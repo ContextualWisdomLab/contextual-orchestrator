@@ -28,7 +28,11 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
+from .chat_capability import (
+    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
+)
 from .credentials import get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_LOGGER = logging.getLogger(__name__)
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
 # bot signature. A stable, identifying user agent is not a credential and is
@@ -160,8 +165,8 @@ def configured_gateway_source(
     )
 
 
-# NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
-# keys participate in upstream load balancing without a second provider identity.
+# Each NVIDIA NIM KV credential is an independent account boundary and may expose
+# a different catalog even though both currently use the same API endpoint.
 PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openai",
@@ -445,9 +450,9 @@ def _price_per_1k(value: Any) -> float | None:
     return per_1k if _valid_price_component(per_1k) else None
 
 
-def _serving_identity(model: DiscoveredModel) -> tuple[str, str]:
-    """Return the durable agent identity used by discovery synchronization."""
-    return (model.provider_name, model.model_id)
+def _serving_identity(model: DiscoveredModel) -> tuple[str, str, str]:
+    """Return the account-scoped identity used by discovery synchronization."""
+    return (model.provider_name, model.credential_name, model.model_id)
 
 
 def _source_tiebreaker(model: DiscoveredModel) -> tuple[str, str, str, str]:
@@ -465,13 +470,13 @@ def _deduplicate_discovered_models(
 ) -> list[DiscoveredModel]:
     """Collapse duplicate agent identities and withhold conflicting price evidence.
 
-    Exact duplicate catalog rows become one candidate. When the same provider/model
-    identity is repeated with conflicting metadata or prices, one deterministic
-    transport record is retained but its prices become unknown. Provider row order
+    Exact duplicate catalog rows from one credential become one candidate. When the
+    same account/model identity repeats with conflicting metadata or prices, one
+    deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
     """
-    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
         identity = _serving_identity(model)
         previous = unique.get(identity)
@@ -1113,12 +1118,20 @@ def discover_provider_models(
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
+        _LOGGER.debug(
+            "model discovery skipped account=%s reason=key_missing",
+            source.provider_name,
+        )
         return []
     if _LOGGER.isEnabledFor(logging.DEBUG):
+        # Never include source.credential_name here: it is the KV key label
+        # (e.g. "OPENAI_API_KEY") and main's
+        # test_discovery_debug_log_identifies_account_without_secret forbids
+        # it from appearing in this log line at all, on top of the actual
+        # credential value never being logged.
         _LOGGER.debug(
-            "discovery_attempt provider=%s credential_name=%s",
+            "discovery_attempt account=%s",
             source.provider_name,
-            source.credential_name,
         )
     started = time.monotonic()
     url = source.list_url
@@ -1141,14 +1154,16 @@ def discover_provider_models(
         # OSError covers ConnectionError/reset failures that are not URLError
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
+        error_code = _provider_discovery_error_code(exc)
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
-                "discovery_provider_failed provider=%s error_type=%s error_message=%s",
+                "discovery_provider_failed account=%s error_code=%s error_type=%s error_message=%s",
                 source.provider_name,
+                error_code,
                 type(exc).__name__,
                 redact_text(str(exc))[:500],
             )
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+        raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             metadata = _fetch_models_dev_metadata(timeout=timeout)
@@ -1195,7 +1210,7 @@ def discover_provider_models(
     result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "discovery_result provider=%s model_count=%d elapsed_ms=%.1f",
+            "discovery_result account=%s model_count=%d elapsed_ms=%.1f",
             source.provider_name,
             len(result),
             (time.monotonic() - started) * 1000.0,
@@ -1374,9 +1389,114 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
+def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence shows this model needs non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` tuple never triggers this.
+
+    This is a deliberately conservative reading: catalog fields such as
+    Models.dev's ``modalities.input`` document *supported* inputs, not which
+    ones a given request must supply, so a model that lists ``text`` next to
+    ``image`` still trips this check. ContextualWisdomLab/.github#1198's
+    incident model (NVIDIA NIM's ``meta/llama-3.2-90b-vision-instruct``) is
+    exactly that shape -- Models.dev reports its inputs as ``text`` *and*
+    ``image`` -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. With no reliable per-deployment
+    tool-calling signal available (see :func:`general_free_serving_candidates`
+    for the incident writeup), treating "declares any non-text input" as
+    disqualifying for *blind* serving is the only evidence-based reading that
+    actually keeps that incident fixed; a model believed to also serve plain
+    text requests just fine can still be reached through a pool that is not
+    modality-blind (see :func:`general_free_serving_candidates`'s docstring).
+
+    Delegates the actual classification to
+    ``chat_capability.requires_non_text_input``, the single evidence-based
+    rule shared with ``orchestrator.TaskOrchestrator._agent_requires_non_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
+    """
+    return requires_non_text_input(discovered.input_modalities)
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return models whose provider metadata identifies zero-cost inference."""
+    """Return the complete zero-cost model inventory (price evidence only).
+
+    This is pure price-based inventory: every model whose structured
+    provider/catalog pricing evidence is entirely zero, regardless of input
+    or output modality. Reporting surfaces that answer "is this model free"
+    -- the ``discover-models`` CLI's ``--free-only`` report, ``free_tier_count``,
+    and the free-tier data-privacy totals -- need this complete inventory, not
+    a servable subset.
+
+    Fitness for the general-purpose *blind* serving pool (``orchestrator/free``)
+    is a stricter, separate question: see :func:`general_free_serving_candidates`.
+    An earlier revision of this function conflated the two, which silently
+    undercounted genuinely free models that are simply unsuited to
+    capability-blind serving in every "is this model free" report.
+    """
     return [model for model in discovered if model.is_free]
+
+
+def general_free_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free models fit for the general-purpose blind serving pool.
+
+    A zero price alone does not certify fitness for arbitrary callers: the
+    free pool (``orchestrator/free``) serves every role and request shape --
+    including tool/function-calling requests -- without knowing in advance
+    which capability a given request will need. Provider pricing can be
+    reliably zero on a model that only a caller who already knows to supply
+    an extra input modality (e.g. an image) could ever use meaningfully;
+    :func:`_requires_non_text_input` excludes exactly those rows here, using
+    catalog evidence discovery already records, not a per-model name rule.
+    Such a model remains fully discovered, fully counted in
+    :func:`free_discovered_models`'s price-based inventory, and eligible for
+    a pool that is not modality-blind (e.g. one built for vision/multimodal
+    tasks) -- it is only withheld from *this* general-purpose free selector.
+
+    Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
+    failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passed every existing chat-capability
+    check, yet NIM's live deployment rejected Strix's tool-calling request
+    against it with a definitive HTTP 400 three independent times in a row --
+    because the free pool had no other candidate to fail over to, this one
+    vision-input model alone exhausted the whole tool-calling pool.
+
+    This is the selector every runtime pool-construction path must apply
+    before treating a discovered model as eligible for blind free serving
+    (e.g. tagging an agent ``cost:free`` in a context where that tag alone
+    drives general-chat ``orchestrator/free`` routing).
+    ``TaskOrchestrator._is_general_free_agent`` additionally re-checks an
+    agent's persisted ``input:<modality>`` tags at selection time -- but only
+    for the capability-blind general chat pool, never for a capability-scoped
+    free route (``_capability_agents``), where that same tag is the expected
+    shape, not a surprise -- so a durable agent-pool row written by an older
+    build, before this exclusion existed, cannot bypass it either.
+
+    Zero price and text-only input still are not enough on their own: an
+    ``evidence_only`` catalog row can never become a serving agent at all
+    (:func:`agent_from_discovered` refuses to build one), and a free
+    non-chat-capable model (e.g. an embedding-only deployment) is not a
+    general chat candidate either. :func:`is_routable_discovered_model` --
+    the same predicate ``_auto_discover_runtime_agents`` and
+    ``provider_bootstrap`` already require before promoting a discovered row
+    to an ordinary chat agent -- excludes both here too, so this selector's
+    count never overstates how many free models the general chat pool could
+    actually serve.
+    """
+    return [
+        model
+        for model in free_discovered_models(discovered)
+        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+    ]
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
@@ -1472,13 +1592,6 @@ def _discovery_price_key(
     return (0, cost, model.provider_name, model.model_id)
 
 
-def _provider_family(provider_name: str) -> str:
-    """Collapse credentials that share one upstream provider outage domain."""
-    if provider_name in {"nvidia_nim", "nvidia_nim_sub"}:
-        return "nvidia_nim"
-    return provider_name
-
-
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
@@ -1525,10 +1638,9 @@ def select_bootstrap_discovered_agents(
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
     Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independent provider family. Remaining
-    capacity is filled in the same deterministic cost order. NVIDIA NIM primary
-    and sub credentials are one outage domain, so they participate in the second
-    pass only after independently hosted providers have had a chance to enter.
+    takes at most one model from each independently discovered provider account.
+    Remaining capacity is filled in the same deterministic cost order. No vendor
+    or endpoint name is used to infer a shared family or collapse credential state.
     Duplicate serving identities never consume capacity twice.
     """
     if limit <= 0:
@@ -1547,14 +1659,13 @@ def select_bootstrap_discovered_agents(
     )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
-    provider_families: set[str] = set()
+    providers: set[str] = set()
 
     for model in ranked:
-        family = _provider_family(model.provider_name)
-        if family in provider_families:
+        if model.provider_name in providers:
             deferred.append(model)
             continue
-        provider_families.add(family)
+        providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
             return selected

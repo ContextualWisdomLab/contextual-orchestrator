@@ -2363,7 +2363,7 @@ def _require_pool_model(
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
-            if any(zdr_allowed(agent) and orchestrator._is_free_agent(agent) for agent in agents):
+            if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
         try:
@@ -2372,6 +2372,12 @@ def _require_pool_model(
             capability_agents = []
         capability_agents = [agent for agent in capability_agents if zdr_allowed(agent)]
         if model_name == TaskOrchestrator.FREE_MODEL:
+            # Deliberately the price-only ``_is_free_agent`` here, not the
+            # blind-general-chat ``_is_general_free_agent``: capability_agents
+            # is already scoped to required_capability, so a non-text
+            # ``input:<modality>`` tag (e.g. a transcription agent's
+            # ``input:audio``) is the expected shape for this exact route, not
+            # a surprise the caller needs protecting from.
             capability_agents = [
                 agent
                 for agent in capability_agents
