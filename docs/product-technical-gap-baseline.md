@@ -1221,10 +1221,12 @@ a reused store are not duplicated in the current report; secrets and raw
 provider diagnostics remain absent.
 
 Remaining larger gaps stay unchanged: durable multi-replica routing observations
-need an accepted retention/decay decision; video jobs need a normalized durable
-ownership/lifecycle contract; and verified answer-token streaming needs a
-cancellable asynchronous dependency graph. Implementing any of those without
-their missing decisions would invent policy rather than close a bounded gap.
+need an accepted retention/decay decision, and verified answer-token streaming
+needs a cancellable asynchronous dependency graph. The video-job gap recorded
+in this snapshot was later closed by #912 and ADR 0037: normalized ownership and
+first-complete usage survive replicas when Valkey is configured, while standalone
+operation remains explicitly process-local and provider lifecycle status remains
+observed rather than invented or persisted.
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
@@ -2095,9 +2097,12 @@ product policy, not a reproduced paper result.
 
 Buyer-visible gaps now prioritized:
 
-1. Video submission is routed, but provider-affine polling/content download and
-   durable job ownership are not yet represented; add a normalized async job
-   resource before calling video orchestration production-complete.
+1. **Closed on #912 / protected main (ADR 0037):** video submission returns an
+   opaque gateway id; provider-affine polling/content download, tenant isolation,
+   normalized ownership, and first-complete usage persistence are implemented.
+   Shared durability uses the existing Valkey registry; without Valkey the
+   documented standalone boundary remains process-local, and provider lifecycle
+   status is observed rather than inferred or persisted.
 2. **Closed on the #838 stack:** Admin exposes group capability coverage and a
    keyboard/native-form REST editor; DB membership is normalized and legacy JSON
    membership migrates without data loss. Authenticated deployed-browser runtime
