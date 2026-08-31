@@ -50,7 +50,7 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict) -> tuple[int, dict]:
+def _post(port: int, payload: dict) -> tuple[int, dict | str]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -63,7 +63,13 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            body = response.read().decode("utf-8")
+            return (
+                response.status,
+                body
+                if response.headers.get_content_type() == "text/event-stream"
+                else json.loads(body),
+            )
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
@@ -146,18 +152,8 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
-def test_http_response_format_only_stream_usage_fails_closed_before_execution() -> None:
-    """response_format-only (conduct mode, no tools) still rejects stream+usage.
-
-    Its usage comes from a multi-step workflow's cost ledger, which may be
-    unmeasured, so this keeps failing closed. The sibling `tools` case (this
-    same request shape but with a `tools` list, i.e. single-agent
-    passthrough) no longer rejects this combination -- its one upstream call
-    is always non-streaming and its real, reported usage survives into the
-    SSE framing unmodified; see
-    test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_include_reported_usage
-    for that positive case.
-    """
+def test_http_response_format_only_stream_usage_omits_unmeasured_counts() -> None:
+    """Conduct streaming succeeds without exposing estimated ledger usage."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -170,8 +166,16 @@ def test_http_response_format_only_stream_usage_fails_closed_before_execution() 
                 "stream_options": {"include_usage": True},
             },
         )
-        assert status == 400, body
-        assert "invalid_stream_options" in json.dumps(body)
+        assert status == 200, body
+        assert isinstance(body, str)
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in body.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        assert frames
+        assert all(frame.get("choices") for frame in frames)
+        assert all(frame["usage"] is None for frame in frames)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -216,7 +220,7 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
-    test_http_response_format_only_stream_usage_fails_closed_before_execution()
+    test_http_response_format_only_stream_usage_omits_unmeasured_counts()
     test_http_tools_passthrough_accepts_coerced_sampling()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")
