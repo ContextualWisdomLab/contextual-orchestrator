@@ -1740,25 +1740,6 @@ def _discovery_price_key(
     return (0, cost, model.provider_name, model.model_id)
 
 
-def select_cheapest_discovered_agent(
-    discovered: list[DiscoveredModel], price_book: "PriceBook"
-) -> DiscoveredModel | None:
-    """Pick the cheapest candidate with trustworthy price evidence.
-
-    A candidate without a price row is unknown, not free. Known prices therefore
-    sort first; when every candidate is unpriced, provider and model identifiers
-    provide deterministic fallback ordering without inventing a monetary value.
-    """
-    eligible = [
-        model
-        for model in _deduplicate_discovered_models(discovered)
-        if is_routable_discovered_model(model)
-    ]
-    if not eligible:
-        return None
-    return min(eligible, key=lambda model: _discovery_price_key(model, price_book))
-
-
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
@@ -1785,26 +1766,23 @@ def select_bootstrap_discovered_agents(
 ) -> list[DiscoveredModel]:
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
-    Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independently discovered provider account.
-    Remaining capacity is filled in the same deterministic cost order. No vendor
-    or endpoint name is used to infer a shared family or collapse credential state.
-    Duplicate serving identities never consume capacity twice.
+    Candidates retain the known-price-first ordering of
+    :func:`select_top_n_cheapest_discovered_agents` (queried here with no
+    effective cap so it returns the full ranked, deduplicated, routable
+    field), but the first pass takes at most one model from each
+    independently discovered provider account. Remaining capacity is filled
+    in the same deterministic cost order. No vendor or endpoint name is used
+    to infer a shared family or collapse credential state. Duplicate serving
+    identities never consume capacity twice.
     """
     if limit <= 0:
         return []
-    eligible = [
-        model
-        for model in _deduplicate_discovered_models(discovered)
-        if is_routable_discovered_model(model)
-    ]
-    if not eligible:
+    ranked = select_top_n_cheapest_discovered_agents(
+        discovered, price_book, len(discovered)
+    )
+    if not ranked:
         return []
 
-    ranked = sorted(
-        eligible,
-        key=lambda model: _discovery_price_key(model, price_book),
-    )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
     providers: set[str] = set()

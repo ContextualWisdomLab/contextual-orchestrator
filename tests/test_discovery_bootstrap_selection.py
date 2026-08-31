@@ -10,7 +10,6 @@ from contextual_orchestrator import model_discovery
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     refresh_price_book,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 
@@ -75,7 +74,9 @@ def test_unpriced_discovered_model_is_unknown_not_free() -> None:
     unpriced = _model("bytez", "unpriced-model")
     _set_price(price_book, priced, 0.01)
 
-    assert select_cheapest_discovered_agent([unpriced, priced], price_book) is priced
+    assert select_top_n_cheapest_discovered_agents(
+        [unpriced, priced], price_book, 1
+    ) == [priced]
     assert select_top_n_cheapest_discovered_agents(
         [unpriced, priced], price_book, 2
     ) == [priced, unpriced]
@@ -99,7 +100,9 @@ def test_partial_provider_price_is_unknown_instead_of_fabricating_a_free_compone
 
     assert refresh_price_book([partial, complete], price_book) == 1
     assert price_book.get_price(partial.provider_name, partial.model_id) is None
-    assert select_cheapest_discovered_agent([partial, complete], price_book) is complete
+    assert select_top_n_cheapest_discovered_agents(
+        [partial, complete], price_book, 1
+    ) == [complete]
 
 
 def test_persisted_price_row_missing_one_component_remains_unknown() -> None:
@@ -152,7 +155,9 @@ def test_huge_price_values_remain_unknown_without_crashing_discovery_or_ranking(
     _set_price(price_book, huge, huge_price)
     _set_price(price_book, valid, 1.0)
 
-    assert select_cheapest_discovered_agent([huge, valid], price_book) is valid
+    assert select_top_n_cheapest_discovered_agents(
+        [huge, valid], price_book, 1
+    ) == [valid]
 
 
 def test_malformed_price_book_row_is_unknown_instead_of_crashing_selection() -> None:
@@ -174,7 +179,9 @@ def test_malformed_price_book_row_is_unknown_instead_of_crashing_selection() -> 
     valid = _model("openrouter", "valid-model")
     _set_price(price_book, valid, 1.0)
 
-    assert select_cheapest_discovered_agent([broken, valid], price_book) is valid
+    assert select_top_n_cheapest_discovered_agents(
+        [broken, valid], price_book, 1
+    ) == [valid]
 
 
 def test_refresh_counts_only_complete_prices_in_the_comparison_currency() -> None:
@@ -213,10 +220,11 @@ def test_invalid_or_cross_currency_price_rows_do_not_outrank_comparable_usd_cost
     _set_price(price_book, non_finite, float("nan"))
     _set_price(price_book, foreign, 0.000001, currency_code="EUR")
 
-    assert select_cheapest_discovered_agent(
+    assert select_top_n_cheapest_discovered_agents(
         [negative, non_finite, foreign, valid],
         price_book,
-    ) is valid
+        1,
+    ) == [valid]
 
 
 def test_duplicate_serving_identity_cannot_consume_bootstrap_capacity() -> None:
@@ -289,10 +297,11 @@ def test_conflicting_duplicate_prices_are_withheld_as_ambiguous() -> None:
         price_book,
     ) == 1
     assert price_book.get_price("openrouter", "duplicate-model") is None
-    assert select_cheapest_discovered_agent(
+    assert select_top_n_cheapest_discovered_agents(
         [cheap_claim, expensive_claim, complete],
         price_book,
-    ) is complete
+        1,
+    ) == [complete]
 
 
 def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> None:

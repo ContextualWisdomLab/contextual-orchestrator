@@ -47,7 +47,6 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 
@@ -2229,36 +2228,6 @@ def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:
     assert price_book.get_price("bytez", "some/model") is None
 
 
-def test_select_cheapest_discovered_agent_picks_the_lower_priced_candidate() -> None:
-    from contextual_orchestrator.cost_ledger import PriceEntry
-
-    price_book = PriceBook(InMemoryConfigStore())
-    cheap = DiscoveredModel(
-        provider_name="openrouter",
-        model_id="small-cheap-model",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
-        auth_scheme="Bearer",
-    )
-    pricey = DiscoveredModel(
-        provider_name="nvidia_nim",
-        model_id="large-pricey-model",
-        credential_name="NVIDIA_NIM_API_KEY",
-        chat_base_url="https://integrate.api.nvidia.com/v1",
-        auth_scheme="Bearer",
-    )
-    price_book.set_price(PriceEntry("openrouter", "small-cheap-model", 0.1, 0.1))
-    price_book.set_price(PriceEntry("nvidia_nim", "large-pricey-model", 5.0, 10.0))
-
-    winner = select_cheapest_discovered_agent([pricey, cheap], price_book)
-    assert winner is cheap
-
-
-def test_select_cheapest_discovered_agent_returns_none_for_empty_list() -> None:
-    price_book = PriceBook(InMemoryConfigStore())
-    assert select_cheapest_discovered_agent([], price_book) is None
-
-
 def test_select_top_n_cheapest_discovered_agents_orders_by_cost() -> None:
     from contextual_orchestrator.cost_ledger import PriceEntry
 
@@ -2282,7 +2251,6 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
     unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", AUTH_SCHEME_RAW_TOKEN)
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
-    assert select_cheapest_discovered_agent([unknown, known], price_book) is known
     assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
 
 

@@ -35,7 +35,6 @@ from contextual_orchestrator.model_discovery import (
     discover_provider_models,
     refresh_price_book,
     select_bootstrap_discovered_agents,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 from tests.test_model_discovery import (
@@ -327,8 +326,8 @@ def test_hostile_price_books_degrade_to_unknown_ranking(book) -> None:
     priced = _chat_model("openrouter", "priced-model")
     other = _chat_model("bytez", "other-model")
 
-    cheapest = select_cheapest_discovered_agent([priced, other], book)
-    assert cheapest is not None
+    cheapest = select_top_n_cheapest_discovered_agents([priced, other], book, 1)
+    assert cheapest != []
 
     top = select_top_n_cheapest_discovered_agents([priced, other], book, 2)
     assert [m.model_id for m in top] == sorted(["priced-model", "other-model"])
@@ -412,7 +411,7 @@ def test_bootstrap_rejects_non_positive_limits_and_empty_catalogs() -> None:
     ]
     assert select_bootstrap_discovered_agents(ineligible, book, 5) == []
     assert select_top_n_cheapest_discovered_agents(ineligible, book, 5) == []
-    assert select_cheapest_discovered_agent([], book) is None
+    assert select_top_n_cheapest_discovered_agents([], book, 1) == []
 
 
 def test_bootstrap_rejects_explicit_non_chat_capabilities() -> None:
