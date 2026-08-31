@@ -545,6 +545,27 @@ class NonBlockingLedgerStore:
             if row.get("usage_record_id") in expected
         }
 
+    def settle_usage_record_ids(self, persisted_ids: set[str]) -> None:
+        """Release deferred exports for confirmed IDs without draining other work."""
+        if not persisted_ids:
+            return
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return
+        with self._deferred_usage_exports_lock:
+            settled = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id in persisted_ids
+            ]
+            self._deferred_usage_exports = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id not in persisted_ids
+            ]
+        for record in settled:
+            self._record_stored(record)
+
     def flush(self, timeout: Optional[float] = None) -> bool:
         """Wait for queued writes to finish. Returns ``False`` on timeout."""
         deadline = time.monotonic() + timeout if timeout is not None else None
@@ -1396,6 +1417,9 @@ class CostLedger:
                     if row.get("usage_record_id") in expected
                 }
             if expected.issubset(persisted):
+                settle = getattr(self.store, "settle_usage_record_ids", None)
+                if callable(settle):
+                    settle(persisted)
                 self._flush_deferred_usage_exports()
                 return True
             if deadline is not None and time.monotonic() >= deadline:
