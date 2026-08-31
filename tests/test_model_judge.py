@@ -12,6 +12,7 @@ from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
 from types import SimpleNamespace
+import urllib.error
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +28,10 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
+    EffortProfileError,
+    ReasoningEffortProfile,
+)
 
 
 RISKY_VERIFIER_REPORT = "The plan is sound overall but discusses downtime risks and error handling."
@@ -574,6 +579,62 @@ def test_structured_synthesis_failure_updates_provider_health() -> None:
     assert exc_info.value.agent_id == "general_agent"
     assert "synthetic provider failure" not in str(exc_info.value)
     assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
+def test_structured_repair_transport_failure_is_classified() -> None:
+    orchestrator, _ = _orch("unused")
+    invalid = {"choices": [{"message": {"content": "not json"}}]}
+
+    with (
+        patch.object(
+            orchestrator.client,
+            "proxy_send",
+            side_effect=[invalid, urllib.error.URLError("synthetic repair outage")],
+        ),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert exc_info.value.error_code == "provider_connection_error"
+    assert exc_info.value.agent_id == "general_agent"
+    assert "synthetic repair outage" not in str(exc_info.value)
+    assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
+def test_structured_synthesis_profile_error_does_not_penalize_provider() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "general_agent",
+                "model-x",
+                base_url="https://provider.example/v1",
+                reasoning_effort_supported=False,
+                tags=("reasoning", "writing", "planning", "research"),
+            )
+        ],
+        client=_ScriptedClient("unused"),
+    )
+    profile = ReasoningEffortProfile(unsupported_provider_fallback="error")
+
+    with pytest.raises(EffortProfileError, match="support is unproven"):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {"type": "json_object"},
+            },
+            effort_profile=profile,
+            single_agent=False,
+        )
+
+    assert "general_agent" not in orchestrator._circuit
 
 
 def test_structured_repair_is_blocked_by_completed_synthesis_budget() -> None:

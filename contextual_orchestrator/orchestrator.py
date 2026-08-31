@@ -4126,7 +4126,12 @@ class TaskOrchestrator:
                             "request body exceeds provider limit"
                         ) from exc
                     if not request_too_large:
-                        raise
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport=endpoint,
+                        ) from None
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
@@ -4134,20 +4139,11 @@ class TaskOrchestrator:
         synthesis_started = time.perf_counter()
         try:
             raw, final_agent = send_synthesis(upstream)
-        except Exception as exc:
+        except ProviderUpstreamError as exc:
             if not _is_request_too_large_error(exc):
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
-            if not isinstance(
-                exc, (ProviderRequestTooLargeError, ProviderUpstreamError)
-            ):
-                raise classify_provider_failure(
-                    exc,
-                    agent_id=final_agent.id,
-                    model=final_agent.model,
-                    transport=endpoint,
-                ) from None
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
@@ -4217,7 +4213,7 @@ class TaskOrchestrator:
             repair_started = time.perf_counter()
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
-            except Exception as exc:
+            except ProviderUpstreamError as exc:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
