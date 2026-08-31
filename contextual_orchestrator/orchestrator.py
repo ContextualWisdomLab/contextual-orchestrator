@@ -4086,12 +4086,13 @@ class TaskOrchestrator:
             if virtual_model
             else [final_agent]
         )
+        synthesis_failure_recorded = False
 
         def send_synthesis(
             payload: dict[str, Any],
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Retry 413 broadly and stale virtual models only within one endpoint."""
-            nonlocal final_agent
+            nonlocal final_agent, synthesis_failure_recorded
             seen_providers: set[str] = set()
             preferred = final_agent
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
@@ -4161,6 +4162,7 @@ class TaskOrchestrator:
                             ):
                                 last_model_not_found = classified
                                 self._record_failure(candidate.id)
+                                synthesis_failure_recorded = True
                                 continue
                             raise classified from None
                         raise
@@ -4174,7 +4176,7 @@ class TaskOrchestrator:
         try:
             raw, final_agent = send_synthesis(upstream)
         except Exception as exc:
-            if not _is_request_too_large_error(exc):
+            if not _is_request_too_large_error(exc) and not synthesis_failure_recorded:
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)

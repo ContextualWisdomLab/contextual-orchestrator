@@ -736,17 +736,16 @@ class ProviderEmbeddingBatchBackend:
 
     def start(self, job: BatchJob) -> None:
         """Make a fully registered reservation executable."""
-        if self._closed.is_set():
-            raise RuntimeError("provider embedding backend is closed")
-        if self._states.get(job.job_id) != "reserved":
-            return
-        self._states[job.job_id] = "queued"
-        self._terminal_events[job.job_id] = threading.Event()
         with self._executor_lock:
+            if self._closed.is_set():
+                raise RuntimeError("provider embedding backend is closed")
+            if self._states.get(job.job_id) != "reserved":
+                return
+            self._states[job.job_id] = "queued"
+            self._terminal_events[job.job_id] = threading.Event()
             if self._executor is None:
                 self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
-            executor = self._executor
-        executor.submit(copy_context().run, self._run_job, job.job_id)
+            self._executor.submit(copy_context().run, self._run_job, job.job_id)
 
     def _run_job(self, job_id: str) -> None:
         """Execute or reclaim one persisted job until it becomes terminal."""

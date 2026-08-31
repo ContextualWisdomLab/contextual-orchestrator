@@ -86,8 +86,13 @@ def test_counter_factory_uses_native_cl100k_only_for_declared_embedding_models(
 ) -> None:
     """The installed wheel is a real runtime path without guessing tokenizers."""
     calls: list[str] = []
+    packed = types.SimpleNamespace(text="hello world", token_count=2)
     module = types.SimpleNamespace(
         count_cl100k=lambda text: calls.append(text) or 2,
+        pack_cl100k=lambda texts, per_input, inputs, total: (
+            [packed],
+            [[0]],
+        ),
     )
     monkeypatch.setattr(
         "contextual_orchestrator.token_counting.importlib.import_module",
@@ -98,6 +103,9 @@ def test_counter_factory_uses_native_cl100k_only_for_declared_embedding_models(
 
     assert isinstance(counter, NativeCl100kTokenCounter)
     assert counter.count_text("hello world", "text-embedding-3-small") == 2
+    assert counter.pack_text("hello world", "text-embedding-3-small", 8192) == [
+        ("hello world", 2)
+    ]
     assert calls == ["hello world"]
     with pytest.raises(TokenCountUnavailable, match="no authoritative tokenizer"):
         counter.count_text("hello world", "provider-unknown")
@@ -112,7 +120,7 @@ def test_native_counter_reports_unavailable_when_extension_call_fails(monkeypatc
 
     monkeypatch.setattr(
         "contextual_orchestrator.token_counting.importlib.import_module",
-        lambda _name: types.SimpleNamespace(count_cl100k=fail),
+        lambda _name: types.SimpleNamespace(count_cl100k=fail, pack_cl100k=fail),
     )
 
     counter = build_embedding_token_counter()

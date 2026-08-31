@@ -212,6 +212,19 @@ def test_split_empty_input_yields_single_empty_part() -> None:
     assert coordinator._force_token_safe_chunks("", model="m", max_tokens=4, max_chars=10) == [("", 0)]
 
 
+def test_split_uses_native_packer_when_available() -> None:
+    class Counter:
+        def pack_text(self, text: str, model: str, max_tokens: int):
+            assert (text, model, max_tokens) == ("alpha beta", "text-embedding-3-small", 4)
+            return [("alpha ", 2), ("beta", 1)]
+
+    coordinator = _coordinator(token_counter=Counter())
+
+    assert coordinator._split_embedding_input(
+        "alpha beta", model="text-embedding-3-small", max_tokens=4, max_chars=100
+    ) == [("alpha ", 2), ("beta", 1)]
+
+
 class _WholeStringOnlyCounter:
     """Pathological counter: only the full original text exceeds the budget."""
 

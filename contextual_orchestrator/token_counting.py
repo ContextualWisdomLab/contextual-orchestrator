@@ -127,6 +127,18 @@ class NativeCl100kTokenCounter:
         """Reject chat counting because this counter is embedding-only."""
         raise TokenCountUnavailable("the native cl100k counter does not count chat framing")
 
+    def pack_text(self, text: str, model: str, max_tokens: int) -> List[tuple[str, int]]:
+        """Split one declared cl100k input at exact native token boundaries."""
+        if model not in _CL100K_EMBEDDING_MODELS:
+            raise TokenCountUnavailable(f"no authoritative tokenizer is declared for {model!r}")
+        try:
+            parts, _shards = self._native_module.pack_cl100k(
+                [text], max_tokens, 1, max_tokens
+            )
+            return [(part.text, int(part.token_count)) for part in parts]
+        except Exception as exc:  # noqa: BLE001 - optional native boundary.
+            raise TokenCountUnavailable("the native cl100k packer is unavailable") from exc
+
 
 class UnavailableEmbeddingTokenCounter:
     """Represent the absence of an authoritative embedding tokenizer."""
@@ -142,7 +154,10 @@ def _native_token_counter() -> NativeCl100kTokenCounter | None:
         module = importlib.import_module("contextual_orchestrator._token_packer")
     except Exception:  # noqa: BLE001 - an incompatible wheel is equivalent to absence.
         return None
-    if not callable(getattr(module, "count_cl100k", None)):
+    if not all(
+        callable(getattr(module, name, None))
+        for name in ("count_cl100k", "pack_cl100k")
+    ):
         return None
     return NativeCl100kTokenCounter(module)
 

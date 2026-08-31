@@ -223,6 +223,35 @@ def test_provider_batch_cancellation_preserves_the_reason() -> None:
     backend.close()
 
 
+def test_close_waits_for_start_to_submit_work() -> None:
+    submit_entered = threading.Event()
+    release_submit = threading.Event()
+    shutdown_called = threading.Event()
+
+    class Executor:
+        def submit(self, *_args):
+            submit_entered.set()
+            assert release_submit.wait(timeout=1)
+
+        def shutdown(self, **_kwargs):
+            shutdown_called.set()
+
+    backend = ProviderEmbeddingBatchBackend(lambda _requests: ([], 0))
+    job = backend.reserve([])
+    backend._executor = Executor()
+    starter = threading.Thread(target=backend.start, args=(job,))
+    starter.start()
+    assert submit_entered.wait(timeout=1)
+
+    closer = threading.Thread(target=backend.close)
+    closer.start()
+    assert not shutdown_called.wait(timeout=0.05)
+    release_submit.set()
+    starter.join(timeout=1)
+    closer.join(timeout=1)
+    assert shutdown_called.is_set()
+
+
 def test_server_shutdown_closes_embedding_workers() -> None:
     class ClosingBackend:
         name = "closing"
@@ -303,6 +332,42 @@ def test_remote_embedding_member_selects_provider_backend() -> None:
         time.sleep(0.01)
     assert document["status"] == "completed"
     assert [item["embedding"] for item in document["embeddings"]] == [[13.0], [13.0]]
+
+
+def test_runtime_added_remote_embedding_member_uses_provider_backend() -> None:
+    client = _SyntheticProviderClient()
+    orchestrator = TaskOrchestrator([], client=client, allow_empty_agents=True)
+    coordinator = CostRoutingCoordinator(
+        orchestrator, embedding_token_counter=_SyntheticExactCounter()
+    )
+    orchestrator.add_agent(
+        "default",
+        ModelAgent(
+            "runtime_embedding",
+            "runtime-embedding-model",
+            base_url="https://synthetic.invalid/v1",
+            tags=("embedding",),
+        ).to_config(),
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["provider input"], model="contextual-orchestrator", wait_timeout=1
+    )
+
+    assert document["status"] == "completed"
+    assert client.embedding_calls == [["provider input"]]
+
+    orchestrator.add_agent(
+        "default",
+        ModelAgent(
+            "runtime_mock", "runtime-mock-model", base_url="mock://local", tags=("embedding",)
+        ).to_config(),
+    )
+    local_document = coordinator.complete_embeddings_batch(
+        ["local input"], agent_id="runtime_mock"
+    )
+    assert local_document["status"] == "completed"
+    assert client.embedding_calls == [["provider input"]]
 
 
 def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -> None:
