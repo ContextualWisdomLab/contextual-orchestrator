@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 from contextual_orchestrator.server import _validate_completions_user  # noqa: E402
 
@@ -43,10 +43,13 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
 
 
 def _server():
+    orchestrator = build()
+    counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
     server = build_server(
-        build(),
+        orchestrator,
         port=0,
         security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=10_000),
+        coordinator=CostRoutingCoordinator(orchestrator, embedding_token_counter=counter),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
