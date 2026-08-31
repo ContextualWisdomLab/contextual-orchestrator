@@ -307,22 +307,27 @@ def test_http_conduct_preflight_rejects_role_ineligible_pin() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _post(
-            server.server_address[1],
-            token,
-            {
-                "model": "orchestrator/auto",
-                "messages": [{"role": "user", "content": "conduct this"}],
-                "mode": "conduct",
-                "routing": {"candidate_id": "worker_only"},
-            },
-        )
+        responses = [
+            _post(
+                server.server_address[1],
+                token,
+                {
+                    "model": "orchestrator/auto",
+                    "messages": [{"role": "user", "content": "conduct this"}],
+                    "mode": mode,
+                    "routing": {"candidate_id": "worker_only"},
+                },
+            )
+            for mode in ("conduct", "auto")
+        ]
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
-    assert status == 400
-    assert body["error"]["code"] == "invalid_routing"
+    assert all(status == 400 for status, _body in responses)
+    assert all(
+        body["error"]["code"] == "invalid_routing" for _status, body in responses
+    )
     assert client.calls == []
 
 

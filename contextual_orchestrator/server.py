@@ -6914,22 +6914,13 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    try:
-                        with orchestrator.candidate_routing_policy(
-                            request_routing, model_name=model_name
-                        ):
-                            route_selected = orchestrator.would_route(
-                                messages, mode, model_name
-                            )
-                    except ValueError as exc:
-                        raise RequestError(400, "invalid_routing", str(exc)) from exc
                     _validate_candidate_routing(
                         orchestrator,
                         request_routing,
                         model_name,
                         required_roles=(
                             ("worker",)
-                            if route_selected
+                            if mode == "route"
                             else ("thinker", "worker", "verifier", "synthesizer")
                         ),
                         required_tags=(
