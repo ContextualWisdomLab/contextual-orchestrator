@@ -48,6 +48,11 @@ from typing import Any, Callable, Iterator, Optional
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600
 
 
+def _claim_renewal_interval_seconds(lease_seconds: float) -> float:
+    """Return the cadence the durable registry uses to observe claim ownership."""
+    return max(0.05, min(lease_seconds / 3, 1.0))
+
+
 class ClaimNotAcquired(RuntimeError):
     """Another worker owns a non-blocking durable job claim."""
 
@@ -230,7 +235,7 @@ class JobRegistryFactory:
                 if renew_until_epoch is not None:
 
                     def renew_claim() -> None:
-                        interval = max(0.05, min(lease_seconds / 3, 1.0))
+                        interval = _claim_renewal_interval_seconds(lease_seconds)
                         while not stop_renewal.wait(interval):
                             remaining = renew_until_epoch - time.time()
                             if remaining <= 0:

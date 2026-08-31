@@ -152,6 +152,8 @@ class _RecordingEmbeddingBackend:
 
 
 class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
+    poll_after_ms = 250
+
     def submit(self, requests, metadata=None):
         super().submit(requests, metadata)
         return BatchJob("pending-embeddings", self.name, "in_progress", len(requests))
@@ -323,6 +325,42 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
 
     assert created["model"] == "resolved-embedding"
     assert polled["model"] == "resolved-embedding"
+    assert created["poll_after_ms"] == _PendingEmbeddingBackend.poll_after_ms
+    assert created["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
+
+
+def test_http_queued_embedding_admission_declares_owned_poll_and_retention() -> None:
+    """The public queued carrier exposes backend and registry lifecycle values."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("embedding_worker", "resolved-embedding", tags=("embedding",))]
+    )
+    backend = _PendingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=_ExactTestCounter(),
+        embedding_batch_backend=backend,
+    )
+    token = "synthetic_batch_token"
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, document = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/batch/embeddings",
+            token,
+            {"inputs": ["synthetic"], "model": "resolved-embedding"},
+        )
+        assert status == 202
+        assert document["poll_after_ms"] == backend.poll_after_ms
+        assert document["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
+    finally:
+        server.shutdown()
 
 
 def test_empty_batch_preserves_resolved_model_identity() -> None:

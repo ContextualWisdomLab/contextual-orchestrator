@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Queued embedding admissions now carry the durable registry's result
+  retention and the selected backend's polling cadence, so clients can poll
+  within the actual job lifecycle instead of guessing or failing closed on
+  missing lifecycle metadata.
 - Virtual structured workflows now exclude a same-endpoint candidate only
   after both its synthesis and bounded repair violate the caller's schema,
   then continue with the next eligible model on that endpoint. Explicit model

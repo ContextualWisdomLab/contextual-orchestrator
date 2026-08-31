@@ -9,6 +9,7 @@ from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     ProviderEmbeddingBatchBackend,
 )
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator import (
     CostRoutingCoordinator,
     InMemoryConfigStore,
@@ -144,6 +145,38 @@ def test_provider_batch_returns_before_terminal_result() -> None:
     assert backend.wait(job, timeout=1)["status"] == "completed"
     assert backend.retrieve(job)[0].embedding == [15.0]
     assert backend.usage(job) == {"prompt_tokens": 2}
+    backend.close()
+
+
+def test_queued_document_exposes_backend_poll_and_registry_retention_contract() -> None:
+    """Queued HTTP documents carry owned cadence/retention, not caller guesses."""
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[1.0] for _request in requests], len(requests)
+
+    registry = JobRegistryFactory(retention_seconds=123)
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=registry,
+        claim_lease_seconds=None,
+    )
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([], allow_empty_agents=True),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_SyntheticExactCounter(),
+        job_registry=registry,
+    )
+    job = coordinator.submit_embeddings_batch(["synthetic"], model="synthetic-model")
+
+    document = coordinator.embeddings_batch_document(job.job_id)
+
+    assert document["status"] in {"queued", "running"}
+    assert document["poll_after_ms"] == backend.poll_after_ms
+    assert document["job_retention_ms"] == 123_000
+    release.set()
+    assert backend.wait(job, timeout=1)["status"] == "completed"
     backend.close()
 
 

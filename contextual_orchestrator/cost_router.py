@@ -1206,22 +1206,36 @@ class CostRoutingCoordinator:
             with self.job_registry.lock(
                 "embedding_document", batch_id, lease_seconds=lease_seconds
             ):
-                return self._embeddings_batch_document_locked(
+                document = self._embeddings_batch_document_locked(
                     batch_id, owner_id=owner_id
                 )
         except ClaimNotAcquired:
             cached = self._embedding_documents.get(batch_id)
             if cached is not None:
-                return cached
-            return {
-                "batch_id": batch_id,
-                "status": "in_progress",
-                "backend": job.backend,
-                "model": self._embedding_models.get(
-                    batch_id, "contextual-orchestrator"
-                ),
-                "embeddings": None,
-            }
+                document = cached
+            else:
+                document = {
+                    "batch_id": batch_id,
+                    "status": "in_progress",
+                    "backend": job.backend,
+                    "model": self._embedding_models.get(
+                        batch_id, "contextual-orchestrator"
+                    ),
+                    "embeddings": None,
+                }
+        result = dict(document)
+        result["job_retention_ms"] = self.job_registry.retention_seconds * 1000
+        if result.get("embeddings") is None and result.get("status") not in {
+            "failed", "cancelled", "rejected"
+        }:
+            backend = self._embedding_backend_for(job)
+            poll_after_ms = getattr(backend, "poll_after_ms", None)
+            if type(poll_after_ms) is not int or poll_after_ms < 1:
+                raise RuntimeError(
+                    "queued embedding backend omitted its polling cadence"
+                )
+            result["poll_after_ms"] = poll_after_ms
+        return result
 
     def _embeddings_batch_document_locked(
         self, batch_id: str, *, owner_id: Optional[str] = None
@@ -1244,13 +1258,14 @@ class CostRoutingCoordinator:
         backend = self._embedding_backend_for(job)
         status = backend.poll(job)
         if not status.get("is_complete"):
-            return {
+            document = {
                 "batch_id": batch_id,
                 "status": status.get("status") or job.status,
                 "backend": job.backend,
                 "model": model_name,
                 "embeddings": None,
             }
+            return document
         terminal_status = str(status.get("status") or "failed")
         if terminal_status != "completed":
             document = {

@@ -302,6 +302,7 @@ class _DroppingEmbeddingBackend:
     """Local-shaped embedding backend that loses one requested vector."""
 
     name = "dropping"
+    poll_after_ms = 250
 
     def __init__(self) -> None:
         self.jobs: Dict[str, BatchJob] = {}
@@ -409,6 +410,8 @@ def test_contended_embedding_document_claim_returns_cache_or_pending() -> None:
         "backend": job.backend,
         "model": "contextual-orchestrator",
         "embeddings": None,
+        "poll_after_ms": 250,
+        "job_retention_ms": coordinator.job_registry.retention_seconds * 1000,
     }
 
     cached = {**pending, "status": "completed", "embeddings": []}

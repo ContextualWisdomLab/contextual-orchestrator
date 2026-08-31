@@ -1026,7 +1026,13 @@ OPENAPI_SPEC = {
                             "input_part_counts, map_reduce}"
                         )
                     },
-                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "202": {
+                        "description": (
+                            "Batch accepted with registry-owned job_retention_ms and "
+                            "backend-owned poll_after_ms; poll GET "
+                            "/v1/batch/embeddings/{batch_id}"
+                        )
+                    },
                     "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }

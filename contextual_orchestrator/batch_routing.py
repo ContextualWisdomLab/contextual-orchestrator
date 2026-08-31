@@ -33,7 +33,11 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
-from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory
+from .batch_job_registry import (
+    ClaimNotAcquired,
+    JobRegistryFactory,
+    _claim_renewal_interval_seconds,
+)
 
 _ROUTING_CATEGORY = "routing"
 _PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
@@ -526,6 +530,7 @@ class EmbeddingBatchBackend(Protocol):
     """Submit/poll/retrieve contract shared by every embeddings batch backend."""
 
     name: str
+    poll_after_ms: int
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
@@ -653,6 +658,14 @@ class ProviderEmbeddingBatchBackend:
         ):
             raise ValueError("durable provider backend claim lease must be positive")
         self._claim_lease_seconds = claim_lease_seconds
+        # This is the backend's actual durable-claim observation cadence (the
+        # same formula used by ``JobRegistryFactory.lock``), not an HTTP-layer
+        # polling guess.  Admission responses expose it so callers do not have
+        # to invent their own retry interval.
+        self.poll_after_ms = int(
+            1000
+            * _claim_renewal_interval_seconds(claim_lease_seconds or 0)
+        )
         if execution_timeout_seconds is not None and execution_timeout_seconds <= 0:
             raise ValueError("provider embedding execution timeout must be positive")
         self._execution_timeout_seconds = (
@@ -1044,6 +1057,14 @@ class PgLlmBatchEmbeddingBackend:
         job_registry: Any = None,
     ) -> None:
         self._client = client
+        poll_interval = getattr(client, "poll_interval_seconds", None)
+        self.poll_after_ms = (
+            int(poll_interval * 1000)
+            if isinstance(poll_interval, (int, float))
+            and not isinstance(poll_interval, bool)
+            and poll_interval > 0
+            else 0
+        )
         self._endpoint_alias = endpoint_alias
         self._endpoint = endpoint
         self._assembler = payload_assembler
