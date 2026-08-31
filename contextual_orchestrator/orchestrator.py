@@ -3402,6 +3402,8 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
+        self._provider_readiness_refresh_lock = threading.Lock()
+        self._provider_readiness_generation = 0
         self._latest_provider_readiness_report: dict[str, Any] | None = None
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
@@ -3489,53 +3491,73 @@ class TaskOrchestrator:
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
         probe_timeout = _validate_provider_probe_timeout(timeout)
-        with self._provider_readiness_lock:
-            if not refresh and self._latest_provider_readiness_report is not None:
-                return json.loads(json.dumps(self._latest_provider_readiness_report))
-            items: list[dict[str, Any]] = []
-            for agent in self.candidates:
-                provider = agent.provider_name or self._infer_provider_name(agent.base_url)
-                if agent.disabled:
-                    items.append({
-                        "agent_id": agent.id,
-                        "model": agent.model,
-                        "provider": provider,
-                        "status": "disabled",
-                    })
-                    continue
-                if refresh:
-                    item = dict(self.client.probe(agent, timeout=probe_timeout))
-                    item["provider"] = provider
-                    items.append(redact_value(item))
-                else:
-                    items.append({
-                        "agent_id": agent.id,
-                        "model": agent.model,
-                        "provider": provider,
-                        "status": "unprobed",
-                    })
-            active = [item for item in items if item["status"] != "disabled"]
-            status = "unprobed" if not refresh else (
-                "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
-            )
-            report = {
-                "status": status,
-                "probe": "refresh" if refresh else "none",
-                "timeout_seconds": probe_timeout,
-                "checked_at": int(time.time()) if refresh else None,
-                "agent_count": len(active),
-                "ready_agent_count": sum(item["status"] == "ready" for item in active),
-                "items": items,
-            }
+        if not refresh:
+            with self._provider_readiness_lock:
+                if self._latest_provider_readiness_report is not None:
+                    return json.loads(json.dumps(self._latest_provider_readiness_report))
+                candidates = list(self.candidates)
+            return self._provider_readiness_report_for(candidates, False, probe_timeout)
+
+        with self._provider_readiness_refresh_lock:
+            with self._provider_readiness_lock:
+                candidates = list(self.candidates)
+                generation = self._provider_readiness_generation
+            report = self._provider_readiness_report_for(candidates, True, probe_timeout)
+            with self._provider_readiness_lock:
+                if generation == self._provider_readiness_generation:
+                    self._latest_provider_readiness_report = json.loads(json.dumps(report))
+                    return report
+        return self.provider_readiness_report(timeout=probe_timeout)
+
+    def _provider_readiness_report_for(
+        self,
+        candidates: list[ModelAgent],
+        refresh: bool,
+        probe_timeout: float,
+    ) -> dict[str, Any]:
+        """Build one readiness report from an immutable candidate snapshot."""
+        items: list[dict[str, Any]] = []
+        for agent in candidates:
+            provider = agent.provider_name or self._infer_provider_name(agent.base_url)
+            if agent.disabled:
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "disabled",
+                })
+                continue
             if refresh:
-                self._latest_provider_readiness_report = json.loads(json.dumps(report))
-            return report
+                item = dict(self.client.probe(agent, timeout=probe_timeout))
+                item["provider"] = provider
+                items.append(redact_value(item))
+            else:
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "unprobed",
+                })
+        active = [item for item in items if item["status"] != "disabled"]
+        status = "unprobed" if not refresh else (
+            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
+        )
+        return {
+            "status": status,
+            "probe": "refresh" if refresh else "none",
+            "timeout_seconds": probe_timeout,
+            "checked_at": int(time.time()) if refresh else None,
+            "agent_count": len(active),
+            "ready_agent_count": sum(item["status"] == "ready" for item in active),
+            "items": items,
+        }
 
     def _set_candidates(self, candidates: list[ModelAgent]) -> None:
         """Replace the configured pool and discard readiness for the old pool."""
         with self._provider_readiness_lock:
             self.candidates = candidates
             self.agents = [agent for agent in candidates if not agent.disabled]
+            self._provider_readiness_generation += 1
             self._latest_provider_readiness_report = None
 
     def _reload_state(self) -> None:
