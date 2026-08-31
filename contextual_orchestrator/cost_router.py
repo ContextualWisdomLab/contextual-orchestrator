@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
     BatchBackend,
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     BatchResultItem,
@@ -707,14 +708,26 @@ class CostRoutingCoordinator:
         return self.batch_backend.poll(job)
 
     def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
-        """Retrieve results for a batch owned by ``owner_id`` and record usage."""
+        """Retrieve results for a batch owned by ``owner_id`` and record usage.
+
+        Raises :class:`~contextual_orchestrator.batch_routing.BatchDownloadError`
+        unchanged when the backend reports an explicit download failure
+        (mirroring how ``KeyError`` from an unknown/unowned job id already
+        propagates to the caller) rather than masking it as a zero-result
+        success -- see ``batch_routing.BatchDownloadError`` for why.
+        """
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
+            # Prefer the real request prompt the batch item carries (e.g. from
+            # LocalBatchBackend) over a blank placeholder when the estimate
+            # fallback below is triggered, so an "estimated" row is actually
+            # estimated from what was asked rather than from empty content.
+            fallback_messages = item.messages or [{"role": "user", "content": ""}]
             record = self._record_completion(
-                messages=[{"role": "user", "content": ""}],
+                messages=fallback_messages,
                 answer=item.answer,
                 route_mode=item.mode,
                 request_channel="batch",
@@ -1013,7 +1026,23 @@ class CostRoutingCoordinator:
                 "embeddings": None,
             }
 
-        items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        try:
+            items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        except BatchDownloadError as exc:
+            # Deliberately NOT cached: an explicit download failure must stay
+            # retryable. Caching this under "completed" (as a bare `return []`
+            # from the backend used to force) would permanently poison
+            # ``batch_id`` with fabricated zero-vectors that no later retry
+            # could ever repair, since a cache hit above short-circuits
+            # poll/retrieve entirely.
+            return {
+                "batch_id": batch_id,
+                "status": "failed",
+                "backend": job.backend,
+                "model": model_name,
+                "embeddings": None,
+                "error": str(exc),
+            }
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)

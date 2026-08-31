@@ -14,6 +14,7 @@ from contextual_orchestrator import (
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import (
+    BatchDownloadError,
     BatchJob,
     BatchResultItem,
     EmbeddingBatchResultItem,
@@ -343,6 +344,46 @@ def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     assert document["embeddings"] is None
     assert document["status"] == "in_progress"
+
+
+class _FlakyEmbeddingBackend(_DroppingEmbeddingBackend):
+    """Fails the first retrieve() with a download error, then succeeds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.retrieve_calls = 0
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        self.retrieve_calls += 1
+        if self.retrieve_calls == 1:
+            raise BatchDownloadError(job.job_id, "transient download error")
+        return super().retrieve(job)
+
+
+def test_embeddings_document_download_failure_is_not_cached_and_retries() -> None:
+    """A download failure must never be cached as a fabricated "completed" doc.
+
+    Regression for the bug where ``retrieve()`` mapped an explicit
+    ``success: False`` to an empty list, which was then unconditionally
+    cached as ``status: "completed"`` with empty vectors -- permanently
+    poisoning the batch id since the cache short-circuits all future
+    poll/retrieve calls. The failure must stay uncached so a later call
+    re-hits the backend and can recover real vectors.
+    """
+    backend = _FlakyEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    failed = coordinator.embeddings_batch_document(job.job_id)
+    assert failed["status"] == "failed"
+    assert failed["embeddings"] is None
+    assert "transient download error" in failed["error"]
+    assert backend.retrieve_calls == 1
+
+    recovered = coordinator.embeddings_batch_document(job.job_id)
+    assert recovered["status"] == "completed"
+    assert backend.retrieve_calls == 2
+    assert recovered["embeddings"][0]["embedding"] != []
 
 
 def test_cost_report_delegates_to_ledger_window() -> None:

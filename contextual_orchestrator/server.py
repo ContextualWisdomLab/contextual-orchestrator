@@ -32,7 +32,7 @@ from .cost_router import (
     CostRoutingCoordinator,
     InvalidBatchModelError,
 )
-from .batch_routing import BatchRequest
+from .batch_routing import BatchDownloadError, BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
@@ -7653,6 +7653,13 @@ def build_server(
                     503,
                     "batch_model_unavailable",
                     "no eligible model-group member is available for this batch request",
+                )
+            except BatchDownloadError as exc:
+                self._send_error(
+                    502,
+                    "batch_download_failed",
+                    f"batch result download failed for job {exc.job_id}",
+                    {"job_id": exc.job_id, "reason": exc.reason},
                 )
             except ProviderResponseError:
                 self._send_error(

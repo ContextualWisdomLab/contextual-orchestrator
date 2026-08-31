@@ -21,6 +21,7 @@ from contextual_orchestrator import (  # noqa: E402
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     PgLlmBatchBackend,
@@ -562,8 +563,9 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
 
 def test_batch_completion_records_on_retrieve() -> None:
     coordinator = _coordinator()
+    prompt = "bulk job please"
     submitted = coordinator.complete(
-        [{"role": "user", "content": "bulk job please"}],
+        [{"role": "user", "content": prompt}],
         hints={"latency_tolerant": True},
         attribution={"team": "beta", "company": "acme"},
     )
@@ -577,6 +579,24 @@ def test_batch_completion_records_on_retrieve() -> None:
     assert len(records) == 1
     assert records[0]["request_channel"] == "batch"
     assert records[0]["team_name"] == "beta"
+
+    # The mock runner behind LocalBatchBackend reports no real per-step usage,
+    # so this legitimately falls back to an estimate -- but it must be an
+    # honest estimate of the *real* prompt threaded through
+    # BatchResultItem.messages, not the old hardcoded blank placeholder
+    # (which always computed exactly ``count_messages([{"content": ""}])``
+    # tokens regardless of how long the actual prompt was).
+    result = retrieved["results"][0]
+    blank_prompt_tokens = coordinator.token_counter.count_messages(
+        [{"role": "user", "content": ""}]
+    )
+    real_prompt_tokens = coordinator.token_counter.count_messages(
+        [{"role": "user", "content": prompt}]
+    )
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] == real_prompt_tokens
+    assert result["prompt_tokens"] != blank_prompt_tokens
+    assert result["completion_tokens"] > 0
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
@@ -664,6 +684,47 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
     # cost from pg-provided usage: 5/1k*1 + 5/1k*2 = 0.005 + 0.010 = 0.015
     assert row["cost_amount"] == 0.015
     assert row["request_channel"] == "batch"
+
+
+def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_success() -> None:
+    """An explicit download failure must never be reported as a zero-result success.
+
+    Regression for the bug where ``PgLlmBatchBackend.retrieve()`` mapped
+    ``success: False`` to ``[]``, which ``retrieve_batch()`` then returned as
+    an ordinary ``result_count: 0`` success -- indistinguishable from a batch
+    that legitimately completed with nothing to report.
+    """
+
+    class _FailingClient:
+        async def upload_jsonl(self, file_path, endpoint_alias, purpose="batch"):
+            return {"id": "file-1"}
+
+        async def create_batch_job(self, input_file_id, endpoint_alias, endpoint="/v1/chat/completions", metadata=None):
+            return {"id": "batch-failed", "status": "validating"}
+
+        async def get_batch_status(self, batch_id, endpoint_alias):
+            return {"status": "completed", "is_complete": True}
+
+        async def download_results(self, batch_id, endpoint_alias):
+            return {"success": False, "reason": "Batch not complete"}
+
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
+                         tags=("reasoning",), priority=1)]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("mock", "*", 1.0, 2.0))
+    backend = PgLlmBatchBackend(_FailingClient())
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book, batch_backend=backend)
+
+    submitted = coordinator.complete([{"role": "user", "content": "route to pg-llm-batch"}],
+                                     hints={"channel": "batch"}, attribution={"provider": "mock"})
+    with pytest.raises(BatchDownloadError) as excinfo:
+        coordinator.retrieve_batch(submitted["job_id"])
+    assert excinfo.value.job_id == submitted["job_id"]
+    assert excinfo.value.reason == "Batch not complete"
+    # No usage was recorded for the failed retrieval.
+    assert coordinator.ledger.records() == []
 
 
 def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() -> None:

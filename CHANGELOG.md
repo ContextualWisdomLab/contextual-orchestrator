@@ -12,6 +12,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Batch result retrieval no longer converts an explicit download failure into
+  a silent empty result. `PgLlmBatchBackend.retrieve()` and
+  `PgLlmBatchEmbeddingBackend.retrieve()` now raise a new
+  `BatchDownloadError` (carrying the job id and the client's reported
+  `reason`/`error`) instead of returning `[]`, which used to be
+  indistinguishable from a batch that legitimately completed with zero
+  items. `CostRoutingCoordinator.retrieve_batch()` now lets the error
+  propagate rather than reporting a fake `result_count: 0` success (a new
+  `except BatchDownloadError` handler in `server.py` maps it to `502
+  batch_download_failed`, matching how other typed batch/provider errors are
+  already routed there). `embeddings_batch_document()` catches it and returns
+  `status: "failed"` with an `error` field, and — the severe half of this bug
+  — deliberately does **not** cache that result: a bare `return []` on
+  download failure used to be treated as a legitimately completed batch and
+  cached under `status: "completed"` with a fabricated `{"embedding": []}`
+  for every input, permanently poisoning that `batch_id` since the cache
+  short-circuits all future poll/retrieve calls before ever touching the
+  backend again. A failed retrieval now stays retryable.
+- `LocalBatchBackend` (the default `batch_backend` whenever
+  `CostRoutingCoordinator` is constructed without an explicit override, i.e.
+  every standalone/self-hosted-without-pg-llm-batch deployment) no longer
+  discards the real usage its runner reports. `BatchResultItem` gained a
+  `messages` field carrying the original request through, and
+  `LocalBatchBackend.submit()` now aggregates real `prompt_tokens`/
+  `completion_tokens` from `result["trace"][i]["usage"]` (usage has no
+  top-level key on `orchestrator.complete()`'s result; it is nested per
+  workflow step) instead of leaving both at the dataclass's `0` default.
+  `retrieve_batch()`'s heuristic-estimate fallback (triggered whenever a
+  batch item reports no usage) now estimates from the batch item's real
+  request messages instead of a hardcoded blank `""` prompt — previously
+  every such row was labeled `measurement_status="estimated"` while actually
+  being a constant ~3-token count derived from empty content regardless of
+  the real prompt's length, misrepresenting what "estimated" meant to a
+  buyer reading the ledger.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

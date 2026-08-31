@@ -1,6 +1,7 @@
 """Public package exports for the contextual orchestration runtime."""
 
 from .batch_routing import (
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     BatchResultItem,
@@ -130,6 +131,7 @@ __all__ = [
     "BatchRequest",
     "BatchJob",
     "BatchResultItem",
+    "BatchDownloadError",
     "LocalBatchBackend",
     "PgLlmBatchBackend",
     # embeddings batch

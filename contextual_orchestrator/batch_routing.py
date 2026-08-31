@@ -24,6 +24,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import logging
 import time
 import uuid
 from contextlib import nullcontext
@@ -31,6 +32,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
+
+_LOGGER = logging.getLogger(__name__)
 
 _ROUTING_CATEGORY = "routing"
 _PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
@@ -203,6 +206,32 @@ class BatchResultItem:
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
+    # The original request messages, carried through so a caller whose
+    # backend reports no usage (e.g. LocalBatchBackend against a mock/local
+    # runner) can estimate from the real prompt instead of a blank placeholder.
+    messages: List[Dict[str, str]] = field(default_factory=list)
+
+
+class BatchDownloadError(RuntimeError):
+    """A batch backend's result download explicitly failed.
+
+    Raised instead of silently returning an empty result list when the
+    injected client reports ``{"success": False, ...}`` — a transient
+    download error, or the batch having actually expired/errored upstream
+    after ``poll()`` already reported ``is_complete=True``. An empty list is
+    reserved for a batch that legitimately completed with zero items;
+    conflating the two hides real failures (and, for embeddings, can
+    permanently poison a cached "completed" document with fabricated
+    zero-vectors — see ``CostRoutingCoordinator.embeddings_batch_document``).
+    """
+
+    def __init__(self, job_id: str, reason: Optional[str] = None) -> None:
+        self.job_id = job_id
+        self.reason = reason
+        message = f"batch {job_id!r} result download failed"
+        if reason:
+            message = f"{message}: {reason}"
+        super().__init__(message)
 
 
 class BatchBackend(Protocol):
@@ -268,12 +297,27 @@ class LocalBatchBackend:
             with context:
                 result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
+            # The runner (typically orchestrator.complete()) has no top-level
+            # "usage" key -- real provider usage is nested per-step inside
+            # "trace"[i]["usage"] (one step for route, possibly several for
+            # conduct). Aggregate it so batch results carry real token counts
+            # instead of the dataclass's zero defaults.
+            trace = result.get("trace") or []
+            prompt_tokens = sum(
+                int((step.get("usage") or {}).get("prompt_tokens", 0)) for step in trace
+            )
+            completion_tokens = sum(
+                int((step.get("usage") or {}).get("completion_tokens", 0)) for step in trace
+            )
             return BatchResultItem(
                 custom_id=request.custom_id,
                 answer=answer,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 attribution=dict(request.attribution),
                 model=request.model,
                 mode=result.get("mode", request.mode),
+                messages=list(request.messages),
             )
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
@@ -389,13 +433,25 @@ class PgLlmBatchBackend:
         }
 
     def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
-        """Download + parse batch results, mapping them back to submitted requests."""
+        """Download + parse batch results, mapping them back to submitted requests.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
         payload = self._run(_download())
         if not payload.get("success"):
-            return []
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
         tracked = self._jobs.get(job.job_id, {}).get("requests", {})
         items: List[BatchResultItem] = []
         for entry in payload.get("responses", []):
@@ -705,13 +761,25 @@ class PgLlmBatchEmbeddingBackend:
         }
 
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
-        """Download + parse embedding results, mapping them back to input order."""
+        """Download + parse embedding results, mapping them back to input order.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
         payload = self._run(_download())
         if not payload.get("success"):
-            return []
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "embeddings batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
         tracked = self._jobs.get(job.job_id, {})
         tracked_requests = tracked.get("requests", {})
         order = tracked.get("order", [])

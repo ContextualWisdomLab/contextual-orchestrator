@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import pytest
 
 from contextual_orchestrator.batch_routing import (
+    BatchDownloadError,
     BatchRequest,
     EmbeddingBatchRequest,
     LocalBatchBackend,
@@ -257,12 +258,14 @@ def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
     assert items[1].embedding == []
 
 
-def test_pg_embedding_backend_failed_download_returns_empty() -> None:
+def test_pg_embedding_backend_failed_download_raises_download_error() -> None:
     client = _FakeEmbeddingClient()
     client.success = False
     backend = PgLlmBatchEmbeddingBackend(client)
     job = backend.submit([EmbeddingBatchRequest(input_text="never retrieved")])
-    assert backend.retrieve(job) == []
+    with pytest.raises(BatchDownloadError) as excinfo:
+        backend.retrieve(job)
+    assert excinfo.value.job_id == job.job_id
     assert client.downloads == [job.job_id]
 
 
