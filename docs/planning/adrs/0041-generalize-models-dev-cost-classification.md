@@ -33,9 +33,9 @@ time, in `_parse_openai_compatible` (`_pricing_is_free`, unless a merged row
 already carries an explicit `is_free` boolean), which requires a provider's
 own model-list response to carry a real per-token price of exactly zero. Of
 this gateway's six configured provider sources, only OpenRouter's own API
-ever reports real pricing, and OpenRouter is deliberately `evidence_only=True`
-(commit `952996ec`, a ZDR-privacy hardening that stays untouched) and so never
-serves inference. Of the remaining five, `openai`, `nvidia_nim`,
+ever reports real pricing. Commit `952996ec` incorrectly made its entire
+authenticated catalog evidence-only even though ZDR evidence is route-specific;
+ADR 0032 now restores those rows as serving candidates. Of the remaining five, `openai`, `nvidia_nim`,
 `nvidia_nim_sub`, and `bytez` never report pricing in their own `/v1/models`
 responses, so `is_free` was never `True` for any of them. `orchestrator/free`
 was therefore structurally empty in practice: the one provider ADR 0032
@@ -87,7 +87,7 @@ constant and its `provider_name == "opencode_zen"` special case with the same
 value, now expressed as data), `nvidia_nim` and `nvidia_nim_sub` both set it
 to `"nvidia"`, and `openai` sets it to `"openai"`. `openrouter` and `bytez`
 keep the `None` default: OpenRouter already reports its own real per-token
-pricing and stays `evidence_only=True` regardless, and there is no
+pricing, and there is no
 Models.dev signal to join for Bytez.
 
 The invocation site in `discover_provider_models` becomes `if
@@ -157,6 +157,25 @@ touches can turn a paid model free.
   supported source is registered. This preserves the prior single fetch for
   `opencode_zen` and removes up to three duplicate fetches when multiple
   supported sources are registered.
+
+## Amendment (2026-08-30): bounded retry on the shared fetch
+
+Restoring real `orchestrator/free` coverage for `nvidia_nim`/`nvidia_nim_sub`
+onto this one shared, unauthenticated, third-party fetch also made it a
+single point of failure for their entire free-tier classification: this
+module already documents that `models.dev` has been observed live to reject
+urllib's default user agent as a bot signature (`_HTTP_USER_AGENT`), and the
+fetch had exactly one attempt. `_fetch_models_dev_metadata` now makes up to
+`_MODELS_DEV_FETCH_ATTEMPTS` (3) total attempts — the initial attempt plus
+2 retries — with a short fixed delay between them before degrading to
+`None`, so one transient blip in a third-party
+service this gateway does not control no longer has to erase `nvidia_nim`'s
+and `nvidia_nim_sub`'s free-tier evidence for an entire discovery run. The
+cost-safety argument above is unchanged: every failure mode this ADR lists
+still leaves `is_free = False` once the retry budget is genuinely exhausted;
+nothing about the retry can turn a paid model free. Motivated by the
+`orchestrator/free` review-sidecar reliability gap in
+`ContextualWisdomLab/.github` PR #1433.
 
 ## References
 

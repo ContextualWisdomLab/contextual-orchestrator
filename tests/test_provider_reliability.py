@@ -29,7 +29,10 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
     is_transient_error,
 )
-from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.provider_errors import (  # noqa: E402
+    ProviderUpstreamError,
+    classify_provider_failure,
+)
 from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
@@ -81,6 +84,24 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(socket.timeout("slow"))
 
 
+def test_transient_classification_unwraps_a_temporary_dns_runtime_error() -> None:
+    """ModelClient._resolve_addresses wraps socket.gaierror as RuntimeError.
+
+    A genuinely temporary DNS failure (EAI_AGAIN) must still be retried even
+    through that wrapper; a permanent one (e.g. EAI_NONAME, a bad hostname)
+    and a config RuntimeError with no DNS cause must not be.
+    """
+    temporary_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    temporary_dns.__cause__ = socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+    assert is_transient_error(temporary_dns) is True
+
+    permanent_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    permanent_dns.__cause__ = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+    assert is_transient_error(permanent_dns) is False
+
+    assert is_transient_error(RuntimeError("provider host 'gateway.example' has no stream address")) is False
+
+
 def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:
     class StoppedProviderClient(ModelClient):
         def __init__(self) -> None:
@@ -130,6 +151,14 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
+    # Regression (Devin review on #923): urlopen wraps a TLS handshake's
+    # SSLCertVerificationError as URLError(reason=...), not a bare ssl.SSLError.
+    # The blanket URLError-is-transient branch used to shadow this before the
+    # ssl.SSLError check could ever see it.
+    assert not is_transient_error(
+        urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+    )
+    assert is_transient_error(urllib.error.URLError(ConnectionResetError(104, "reset")))
 
 
 def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
@@ -602,6 +631,228 @@ def test_mock_batch_path_is_not_wrapped() -> None:
     results = client.batch_chat(agent, {"task_0": [{"role": "user", "content": "hello"}]})
     assert set(results) == {"task_0"}
     assert results["task_0"]["content"]
+
+
+# -- orchestrator/free request-time failover (ContextualWisdomLab/.github#1433) --
+
+
+def _free_pool_orchestrator(
+    client: ModelClient, *, free_ids: tuple[str, ...], priced_id: str = "priced_worker"
+) -> TaskOrchestrator:
+    """A free/priced mixed pool used to prove free-tier failover never promotes."""
+    agents = [
+        ModelAgent(free_id, f"{free_id}-model", tags=("reasoning", "cost:free"))
+        for free_id in free_ids
+    ] + [
+        ModelAgent(priced_id, "priced-model", tags=("reasoning",), priority=99),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, client=client, tool_retry_attempts=1, tool_retry_backoff_seconds=0.0
+    )
+    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    return orchestrator
+
+
+def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
+    """A 502/503 on the primary free route fails over to the next free route.
+
+    Regression for ContextualWisdomLab/.github#1433: the sidecar's
+    ``orchestrator/free`` preflight returned an opaque 502 instead of trying
+    the next-ranked free candidate already in the built catalog.
+    """
+    calls: list[str] = []
+
+    class FlakyFreeTier(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+            if agent.id == "free_route_b":
+                raise classify_provider_failure(_http_error(503), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        FlakyFreeTier(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_c] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_c"
+    # tool_retry_attempts=1 gives each failing free route one same-agent retry
+    # before advancing — the request-time-failure retry budget from point 2.
+    assert calls == [
+        "free_route_a",
+        "free_route_a",
+        "free_route_b",
+        "free_route_b",
+        "free_route_c",
+    ]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_advances_through_the_free_pool_on_non_retryable_4xx() -> None:
+    """A non-retryable 400 on the primary free route advances immediately.
+
+    Reproduces a live incident reported against ContextualWisdomLab/.github#1437:
+    a required Strix run against ``orchestrator/free`` had all three of the
+    sidecar's bounded outer attempts land on the same agent and fail with a
+    provider HTTP 400 ``invalid_request_error`` (``retryable: false``), and
+    the gateway declared the whole free pool exhausted. Each outer attempt
+    starts a fresh gateway process, so this reproduces as: does a single
+    ``route_once`` call advance past a non-retryable failure on the primary
+    free route to a second, distinct free route, with no same-agent retry
+    (unlike the retryable-5xx case above)?
+    """
+    calls: list[str] = []
+
+    class InvalidRequestOnPrimary(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(400), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        InvalidRequestOnPrimary(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+    # Non-retryable: free_route_a is tried exactly once, then failover moves
+    # on immediately -- no same-agent retry, unlike the retryable-5xx case.
+    assert calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent() -> None:
+    """Exhausting every free route fails closed with the last classified error.
+
+    ADR-0003 (ContextualWisdomLab/.github) requires that failing over among
+    free routes never silently promotes to a priced route without the
+    evidence gate ``orchestrator/auto`` already enforces.
+    """
+
+    class AllFreeRoutesDown(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "priced_worker":  # pragma: no cover - must never be reached
+                return "[priced_worker] answer"
+            return_status = 502 if agent.id == "free_route_a" else 503
+            raise classify_provider_failure(
+                _http_error(return_status), agent_id=agent.id, model=agent.model
+            )
+
+    client = AllFreeRoutesDown()
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+    orchestrator.tool_retry_attempts = 0  # exhaust on the first attempt per candidate
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert excinfo.value.client_status == 503
+    assert excinfo.value.agent_id == "free_route_b"
+    assert client.calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_free_model_failover_survives_a_tool_shaped_provider_message() -> None:
+    """A 500 whose body happens to mention "tool"/"invalid arguments" still fails over.
+
+    Regression for the fragility this fix removes: before, ``_invoke``
+    classified the *primary provider call's* failure with
+    ``classify_tool_failure`` — a tool-execution-oriented, message-text
+    heuristic. A plain transport failure whose upstream JSON body incidentally
+    contained a tool-execution-shaped phrase (e.g. an "invalid arguments"
+    rejection that also names ``tool_choice``) was reclassified as
+    ``invalid_arguments`` and failed CLOSED instead of failing over, even
+    though replaying a stateless chat completion on another free route is
+    always safe. Classification now comes only from the provider's own
+    already-computed ``retryable`` flag.
+    """
+    tool_shaped_error = urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        500,
+        "Internal Server Error",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "message": "invalid arguments: unsupported tool_choice value",
+                    }
+                }
+            ).encode("utf-8")
+        ),
+    )
+
+    class ToolShapedFailureThenBackup(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(
+                    tool_shaped_error, agent_id=agent.id, model=agent.model
+                )
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        ToolShapedFailureThenBackup(), free_ids=("free_route_a", "free_route_b")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+
+
+def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
+    """``orchestrator/auto`` request-time failover is unaffected by the fix."""
+
+    class FlakyPrimary(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "auto_primary":
+                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    agents = [
+        ModelAgent("auto_primary", "mock-a", tags=("reasoning",), priority=5),
+        ModelAgent("auto_backup", "mock-b", tags=("reasoning",), priority=1),
+    ]
+    client = FlakyPrimary()
+    orchestrator = TaskOrchestrator(
+        agents, client=client, tool_retry_attempts=0, tool_retry_backoff_seconds=0.0
+    )
+    orchestrator._triage_fn = lambda text: False
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.AUTO_MODEL,
+    )
+
+    assert result["answer"] == "[auto_backup] answer"
+    assert result["trace"][0]["served_agent_id"] == "auto_backup"
+    assert client.calls == ["auto_primary", "auto_backup"]
 
 
 if __name__ == "__main__":

@@ -30,7 +30,6 @@ from .model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
     _currency_is_comparable,
-    _provider_family,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -188,6 +187,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
+                *(("spend:blocked",) if not model.spend_admitted else ()),
                 *privacy_tags_for_discovered(model),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
@@ -232,11 +232,10 @@ def select_provider_diverse_models(
     selected: list[DiscoveredModel] = []
     seen_providers: set[str] = set()
     for model in ordered:
-        provider_family = _provider_family(model.provider_name)
-        if provider_family in seen_providers:
+        if model.provider_name in seen_providers:
             continue
         selected.append(model)
-        seen_providers.add(provider_family)
+        seen_providers.add(model.provider_name)
         if len(selected) >= limit:
             return selected
     selected_keys = {

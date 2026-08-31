@@ -85,12 +85,22 @@ _UNMAPPED_UPSTREAM_SURFACE: tuple[int, str, bool] = (502, "api_error", False)
 
 
 def provider_error_body(exc: urllib.error.HTTPError) -> bytes:
-    """Read and cache one bounded upstream error body for all classifiers."""
+    """Read and cache one bounded upstream error body for all classifiers.
+
+    The read is untrusted network I/O: a stalled or dropped connection can
+    raise ``http.client.IncompleteRead`` (not an ``OSError`` subclass) or
+    other transport failures mid-read. A classifier's body inspection must
+    never abort its caller over an unreadable body, so any read failure
+    here degrades to an empty body rather than propagating.
+    """
     cache_key = "_contextual_orchestrator_provider_error_body"
     cached = getattr(exc, cache_key, None)
     if isinstance(cached, bytes):
         return cached
-    body = exc.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[:MAX_PROVIDER_ERROR_BODY_BYTES]
+    try:
+        body = exc.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[:MAX_PROVIDER_ERROR_BODY_BYTES]
+    except Exception:  # noqa: BLE001 - bodies are untrusted input; a read failure is not fatal
+        body = b""
     try:
         setattr(exc, cache_key, body)
     except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable

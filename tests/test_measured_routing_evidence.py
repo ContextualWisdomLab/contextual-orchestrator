@@ -91,6 +91,20 @@ def test_output_tokens_validation_rejects_non_positive_and_boolean() -> None:
             router.observe_success("member_one", 1.0, output_tokens=invalid)  # type: ignore[arg-type]
 
 
+def test_total_tokens_validation_rejects_non_positive_and_boolean() -> None:
+    router = ModelGroupRouter()
+    for invalid in (0, -5, True, 1.5, "12"):
+        with pytest.raises((TypeError, ValueError)):
+            router.observe_success("member_one", 1.0, total_tokens=invalid)  # type: ignore[arg-type]
+
+
+def test_usage_total_tokens_requires_provider_reported_positive_integer() -> None:
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": 42}) == 42
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": 0}) is None
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": True}) is None
+    assert TaskOrchestrator._usage_total_tokens({"completion_tokens": 42}) is None
+
+
 def test_unobserved_member_reports_include_null_token_column() -> None:
     router = ModelGroupRouter()
     report = router.member_report("never_seen")

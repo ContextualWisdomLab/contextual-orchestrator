@@ -31,6 +31,7 @@ import math
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 
 from .conventions import require_object_name
@@ -46,6 +47,7 @@ BETA_PRIOR_FAILURE_COUNT = 1.0
 #: Floor under the latency divisor so a zero/near-zero EWMA cannot explode
 #: the score before any real latency is observable (1 ms).
 MIN_ROUTING_LATENCY_SECONDS = 1e-3
+RATE_OBSERVATION_WINDOW_SECONDS = 60.0
 
 #: Neutral score assigned to members with no observations yet. All unobserved
 #: members share it exactly, which makes intra-group ordering fall back to the
@@ -130,6 +132,9 @@ class ModelGroupRouter:
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
         self._members: dict[str, dict[str, float | None]] = {}
+        self._minute_observations: dict[str, deque[tuple[float, int | None]]] = {}
+        self._max_observed_rpm: dict[str, int] = {}
+        self._max_observed_tpm: dict[str, int] = {}
 
     def register_member(self, member_id: str) -> None:
         """Ensure a member exists in the ledger (idempotent, keeps history)."""
@@ -169,6 +174,9 @@ class ModelGroupRouter:
                         )
                         del self._members[member_id]
                         self._member_contexts.pop(member_id, None)
+                        self._minute_observations.pop(member_id, None)
+                        self._max_observed_rpm.pop(member_id, None)
+                        self._max_observed_tpm.pop(member_id, None)
             return
         with self._lock:
             with self._observation_io_lock:
@@ -181,6 +189,9 @@ class ModelGroupRouter:
                         )
                         self._members.pop(member_id, None)
                         self._member_contexts.pop(member_id, None)
+                        self._minute_observations.pop(member_id, None)
+                        self._max_observed_rpm.pop(member_id, None)
+                        self._max_observed_tpm.pop(member_id, None)
 
     def reset_members(self, member_ids: set[str]) -> None:
         """Discard measurements whose group context changed."""
@@ -192,6 +203,9 @@ class ModelGroupRouter:
                     )
                     self._members.pop(member_id, None)
                     self._member_contexts.pop(member_id, None)
+                    self._minute_observations.pop(member_id, None)
+                    self._max_observed_rpm.pop(member_id, None)
+                    self._max_observed_tpm.pop(member_id, None)
             return
         with self._lock:
             with self._observation_io_lock:
@@ -202,6 +216,9 @@ class ModelGroupRouter:
                     )
                     self._members.pop(member_id, None)
                     self._member_contexts.pop(member_id, None)
+                    self._minute_observations.pop(member_id, None)
+                    self._max_observed_rpm.pop(member_id, None)
+                    self._max_observed_tpm.pop(member_id, None)
 
     def update_prior(
         self,
@@ -246,6 +263,7 @@ class ModelGroupRouter:
         member_id: str,
         latency_seconds: float,
         output_tokens: int | None = None,
+        total_tokens: int | None = None,
         *,
         observation_context_key: str | None = None,
         observed_at: float | None = None,
@@ -271,6 +289,12 @@ class ModelGroupRouter:
             or output_tokens <= 0
         ):
             raise ValueError("output_tokens must be a positive integer when provided")
+        if total_tokens is not None and (
+            isinstance(total_tokens, bool)
+            or not isinstance(total_tokens, int)
+            or total_tokens <= 0
+        ):
+            raise ValueError("total_tokens must be a positive integer when provided")
         clamped = max(latency, self._min_latency_seconds)
         try:
             throughput_sample = None if output_tokens is None else float(output_tokens) / clamped
@@ -295,6 +319,18 @@ class ModelGroupRouter:
                 )
                 if state is not None:
                     self._apply_success_locked(state, clamped, throughput_sample)
+                    observations = self._minute_observations.setdefault(member_id, deque())
+                    observations.append((when, total_tokens))
+                    cutoff = when - RATE_OBSERVATION_WINDOW_SECONDS
+                    while observations and observations[0][0] <= cutoff:
+                        observations.popleft()
+                    self._max_observed_rpm[member_id] = max(
+                        self._max_observed_rpm.get(member_id, 0), len(observations)
+                    )
+                    self._max_observed_tpm[member_id] = max(
+                        self._max_observed_tpm.get(member_id, 0),
+                        sum(tokens or 0 for _, tokens in observations),
+                    )
 
     def observe_failure(
         self,
@@ -572,6 +608,9 @@ class ModelGroupRouter:
                 "success_posterior_mean": UNOBSERVED_MEMBER_SCORE,
                 "ewma_latency_seconds": None,
                 "ewma_tokens_per_second": None,
+                "max_observed_rpm": 0,
+                "max_observed_tpm": 0,
+                "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
                 "success_count": 0,
                 "failure_count": 0,
                 "score": UNOBSERVED_MEMBER_SCORE,
@@ -594,5 +633,8 @@ class ModelGroupRouter:
                 beta
                 - self._float_value(state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT)
             ),
+            "max_observed_rpm": self._max_observed_rpm.get(member_id, 0),
+            "max_observed_tpm": self._max_observed_tpm.get(member_id, 0),
+            "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
             "score": round(self._score_locked(member_id), 9),
         }

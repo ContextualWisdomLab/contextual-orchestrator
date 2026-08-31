@@ -1,5 +1,6 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
+from dataclasses import replace
 import os
 from unittest.mock import patch
 
@@ -45,6 +46,61 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
     assert all(not candidate.base_url.startswith("mock://") for candidate in orchestrator.agents)
     assert "bootstrap_agent" in result["updated"]
+
+
+def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
+    monkeypatch,
+) -> None:
+    """A free vision-input model becomes a normal agent, not a blind-free one.
+
+    Reproduces the second locus of ContextualWisdomLab/.github#1198's incident
+    (Devin review on PR #933): ``_auto_discover_runtime_agents`` activates
+    every routable discovered model directly through
+    ``model_discovery.agent_from_discovered`` and never consulted
+    ``model_discovery.free_discovered_models``'s exclusion at all, so NVIDIA
+    NIM's ``meta/llama-3.2-90b-vision-instruct`` kept its ``cost:free`` tag and
+    stayed blindly selectable by ``orchestrator/free`` through this second
+    path even after that first function was fixed. Pre-fix, every assertion
+    from ``_is_general_free_agent`` onward here fails: the agent is (wrongly)
+    treated as blind-free-pool eligible and ``orchestrator/free`` is (wrongly)
+    advertised.
+    """
+    vision = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-90b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([vision], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert len(result["added"]) == 1
+    agent = next(
+        candidate for candidate in orchestrator.agents if candidate.id == result["added"][0]
+    )
+    # The model is a legitimate chat-capable agent (e.g. for a caller that
+    # explicitly requests it with an image) and its price evidence is honest.
+    assert agent.disabled is False
+    assert "cost:free" in agent.tags
+    # Its own capability route can still serve it for free (price-only).
+    assert orchestrator._is_free_agent(agent) is True
+    # It must never be selectable by the capability-blind general chat pool.
+    assert orchestrator._is_general_free_agent(agent) is False
+    assert orchestrator.FREE_MODEL not in {
+        row["id"] for row in orchestrator.list_openai_models()["data"]
+    }
 
 
 def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -> None:
@@ -361,6 +417,121 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert orchestrator.candidates == [bootstrap, existing]
+
+
+def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
+    monkeypatch,
+) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        discovered.model_id,
+        base_url="https://custom.example/v1",
+        provider_name="openrouter",
+        tags=("discovered", "chat", "operator-tag"),
+        priority=17,
+    )
+    orchestrator = TaskOrchestrator([existing])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": [existing.id]}
+    blocked = orchestrator.candidates[0]
+    assert blocked.disabled is True
+    assert blocked.base_url == existing.base_url
+    assert blocked.priority == 17
+    assert blocked.tags == (*existing.tags, "spend:blocked")
+
+    _auto_discover_runtime_agents(orchestrator)
+    assert orchestrator.candidates[0] == blocked
+
+    recovered = replace(discovered, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0] == existing
+
+
+def test_auto_discovery_recovers_model_first_discovered_while_spend_blocked(
+    monkeypatch,
+) -> None:
+    blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([blocked], []),
+    )
+    orchestrator = TaskOrchestrator([], allow_empty_agents=True)
+    _auto_discover_runtime_agents(orchestrator)
+    assert orchestrator.candidates[0].disabled is True
+
+    recovered = replace(blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0].disabled is False
+    assert "spend:blocked" not in orchestrator.candidates[0].tags
+
+
+def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
+    monkeypatch,
+) -> None:
+    blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        blocked.model_id,
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([existing], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([blocked], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    recovered = replace(blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0] == existing
 
 
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
