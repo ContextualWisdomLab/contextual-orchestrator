@@ -228,6 +228,7 @@ def test_pg_embedding_backend_full_lifecycle_with_assembler() -> None:
 def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
     client = _FakeEmbeddingClient()
     backend = PgLlmBatchEmbeddingBackend(client, endpoint_alias="nim-east")
+    assert backend.poll_after_ms == 1000
     requests = [EmbeddingBatchRequest(input_text="solo input", custom_id="emb_solo")]
     job = backend.submit(requests)
     assert job.status == "validating"
