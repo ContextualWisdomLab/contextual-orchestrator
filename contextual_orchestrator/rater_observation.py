@@ -10,10 +10,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 from typing import Any
+import unicodedata
 
 
 GOVERNED_RATER_OBSERVATION_CONTRACT_V1 = "cwl_governed_rater_observation/v1"
+GOVERNED_RATER_UPSTREAM_REVISION = "38487df3f5f84b475e07b39cf13c893293e542e7"
+GOVERNED_RATER_SCHEMA_SHA256 = "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
+GOVERNED_RATER_CONFORMANCE_SHA256 = "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
 MAX_RATER_REFERENCE_LENGTH = 256
 MAX_RATER_OBSERVATIONS = 128
 MAX_RATER_EVIDENCE_REFERENCES = 64
@@ -44,7 +49,6 @@ _CONFIGURATION_FIELDS = frozenset(
 )
 _OBSERVATION_FIELDS = frozenset(
     {
-        "criterion_ref",
         "status",
         "category_anchor_ref",
         "evidence_reference_ids",
@@ -74,6 +78,17 @@ class RaterObservationError(ValueError):
         super().__init__(message)
 
 
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RaterObservationError(
+                "duplicate_object_member", "JSON objects must not repeat member names"
+            )
+        result[key] = value
+    return result
+
+
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise RaterObservationError("invalid_object", f"{field_name} must be an object")
@@ -89,17 +104,22 @@ def _reference(value: Any, field_name: str) -> str:
         raise RaterObservationError(
             "invalid_reference", f"{field_name} must be a string"
         )
-    normalized = value.strip()
-    if not normalized or len(normalized) > MAX_RATER_REFERENCE_LENGTH:
+    if (
+        not value
+        or value != value.strip()
+        or value.startswith("\ufeff")
+        or value.endswith("\ufeff")
+        or len(value) > MAX_RATER_REFERENCE_LENGTH
+    ):
         raise RaterObservationError(
             "invalid_reference",
             f"{field_name} must be a bounded non-empty reference",
         )
-    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+    if any(unicodedata.category(character) == "Cc" for character in value):
         raise RaterObservationError(
             "invalid_reference", f"{field_name} must not contain control characters"
         )
-    return normalized
+    return value
 
 
 def _reference_tuple(
@@ -253,18 +273,23 @@ class CriterionObservation:
             )
 
     @classmethod
-    def from_mapping(cls, value: Any) -> CriterionObservation:
+    def from_mapping(
+        cls, value: Any, *, criterion_ref: str | None = None
+    ) -> CriterionObservation:
         """Translate one untrusted structured observation into the domain entity."""
         payload = _mapping(value, "observation")
-        _reject_unknown_fields(payload, _OBSERVATION_FIELDS, "observation")
-        missing = _OBSERVATION_FIELDS - set(payload)
+        allowed = _OBSERVATION_FIELDS
+        if criterion_ref is None:
+            allowed = allowed | {"criterion_ref"}
+        _reject_unknown_fields(payload, allowed, "observation")
+        missing = allowed - set(payload)
         if missing:
             raise RaterObservationError(
                 "missing_field",
                 f"observation is missing required fields: {sorted(missing)}",
             )
         return cls(
-            criterion_ref=payload["criterion_ref"],
+            criterion_ref=(payload["criterion_ref"] if criterion_ref is None else criterion_ref),
             status=payload["status"],
             category_anchor_ref=payload["category_anchor_ref"],
             evidence_reference_ids=payload["evidence_reference_ids"],
@@ -276,7 +301,6 @@ class CriterionObservation:
     def to_payload(self) -> dict[str, Any]:
         """Return the published-language representation."""
         return {
-            "criterion_ref": self.criterion_ref,
             "status": self.status,
             "category_anchor_ref": self.category_anchor_ref,
             "evidence_reference_ids": list(self.evidence_reference_ids),
@@ -339,6 +363,17 @@ class RaterInvocation:
         object.__setattr__(self, "observations", observations)
 
     @classmethod
+    def from_json(cls, value: str) -> RaterInvocation:
+        """Decode raw JSON while rejecting duplicate members at every depth."""
+        if type(value) is not str:
+            raise RaterObservationError("invalid_json", "invocation JSON must be a string")
+        try:
+            payload = json.loads(value, object_pairs_hook=_unique_object)
+        except json.JSONDecodeError as exc:
+            raise RaterObservationError("invalid_json", "invocation JSON is invalid") from exc
+        return cls.from_mapping(payload)
+
+    @classmethod
     def from_mapping(cls, value: Any) -> RaterInvocation:
         """Apply the Anti-Corruption Layer to an untrusted invocation envelope."""
         payload = _mapping(value, "invocation")
@@ -350,10 +385,7 @@ class RaterInvocation:
                 f"invocation is missing required fields: {sorted(missing)}",
             )
         raw_observations = payload["observations"]
-        if not isinstance(raw_observations, (list, tuple)):
-            raise RaterObservationError(
-                "invalid_observations", "observations must be an array"
-            )
+        raw_observations = _mapping(raw_observations, "observations")
         if not raw_observations or len(raw_observations) > MAX_RATER_OBSERVATIONS:
             raise RaterObservationError(
                 "invalid_observations",
@@ -369,7 +401,8 @@ class RaterInvocation:
             rubric_revision_ref=payload["rubric_revision_ref"],
             response_evidence_ref=payload["response_evidence_ref"],
             observations=tuple(
-                CriterionObservation.from_mapping(item) for item in raw_observations
+                CriterionObservation.from_mapping(item, criterion_ref=criterion_ref)
+                for criterion_ref, item in raw_observations.items()
             ),
         )
 
@@ -382,5 +415,7 @@ class RaterInvocation:
             "task_revision_ref": self.task_revision_ref,
             "rubric_revision_ref": self.rubric_revision_ref,
             "response_evidence_ref": self.response_evidence_ref,
-            "observations": [item.to_payload() for item in self.observations],
+            "observations": {
+                item.criterion_ref: item.to_payload() for item in self.observations
+            },
         }

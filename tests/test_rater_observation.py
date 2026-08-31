@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+from pathlib import Path
 
 import pytest
 
 from contextual_orchestrator.rater_observation import (
     GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
+    GOVERNED_RATER_CONFORMANCE_SHA256,
+    GOVERNED_RATER_SCHEMA_SHA256,
+    GOVERNED_RATER_UPSTREAM_REVISION,
     MAX_RATER_EVIDENCE_REFERENCES,
     MAX_RATER_OBSERVATIONS,
     MAX_RATER_REFERENCE_LENGTH,
@@ -56,6 +61,8 @@ def _abstained(criterion_ref: str = "criterion-b") -> dict[str, object]:
 
 
 def _invocation() -> dict[str, object]:
+    observed = _observed()
+    abstained = _abstained()
     return {
         "contract_id": GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
         "invocation_ref": "invocation-1",
@@ -63,7 +70,10 @@ def _invocation() -> dict[str, object]:
         "task_revision_ref": "task-v1",
         "rubric_revision_ref": "rubric-v1",
         "response_evidence_ref": "response-evidence-1",
-        "observations": [_observed(), _abstained()],
+        "observations": {
+            observed.pop("criterion_ref"): observed,
+            abstained.pop("criterion_ref"): abstained,
+        },
     }
 
 
@@ -170,6 +180,38 @@ def test_configuration_requires_exact_fields_and_bounded_references() -> None:
     assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(control)) == (
         "invalid_reference"
     )
+
+
+def test_shared_canonical_reference_conformance_fixture() -> None:
+    fixture_path = Path(__file__).parent / "fixtures/governed_rater_observation_v1_conformance.json"
+    fixture_bytes = fixture_path.read_bytes()
+    fixture = json.loads(fixture_bytes)
+    assert fixture["contract_id"] == GOVERNED_RATER_OBSERVATION_CONTRACT_V1
+    assert GOVERNED_RATER_UPSTREAM_REVISION == "38487df3f5f84b475e07b39cf13c893293e542e7"
+    assert GOVERNED_RATER_SCHEMA_SHA256 == "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
+    assert GOVERNED_RATER_CONFORMANCE_SHA256 == "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
+    assert fixture["reference_cases"]
+    for case in fixture["reference_cases"]:
+        configuration = _configuration()
+        configuration["provider_ref"] = case["value"]
+        if case["valid"]:
+            assert RaterConfigurationIdentity.from_mapping(configuration).provider_ref == case["value"]
+        else:
+            assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(configuration)) == "invalid_reference"
+
+
+def test_shared_duplicate_member_cases_fail_before_mapping_validation() -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/governed_rater_observation_v1_conformance.json").read_text()
+    )
+    for case in fixture["observation_identity_cases"]:
+        if case["valid"]:
+            continue
+        observations = case["json_text"]
+        raw = json.dumps(_invocation()).replace(
+            json.dumps(_invocation()["observations"]), observations
+        )
+        assert _error_code(lambda raw=raw: RaterInvocation.from_json(raw)) == "duplicate_object_member"
 
 
 def test_observation_schema_is_exact_and_status_is_bounded() -> None:
@@ -305,22 +347,17 @@ def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> No
         "contract_incompatible"
     )
 
-    duplicate = _invocation()
-    duplicate["observations"] = [_observed("same"), _abstained("same")]
-    assert _error_code(lambda: RaterInvocation.from_mapping(duplicate)) == (
-        "duplicate_criterion"
-    )
-
     empty = _invocation()
-    empty["observations"] = []
+    empty["observations"] = {}
     assert _error_code(lambda: RaterInvocation.from_mapping(empty)) == (
         "invalid_observations"
     )
 
     oversized = _invocation()
-    oversized["observations"] = [
-        _observed(f"criterion-{index}") for index in range(MAX_RATER_OBSERVATIONS + 1)
-    ]
+    oversized["observations"] = {
+        f"criterion-{index}": _observed()
+        for index in range(MAX_RATER_OBSERVATIONS + 1)
+    }
     assert _error_code(lambda: RaterInvocation.from_mapping(oversized)) == (
         "invalid_observations"
     )
@@ -328,13 +365,15 @@ def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> No
     wrong_container = _invocation()
     wrong_container["observations"] = "observation"
     assert _error_code(lambda: RaterInvocation.from_mapping(wrong_container)) == (
-        "invalid_observations"
+        "invalid_object"
     )
 
 
 def test_collection_limits_are_checked_before_untrusted_values_are_traversed() -> None:
     invocation = _invocation()
-    invocation["observations"] = _OversizedList([None] * (MAX_RATER_OBSERVATIONS + 1))
+    invocation["observations"] = {
+        f"criterion-{index}": None for index in range(MAX_RATER_OBSERVATIONS + 1)
+    }
     assert _error_code(lambda: RaterInvocation.from_mapping(invocation)) == (
         "invalid_observations"
     )
@@ -356,7 +395,7 @@ def test_collection_limits_are_checked_before_untrusted_values_are_traversed() -
     ) == ("invalid_references")
 
     wrong_observation = _invocation()
-    wrong_observation["observations"] = ["observation"]
+    wrong_observation["observations"] = {"criterion": "observation"}
     assert _error_code(lambda: RaterInvocation.from_mapping(wrong_observation)) == (
         "invalid_object"
     )
@@ -407,6 +446,6 @@ def test_mapping_inputs_are_snapshotted_into_immutable_domain_values() -> None:
     invocation = RaterInvocation.from_mapping(payload)
 
     payload["configuration"]["provider_ref"] = "mutated"  # type: ignore[index]
-    payload["observations"][0]["evidence_reference_ids"].append("mutated")  # type: ignore[index,union-attr]
+    payload["observations"]["criterion-a"]["evidence_reference_ids"].append("mutated")  # type: ignore[index,union-attr]
 
     assert invocation.to_payload() == original
