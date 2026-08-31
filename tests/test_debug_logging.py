@@ -191,6 +191,28 @@ def test_summarize_request_for_log_handles_missing_status_and_session() -> None:
     assert "session_id_hash=-" in line
 
 
+def test_summarize_request_for_log_strips_query_string() -> None:
+    """A query string on `path` is never logged, only the bare path before `?`.
+
+    Deterministic unit-level counterpart to
+    tests/test_telemetry.py::test_per_request_info_summary_never_includes_query_string,
+    which exercises the same property end to end through a real server but
+    can occasionally flake on unrelated threaded-server teardown timing; this
+    test proves the property directly against the formatter with no
+    threading involved.
+    """
+    fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
+    line = summarize_request_for_log(
+        method="GET",
+        path=f"/healthz?api_key={fake_token}",
+        status=200,
+        latency_ms=0.5,
+    )
+    assert "path=/healthz" in line
+    assert "?" not in line
+    assert fake_token not in line
+
+
 def test_summarize_payload_for_log_truncates_and_labels() -> None:
     payload = {"choices": [{"message": {"content": "x" * 2000}}]}
     line = summarize_payload_for_log("response", payload, max_characters=100)

@@ -1181,9 +1181,33 @@ def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Except
 
     Fires by default (no --verbose needed): a provider call that ultimately
     failed is an actionable operational event, not just internal reasoning.
+    Only fires when the retry budget was actually exhausted -- an immediate
+    non-transient rejection that never spent a retry logs
+    :func:`_log_provider_rejected_permanent` instead, so an operator scanning
+    WARNING output never mistakes "gave up after using its full retry
+    budget" for "was never going to be retried in the first place".
     """
     _LOGGER.warning(
         "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s",
+        agent.id,
+        agent.model,
+        attempts,
+        type(last_error).__name__,
+    )
+
+
+def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_error: Exception) -> None:
+    """WARNING-log a provider call that stopped on a non-transient failure, not budget exhaustion.
+
+    Fires by default (no --verbose needed), mirroring
+    :func:`_log_provider_exhausted`'s default visibility, but under a
+    distinct event name: the retry loop stopped because
+    ``is_transient_error`` classified the final failure as permanent (e.g. a
+    401/403/malformed-request response), which can happen well before the
+    configured retry budget (``attempts`` may be as low as 1) is used up.
+    """
+    _LOGGER.warning(
+        "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s",
         agent.id,
         agent.model,
         attempts,
@@ -1686,7 +1710,10 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            _log_provider_exhausted(agent, attempt + 1, last_error)
+            if attempt >= retry_limit:
+                _log_provider_exhausted(agent, attempt + 1, last_error)
+            else:
+                _log_provider_rejected_permanent(agent, attempt + 1, last_error)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -2228,7 +2255,10 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            _log_provider_exhausted(agent, attempt + 1, last_error)
+            if attempt >= retry_limit:
+                _log_provider_exhausted(agent, attempt + 1, last_error)
+            else:
+                _log_provider_rejected_permanent(agent, attempt + 1, last_error)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (

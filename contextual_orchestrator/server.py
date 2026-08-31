@@ -35,6 +35,7 @@ from .cost_router import (
 from .batch_routing import BatchRequest
 from .debug_logging import (
     redact_credential_shaped_keys,
+    response_metadata_for_log,
     summarize_payload_for_log,
     summarize_request_for_log,
 )
@@ -5055,16 +5056,19 @@ def _strip_internal_fields(value: Any) -> Any:
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
-        # Reuses this SAME already-redacted safe_payload as the base -- never
-        # a second, separate, possibly-unredacted copy of the response body
-        # -- but redact_value/redact_text only pattern-match a secret's
-        # in-string *value* shape; they never inspect the JSON key a string
-        # is nested under, so a field like {"private_key": "..."} would
-        # otherwise still leak here verbatim. This additional, log-only pass
-        # closes that gap by key name; it never affects what
-        # _response_payload returns to actual HTTP callers below, only what
-        # gets logged.
-        log_safe_payload = redact_credential_shaped_keys(safe_payload)
+        # The DEBUG response-body summary logs only an allowlisted metadata
+        # shape (has_error/model/choice_count/usage) via
+        # response_metadata_for_log -- never the payload itself. redact_value
+        # only pattern-matches a secret's in-string *value* shape, and even
+        # the additional redact_credential_shaped_keys pass only masks
+        # *credential*-shaped JSON keys; neither ever masks ordinary response
+        # text (choices[].message.content, tool-call arguments, an
+        # error.message that can reflect caller-supplied input), which is not
+        # a credential but can still carry PII or business-sensitive content
+        # (CWE-532). redact_credential_shaped_keys is applied on top of the
+        # allowlist anyway, defense-in-depth, in case a future allowlist
+        # field ever collides with a credential-shaped key name.
+        log_safe_payload = redact_credential_shaped_keys(response_metadata_for_log(safe_payload))
         _LOGGER.debug(summarize_payload_for_log("response", log_safe_payload))
     public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
@@ -5453,9 +5457,22 @@ def build_server(
             Body-consumption tracking must restart per request so an unread
             declared body still closes the connection, and correlation/trace
             state must never leak across requests on a reused connection.
+
+            ``command``/``path`` are reset here too: stdlib's own
+            ``handle_one_request`` only assigns them when it actually parses a
+            request line, so on a keep-alive connection's *last* call --
+            triggered by the client closing the connection, where nothing is
+            read at all -- they would otherwise still hold the *previous*
+            request's values. Resetting them first lets
+            ``_log_request_summary``'s existing "nothing to report" guard
+            correctly recognize that no new request happened this call,
+            instead of logging the prior request a second time with a
+            statusless "phantom" entry.
             """
             self._request_body_consumed = False
             self._last_status = None
+            self.command = None
+            self.path = None
             request_started = time.monotonic()
             try:
                 super().handle_one_request()

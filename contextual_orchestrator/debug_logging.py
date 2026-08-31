@@ -258,6 +258,54 @@ def redact_credential_shaped_keys(value: object) -> object:
     return value
 
 
+def response_metadata_for_log(payload: object) -> dict[str, object]:
+    """Extract an allowlisted, content-free metadata summary from a response payload.
+
+    `redact_value`/`redact_credential_shaped_keys` only mask *credential*-shaped
+    content -- ordinary response text (``choices[].message.content``,
+    tool-call arguments, an ``error.message`` that can reflect
+    caller-supplied input) is not a credential, so neither pass ever masks
+    it, and it would otherwise reach DEBUG output verbatim. That text can
+    carry PII or business-sensitive content that has nothing to do with
+    secrets (CWE-532: insertion of sensitive information into a log file).
+
+    This returns a small, fixed allowlist of shape/usage metadata instead --
+    never any user- or provider-authored text -- for a caller (`server.py`'s
+    response-body DEBUG summary) to log in place of the payload itself.
+
+    Args:
+        payload: A JSON-like response payload (typically an OpenAI-shaped
+            chat completion or error object). Any non-dict value is treated
+            as carrying no usable metadata.
+
+    Returns:
+        A dict with exactly the keys ``has_error`` (bool), ``model`` (the
+        served model name, or ``None``), ``choice_count`` (``int``), and
+        ``usage`` (a dict of only the numeric usage counters, or ``None``)
+        -- never any other field from ``payload``.
+    """
+    if not isinstance(payload, dict):
+        return {"has_error": False, "model": None, "choice_count": 0, "usage": None}
+    model = payload.get("model")
+    choices = payload.get("choices")
+    usage = payload.get("usage")
+    safe_usage: dict[str, object] | None = None
+    if isinstance(usage, dict):
+        # Numeric-only, in case a malformed or adversarial upstream response
+        # ever put non-numeric (e.g. string) content under a "usage" key.
+        safe_usage = {
+            key: value
+            for key, value in usage.items()
+            if isinstance(key, str) and isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+    return {
+        "has_error": isinstance(payload.get("error"), dict),
+        "model": model if isinstance(model, str) else None,
+        "choice_count": len(choices) if isinstance(choices, list) else 0,
+        "usage": safe_usage,
+    }
+
+
 def summarize_payload_for_log(
     label: str,
     safe_payload: object,

@@ -89,11 +89,17 @@ def _add_log_level_arguments(parser: argparse.ArgumentParser) -> None:
 def _configure_logging_from_cli(arguments: list[str]) -> None:
     """Resolve the effective log level and configure stdlib logging, once.
 
-    Runs before the ``arguments[0]`` subcommand-string dispatch so
-    ``register-credential``, ``discover-models``, ``check-fast-mlsirm``,
-    one-shot completion, and ``--serve`` are all configured uniformly from
-    one call site, using a lightweight ``parse_known_args`` pre-scan that
-    does not need to know any subcommand's full argument set.
+    Runs before subcommand dispatch so ``register-credential``,
+    ``discover-models``, ``check-fast-mlsirm``, one-shot completion, and
+    ``--serve`` are all configured uniformly from one call site, using a
+    lightweight ``parse_known_args`` pre-scan that does not need to know any
+    subcommand's full argument set. Standard stdlib argparse
+    option-terminator semantics apply here for free: a literal ``--``
+    anywhere in ``arguments`` stops this pre-scan from recognizing anything
+    after it as ``--log-level``/``--verbose``/``--debug``, since
+    ``parse_known_args`` itself already treats everything past a bare
+    ``--`` as positional (verified directly; this is not special-cased here
+    -- it falls out of using stdlib ``argparse`` as intended).
 
     Precedence: explicit ``--log-level`` > ``--verbose``/``--debug`` >
     ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` > default ``WARNING``.

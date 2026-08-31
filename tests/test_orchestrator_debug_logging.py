@@ -121,6 +121,65 @@ def test_provider_exhausted_warning_fires_without_verbose() -> None:
     assert "final_error_type=" in output
 
 
+def test_provider_rejected_permanent_fires_instead_of_exhausted_on_immediate_non_transient_failure() -> None:
+    """A non-transient first failure never claims a retry budget it never used.
+
+    With `max_retries=2` (a real, non-zero budget) and a first attempt that
+    fails with a non-transient error (401, not in TRANSIENT_HTTP_STATUS), the
+    loop breaks immediately without ever spending a retry. `provider_exhausted`
+    ("used its full retry budget") would misclassify this as an exhaustion
+    event; a distinctly named event for an immediate terminal rejection is
+    the accurate one.
+    """
+
+    class AlwaysUnauthorizedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(401)
+
+    client = AlwaysUnauthorizedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_with_retry(agent, {"model": "gpt"})
+        except Exception:
+            pass
+    assert client.attempts == 1  # no retry budget was actually consumed
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent agent_id=worker_agent" in output
+    assert "final_error_type=" in output
+
+
+def test_send_raw_with_retry_also_distinguishes_permanent_rejection_from_exhaustion() -> None:
+    """`_send_raw_with_retry` duplicates `_send_with_retry`'s retry loop and must share the fix."""
+
+    class AlwaysUnauthorizedRawClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(401)
+
+    client = AlwaysUnauthorizedRawClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_raw_with_retry(agent, "chat/completions", {})
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent agent_id=worker_agent" in output
+
+
 def test_circuit_opened_emits_warning_without_debug() -> None:
     """The WARNING-tier edge-transition line fires by default; the per-increment DEBUG line does not."""
     orchestrator = TaskOrchestrator([ModelAgent("solo_agent", "mock-model")])

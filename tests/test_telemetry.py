@@ -283,6 +283,45 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         server.server_close()
 
 
+def test_handle_one_request_resets_command_and_path_before_each_call(monkeypatch):
+    """Deterministic unit-level counterpart to
+    test_keep_alive_close_does_not_log_phantom_request below, which proves
+    the same property end to end through a real socket but can occasionally
+    flake on unrelated threaded-server teardown timing.
+
+    Simulates stdlib's own `handle_one_request`: the first call "parses" a
+    request (setting `command`/`path`, as `parse_request` would), the second
+    call reads nothing at all (an empty `raw_requestline` -- a closed
+    keep-alive connection) and touches neither attribute, matching real
+    stdlib behavior on that path. Without resetting them first, the second
+    call would leave the *first* call's `command`/`path` in place, causing
+    `_log_request_summary`'s "nothing to report" guard to never fire.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    call_count = {"n": 0}
+
+    def fake_super_handle_one_request(self):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            self.command = "GET"
+            self.path = "/healthz"
+        # Second call: nothing read, nothing touched (matches stdlib on a
+        # closed connection).
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request)
+    try:
+        handler.handle_one_request()
+        assert handler.command == "GET"
+        assert handler.path == "/healthz"
+
+        handler.handle_one_request()
+        assert handler.command is None
+        assert handler.path is None
+    finally:
+        server.server_close()
+
+
 def test_handler_replaces_trace_context_on_reauthorization(monkeypatch):
     """A second authorization cannot leave the first trace context attached."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -364,7 +403,15 @@ def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeyp
 
 
 def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(caplog):
-    """The DEBUG response summary reuses _response_payload's own redact_value() output."""
+    """The DEBUG response summary never carries a secret from an error message.
+
+    Superseded mechanism, same property: this used to prove the secret was
+    caught by redact_value and replaced with "[REDACTED]" in an otherwise
+    logged error message. It now logs only allowlisted metadata
+    (response_metadata_for_log) and never the error message text at all --
+    a strictly stronger guarantee, since the secret (and the rest of the
+    message) is absent rather than merely masked.
+    """
     fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
     payload = {
         "choices": [{"message": {"content": "ok"}}],
@@ -375,21 +422,24 @@ def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(cap
         server_module._response_payload(payload, include_trace=True)
 
     assert "response_summary" in caplog.text
-    assert "[REDACTED]" in caplog.text
+    assert "has_error" in caplog.text
     assert fake_secret not in caplog.text
 
 
 def test_response_payload_debug_log_redacts_credential_shaped_json_keys(caplog):
-    """Key-name-aware redaction catches secrets `redact_value` cannot see.
+    """A secret under a credential-shaped key never reaches the response summary.
 
     `redact_value`/`redact_text` only pattern-match the literal in-string
     shape `(api[_-]?key|token|secret|password)[:=]<value>` or `bearer
     <value>` -- they never inspect the JSON *key name* a string value is
     nested under. A response payload shaped like `{"private_key": "..."}`,
-    `{"key": "..."}`, `{"auth": "..."}`, or `{"credential": "..."}` must
-    still be caught by an additional key-name-based redaction pass applied
-    at this logging call site, independent of whether the value itself
-    matches any known secret shape.
+    `{"key": "..."}`, `{"auth": "..."}`, or `{"credential": "..."}` is now
+    caught structurally: the response summary logs only an allowlisted
+    metadata shape that never includes these fields at all (see
+    `response_metadata_for_log`), with the key-name-based
+    `redact_credential_shaped_keys` pass applied on top as a second,
+    defense-in-depth layer in case a future allowlist field ever collides
+    with a credential-shaped key name.
     """
     fake_private_key = "-----BEGIN PRIVATE KEY-----\nMIIFAKEFAKEFAKE\n-----END PRIVATE KEY-----"
     fake_api_key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE12"
@@ -413,7 +463,56 @@ def test_response_payload_debug_log_redacts_credential_shaped_json_keys(caplog):
     assert fake_api_key not in caplog.text
     assert fake_auth not in caplog.text
     assert fake_credential not in caplog.text
-    assert "[REDACTED]" in caplog.text
+
+
+def test_response_payload_debug_log_never_includes_ordinary_response_content(caplog):
+    """CWE-532 (CodeRabbit): the DEBUG summary must never carry response *content*.
+
+    `redact_value`/`redact_credential_shaped_keys` only mask credential-shaped
+    content -- ordinary response text (`choices[].message.content`, tool-call
+    arguments, an `error.message` that can echo caller-supplied input) is not
+    a credential, so it was never masked and reached DEBUG output verbatim.
+    That text can carry PII or business-sensitive content that has nothing to
+    do with secrets. The summary now logs only an allowlisted metadata shape
+    (whether the response is error-shaped, the model name, the choice count,
+    and numeric usage counts) and never the payload's actual text.
+    """
+    sensitive_content = "My SSN is 123-45-6789 and I live at 42 Example Lane."
+    sensitive_tool_argument = "wire $50000 to account 000111222 routing 333444555"
+    sensitive_error_text = "rejected request containing patient record MRN-778899"
+    payload = {
+        "id": "chatcmpl-abc123",
+        "model": "gpt-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": sensitive_content,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "wire_transfer", "arguments": sensitive_tool_argument},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        "error": {"message": sensitive_error_text},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert sensitive_content not in caplog.text
+    assert sensitive_tool_argument not in caplog.text
+    assert sensitive_error_text not in caplog.text
+    # The allowlisted metadata itself is still present.
+    assert "gpt-test" in caplog.text
+    assert "choice_count" in caplog.text
+    assert "46" in caplog.text  # total_tokens, allowlisted numeric usage
 
 
 def test_response_payload_debug_log_is_silent_without_debug(caplog):
@@ -481,6 +580,43 @@ def test_per_request_info_summary_never_includes_query_string(caplog):
     assert "path=/healthz" in caplog.text
     assert fake_token not in caplog.text
     assert "?" not in caplog.text
+
+
+def test_keep_alive_close_does_not_log_phantom_request(caplog):
+    """A keep-alive connection closing without a second request logs nothing extra.
+
+    `handle_one_request` never reset `self.command`/`self.path` before each
+    call, so when a persistent connection's next read returns nothing (the
+    client closed it), those attributes were still whatever the *previous*
+    real request left them as. The per-request summary's own "nothing to
+    report" guard (`if not method and not path: return`) therefore never
+    fired, and the prior request got logged a second time with a statusless
+    "phantom" entry.
+    """
+    import http.client
+    import threading
+    import time as time_module
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            assert response.status == 200
+            response.read()
+            connection.close()  # keep-alive connection closed with no second request
+            time_module.sleep(0.3)  # let the server's connection thread observe the close
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert caplog.text.count("http_request") == 1
+    assert "path=/healthz" in caplog.text
 
 
 def test_per_request_info_summary_absent_below_info(caplog):

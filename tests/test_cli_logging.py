@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator.__main__ import main  # noqa: E402
+from contextual_orchestrator.__main__ import _configure_logging_from_cli, main  # noqa: E402
 
 _ENV_VAR = "CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL"
 
@@ -119,6 +119,21 @@ def test_log_level_flag_is_case_insensitive() -> None:
     with _restored_root_logger(), _no_log_level_env():
         _run_one_shot(["--log-level", "info"])
         assert logging.getLogger().getEffectiveLevel() == logging.INFO
+
+
+def test_log_level_flag_after_option_terminator_is_not_consumed() -> None:
+    """A literal `--` stops the logging pre-scan from treating what follows as a flag.
+
+    Confirms a Devin automated-review finding here ("parse_known_args still
+    consumes --log-level after --") was a false positive: `parse_known_args`
+    already respects stdlib argparse's `--` option-terminator semantics with
+    no special-casing needed in `_configure_logging_from_cli` -- verified
+    directly against the real pre-scan parser, not just argparse in the
+    abstract.
+    """
+    with _restored_root_logger(), _no_log_level_env():
+        _configure_logging_from_cli(["--", "--log-level", "DEBUG"])
+        assert logging.getLogger().getEffectiveLevel() == logging.WARNING
 
 
 def test_verbose_flag_is_equivalent_to_debug_log_level() -> None:
