@@ -23,7 +23,9 @@ def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
 def test_gateway_image_installs_postgres_driver_and_ignores_secrets() -> None:
     dockerfile = Path("Dockerfile").read_text()
     assert "COPY pyproject.toml requirements.lock README.md LICENSE ./" in dockerfile
-    assert "pip install --no-cache-dir --require-hashes -r requirements.lock" in dockerfile
+    assert "uv pip install --python 3.12 --require-hashes" in dockerfile
+    assert "COPY --from=dependency-builder /build/deps/" in dockerfile
+    assert "maturin build --locked --release" in dockerfile
     assert "--production" in dockerfile
     assert "--admin-token-key CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN" in dockerfile
     assert "--inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN" in dockerfile
