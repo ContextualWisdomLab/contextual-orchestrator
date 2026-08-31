@@ -171,6 +171,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   immediately after its provider call completes but before
   `_model_judge_verification` builds its result -- and asserts the
   persisted `judge_model` still reflects what actually served the request.
+  (Devin review on #961) `batch_route` groups prompts by worker agent and
+  runs one `batch_chat()` provider call per group; it built every group's
+  results into one flat dict before persisting any of them, so if an
+  earlier group's call already succeeded (real, incurred provider spend)
+  and a later, unrelated group's call then raised, the whole `batch_route`
+  call raised before the earlier group's rows were ever persisted --
+  losing that spend from budget accounting entirely, not just leaving it
+  pending. Each group's rows are now persisted as pending immediately after
+  that group's own `batch_chat()` call validates, before the next group's
+  call starts, the same as every row within one group already was.
+  (Devin review on #961) `count_workflow_runs()`, `analytics_snapshot()`,
+  and `sales_readiness_report()` read `_workflow_runs` directly, so an
+  interrupted batch's `pending_verification` rows -- deliberately excluded
+  from `_run_order`/`list_recent_runs()` -- still counted as finished
+  results in those completed-run consumers (e.g. a workflow-runs API
+  `total_count` that pagination could never actually reach). All three now
+  read through a new `_completed_workflow_runs()` helper that excludes
+  pending rows; `spend_analytics()` deliberately keeps iterating
+  `_workflow_runs` directly, since a pending row's incurred spend must
+  still be counted there.
 
 ### Added
 

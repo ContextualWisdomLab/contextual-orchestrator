@@ -494,6 +494,89 @@ def test_batch_route_judge_usage_survives_agent_pool_model_change() -> None:
     assert by_model["model-x"]["estimated_cost_usd"] == pytest.approx(0.00008)
 
 
+def test_batch_route_persists_earlier_group_spend_when_a_later_group_fails() -> None:
+    """One provider group's real, already-incurred spend must survive a
+    completely unrelated later group's batch_chat() failure.
+
+    Devin review on #961: batch_route executes one batch_chat() call per
+    distinct worker agent ("group"), building every group's results into one
+    flat dict before persisting any of them. If an earlier group's call
+    already succeeded (real, incurred provider spend) and a later group's
+    call then raised, the whole batch_route call raised before the earlier
+    group's rows were ever persisted -- losing that real spend from budget
+    accounting entirely, not just leaving it pending.
+    """
+    agent_a = ModelAgent("agent_a", "model-a", tags=("reasoning", "writing"))
+    agent_b = ModelAgent("agent_b", "model-b", tags=("reasoning", "writing"))
+
+    class _SecondGroupFailsClient(_CountingClient):
+        def batch_chat(self, agent, requests, temperature=0.2, poll_interval=5.0, poll_timeout=3600.0):  # type: ignore[override]
+            if agent.id == "agent_b":
+                raise RuntimeError("provider outage for agent_b's batch")
+            return super().batch_chat(agent, requests, temperature, poll_interval, poll_timeout)
+
+    client = _SecondGroupFailsClient()
+    orchestrator = TaskOrchestrator([agent_a, agent_b], client=client)
+    agent_by_prompt = {"task one": agent_a, "task two": agent_b}
+
+    with patch.object(
+        orchestrator,
+        "_select_agent",
+        side_effect=lambda text, role, **kwargs: agent_by_prompt[text],
+    ):
+        with pytest.raises(RuntimeError, match="provider outage for agent_b"):
+            orchestrator.batch_route(["task one", "task two"])
+
+    # agent_a's group already succeeded and incurred real spend (6 output
+    # tokens per _CountingClient) before agent_b's group failed -- that
+    # spend must not be lost.
+    assert orchestrator.budget_status()["spent_output_tokens"] == 6
+    pending = [
+        record for record in orchestrator._workflow_runs.values()  # noqa: SLF001
+        if record.get("pending_verification")
+    ]
+    assert len(pending) == 1
+    assert pending[0]["trace"][0]["agent_id"] == "agent_a"
+
+
+def test_pending_batch_rows_excluded_from_completed_run_counts() -> None:
+    """A not-yet-judged batch row must not inflate completed-run KPIs.
+
+    Devin review on #961: count_workflow_runs(), analytics_snapshot(), and
+    sales_readiness_report() read _workflow_runs directly, so an interrupted
+    batch's pending_verification rows -- deliberately kept out of
+    _run_order/list_recent_runs() -- still counted as finished results in
+    those completed-run consumers.
+    """
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,  # below the two-item aggregate (12)
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+
+    # Both items' worker calls completed and are pending, but neither was
+    # ever judged.
+    assert len(orchestrator._workflow_runs) == 2  # noqa: SLF001
+    assert orchestrator.count_workflow_runs() == 0
+    assert orchestrator.list_recent_runs() == []
+    snapshot = orchestrator.analytics_snapshot()
+    route_driver = next(
+        driver for driver in snapshot["drivers"]
+        if driver["metric_name"] == "route_versus_conduct_mix"
+    )
+    assert route_driver["counts"]["route"] == 0
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")

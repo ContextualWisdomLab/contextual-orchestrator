@@ -4710,25 +4710,62 @@ class TaskOrchestrator:
         for index, (prompt, agent) in enumerate(selected):
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
+        # Every worker request within one provider group completes together,
+        # in that group's single batch_chat() call, before the next group's
+        # call even starts -- unlike route_once/conduct(), a later row's real
+        # spend is never hidden behind a not-yet-executed provider call.
+        # _replace_workflow_run is the sole path that updates the in-memory
+        # budget meter, so a completed worker result that is never persisted
+        # is real, already-incurred spend that would otherwise silently
+        # vanish from budget accounting -- either the moment a later
+        # checkpoint raises (Devin review, PR #961), or, just as real, the
+        # moment a *later group's* batch_chat() call itself raises before any
+        # row from an earlier, already-succeeded group had been persisted at
+        # all (a further Devin review round on the same finding: building
+        # every group's results into one flat dict before persisting any of
+        # them left an already-succeeded group's spend exposed to a
+        # completely unrelated later group's failure). Each group's rows are
+        # now persisted immediately after that group's own batch_chat() call
+        # validates, before moving on to the next group -- to the in-memory
+        # meter AND, when a durable --state-db is configured, to the store
+        # too, or a process restart before judging reloads none of this
+        # batch's spend and repeats the same gap (a second Devin review round
+        # on that finding) -- with no verification yet, before any budget
+        # check that could raise. An explicit "pending_verification" marker
+        # (rather than inferring pending-ness from _is_trace_complete(),
+        # which also requires a truthy "answer" and so would misclassify a
+        # completed route/stream/conduct run that legitimately received an
+        # empty answer -- a third Devin review round on this same reload
+        # path) is the only way _reload_state() tells this row apart from
+        # every other, already-judged persisted run; a judged record below
+        # carries no such key, so it reads exactly like any other completed
+        # run once replaced. This pending state gets no run_order/audit/
+        # analytics "workflow_run_created" side effects until it is actually
+        # judged below, matching the fact that it is not yet a complete
+        # result -- and, for the same reason, count_workflow_runs()/
+        # analytics_snapshot()/sales_readiness_report() read completed runs
+        # through _completed_workflow_runs(), which excludes it the same way
+        # _run_order already does (a fourth Devin review round: those
+        # consumers had been reading _workflow_runs directly and so still
+        # counted an interrupted batch's pending rows as finished results).
         answers: dict[int, dict[str, Any]] = {}
-        batch_latency_ms_by_agent: dict[str, float] = {}
+        prepared_rows: dict[int, dict[str, Any]] = {}
+        run_ids: dict[int, str] = {}
         for agent_id, requests in requests_by_agent.items():
+            agent = agents_by_id[agent_id]
             effort_profile = self._role_effort_profile("worker")
             batch_started_at = time.perf_counter()
             batch = (
                 self.client.batch_chat(
-                    agents_by_id[agent_id], requests, effort_profile=effort_profile
+                    agent, requests, effort_profile=effort_profile
                 )
                 if effort_profile is not None
-                else self.client.batch_chat(agents_by_id[agent_id], requests)
+                else self.client.batch_chat(agent, requests)
             )
             # One provider batch call covers every request in this group. Record
             # its shared elapsed time on each trace row without claiming
             # unavailable per-request timing precision.
-            batch_latency_ms_by_agent[agent_id] = round(
-                (time.perf_counter() - batch_started_at) * 1000,
-                2,
-            )
+            batch_latency_ms = round((time.perf_counter() - batch_started_at) * 1000, 2)
             results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
                 # _validate_batch_results already pinned every result key to the
@@ -4746,66 +4783,36 @@ class TaskOrchestrator:
                 if index in answers:  # pragma: no cover - results keys are unique
                     raise RuntimeError("batch provider returned a duplicate request identifier")
                 answers[index] = result
-
-        # Every worker request in this batch already completed above, in the
-        # provider batch call, before any judge call starts -- unlike
-        # route_once/conduct(), a later row's real spend is never hidden
-        # behind a not-yet-executed provider call. _replace_workflow_run is
-        # the sole path that updates the in-memory budget meter, so a
-        # completed worker result that is never persisted is real,
-        # already-incurred spend that would otherwise silently vanish from
-        # budget accounting the moment a later checkpoint raises -- letting
-        # a caller retry the same batch indefinitely against an unchanged
-        # meter (Devin review, PR #961). Persist every row's real worker
-        # spend immediately -- to the in-memory meter AND, when a durable
-        # --state-db is configured, to the store too, or a process restart
-        # before judging reloads none of this batch's spend and repeats the
-        # same gap (a second Devin review round on the same finding) -- with
-        # no verification yet, before any budget check that could raise.
-        # An explicit "pending_verification" marker (rather than inferring
-        # pending-ness from _is_trace_complete(), which also requires a
-        # truthy "answer" and so would misclassify a completed route/
-        # stream/conduct run that legitimately received an empty answer --
-        # a third Devin review round on this same reload path) is the only
-        # way _reload_state() tells this row apart from every other,
-        # already-judged persisted run; a judged record below carries no
-        # such key, so it reads exactly like any other completed run once
-        # replaced. This pending state gets no run_order/audit/analytics
-        # "workflow_run_created" side effects until it is actually judged
-        # below, matching the fact that it is not yet a complete result.
-        prepared_rows: list[dict[str, Any]] = []
-        run_ids: list[str] = []
-        for index, (prompt, agent) in enumerate(selected):
-            result = answers[index]
-            row: dict[str, Any] = {
-                "id": 0, "role": "worker", "agent_id": agent.id,
-                "model": agent.model,
-                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
-                "latency_ms": batch_latency_ms_by_agent[agent.id],
-                "subtask": "Direct route (batched)", "access": [], "output": result["content"],
-            }
-            if result.get("usage") is not None:
-                row["usage"] = result["usage"]
-            prepared_rows.append(row)
-            run_id = f"run_{uuid.uuid4().hex}"
-            run_ids.append(run_id)
-            pending_record = self._with_effort_snapshot(
-                {
-                    "workflow_run_id": run_id,
-                    "created_at": int(time.time()),
-                    "mode": "route",
-                    "policy_mode": "route",
-                    "prompt_text": prompt,
-                    "answer": result["content"],
-                    "trace": [row],
-                    "policy_snapshot": self.policy.as_dict(),
-                    "verification": {},
-                    "pending_verification": True,
+                prompt = selected[index][0]
+                row: dict[str, Any] = {
+                    "id": 0, "role": "worker", "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+                    "latency_ms": batch_latency_ms,
+                    "subtask": "Direct route (batched)", "access": [], "output": result["content"],
                 }
-            )
-            self._replace_workflow_run(pending_record)
-            if self._store is not None:
-                self._store.save("workflow_run", run_id, pending_record)
+                if result.get("usage") is not None:
+                    row["usage"] = result["usage"]
+                prepared_rows[index] = row
+                run_id = f"run_{uuid.uuid4().hex}"
+                run_ids[index] = run_id
+                pending_record = self._with_effort_snapshot(
+                    {
+                        "workflow_run_id": run_id,
+                        "created_at": int(time.time()),
+                        "mode": "route",
+                        "policy_mode": "route",
+                        "prompt_text": prompt,
+                        "answer": result["content"],
+                        "trace": [row],
+                        "policy_snapshot": self.policy.as_dict(),
+                        "verification": {},
+                        "pending_verification": True,
+                    }
+                )
+                self._replace_workflow_run(pending_record)
+                if self._store is not None:
+                    self._store.save("workflow_run", run_id, pending_record)
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
@@ -7295,11 +7302,29 @@ class TaskOrchestrator:
         ][start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
+    def _completed_workflow_runs(self) -> list[dict[str, Any]]:
+        """Return workflow runs visible to completed-run consumers.
+
+        Excludes ``batch_route``'s not-yet-judged ``pending_verification``
+        rows (Devin review on #961): those are kept in ``_workflow_runs`` so
+        their real, already-incurred spend is never lost, but a pending row
+        is not a finished result and must not inflate a completed-run count,
+        analytics KPI, or commercial-readiness metric -- the same reasoning
+        that already keeps them out of ``_run_order``/``list_recent_runs``.
+        Spend surfaces (``spend_analytics``) deliberately keep iterating
+        ``_workflow_runs`` directly instead of this helper, since a pending
+        row's spend is real and must stay counted there.
+        """
+        return [
+            run for run in self._workflow_runs.values()
+            if not run.get("pending_verification")
+        ]
+
     def count_workflow_runs(self, owner_id: str | None = None) -> int:
-        """Count only workflow runs visible to the requested owner."""
+        """Count only completed workflow runs visible to the requested owner."""
         return sum(
             owner_id is None or record.get("owner_id") == owner_id
-            for record in self._workflow_runs.values()
+            for record in self._completed_workflow_runs()
         )
 
     def list_recent_audit_events(
@@ -7622,7 +7647,7 @@ class TaskOrchestrator:
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
-        runs = list(self._workflow_runs.values())
+        runs = self._completed_workflow_runs()
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
@@ -7720,7 +7745,7 @@ class TaskOrchestrator:
         """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
-        runs = list(self._workflow_runs.values())
+        runs = self._completed_workflow_runs()
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]
