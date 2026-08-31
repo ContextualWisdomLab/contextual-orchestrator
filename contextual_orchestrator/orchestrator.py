@@ -1744,12 +1744,31 @@ class ModelClient:
             else self._open_provider(request, destination, timeout=timeout)
         )
         with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(self._read_provider_response(response).decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
         return self._response_content(agent, data)
+
+    def _read_provider_response(self, response: Any) -> bytes:
+        """Read one response without letting slow trickle traffic renew a route deadline."""
+        deadline = self.request_settings_snapshot()["deadline"]
+        read1 = getattr(response, "read1", None)
+        if deadline is None or not callable(read1):
+            return response.read()
+        chunks: list[bytes] = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("provider response deadline exceeded")
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if sock is not None:
+                sock.settimeout(min(self.timeout, remaining))
+            chunk = read1(65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
 
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
@@ -1782,12 +1801,33 @@ class ModelClient:
             connection.close()
             raise
 
-    @staticmethod
-    def _resolve_addresses(hostname: str, port: int) -> list[ProviderDestination]:
+    def _resolve_addresses(self, hostname: str, port: int) -> list[ProviderDestination]:
+        deadline = self.request_settings_snapshot()["deadline"]
+        result: list[Any] = []
+
+        def resolve() -> None:
+            try:
+                result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+            except BaseException as exc:
+                result.append(exc)
+
+        if deadline is None:
+            resolve()
+        else:
+            worker = threading.Thread(target=resolve, daemon=True)
+            worker.start()
+            worker.join(max(0.0, deadline - time.monotonic()))
+            if worker.is_alive():
+                raise TimeoutError("provider DNS resolution deadline exceeded")
+        if result and isinstance(result[0], BaseException):
+            exc = result[0]
+            if isinstance(exc, socket.gaierror):
+                raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+            raise exc
         try:
-            addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-        except socket.gaierror as exc:
-            raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+            addresses = result[0]
+        except IndexError:
+            raise TimeoutError("provider DNS resolution deadline exceeded") from None
         resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
         if not resolved:
             raise RuntimeError(f"provider host {hostname!r} has no stream address")
@@ -2292,7 +2332,7 @@ class ModelClient:
             else self._open_provider(request, destination, timeout=timeout)
         )
         with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(self._read_provider_response(response).decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         return data
 
@@ -5323,11 +5363,9 @@ class TaskOrchestrator:
         completion that landed just before the deadline (and so already
         incurred real, billable provider cost) is preserved there for the
         caller to account for, even though this method itself cannot return
-        it as a normal result. ``_invoke``'s own deeper cross-candidate and
-        same-agent-retry deadline failures (surfaced through this method
-        unwrapped) remain plain ``RuntimeError`` -- unifying those as well
-        would touch every other caller of ``_invoke``, not just this
-        deadline-scoped, opt-in feature, and is out of scope here.
+        it as a normal result. Deeper cross-candidate and same-agent-retry
+        deadline failures are normalized to this same type at this public
+        boundary.
         """
         if deadline_seconds is not None and (
             isinstance(deadline_seconds, bool)
@@ -5343,11 +5381,16 @@ class TaskOrchestrator:
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
         requested = self._requested_agent(model_name)
-        ranked_pool: list[ModelAgent] = (
-            [requested] if requested is not None else []
-        ) or self._ranked_agents(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
-        )
+        with (
+            self.client.request_settings(deadline=deadline)
+            if deadline is not None
+            else nullcontext()
+        ):
+            ranked_pool: list[ModelAgent] = (
+                [requested] if requested is not None else []
+            ) or self._ranked_agents(
+                text, "worker", free_only=free_only, prompt_context=prompt_context
+            )
         free_ids = {
             candidate.id
             for candidate in self.agents
@@ -5373,14 +5416,22 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, attempt_usage = self._invoke(
-                candidate,
-                messages,
-                text=text,
-                role="worker",
-                allowed_agent_ids=allowed_agent_ids,
-                deadline=deadline,
-            )
+            try:
+                attempt_answer, attempt_served_id, attempt_usage = self._invoke(
+                    candidate,
+                    messages,
+                    text=text,
+                    role="worker",
+                    allowed_agent_ids=allowed_agent_ids,
+                    deadline=deadline,
+                )
+            except Exception as exc:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise RouteDeadlineExceededError(
+                        "request deadline exceeded during provider invocation",
+                        trace=trace_rows,
+                    ) from exc
+                raise
             # Record this attempt's trace/usage before checking the deadline: a
             # completion that actually landed already incurred real, billable
             # provider cost, and previously raising here before appending `row`
@@ -5430,6 +5481,8 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            if isinstance(verification.get("judge_usage"), dict):
+                row["realtime_judge"]["usage"] = verification["judge_usage"]
             if deadline is not None and time.monotonic() >= deadline:
                 raise RouteDeadlineExceededError(
                     "request deadline exceeded during real-time judging",
@@ -6182,6 +6235,11 @@ class TaskOrchestrator:
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
             return None
+        if (
+            self.client.request_settings_snapshot()["deadline"] is not None
+            and not self._agent(embedding_member).base_url.startswith("mock://")
+        ):
+            return None
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
@@ -6202,6 +6260,11 @@ class TaskOrchestrator:
             return cached
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
+            return None
+        if (
+            self.client.request_settings_snapshot()["deadline"] is not None
+            and not self._agent(embedding_member).base_url.startswith("mock://")
+        ):
             return None
         try:
             vectors = self.client.embed(

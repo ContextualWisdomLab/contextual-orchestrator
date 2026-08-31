@@ -1340,5 +1340,75 @@ def test_route_once_deadline_exceeded_error_preserves_judge_verdict_in_trace(
     assert excinfo.value.trace[0]["realtime_judge"] == {"accepted": True, "reason": "judged"}
 
 
+def test_route_once_deadline_preserves_completed_judge_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _ScriptedToolClient({"primary_worker": ["answer"]})
+    orchestrator = _orchestrator(client)
+
+    def completed_judge(**_kwargs: object) -> dict[str, object]:
+        time.sleep(0.03)
+        return {
+            "accepted": True,
+            "reason": "verified",
+            "judge_usage": {"prompt_tokens": 3, "completion_tokens": 1},
+        }
+
+    monkeypatch.setattr(orchestrator, "_realtime_route_judge", completed_judge)
+    with pytest.raises(RouteDeadlineExceededError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}], deadline_seconds=0.02
+        )
+    assert excinfo.value.trace[0]["realtime_judge"]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+    }
+
+
+def test_provider_response_slow_trickle_cannot_renew_absolute_deadline() -> None:
+    class Response:
+        fp = None
+
+        def read1(self, _size: int) -> bytes:
+            time.sleep(0.011)
+            return b"x"
+
+    client = ModelClient(timeout=1)
+    with client.request_settings(deadline=time.monotonic() + 0.02):
+        with pytest.raises(TimeoutError, match="response deadline"):
+            client._read_provider_response(Response())
+
+
+def test_route_once_normalizes_nested_deadline_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = _orchestrator(_ScriptedToolClient({"primary_worker": ["unused"]}))
+
+    def expired(*_args: object, **_kwargs: object) -> tuple[str, str, None]:
+        time.sleep(0.02)
+        raise RuntimeError("nested deadline")
+
+    monkeypatch.setattr(orchestrator, "_invoke", expired)
+    with pytest.raises(RouteDeadlineExceededError):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}], deadline_seconds=0.01
+        )
+
+
+def test_provider_dns_resolution_obeys_route_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ModelClient(timeout=1)
+
+    def slow_dns(*_args: object, **_kwargs: object) -> list[object]:
+        time.sleep(0.05)
+        return []
+
+    monkeypatch.setattr(orchestrator_module.socket, "getaddrinfo", slow_dns)
+    with client.request_settings(deadline=time.monotonic() + 0.01):
+        with pytest.raises(TimeoutError, match="DNS resolution deadline"):
+            client._resolve_addresses("slow.example", 443)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
