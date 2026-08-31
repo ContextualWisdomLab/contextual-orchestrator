@@ -83,6 +83,27 @@ def _env_flag(name: str) -> bool:
 _VERBOSE_HANDLER_NAME = "contextual_orchestrator.verbose"
 
 
+class _ExactLevelFilter(logging.Filter):
+    """Admit only records at exactly one level, e.g. DEBUG and nothing above it.
+
+    A handler's own ``setLevel`` is a floor, not a ceiling (stdlib
+    ``Handler.handle`` compares ``record.levelno >= self.level``), so it
+    cannot by itself restrict a handler to DEBUG alone -- it would still
+    pass through INFO/WARNING/ERROR/CRITICAL. Used to keep
+    ``_configure_logging``'s dedicated per-logger handler scoped to exactly
+    the verbose records it exists for, so it never re-emits a WARNING/ERROR
+    record that propagation to the host's own handler already delivers.
+    """
+
+    def __init__(self, level: int) -> None:
+        super().__init__()
+        self._level = level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return whether ``record`` is at exactly this filter's level."""
+        return record.levelno == self._level
+
+
 def _logger_already_delivers_debug(logger: logging.Logger) -> bool:
     """Return whether a DEBUG record from ``logger`` already reaches a handler.
 
@@ -152,7 +173,17 @@ def _configure_logging(verbose: bool) -> None:
     covers it. In every case, propagation to root is left untouched (never
     ``propagate = False``): these loggers' pre-existing WARNING/ERROR call
     sites must keep reaching whatever the host already listens to on root,
-    exactly as before this feature existed.
+    exactly as before this feature existed -- and (4) a plain
+    ``StreamHandler()``'s level defaults to ``NOTSET``, i.e. it accepts
+    every level from DEBUG upward, not DEBUG alone: when the dedicated
+    handler *is* attached (the strict-host-handler case (2) fixes), it also
+    receives every WARNING/ERROR record from that logger, which propagation
+    already delivered to the host's own handler -- doubling every server
+    failure's log line. ``_ExactLevelFilter`` bounds the dedicated handler
+    to exactly the level ``_configure_logging`` was asked to enable (DEBUG),
+    so it only ever emits the records propagation would otherwise have
+    silently dropped, never the WARNING/ERROR ones already reaching the host
+    by the normal path.
     """
     if not verbose:
         return
@@ -171,6 +202,7 @@ def _configure_logging(verbose: bool) -> None:
         handler = logging.StreamHandler()
         handler.name = _VERBOSE_HANDLER_NAME
         handler.setFormatter(formatter)
+        handler.addFilter(_ExactLevelFilter(logging.DEBUG))
         logger.addHandler(handler)
 
 

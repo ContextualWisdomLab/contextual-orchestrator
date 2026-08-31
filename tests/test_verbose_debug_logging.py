@@ -295,6 +295,63 @@ def test_configure_logging_skips_its_own_handler_when_a_permissive_host_handler_
     assert orchestrator_logger.level == logging.DEBUG
 
 
+def test_configure_logging_never_duplicates_a_warning_through_its_own_handler(
+    restore_root_logger,
+) -> None:
+    """Availability regression: verbose mode must never double-log a real failure.
+
+    Devin's seventh review round caught this real follow-up to round 5's
+    fix: the dedicated handler attached directly to a leaf logger (round 5,
+    for the strict-host-handler case) is a plain ``StreamHandler()`` with no
+    level filter, so it accepts every level from DEBUG upward -- not DEBUG
+    alone. A WARNING/ERROR record from one of the audited loggers already
+    reaches the host's own root handler via propagation (unaffected by this
+    feature); once the dedicated handler is also attached, that same record
+    reaches it too, so a real server failure gets logged twice. Reproduced
+    directly before this fix: a WARNING record delivered to both the
+    INFO-level hosted handler (via propagation) and the dedicated handler
+    (attached because propagation alone didn't cover DEBUG) -- two
+    deliveries for one failure.
+
+    Clears ``root.handlers`` first for the same reason as the other tests in
+    this module: pytest's own root handlers are already permissive and
+    would otherwise mask the strict-host-handler scenario this test means to
+    isolate.
+    """
+    root = logging.getLogger()
+    root.handlers.clear()
+    hosted_records: list[logging.LogRecord] = []
+    hosted_handler = logging.Handler()
+    hosted_handler.setLevel(logging.INFO)
+    hosted_handler.emit = hosted_records.append  # type: ignore[method-assign]
+    root.addHandler(hosted_handler)
+
+    _configure_logging(True)
+
+    orchestrator_logger = logging.getLogger("contextual_orchestrator.orchestrator")
+    own_handler = next(
+        (h for h in orchestrator_logger.handlers if h.name == "contextual_orchestrator.verbose"),
+        None,
+    )
+    assert own_handler is not None, "the strict host handler must still get the dedicated handler"
+
+    dedicated_records: list[logging.LogRecord] = []
+    own_handler.emit = dedicated_records.append  # type: ignore[method-assign]
+
+    orchestrator_logger.warning("provider.circuit_open agent_id=example-agent")
+
+    assert len(hosted_records) == 1, "the WARNING must reach the host handler exactly once"
+    assert dedicated_records == [], (
+        "the dedicated verbose handler must not re-emit a WARNING that "
+        "propagation already delivered to the host's own handler"
+    )
+
+    debug_records: list[logging.LogRecord] = []
+    own_handler.emit = debug_records.append  # type: ignore[method-assign]
+    orchestrator_logger.debug("dispatch.decision mode=auto model=contextual-orchestrator path=route")
+    assert len(debug_records) == 1, "the dedicated handler must still deliver its own DEBUG records"
+
+
 def test_configure_logging_never_discards_an_existing_root_handler(
     restore_root_logger,
 ) -> None:
