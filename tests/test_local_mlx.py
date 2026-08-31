@@ -188,6 +188,14 @@ def test_provider_probe_leaves_registry_and_model_inference_unbounded() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_legacy_timeout_arguments_do_not_set_wall_clock_deadlines() -> None:
+    client = ModelClient(0.25, 0.5, 321)
+
+    assert client.timeout is None
+    assert client.connect_timeout is None
+    assert client.max_output_tokens == 321
+
+
 def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
     agent = ModelAgent("local_agent", "requested-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)
@@ -281,7 +289,7 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     assert counters["max_active"] == 1
 
 
-def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
+def test_local_provider_serializes_model_switches_without_expiring_waiters() -> None:
     import threading
 
     first_agent = ModelAgent("first_agent", "model-a", base_url="mlx://127.0.0.1:8080/v1")
@@ -327,8 +335,7 @@ def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
     assert not first.is_alive()
     assert not second.is_alive()
     assert max_active == 1
-    assert len(errors) == 1
-    assert isinstance(errors[0], TimeoutError)
+    assert errors == []
 
 
 def test_reasoning_only_response_explains_local_template_fix() -> None:
@@ -749,6 +756,49 @@ def test_cancellable_provider_call_closes_blocked_transport_without_generation_t
     assert not thread.is_alive()
     assert errors
     assert connection.closed
+
+
+def test_cancellable_provider_call_closes_blocked_connection_establishment() -> None:
+    entered = threading.Event()
+    released = threading.Event()
+
+    class Connection:
+        sock = None
+
+        def connect(self):
+            entered.set()
+            assert released.wait(timeout=1)
+            raise OSError("cancelled")
+
+        def close(self):
+            released.set()
+
+    client = ModelClient()
+    connection = Connection()
+    request = urllib.request.Request("https://provider.example/v1/chat/completions")
+    call, cancel = client.cancellable_call(
+        lambda: client._open_provider(request, (socket.AF_INET, ("127.0.0.1", 443)))
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except _ProviderRequestCancelled as exc:
+            errors.append(exc)
+
+    with patch(
+        "contextual_orchestrator.orchestrator.http.client.HTTPSConnection",
+        return_value=connection,
+    ):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors
 
 
 def test_cancellable_provider_call_ignores_connection_close_failure() -> None:

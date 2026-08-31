@@ -1319,6 +1319,7 @@ class ModelClient:
     def __init__(
         self,
         timeout: float | None = None,
+        connect_timeout: float | None = None,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,
@@ -1331,7 +1332,11 @@ class ModelClient:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
-        self.timeout = timeout
+        # Retain the historical positional/keyword slots without enforcing an
+        # elapsed-time cutoff. Cancellation is explicit and transport-owned.
+        del timeout, connect_timeout
+        self.timeout: None = None
+        self.connect_timeout: None = None
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1577,7 +1582,7 @@ class ModelClient:
                 applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
         return applied
 
-    def probe(self, agent: ModelAgent) -> dict[str, Any]:
+    def probe(self, agent: ModelAgent, *, timeout: float | None = None) -> dict[str, Any]:
         """Verify a local model registry, then run one unbounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
@@ -1586,6 +1591,7 @@ class ModelClient:
         allowed to complete regardless of wall-clock duration and are cancelled
         only by an explicit caller action.
         """
+        del timeout  # compatibility-only; readiness has no wall-clock deadline
         started = time.monotonic()
         if not is_chat_compatible_model_id(agent.model):
             return {
@@ -1824,13 +1830,13 @@ class ModelClient:
             )
         )
         target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        cancellation = _PROVIDER_CANCELLATION.get()
+        if cancellation is not None:
+            cancellation.register(connection)
         try:
             connection.connect()
             if connection.sock is not None:
                 connection.sock.settimeout(generation_timeout)
-            cancellation = _PROVIDER_CANCELLATION.get()
-            if cancellation is not None:
-                cancellation.register(connection)
             connection.request(
                 request.get_method(),
                 target,
@@ -3545,8 +3551,10 @@ class TaskOrchestrator:
         self,
         *,
         refresh: bool = False,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Report provider liveness separately from an explicit chat readiness probe."""
+        del timeout  # compatibility-only; readiness has no wall-clock deadline
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
         items: list[dict[str, Any]] = []
