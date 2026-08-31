@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import logging
 import math
@@ -1414,7 +1415,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 def model_group_name_for(discovered: DiscoveredModel) -> str:
     """Use the provider-declared exact model identity as the logical group."""
-    return f"model_{_slug(discovered.model_id)}"
+    identity = discovered.model_id.casefold()
+    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
+    return f"model_{_slug(identity)}_{fingerprint}"
 
 
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:

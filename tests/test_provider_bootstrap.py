@@ -19,6 +19,7 @@ from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
     agent_from_discovered,
+    model_group_name_for,
 )
 from contextual_orchestrator import provider_bootstrap
 
@@ -225,7 +226,7 @@ def test_openrouter_discovery_keeps_concrete_free_models_not_free_meta_router():
     assert provider_bootstrap.select_model_group_diverse_models(
         [meta_router, concrete], limit=2
     ) == [concrete]
-    assert agent_from_discovered(concrete).group_name == "model_qwen_concrete_free"
+    assert agent_from_discovered(concrete).group_name == model_group_name_for(concrete)
 
 
 def test_non_chat_catalog_rows_are_never_selected_for_chat_service():

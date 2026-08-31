@@ -45,6 +45,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     free_discovered_models,
     general_free_serving_candidates,
     is_routable_discovered_model,
+    model_group_name_for,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -762,7 +763,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == "model_vendor_free_model"
+    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == "model_vendor_free_model_7959c29fc9"
 
 
 def _nim_vision_model() -> DiscoveredModel:
@@ -1234,7 +1235,20 @@ def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inferenc
     assert discovered[0].input_modalities == ("text", "image")
     assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
     assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
-    assert agent_from_discovered(discovered[0]).group_name == "model_provider_example_free"
+    assert agent_from_discovered(discovered[0]).group_name == "model_provider_example_free_681f6a3471"
+
+
+def test_model_group_name_preserves_distinct_exact_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai",
+        "vendor/model-a",
+        "OPENAI_API_KEY",
+        "https://api.openai.com/v1",
+        "Bearer",
+    )
+    second = replace(first, model_id="vendor/model_a")
+
+    assert model_group_name_for(first) != model_group_name_for(second)
 
 
 def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
