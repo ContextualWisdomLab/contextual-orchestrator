@@ -371,7 +371,11 @@ def test_response_content_classifies_reasoning_without_content() -> None:
     with pytest.raises(ProviderResponseError) as error:
         ModelClient._response_content(
             agent,
-            {"choices": [{"message": {"reasoning": "thinking only"}}]},
+            {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "thinking only"}}
+                ]
+            },
         )
 
     assert error.value.detail["provider_response_failure_kind"] == "reasoning_without_content"
@@ -388,6 +392,16 @@ def test_response_content_classifies_missing_assistant_content() -> None:
         )
 
     assert error.value.detail["provider_response_failure_kind"] == "assistant_content_missing"
+
+    with pytest.raises(ProviderResponseError) as empty_error:
+        ModelClient._response_content(
+            agent,
+            {"choices": [{"message": {"content": ""}}]},
+        )
+    assert (
+        empty_error.value.detail["provider_response_failure_kind"]
+        == "assistant_content_missing"
+    )
 
 
 class _AgentDownClient(ModelClient):
