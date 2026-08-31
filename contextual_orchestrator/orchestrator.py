@@ -1329,7 +1329,6 @@ class ModelClient:
     def __init__(
         self,
         timeout: float | None = None,
-        connect_timeout: float | None = None,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,
@@ -1341,6 +1340,8 @@ class ModelClient:
         ca_bundle: str | None = None,
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
+        *,
+        connect_timeout: float | None = None,
     ) -> None:
         # No deadline is selected by default. Explicit legacy caller limits remain
         # compatible; review workflows and readiness paths never supply them.
@@ -3633,7 +3634,17 @@ class TaskOrchestrator:
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
         items: list[dict[str, Any]] = []
-        with self._provider_readiness_lock:
+        acquired = not refresh or self._provider_readiness_lock.acquire(blocking=False)
+        if not acquired:
+            return {
+                "status": "refresh_in_progress",
+                "probe": "refresh",
+                "checked_at": None,
+                "agent_count": len(self.agents),
+                "ready_agent_count": 0,
+                "items": [],
+            }
+        try:
             for agent in self.candidates:
                 provider = agent.provider_name or self._infer_provider_name(agent.base_url)
                 if agent.disabled:
@@ -3655,6 +3666,9 @@ class TaskOrchestrator:
                         "provider": provider,
                         "status": "unprobed",
                     })
+        finally:
+            if refresh:
+                self._provider_readiness_lock.release()
         active = [item for item in items if item["status"] != "disabled"]
         status = "unprobed" if not refresh else (
             "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"

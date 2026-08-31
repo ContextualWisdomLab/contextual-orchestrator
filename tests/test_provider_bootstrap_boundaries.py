@@ -316,6 +316,37 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     assert all(ids_by_state[agent_id] == "enabled" for agent_id in expected_ids)
 
 
+def test_durable_pool_does_not_activate_manual_legacy_id_collision(tmp_path: Any) -> None:
+    """Discovery must not override an operator-disabled manual endpoint."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "manual_collision.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    manual = replace(
+        generated,
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        priority=77,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    assert pb._synchronize_durable_agent_pool(agents_db, [model]) == ()
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    stored = next(agent for agent in restarted.candidates if agent.id == manual.id)
+    assert stored.base_url == manual.base_url
+    assert stored.disabled is True
+    assert stored.priority == 77
+    assert stored.tags == ("manual",)
+    restarted.close()
+
+
 def test_durable_pool_sync_closes_temporary_orchestrator(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,

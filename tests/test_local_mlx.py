@@ -191,11 +191,12 @@ def test_provider_probe_leaves_registry_and_model_inference_unbounded() -> None:
 
 
 def test_legacy_timeout_argument_positions_remain_compatible() -> None:
-    client = ModelClient(0.25, 0.5, 321)
+    client = ModelClient(0.25, 321, 3, connect_timeout=0.5)
 
     assert client.timeout == 0.25
     assert client.connect_timeout == 0.5
     assert client.max_output_tokens == 321
+    assert client.max_retries == 3
 
 
 def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
@@ -266,6 +267,7 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     entered = threading.Event()
     release = threading.Event()
     counters = {"active": 0, "max_active": 0}
+    reports = []
     counter_lock = threading.Lock()
 
     def probe(_agent):
@@ -280,7 +282,9 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
 
     with patch.object(client, "probe", side_effect=probe):
         first = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
-        second = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        second = threading.Thread(
+            target=lambda: reports.append(orchestrator.provider_readiness_report(refresh=True))
+        )
         first.start()
         assert entered.wait(timeout=2)
         second.start()
@@ -289,6 +293,14 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
         second.join(timeout=2)
 
     assert counters["max_active"] == 1
+    assert reports == [{
+        "status": "refresh_in_progress",
+        "probe": "refresh",
+        "checked_at": None,
+        "agent_count": 1,
+        "ready_agent_count": 0,
+        "items": [],
+    }]
 
 
 def test_local_provider_serializes_model_switches_and_bounds_explicit_waiters() -> None:

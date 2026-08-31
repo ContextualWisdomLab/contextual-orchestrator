@@ -282,10 +282,13 @@ def _synchronize_durable_agent_pool(
             matches = [
                 candidate
                 for candidate in bootstrap.candidates
+                if "discovered" in candidate.tags
                 if candidate.provider_name == agent.provider_name
                 and candidate.credential_name == agent.credential_name
                 and candidate.model == agent.model
             ]
+            if not matches:
+                continue
             selected_ids.add(
                 next((item.id for item in matches if item.id == agent.id), matches[-1].id)
             )

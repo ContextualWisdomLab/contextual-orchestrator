@@ -521,7 +521,7 @@ OPENAPI_SPEC = {
         "/api/v1/provider_readiness/latest": {
             "get": {
                 "operationId": "get_latest_provider_readiness",
-                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "summary": "Read or explicitly refresh provider chat readiness",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [{
                     "name": "refresh",
