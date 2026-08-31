@@ -716,6 +716,36 @@ def test_batch_run_skips_blank_lines_in_output_content() -> None:
     assert results["task_0"]["usage"] == {"prompt_tokens": 3}
 
 
+def test_batch_run_pins_openrouter_zdr_in_uploaded_jsonl() -> None:
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    raw = b'{"custom_id":"task_0","response":{"body":{"choices":[{"message":{"content":"ok"}}]}}}\n'
+
+    def capture_upload(_agent, content, _destination):
+        captured["line"] = json.loads(content.decode("utf-8"))
+        return "file_1"
+
+    def batch_json(_agent, method, _path, payload=None, destination=None):
+        del payload, destination
+        return {"id": "batch_1"} if method == "POST" else {
+            "status": "completed", "output_file_id": "file_9"
+        }
+
+    with patch.object(client, "_batch_upload", side_effect=capture_upload), patch.object(
+        client, "_batch_json", side_effect=batch_json
+    ), patch.object(client, "_batch_raw", return_value=raw):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._batch_run(
+                agent, {"task_0": [{"role": "user", "content": "hi"}]}, None, 0.01, 5.0
+            )
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    assert captured["line"]["body"]["provider"] == {"zdr": True}
+
+
 # -- Responses input coercion shapes -------------------------------------------------
 
 

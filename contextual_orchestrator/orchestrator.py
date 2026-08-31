@@ -2445,12 +2445,12 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": self.apply_effort_profile(agent, {
+                "body": _pin_openrouter_zdr(agent, self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
                     "temperature": settings["temperature"] if temperature is None else temperature,
                     "max_tokens": settings["max_output_tokens"],
-                }, effort_profile),
+                }, effort_profile)),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
