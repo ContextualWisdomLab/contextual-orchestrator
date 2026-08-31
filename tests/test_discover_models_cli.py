@@ -69,11 +69,10 @@ def test_discover_models_provider_ca_bundle_help_is_available() -> None:
     assert "--provider-ca-bundle" in stdout.getvalue()
 
 
-def test_discover_models_log_level_flag_wins_over_verbose_and_environment() -> None:
-    """The subcommand accepts explicit verbosity with documented precedence."""
+def test_discover_models_log_level_flag_wins_over_verbose() -> None:
+    """The subcommand accepts an explicit verbosity selection."""
     stdout = StringIO()
     with (
-        patch.dict(os.environ, {"CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL": "ERROR"}, clear=True),
         patch.object(
             sys,
             "argv",

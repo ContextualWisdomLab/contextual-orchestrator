@@ -82,9 +82,7 @@ def _configure_logging(explicit_level: str | None = None) -> None:
     counts, and elapsed time are ever logged (see
     :mod:`contextual_orchestrator.model_discovery`) -- never an ``api_key``
     or provider payload/content -- so raising this to DEBUG is safe in any
-    environment, CI included. ``explicit_level`` (e.g. a ``--log-level`` CLI
-    flag) wins over the ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` environment
-    variable. With neither set, this leaves the process's logging
+    environment, CI included. With no explicit CLI selection, this leaves the process's logging
     configuration untouched (Python's stdlib WARNING default applies, same
     as before verbose logging was configurable) rather than pinning an
     explicit level on every ``main()`` call -- ``main()`` runs many times
@@ -92,10 +90,9 @@ def _configure_logging(explicit_level: str | None = None) -> None:
     ``setLevel`` here would permanently shadow a later, unrelated test's
     ``caplog.at_level("DEBUG")`` for the whole process.
     """
-    requested = explicit_level or os.environ.get("CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL")
-    if not requested:
+    if not explicit_level:
         return
-    level = _resolve_log_level(requested)
+    level = _resolve_log_level(explicit_level)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("contextual_orchestrator").setLevel(level)
 
@@ -318,8 +315,7 @@ def _discover_models_command(argv: list[str]) -> None:
         "--log-level",
         choices=_LOG_LEVEL_NAMES,
         default=None,
-        help="Verbosity for provider discovery diagnostics (default: "
-        "$CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL or WARNING).",
+        help="Verbosity for provider discovery diagnostics (default: WARNING).",
     )
     parser.add_argument(
         "--agents-db",
@@ -534,7 +530,6 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    _configure_logging()
     if arguments and arguments[0] == "register-credential":
         _register_credential_command(arguments[1:])
         return
@@ -649,8 +644,8 @@ def main(argv: list[str] | None = None) -> None:
         "--log-level",
         choices=_LOG_LEVEL_NAMES,
         default=None,
-        help="Verbosity for provider-discovery and server diagnostics (default: "
-        "$CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL or WARNING). DEBUG never logs an "
+        help="Verbosity for provider-discovery and server diagnostics (default: WARNING). "
+        "DEBUG never logs an "
         "api_key or provider payload/content.",
     )
     args = parser.parse_args(arguments)

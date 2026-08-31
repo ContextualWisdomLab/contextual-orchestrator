@@ -51,8 +51,8 @@ if TYPE_CHECKING:
 # provider/model identifiers, counts, and elapsed time -- so this logger is
 # safe to enable at DEBUG in any environment, including CI. Silent by default
 # (module loggers have no handler until a caller configures one, e.g. via
-# ``logging.basicConfig`` gated on ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` in
-# ``__main__.main()``), matching this repo's existing per-module logger
+# ``logging.basicConfig`` selected by CLI flags in ``__main__.main()``),
+# matching this repo's existing per-module logger
 # convention (``server.py``, ``telemetry.py``, ``video_jobs.py``).
 _LOGGER = logging.getLogger(__name__)
 

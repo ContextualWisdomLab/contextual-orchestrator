@@ -21,7 +21,7 @@ fetch to one shared `concurrent.futures.wait(futures, timeout=timeout)` deadline
 `executor.map()` (no total-time bound); any model not done by the deadline is reported unmapped rather
 than waited on further — this data is best-effort provider-privacy enrichment, not required for
 discovery. Regression test proves the bound holds regardless of catalog size. Also adds opt-in
-verbose/debug discovery logging (`--log-level` / `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`, never logs
+verbose/debug discovery logging (`--log-level`, never logs
 `api_key` or payload content) for exactly this kind of future timing diagnosis.
 
 **Separate, larger gap found while root-causing `.github#1463`'s live Strix failure** (not caused by
