@@ -62,6 +62,17 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
+DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
+
+
+def discovery_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
+    """Return public capability evidence with its discovery-ownership marker."""
+    if model.supports_parallel_tool_calls is True:
+        return ("tool_call:multi", DISCOVERY_TOOL_CALL_MULTI_TAG)
+    if model.supports_parallel_tool_calls is False:
+        return ("tool_call:single", DISCOVERY_TOOL_CALL_SINGLE_TAG)
+    return ()
 
 
 def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None:
@@ -1709,13 +1720,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
-            *(
-                ("tool_call:multi",)
-                if discovered.supports_parallel_tool_calls is True
-                else ("tool_call:single",)
-                if discovered.supports_parallel_tool_calls is False
-                else ()
-            ),
+            *discovery_tool_call_tags(discovered),
         ),
         priority=priority,
         disabled=True,

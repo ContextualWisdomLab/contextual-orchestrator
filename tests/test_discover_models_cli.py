@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import urllib.parse
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -368,6 +369,20 @@ def test_discover_models_persists_single_tool_chat_rows_to_agents_db(tmp_path) -
     stored = next(agent for agent in reloaded.candidates if agent.model == discovered.model_id)
     assert stored.disabled is True
     assert "tool_call:single" in stored.tags
+    assert "discovery:tool_call:single" in stored.tags
+
+    unknown = replace(discovered, supports_parallel_tool_calls=None)
+    with patch(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([unknown], []),
+    ):
+        from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
+
+        _auto_discover_runtime_agents(reloaded)
+
+    refreshed = next(agent for agent in reloaded.candidates if agent.model == discovered.model_id)
+    assert "tool_call:single" not in refreshed.tags
+    assert "discovery:tool_call:single" not in refreshed.tags
 
 
 def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:

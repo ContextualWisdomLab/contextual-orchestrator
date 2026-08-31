@@ -15,12 +15,16 @@ from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    DISCOVERY_TOOL_CALL_MULTI_TAG,
+    DISCOVERY_TOOL_CALL_SINGLE_TAG,
+    DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
     configured_gateway_source,
     discover_all_models,
+    discovery_tool_call_tags,
     free_discovered_models,
     general_free_serving_candidates,
     is_discovered_chat_candidate,
@@ -31,6 +35,7 @@ from .model_discovery import (
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -408,10 +413,6 @@ _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG = (
 )
 _DISCOVERY_SPEND_BLOCKED_TAG = "spend:blocked"
 _DISCOVERY_SPEND_PRESERVE_DISABLED_TAG = "spend:blocked:preserve-disabled"
-_DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
-_DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
-
-
 def _should_preserve_operator_disabled_state(existing: ModelAgent) -> bool:
     """Return whether a discovery blocker should preserve operator disablement."""
     if not existing.disabled:
@@ -425,23 +426,14 @@ def _should_preserve_operator_disabled_state(existing: ModelAgent) -> bool:
     return not bool(tags & {_DISCOVERY_SPEND_BLOCKED_TAG, _DISCOVERY_CAPABILITY_BLOCKED_TAG})
 
 
-def _discovered_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
-    """Return the discovery-derived tool-call tags for one model."""
-    if model.supports_parallel_tool_calls is True:
-        return ("tool_call:multi", _DISCOVERY_TOOL_CALL_MULTI_TAG)
-    if model.supports_parallel_tool_calls is False:
-        return ("tool_call:single", _DISCOVERY_TOOL_CALL_SINGLE_TAG)
-    return ()
-
-
 def _refresh_discovered_tool_call_tags(
     tags: tuple[str, ...],
     model: DiscoveredModel,
 ) -> tuple[str, ...]:
     """Replace stale tool-call evidence with the current discovery result."""
     hidden_tags = {
-        _DISCOVERY_TOOL_CALL_SINGLE_TAG,
-        _DISCOVERY_TOOL_CALL_MULTI_TAG,
+        DISCOVERY_TOOL_CALL_SINGLE_TAG,
+        DISCOVERY_TOOL_CALL_MULTI_TAG,
     }
     has_discovery_provenance = bool(hidden_tags.intersection(tags))
     refreshed = []
@@ -454,7 +446,7 @@ def _refresh_discovered_tool_call_tags(
         ):
             continue
         refreshed.append(tag)
-    return tuple(dict.fromkeys(refreshed)) + _discovered_tool_call_tags(model)
+    return tuple(dict.fromkeys(refreshed)) + discovery_tool_call_tags(model)
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
