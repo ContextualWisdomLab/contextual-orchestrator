@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -1505,6 +1505,8 @@ class ModelClient:
             self.local_concurrency,
             self.timeout if request_timeout is None else request_timeout,
         ):
+            if deadline is None:
+                return self._send_with_retry(agent, payload, destination)
             return self._send_with_retry(agent, payload, destination, deadline=deadline)
 
     def apply_effort_profile(
@@ -6683,7 +6685,11 @@ class TaskOrchestrator:
                 try:
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
-                    with self.client.request_settings(deadline=deadline):
+                    with (
+                        self.client.request_settings(deadline=deadline)
+                        if deadline is not None
+                        else nullcontext()
+                    ):
                         output = (
                             self.client.chat(agent, messages, effort_profile=effort_profile)
                             if effort_profile is not None
