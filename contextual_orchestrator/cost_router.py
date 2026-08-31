@@ -780,16 +780,12 @@ class CostRoutingCoordinator:
             raise TypeError("zdr_only must be a boolean")
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
-        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
-        provider_routing = None
-        if zdr_only and resolved_agent_id is not None:
-            selected = next(
-                candidate
-                for candidate in self.orchestrator.candidates
-                if candidate.id == resolved_agent_id
-            )
-            if selected.provider_name == "openrouter":
-                provider_routing = {"zdr": True}
+        resolved_model, resolved_agent_id, resolved_provider = self._resolve_embedding_target(
+            model, zdr_only, agent_id
+        )
+        provider_routing = (
+            {"zdr": True} if zdr_only and resolved_provider == "openrouter" else None
+        )
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs,
@@ -810,10 +806,10 @@ class CostRoutingCoordinator:
 
     def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, Optional[str], Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice."""
         if agent_id is None and not zdr_only:
-            return model, None
+            return model, None, None
         selection_model = (
             None
             if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
@@ -822,10 +818,11 @@ class CostRoutingCoordinator:
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
-            return candidates[0].model, candidates[0].id
+            selected = candidates[0]
+            return selected.model, selected.id, selected.provider_name
         for candidate in candidates:
             if candidate.id == agent_id:
-                return candidate.model, candidate.id
+                return candidate.model, candidate.id, candidate.provider_name
         raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
