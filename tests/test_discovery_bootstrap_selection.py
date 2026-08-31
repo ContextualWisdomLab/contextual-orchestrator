@@ -323,8 +323,15 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
     assert selected == [router_cheapest, nim_model, openai_model]
 
 
-def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() -> None:
-    """Two NIM keys must not displace an independently hosted provider."""
+def test_bootstrap_selector_treats_nim_primary_and_sub_as_independent_providers() -> None:
+    """Two NIM keys are independent credential boundaries, not one outage domain.
+
+    Every KV credential is its own independent provider-account/catalog
+    boundary (see ContextualWisdomLab/contextual-orchestrator#941); the
+    selector never infers that ``nvidia_nim`` and ``nvidia_nim_sub`` share
+    fate merely because of the name resemblance, so cheapest-first filling
+    admits both before a pricier, unrelated provider.
+    """
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -346,7 +353,7 @@ def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() ->
         2,
     )
 
-    assert selected == [nim_primary, openrouter]
+    assert selected == [nim_primary, nim_sub]
 
 
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:
