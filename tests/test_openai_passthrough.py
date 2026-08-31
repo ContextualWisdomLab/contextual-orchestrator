@@ -28,6 +28,7 @@ from contextual_orchestrator.server import (  # noqa: E402
     build_server,
     responses_sse_body,
 )
+from contextual_orchestrator.telemetry import current_session_id  # noqa: E402
 
 
 def _build() -> TaskOrchestrator:
@@ -404,7 +405,21 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
 
 def test_lineage_structured_payload_accepts_session_without_provider_forwarding() -> None:
     """Lineage correlation is gateway metadata, not a provider request field."""
-    server, port, token = _serve()
+    orchestrator = _build()
+    observed_sessions: list[str | None] = []
+    proxy_completion = orchestrator.proxy_completion
+
+    def capture_session(*args, **kwargs):  # type: ignore[no-untyped-def]
+        observed_sessions.append(current_session_id())
+        return proxy_completion(*args, **kwargs)
+
+    orchestrator.proxy_completion = capture_session  # type: ignore[method-assign]
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
     try:
         status, body = _post(
             f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -421,7 +436,7 @@ def test_lineage_structured_payload_accepts_session_without_provider_forwarding(
     assert status == 200
     assert body["echo"]["response_format"] == {"type": "json_object"}
     assert "session_id" not in body["echo"]
-    assert "session_id" in TaskOrchestrator._ORCHESTRATION_ONLY_KEYS
+    assert observed_sessions == ["synthetic-lineage-session"]
 
 
 def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
