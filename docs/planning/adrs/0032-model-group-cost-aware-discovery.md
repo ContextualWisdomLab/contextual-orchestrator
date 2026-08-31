@@ -172,6 +172,11 @@ motivate evidence-based model routing, while this amendment only makes one
 caller-held observation explicit and auditable. Ordinary omitted-control
 behavior and response shape remain unchanged.
 
+Redistributable research artifacts are already committed at
+`docs/papers/routellm-routing-2406.18665.pdf` and
+`docs/papers/frugalgpt-cost-2305.05176.pdf`; `docs/papers/README.md` records
+their citations and provenance.
+
 OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
 
 OpenRouter. (2026). *Image generation*. https://openrouter.ai/docs/guides/overview/multimodal/image-generation

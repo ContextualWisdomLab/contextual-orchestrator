@@ -262,8 +262,9 @@ class CostRoutingCoordinator:
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
         routing_controls = hints if isinstance(hints, dict) else {}
-        has_candidate_controls = any(
-            key in routing_controls for key in ("candidate_id", "exclude_candidate_ids")
+        has_candidate_controls = bool(
+            routing_controls.get("candidate_id")
+            or routing_controls.get("exclude_candidate_ids")
         )
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)

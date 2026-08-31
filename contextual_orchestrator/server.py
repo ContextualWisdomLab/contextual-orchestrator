@@ -3135,7 +3135,9 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
-def _validate_routing(routing: Any) -> dict[str, Any] | None:
+def _validate_routing(
+    routing: Any, *, allow_candidate_controls: bool = False
+) -> dict[str, Any] | None:
     """OpenAI-adjacent routing hints for sync vs batch channel selection.
 
     Fail closed on shape so callers cannot smuggle non-boolean latency flags or
@@ -3146,16 +3148,10 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
-    unknown = sorted(
-        set(routing)
-        - {
-            "channel",
-            "latency_tolerant",
-            "priority",
-            "candidate_id",
-            "exclude_candidate_ids",
-        }
-    )
+    allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_candidate_controls:
+        allowed.update({"candidate_id", "exclude_candidate_ids"})
+    unknown = sorted(set(routing) - allowed)
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
@@ -6695,7 +6691,9 @@ def build_server(
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
-                    request_routing = _validate_routing(body.get("routing"))
+                    request_routing = _validate_routing(
+                        body.get("routing"), allow_candidate_controls=True
+                    )
                     _validate_candidate_routing(orchestrator, request_routing, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -6899,9 +6897,12 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
-                    )
+                    with orchestrator.candidate_routing_policy(
+                        request_routing, model_name=model_name
+                    ):
+                        route_stream = bool(
+                            stream and orchestrator.would_route(messages, mode, model_name)
+                        )
                     if route_stream:
                         if explicit_trace:
                             raise RequestError(
@@ -7261,7 +7262,9 @@ def build_server(
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
                     model_name = _validate_responses_model(body)
-                    responses_routing_control = _validate_routing(body.get("routing"))
+                    responses_routing_control = _validate_routing(
+                        body.get("routing"), allow_candidate_controls=True
+                    )
                     _validate_candidate_routing(
                         orchestrator, responses_routing_control, model_name
                     )
@@ -7431,6 +7434,21 @@ def build_server(
                                 503,
                                 "file_provider_unavailable",
                                 "no common referenced file provider is available",
+                            )
+                        pinned = (responses_routing_control or {}).get("candidate_id")
+                        excluded = set(
+                            (responses_routing_control or {}).get(
+                                "exclude_candidate_ids", ()
+                            )
+                        )
+                        if (
+                            (pinned is not None and pinned not in valid_agents)
+                            or not (valid_agents - excluded)
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "candidate controls are incompatible with referenced file providers",
                             )
                         body["_file_replicas"] = provider_ids
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).

@@ -252,6 +252,9 @@ _REQUEST_CANDIDATE_ID: ContextVar[str | None] = ContextVar(
 _REQUEST_EXCLUDED_CANDIDATE_IDS: ContextVar[frozenset[str]] = ContextVar(
     "request_excluded_candidate_ids", default=frozenset()
 )
+_REQUEST_ATTEMPTED_CANDIDATE_IDS: ContextVar[list[str] | None] = ContextVar(
+    "request_attempted_candidate_ids", default=None
+)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -3493,9 +3496,11 @@ class TaskOrchestrator:
                 raise ValueError("candidate_id is not eligible for orchestrator/free")
         candidate_token = _REQUEST_CANDIDATE_ID.set(candidate_id)
         excluded_token = _REQUEST_EXCLUDED_CANDIDATE_IDS.set(frozenset(normalized))
+        attempted_token = _REQUEST_ATTEMPTED_CANDIDATE_IDS.set([])
         try:
             yield
         finally:
+            _REQUEST_ATTEMPTED_CANDIDATE_IDS.reset(attempted_token)
             _REQUEST_EXCLUDED_CANDIDATE_IDS.reset(excluded_token)
             _REQUEST_CANDIDATE_ID.reset(candidate_token)
 
@@ -3508,6 +3513,12 @@ class TaskOrchestrator:
         )
 
     @staticmethod
+    def _record_candidate_attempt(agent_id: str) -> None:
+        attempted = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get()
+        if attempted is not None and agent_id not in attempted:
+            attempted.append(agent_id)
+
+    @staticmethod
     def _candidate_routing_evidence(result: Mapping[str, Any]) -> dict[str, Any] | None:
         pinned = _REQUEST_CANDIDATE_ID.get()
         excluded = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())
@@ -3515,13 +3526,15 @@ class TaskOrchestrator:
             return None
         trace = result.get("trace")
         rows = trace if isinstance(trace, list) else []
-        attempted = [
-            value
-            for row in rows
-            if isinstance(row, Mapping)
-            for value in [row.get("agent_id")]
-            if isinstance(value, str) and value
-        ]
+        attempted = list(_REQUEST_ATTEMPTED_CANDIDATE_IDS.get() or ())
+        if not attempted:
+            attempted = [
+                value
+                for row in rows
+                if isinstance(row, Mapping)
+                for value in [row.get("agent_id")]
+                if isinstance(value, str) and value
+            ]
         served = next(
             (
                 value
@@ -3734,7 +3747,11 @@ class TaskOrchestrator:
         )
         if (
             isinstance(required_agent_id, str)
-            and (agent is None or not self._zdr_agent_allowed(agent))
+            and (
+                agent is None
+                or not self._zdr_agent_allowed(agent)
+                or not self._request_candidate_allowed(agent)
+            )
         ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
@@ -3797,6 +3814,7 @@ class TaskOrchestrator:
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
+            self._record_candidate_attempt(agent.id)
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
@@ -3880,6 +3898,7 @@ class TaskOrchestrator:
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
+            self._record_candidate_attempt(candidate.id)
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
             if isinstance(file_replicas, dict):
@@ -4005,7 +4024,11 @@ class TaskOrchestrator:
         )
         if (
             isinstance(required_agent_id, str)
-            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
+            and (
+                final_agent is None
+                or not self._zdr_agent_allowed(final_agent)
+                or not self._request_candidate_allowed(final_agent)
+            )
         ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
@@ -4213,6 +4236,11 @@ class TaskOrchestrator:
                     if candidate.id != preferred.id
                 ),
             ]
+            ordered_candidates = [
+                candidate
+                for candidate in ordered_candidates
+                if self._request_candidate_allowed(candidate)
+            ]
             for candidate in ordered_candidates:
                 provider_key = (
                     f"provider:{candidate.provider_name.casefold()}"
@@ -4237,6 +4265,7 @@ class TaskOrchestrator:
                         active_profile,
                         api_surface=api_surface,
                     )
+                self._record_candidate_attempt(candidate.id)
                 try:
                     send = self.client.proxy_send
                     if virtual_model:
@@ -4573,6 +4602,7 @@ class TaskOrchestrator:
         if include_usage:
             stream_kwargs["include_usage"] = True
         stream = self.client.stream_chat(agent, messages, **stream_kwargs)
+        self._record_candidate_attempt(agent.id)
         started_at = time.perf_counter()
         try:
             for delta in stream:
@@ -5584,6 +5614,12 @@ class TaskOrchestrator:
                     capable = []
                 if capable:
                     agent = capable[0]
+                if not self._request_candidate_allowed(agent) or any(
+                    tag not in agent.tags for tag in required_tags
+                ):
+                    raise ValueError(
+                        "no eligible candidate satisfies the active routing controls"
+                    )
             if progress is not None:
                 progress(step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
@@ -6214,9 +6250,15 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        digest = hashlib.sha256(
-            (text + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")).encode("utf-8")
-        ).hexdigest()
+        control_key = json.dumps(
+            {
+                "candidate_id": _REQUEST_CANDIDATE_ID.get(),
+                "exclude_candidate_ids": sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get()),
+                "zdr_only": _REQUEST_ZDR_ONLY.get(),
+            },
+            sort_keys=True,
+        )
+        digest = hashlib.sha256((text + "\x00" + control_key).encode("utf-8")).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
         if cached is not None:
@@ -6232,7 +6274,14 @@ class TaskOrchestrator:
         except RuntimeError:
             candidates = []
         if not candidates and not _REQUEST_ZDR_ONLY.get():
-            candidates = list(self.agents)
+            candidates = [
+                agent
+                for agent in self.agents
+                if not agent.disabled
+                and self._zdr_agent_allowed(agent)
+                and self._request_candidate_allowed(agent)
+                and _is_general_chat_agent(agent)
+            ]
         if not candidates:
             return False
         triage_agent = candidates[0]
@@ -6241,6 +6290,7 @@ class TaskOrchestrator:
             {"role": "user", "content": text},
         ]
         try:
+            self._record_candidate_attempt(triage_agent.id)
             reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
@@ -6653,6 +6703,7 @@ class TaskOrchestrator:
             request_settings = self.client.request_settings_snapshot()
 
             def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
+                self._record_candidate_attempt(agent.id)
                 with self.client.request_settings(**request_settings):
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
@@ -6711,6 +6762,7 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
+                    self._record_candidate_attempt(agent.id)
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
                     output = (
@@ -6890,6 +6942,7 @@ class TaskOrchestrator:
             agent
             for agent in ordered
             if not agent.disabled
+            and self._request_candidate_allowed(agent)
             and self._zdr_agent_allowed(agent)
             and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)

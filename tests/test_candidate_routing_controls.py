@@ -7,9 +7,16 @@ import threading
 import urllib.error
 import urllib.request
 
+import pytest
+
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient
-from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.server import (
+    RequestError,
+    SecurityConfig,
+    _validate_routing,
+    build_server,
+)
 
 
 class _CandidateClient(ModelClient):
@@ -21,6 +28,8 @@ class _CandidateClient(ModelClient):
         self.calls.append(agent.id)
         if agent.id == "candidate_a":
             raise RuntimeError("candidate a failed")
+        if messages and "workflow_required" in str(messages[0].get("content")):
+            return '{"workflow_required": false}'
         return "candidate b"
 
     def stream_chat(self, agent, messages, **kwargs):
@@ -279,3 +288,84 @@ def test_candidate_pin_is_honored_by_responses_json_and_stream_paths() -> None:
     completed = next(event for event in stream_events if event["type"] == "response.completed")
     assert completed["response"]["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
     assert set(client.calls) == {"candidate_b"}
+
+
+def test_auto_stream_triage_and_completion_both_honor_the_pin() -> None:
+    server, thread, token, client = _serve()
+    try:
+        status, events = _post_sse(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "auto route"}],
+                "stream": True,
+                "routing": {
+                    "candidate_id": "candidate_b",
+                    "exclude_candidate_ids": ["candidate_a"],
+                },
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert events
+    assert len(client.calls) >= 2
+    assert set(client.calls) == {"candidate_b"}
+
+
+def test_core_rejects_file_affinity_that_conflicts_with_pin() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("candidate_a", "model-a"),
+            ModelAgent("candidate_b", "model-b"),
+        ]
+    )
+    with orchestrator.candidate_routing_policy(
+        {"candidate_id": "candidate_b"}, model_name="orchestrator/auto"
+    ):
+        try:
+            orchestrator.proxy_completion(
+                {
+                    "model": "orchestrator/auto",
+                    "input": "file request",
+                    "_required_agent_id": "candidate_a",
+                },
+                endpoint="responses",
+            )
+        except RuntimeError as exc:
+            assert "required file provider" in str(exc)
+        else:  # pragma: no cover - security regression
+            raise AssertionError("conflicting file affinity was accepted")
+
+
+def test_candidate_keys_are_rejected_on_unsupported_routing_surfaces() -> None:
+    with pytest.raises(RequestError) as error:
+        _validate_routing({"candidate_id": "candidate_b"})
+    assert error.value.code == "invalid_routing"
+    assert _validate_routing(
+        {"exclude_candidate_ids": []}, allow_candidate_controls=True
+    ) == {"exclude_candidate_ids": []}
+
+
+def test_attempt_evidence_keeps_failed_candidate_before_success() -> None:
+    server, thread, token, client = _serve()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            _tool_body({"exclude_candidate_ids": ["disabled_candidate"]}),
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert client.calls == ["candidate_a", "candidate_b"]
+    assert body["orchestration"]["routing"]["attempted_candidate_ids"] == [
+        "candidate_a",
+        "candidate_b",
+    ]
+    assert body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
