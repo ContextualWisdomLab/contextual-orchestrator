@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
