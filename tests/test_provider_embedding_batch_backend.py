@@ -243,6 +243,7 @@ def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -
         embedding_token_counter=_SyntheticExactCounter(),
     )
     coordinator.config.set("routing", "embedding_max_tokens_per_request", 3)
+    coordinator.config.set("routing", "embedding_max_inputs_per_request", 2)
 
     document = coordinator.complete_embeddings_batch(
         ["one two", "three four", "five"],

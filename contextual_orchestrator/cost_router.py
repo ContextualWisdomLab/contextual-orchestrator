@@ -56,6 +56,7 @@ _RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
+_DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
@@ -151,7 +152,7 @@ class CostRoutingCoordinator:
                         for request in requests
                     ):
                         raise RuntimeError("provider embedding batch must retain one selected route")
-                    max_tokens, _max_chars = self._embedding_request_limits()
+                    max_tokens, _max_chars, max_inputs = self._embedding_request_limits()
                     vectors: List[List[float]] = []
                     prompt_tokens = 0
                     shard: List[EmbeddingBatchRequest] = []
@@ -160,7 +161,10 @@ class CostRoutingCoordinator:
                         request_tokens = request.token_count or len(
                             request.input_text.encode("utf-8")
                         )
-                        if shard and shard_tokens + request_tokens > max_tokens:
+                        if shard and (
+                            len(shard) >= max_inputs
+                            or shard_tokens + request_tokens > max_tokens
+                        ):
                             shard_vectors, shard_usage = self._run_embedding_shard(
                                 agent, shard
                             )
@@ -928,7 +932,7 @@ class CostRoutingCoordinator:
         agent_id: Optional[str],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
-        max_tokens, max_chars = self._embedding_request_limits()
+        max_tokens, max_chars, max_inputs = self._embedding_request_limits()
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
         for source_index, text in enumerate(inputs):
@@ -955,9 +959,10 @@ class CostRoutingCoordinator:
         return requests, part_counts, {
             "max_tokens_per_part": max_tokens,
             "max_chars_per_part": max_chars,
+            "max_inputs_per_request": max_inputs,
         }
 
-    def _embedding_request_limits(self) -> tuple[int, int]:
+    def _embedding_request_limits(self) -> tuple[int, int, int]:
         """Return configured per-provider-call embedding ceilings.
 
         Azure's current embeddings limit is surfaced by LiteLLM as a 300,000
@@ -980,7 +985,15 @@ class CostRoutingCoordinator:
             ),
             _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART,
         )
-        return max_tokens, max_chars
+        max_inputs = _positive_int(
+            self.config.get(
+                _EMBEDDING_CONFIG_CATEGORY,
+                "embedding_max_inputs_per_request",
+                _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST,
+            ),
+            _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST,
+        )
+        return max_tokens, max_chars, max_inputs
 
     def _split_embedding_input(
         self,
