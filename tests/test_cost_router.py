@@ -24,6 +24,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchDownloadError,
     BatchJob,
     BatchRequest,
+    LocalBatchBackend,
     PgLlmBatchBackend,
 )
 from contextual_orchestrator.cost_router import BatchModelSelectionError  # noqa: E402
@@ -576,9 +577,9 @@ def test_batch_completion_records_on_retrieve() -> None:
     retrieved = coordinator.retrieve_batch(submitted["job_id"])
     assert retrieved["result_count"] == 1
     records = coordinator.ledger.records()
-    assert len(records) == 1
-    assert records[0]["request_channel"] == "batch"
-    assert records[0]["team_name"] == "beta"
+    assert records
+    assert all(record["request_channel"] == "batch" for record in records)
+    assert all(record["team_name"] == "beta" for record in records)
 
     # The mock runner behind LocalBatchBackend reports no real per-step usage,
     # so this legitimately falls back to an estimate -- but it must be an
@@ -597,6 +598,79 @@ def test_batch_completion_records_on_retrieve() -> None:
     assert result["prompt_tokens"] == real_prompt_tokens
     assert result["prompt_tokens"] != blank_prompt_tokens
     assert result["completion_tokens"] > 0
+
+
+def test_local_batch_records_each_served_provider_at_its_own_price() -> None:
+    agents = [
+        ModelAgent(id="worker_a", model="model-a", base_url="mock://a", provider_name="alpha"),
+        ModelAgent(id="worker_b", model="model-b", base_url="mock://b", provider_name="beta"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("alpha", "model-a", 1.0, 2.0))
+    price_book.set_price(PriceEntry("beta", "model-b", 3.0, 4.0))
+    backend = LocalBatchBackend(
+        lambda *_: {
+            "answer": "done",
+            "mode": "conduct",
+            "trace": [
+                {"agent_id": "worker_a", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                {"agent_id": "worker_b", "usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+            ],
+        }
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, batch_backend=backend
+    )
+
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "meter both"}], hints={"channel": "batch"}
+    )
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+    rows = coordinator.ledger.records()
+
+    assert [(row["provider_name"], row["model_name"]) for row in rows] == [
+        ("alpha", "model-a"),
+        ("beta", "model-b"),
+    ]
+    assert result["usage_record_ids"] == [row["usage_record_id"] for row in rows]
+    assert result["prompt_tokens"] == 17
+    assert result["completion_tokens"] == 8
+    assert result["cost_amount"] == 0.053
+    assert result["measurement_status"] == "measured"
+
+
+def test_local_batch_malformed_usage_falls_back_without_coercion() -> None:
+    coordinator = _coordinator()
+    coordinator.batch_backend = LocalBatchBackend(
+        lambda *_: {
+            "answer": "done",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "fallback",
+                    "usage": {"prompt_tokens": None, "completion_tokens": 3},
+                },
+                {
+                    "agent_id": "mock_worker",
+                    "output": "again",
+                    "usage": {"prompt_tokens": "7", "completion_tokens": "3"},
+                },
+            ],
+        }
+    )
+
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "do not coerce"}], hints={"channel": "batch"}
+    )
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+
+    assert result["measurement_status"] == "estimated"
+    assert all(
+        row["measurement_status"] == "estimated"
+        for row in coordinator.ledger.records()
+    )
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
@@ -621,10 +695,12 @@ def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     )
     job = coordinator.complete([{"role": "user", "content": "batch one"}],
                                hints={"channel": "batch"}, attribution={"company": "acme"})
-    coordinator.retrieve_batch(job["job_id"])
+    batch = coordinator.retrieve_batch(job["job_id"])
 
     report = coordinator.cost_report("company")
-    assert report["grand_total"]["record_count"] == len(sync["usage_record_ids"]) + 1
+    assert report["grand_total"]["record_count"] == (
+        len(sync["usage_record_ids"]) + len(batch["results"][0]["usage_record_ids"])
+    )
     assert report["items"][0]["dimension_value"] == "acme"
 
 

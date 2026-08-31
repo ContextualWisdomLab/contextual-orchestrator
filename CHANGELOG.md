@@ -38,7 +38,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `LocalBatchBackend.submit()` now aggregates real `prompt_tokens`/
   `completion_tokens` from `result["trace"][i]["usage"]` (usage has no
   top-level key on `orchestrator.complete()`'s result; it is nested per
-  workflow step) instead of leaving both at the dataclass's `0` default.
+  workflow step) instead of leaving both at the dataclass's `0` default. The
+  minimal per-step usage trace is retained so heterogeneous conduct calls are
+  charged to their actual served provider/model rather than collapsed into one
+  `unknown` row; malformed counts fail closed to estimates without coercion.
   `retrieve_batch()`'s heuristic-estimate fallback (triggered whenever a
   batch item reports no usage) now estimates from the batch item's real
   request messages instead of a hardcoded blank `""` prompt — previously

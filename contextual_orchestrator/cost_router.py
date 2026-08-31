@@ -720,34 +720,76 @@ class CostRoutingCoordinator:
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
-            provider_model = self._resolve_batch_provider_model(item)
             # Prefer the real request prompt the batch item carries (e.g. from
             # LocalBatchBackend) over a blank placeholder when the estimate
             # fallback below is triggered, so an "estimated" row is actually
             # estimated from what was asked rather than from empty content.
             fallback_messages = item.messages or [{"role": "user", "content": ""}]
-            record = self._record_completion(
-                messages=fallback_messages,
-                answer=item.answer,
-                route_mode=item.mode,
-                request_channel="batch",
-                attribution=item.attribution,
-                model_name=item.model,
-                provider_model=provider_model,
-                workflow_run_id=job.job_id,
-                prompt_tokens=item.prompt_tokens or None,
-                completion_tokens=item.completion_tokens or None,
-            )
+            records = []
+            request_prompt_attributed = False
+            for step in item.trace:
+                counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
+                records.append(
+                    self._record_completion(
+                        messages=fallback_messages if attribute_request_prompt else [],
+                        answer=step.get("output", "") if counts is None else "",
+                        route_mode=item.mode,
+                        request_channel="batch",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=self._served_provider_model(
+                            {"trace": [step]}, item.model
+                        ),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            if not records:
+                records.append(
+                    self._record_completion(
+                        messages=fallback_messages,
+                        answer=item.answer,
+                        route_mode=item.mode,
+                        request_channel="batch",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=self._resolve_batch_provider_model(item),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=item.prompt_tokens or None,
+                        completion_tokens=item.completion_tokens or None,
+                    )
+                )
+            currencies = {record.currency_code for record in records}
             recorded.append(
                 {
                     "custom_id": item.custom_id,
                     "answer": item.answer,
-                    "usage_record_id": record.usage_record_id,
-                    "cost_amount": record.cost_amount,
-                    "currency_code": record.currency_code,
-                    "prompt_tokens": record.prompt_tokens,
-                    "completion_tokens": record.completion_tokens,
-                    "measurement_status": record.measurement_status,
+                    "usage_record_id": records[-1].usage_record_id,
+                    "usage_record_ids": [record.usage_record_id for record in records],
+                    "cost_amount": (
+                        round(sum(record.cost_amount for record in records), 6)
+                        if len(currencies) == 1
+                        else None
+                    ),
+                    "currency_code": (
+                        next(iter(currencies)) if len(currencies) == 1 else "MIXED"
+                    ),
+                    "prompt_tokens": sum(record.prompt_tokens for record in records),
+                    "completion_tokens": sum(
+                        record.completion_tokens for record in records
+                    ),
+                    "measurement_status": (
+                        "estimated"
+                        if any(
+                            record.measurement_status == "estimated"
+                            for record in records
+                        )
+                        else "measured"
+                    ),
                 }
             )
         return {

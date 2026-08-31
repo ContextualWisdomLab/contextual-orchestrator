@@ -210,6 +210,9 @@ class BatchResultItem:
     # backend reports no usage (e.g. LocalBatchBackend against a mock/local
     # runner) can estimate from the real prompt instead of a blank placeholder.
     messages: List[Dict[str, str]] = field(default_factory=list)
+    # Local runs keep their per-call identities and usage intact so the cost
+    # router can meter heterogeneous conduct workflows one provider at a time.
+    trace: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class BatchDownloadError(RuntimeError):
@@ -302,12 +305,26 @@ class LocalBatchBackend:
             # "trace"[i]["usage"] (one step for route, possibly several for
             # conduct). Aggregate it so batch results carry real token counts
             # instead of the dataclass's zero defaults.
-            trace = result.get("trace") or []
+            trace = [
+                {
+                    key: step[key]
+                    for key in ("agent_id", "served_agent_id", "usage", "output")
+                    if key in step
+                }
+                for step in result.get("trace") or []
+                if isinstance(step, dict)
+            ]
+
+            def reported(step: Dict[str, Any], key: str) -> int:
+                usage = step.get("usage")
+                value = usage.get(key) if isinstance(usage, dict) else None
+                return value if type(value) is int and value >= 0 else 0
+
             prompt_tokens = sum(
-                int((step.get("usage") or {}).get("prompt_tokens", 0)) for step in trace
+                reported(step, "prompt_tokens") for step in trace
             )
             completion_tokens = sum(
-                int((step.get("usage") or {}).get("completion_tokens", 0)) for step in trace
+                reported(step, "completion_tokens") for step in trace
             )
             return BatchResultItem(
                 custom_id=request.custom_id,
@@ -318,6 +335,7 @@ class LocalBatchBackend:
                 model=request.model,
                 mode=result.get("mode", request.mode),
                 messages=list(request.messages),
+                trace=trace,
             )
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
