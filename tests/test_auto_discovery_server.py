@@ -418,6 +418,36 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
     assert orchestrator.candidates == [bootstrap, existing]
 
 
+def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
+    monkeypatch,
+) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        discovered.model_id,
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+    )
+    orchestrator = TaskOrchestrator([existing])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": [existing.id]}
+    assert orchestrator.candidates[0].disabled is True
+
+
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
     captured = []
     monkeypatch.setattr(

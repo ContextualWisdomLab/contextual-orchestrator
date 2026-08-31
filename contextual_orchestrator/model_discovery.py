@@ -1286,19 +1286,15 @@ def discover_all_models(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
     )
-    if any(model.provider_name == "openrouter" and not model.is_free for model in routed):
-        paid_available = openrouter_paid_inference_available(timeout=timeout)
-        routed = [
-            replace(
-                model,
-                spend_admitted=(
-                    model.provider_name != "openrouter"
-                    or model.is_free
-                    or paid_available is True
-                ),
-            )
-            for model in routed
-        ]
+    if any(
+        source.provider_name == "openrouter"
+        and get_credential(source.credential_name)
+        for source in sources
+    ):
+        routed = apply_openrouter_spend_admission(
+            routed,
+            openrouter_paid_inference_available(timeout=timeout),
+        )
     return routed, errors
 
 
@@ -1333,6 +1329,24 @@ def openrouter_paid_inference_available(
         OSError,
     ):
         return None
+
+
+def apply_openrouter_spend_admission(
+    discovered: Sequence[DiscoveredModel],
+    paid_available: bool | None,
+) -> list[DiscoveredModel]:
+    """Fail closed for paid OpenRouter rows without current credit evidence."""
+    return [
+        replace(
+            model,
+            spend_admitted=(
+                model.provider_name != "openrouter"
+                or model.is_free
+                or paid_available is True
+            ),
+        )
+        for model in discovered
+    ]
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
