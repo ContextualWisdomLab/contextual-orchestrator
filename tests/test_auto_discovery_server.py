@@ -4,7 +4,10 @@ from dataclasses import replace
 import os
 from unittest.mock import patch
 
-from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
+from contextual_orchestrator.__main__ import (
+    _auto_discover_runtime_agents,
+    _probe_configured_gateway_structured_chat,
+)
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
@@ -85,6 +88,75 @@ def test_embedding_only_discovery_keeps_chat_fallbacks(monkeypatch) -> None:
     by_id = {agent.id: agent for agent in orchestrator.candidates}
     assert "configured_gateway_placeholder" in by_id
     assert by_id["bootstrap_chat_agent"].disabled is False
+
+
+def test_configured_gateway_discovery_retains_only_structured_probe_successes(
+    monkeypatch,
+) -> None:
+    """Configured-gateway chat rows require a successful bounded structured probe."""
+    models = [
+        DiscoveredModel(
+            provider_name="configured_gateway",
+            model_id=model_id,
+            credential_name="LLM_GATEWAY_API_KEY",
+            chat_base_url="https://gateway.synthetic.example/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+        )
+        for model_id in ("stale-model", "live-model")
+    ]
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential",
+        lambda name: "present" if name == "LLM_GATEWAY_API_KEY" else None,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: (models, []),
+    )
+    probes: list[str] = []
+
+    def probe(_orchestrator, model):
+        probes.append(model.model_id)
+        return model.model_id == "live-model"
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        probe,
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert probes == ["stale-model", "live-model"]
+    assert result["added"] == ["configured_gateway_live_model"]
+    assert all(agent.model != "stale-model" for agent in orchestrator.agents)
+
+
+def test_configured_gateway_structured_probe_is_bounded_and_validates_output() -> None:
+    """The startup probe proves JSON object service with a bounded synthetic call."""
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="candidate-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    orchestrator = TaskOrchestrator([], allow_empty_agents=True)
+    observed = {}
+
+    def send(agent, endpoint, payload):
+        observed.update(agent=agent, endpoint=endpoint, payload=payload)
+        return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    orchestrator.client.proxy_send_once = send
+
+    assert _probe_configured_gateway_structured_chat(orchestrator, model) is True
+    assert observed["endpoint"] == "chat/completions"
+    assert observed["payload"]["max_tokens"] == 8
+    assert observed["payload"]["response_format"] == {"type": "json_object"}
 
 
 def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(

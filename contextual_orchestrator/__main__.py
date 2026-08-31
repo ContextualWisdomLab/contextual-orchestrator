@@ -16,6 +16,7 @@ from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
     ProviderModelSource,
     agent_from_discovered,
@@ -403,6 +404,37 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+def _probe_configured_gateway_structured_chat(
+    orchestrator: TaskOrchestrator,
+    model: DiscoveredModel,
+) -> bool:
+    """Return whether one configured-gateway row proves bounded structured chat."""
+    agent = replace(agent_from_discovered(model), disabled=False)
+    payload = {
+        "model": agent.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": 'Return only {"status":"ok"}.',
+            }
+        ],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 8,
+        "stream": False,
+    }
+    try:
+        response = orchestrator.client.proxy_send_once(
+            agent,
+            "chat/completions",
+            payload,
+        )
+        content = response["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except Exception:  # noqa: BLE001 - startup capability probe is fail-closed
+        return False
+    return isinstance(parsed, dict) and parsed.get("status") == "ok"
+
+
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate routable chat models without runtime env transport.
 
@@ -419,6 +451,18 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in discovered
         if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
+    configured_gateway_probe_required = any(
+        model.provider_name == "configured_gateway"
+        and get_credential(model.credential_name) is not None
+        for model in chat_models
+    )
+    if configured_gateway_probe_required:
+        chat_models = [
+            model
+            for model in chat_models
+            if model.provider_name != "configured_gateway"
+            or _probe_configured_gateway_structured_chat(orchestrator, model)
+        ]
     runtime_models = [
         model
         for model in discovered

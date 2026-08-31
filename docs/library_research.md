@@ -102,6 +102,7 @@ missing or invalid.
 | What may an observation claim? | Council of Europe CEFR Companion Volume and linking manual | Preserve criterion-level evidence and transparent linking inputs; do not emit a CEFR level or placement decision. | A local CEFR scale or standard-setting algorithm. |
 | What makes an assessment result defensible? | AERA, APA, and NCME Standards for Educational and Psychological Testing | Keep task, rubric, criterion, anchor, evidence, rater, prompt, workflow, parse, verifier, and replay provenance explicit. | Calling provider success or a model label validity evidence. |
 | How should provider calls be governed? | Existing `TaskOrchestrator`, KV credential registry, model discovery, and structured-output passthrough | Reuse the existing gateway; require exact external contract compatibility and fail closed on missing capability or provider failure. | Direct provider SDK calls or a second credential path. |
+| What proves a discovered configured-gateway chat row is usable? | The existing provider-error boundary distinguishes catalog metadata from runtime success. | Require one bounded synthetic structured-output probe before activation and share missing-model exclusions across the full virtual request. | Treating list membership as readiness or retrying the same missing model in later workflow roles. |
 
 Official references:
 

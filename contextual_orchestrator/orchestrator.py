@@ -3959,9 +3959,11 @@ class TaskOrchestrator:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
 
         self._raise_if_spend_budget_exceeded()
+        request_exclusions: set[str] = set()
         workflow = self.conduct(
             messages,
             model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
+            _excluded_agent_ids=request_exclusions,
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -4087,6 +4089,31 @@ class TaskOrchestrator:
             else [final_agent]
         )
         synthesis_failure_recorded = False
+        synthesis_candidates = [
+            candidate
+            for candidate in synthesis_candidates
+            if candidate.id not in request_exclusions
+        ]
+        if final_agent.id in request_exclusions:
+            same_endpoint_candidates = [
+                candidate
+                for candidate in synthesis_candidates
+                if candidate.base_url.rstrip("/").casefold()
+                == final_agent.base_url.rstrip("/").casefold()
+            ]
+            if not same_endpoint_candidates:
+                raise ProviderUpstreamError(
+                    agent_id=final_agent.id,
+                    model=final_agent.model,
+                    error_code="model_not_found",
+                    message="every eligible model on the selected endpoint is unavailable",
+                    client_status=404,
+                    provider_status=404,
+                    retryable=False,
+                    transport="structured_synthesis",
+                )
+            final_agent = same_endpoint_candidates[0]
+            synthesis_candidates = same_endpoint_candidates
 
         def send_synthesis(
             payload: dict[str, Any],
@@ -4161,6 +4188,7 @@ class TaskOrchestrator:
                                 and candidate_endpoint == preferred_endpoint
                             ):
                                 last_model_not_found = classified
+                                request_exclusions.add(candidate.id)
                                 self._record_failure(candidate.id)
                                 synthesis_failure_recorded = True
                                 continue
@@ -5425,6 +5453,7 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
         workflow_run_id: str | None = None,
+        _excluded_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
@@ -5529,6 +5558,7 @@ class TaskOrchestrator:
                 text=task,
                 role=step.role,
                 allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
+                excluded_agent_ids=_excluded_agent_ids,
             )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
@@ -6520,6 +6550,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
+        excluded_agent_ids: set[str] | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -6549,6 +6580,12 @@ class TaskOrchestrator:
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
             )
+        if excluded_agent_ids:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.id not in excluded_agent_ids
+            ]
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         race_members = self._equivalent_race_members(candidates, capability="text")
@@ -6654,6 +6691,13 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
+                        if (
+                            excluded_agent_ids is not None
+                            and exc.error_code == "model_not_found"
+                        ):
+                            excluded_agent_ids.add(agent.id)
+                            self._record_failure(agent.id)
+                            break
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
                         # the provider's own already-computed retryability

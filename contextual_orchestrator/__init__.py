@@ -147,6 +147,7 @@ __all__ = [
     "EmbeddingBatchResultItem",
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
+    "ProviderEmbeddingBatchBackend",
     "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
