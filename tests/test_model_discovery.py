@@ -43,6 +43,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_provider_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -1511,6 +1512,40 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
+
+
+@pytest.mark.parametrize(
+    ("credit_available", "paid_admitted"),
+    [(False, False), (None, False), (True, True)],
+)
+def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
+    credit_available: bool | None,
+    paid_admitted: bool,
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "provider/free", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "provider/paid", "pricing": {"prompt": "0.1", "completion": "0.1"}},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=lambda request, timeout=None: _Response(
+            payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
+        ),
+    ), patch(
+        "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+        return_value=credit_available,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["provider/free"].spend_admitted is True
+    assert by_id["provider/paid"].spend_admitted is paid_admitted
+    assert is_routable_discovered_model(by_id["provider/free"]) is True
+    assert is_routable_discovered_model(by_id["provider/paid"]) is paid_admitted
 
 
 def test_price_per_1k_rejects_underflowing_positive_value() -> None:

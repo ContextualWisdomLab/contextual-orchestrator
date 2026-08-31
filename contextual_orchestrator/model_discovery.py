@@ -284,6 +284,7 @@ class DiscoveredModel:
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
+    spend_admitted: bool = True
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -1281,10 +1282,24 @@ def discover_all_models(
     # OpenRouter's authenticated catalog supplies routable account-model rows;
     # its public ZDR endpoint adds route-specific privacy evidence without
     # turning the whole provider account into either ZDR-only or non-serving.
-    return _apply_discovered_model_evidence(
+    routed = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
-    ), errors
+    )
+    if any(model.provider_name == "openrouter" and not model.is_free for model in routed):
+        paid_available = openrouter_paid_inference_available(timeout=timeout)
+        routed = [
+            replace(
+                model,
+                spend_admitted=(
+                    model.provider_name != "openrouter"
+                    or model.is_free
+                    or paid_available is True
+                ),
+            )
+            for model in routed
+        ]
+    return routed, errors
 
 
 def openrouter_paid_inference_available(
@@ -1366,8 +1381,10 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     expose a media-only model with a generic identifier, so the model-name
     heuristic is only a fallback for rows with no capability or modality data.
     """
-    return not discovered.evidence_only and is_discovered_chat_candidate(
-        discovered
+    return (
+        not discovered.evidence_only
+        and discovered.spend_admitted
+        and is_discovered_chat_candidate(discovered)
     )
 
 
