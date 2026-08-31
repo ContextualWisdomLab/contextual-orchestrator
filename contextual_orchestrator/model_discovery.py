@@ -202,7 +202,9 @@ def probe_discovered_model_tool_call_capability(
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - scoped provider probe
+        with urllib.request.urlopen(  # noqa: S310 - scoped provider probe  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+            request, timeout=timeout
+        ) as response:
             body = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
