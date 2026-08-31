@@ -271,6 +271,17 @@ is read from a **KV config store**, never `os.getenv`.
   `orchestration.routing`. Omitting both keys preserves the existing request
   and response contract. Concrete provider model names cannot be combined with
   these controls; candidate IDs remain absent from `/v1/models`.
+
+  ```json
+  {
+    "model": "orchestrator/auto",
+    "messages": [{"role": "user", "content": "Review this change"}],
+    "routing": {
+      "candidate_id": "candidate_b",
+      "exclude_candidate_ids": ["candidate_a"]
+    }
+  }
+  ```
 - **Batch routing to pg-llm-batch.** The production batch backend is an injected
   [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch)
   OpenAI-compatible Batch API client (submit JSONL -> poll -> retrieve). A local
