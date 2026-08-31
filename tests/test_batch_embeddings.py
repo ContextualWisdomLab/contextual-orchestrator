@@ -75,7 +75,12 @@ def _serve():
     price_book.set_price(
         PriceEntry("acme-provider", "text-embedding-test", prompt_price_per_1k=0.13, completion_price_per_1k=0.0)
     )
-    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=HeuristicTokenCounter(),
+    )
     token = "cost_token"
     server = build_server(
         orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
@@ -271,7 +276,11 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
             ),
         ]
     )
-    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=HeuristicTokenCounter(),
+    )
     token = "zdr_batch_token"
     server = build_server(
         orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
@@ -296,6 +305,7 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
     coordinator = CostRoutingCoordinator(
         orchestrator,
         InMemoryConfigStore(),
+        embedding_token_counter=HeuristicTokenCounter(),
         embedding_batch_backend=_PendingEmbeddingBackend(),
     )
 

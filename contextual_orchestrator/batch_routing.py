@@ -578,9 +578,9 @@ class LocalEmbeddingBatchBackend:
         )
 
     def _count_tokens(self, text: str, model: str) -> int:
-        if self._token_counter is not None:
-            return int(self._token_counter.count_text(text, model))
-        return len(text.split())
+        if self._token_counter is None:
+            raise RuntimeError("an authoritative embedding tokenizer is required")
+        return int(self._token_counter.count_text(text, model))
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
@@ -736,7 +736,8 @@ class ProviderEmbeddingBatchBackend:
                 "provider_embedding_job_execution", job_id,
                 lease_seconds=self._claim_lease_seconds,
                 renew_until_epoch=deadline_epoch,
-            ):
+            ) as execution_claim:
+                execution_claim.ensure_owned()
                 with self._registry.lock(
                     "provider_embedding_job_states", job_id,
                     lease_seconds=self._claim_lease_seconds,
@@ -746,6 +747,7 @@ class ProviderEmbeddingBatchBackend:
                     self._states[job_id] = "running"
                 requests = list(self._requests[job_id])
                 vectors, prompt_tokens = self._runner(requests)
+                execution_claim.ensure_owned()
                 if self._states.get(job_id) == "cancelled":
                     return
                 if len(vectors) != len(requests):
@@ -768,6 +770,10 @@ class ProviderEmbeddingBatchBackend:
                     "provider_embedding_job_states", job_id,
                     lease_seconds=self._claim_lease_seconds,
                 ):
+                    # Refresh while holding the terminal-state lock. A stale
+                    # worker must never publish after another worker can claim
+                    # the same provider job.
+                    execution_claim.ensure_owned(refresh=True)
                     if self._states.get(job_id) == "cancelled":
                         return
                     self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}

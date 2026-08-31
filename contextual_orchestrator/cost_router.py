@@ -41,7 +41,11 @@ from .batch_routing import (
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import (
+    HeuristicTokenCounter,
+    build_embedding_token_counter,
+    build_token_counter,
+)
 
 
 _RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -73,6 +77,7 @@ class CostRoutingCoordinator:
         price_book: Optional[PriceBook] = None,
         ledger: Optional[CostLedger] = None,
         token_counter: Any = None,
+        embedding_token_counter: Any = None,
         routing_policy: Optional[RoutingPolicy] = None,
         batch_backend: Optional[BatchBackend] = None,
         embedding_batch_backend: Optional[EmbeddingBatchBackend] = None,
@@ -89,6 +94,12 @@ class CostRoutingCoordinator:
         self.token_counter = token_counter or (
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
+        if embedding_token_counter is not None:
+            self.embedding_token_counter = embedding_token_counter
+        elif token_counter is not None:
+            self.embedding_token_counter = token_counter
+        else:
+            self.embedding_token_counter = build_embedding_token_counter(postgres_dsn)
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
@@ -137,12 +148,16 @@ class CostRoutingCoordinator:
                         for request in requests
                     ):
                         raise RuntimeError("provider embedding batch must retain one selected route")
+                    prompt_tokens = sum(
+                        int(
+                            self.embedding_token_counter.count_text(
+                                request.input_text, request.model
+                            )
+                        )
+                        for request in requests
+                    )
                     vectors = orchestrator.client.embed(
                         agent, [request.input_text for request in requests]
-                    )
-                    prompt_tokens = sum(
-                        int(self.token_counter.count_text(request.input_text, request.model))
-                        for request in requests
                     )
                     return vectors, prompt_tokens
 
@@ -158,7 +173,7 @@ class CostRoutingCoordinator:
                 )
             else:
                 self.embedding_batch_backend = LocalEmbeddingBatchBackend(
-                    token_counter=self.token_counter, job_registry=registry
+                    token_counter=self.embedding_token_counter, job_registry=registry
                 )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
@@ -907,8 +922,7 @@ class CostRoutingCoordinator:
 
         Azure's current embeddings limit is surfaced by LiteLLM as a 300,000
         token request cap. The default stays below that ceiling and also applies
-        a character guard so heuristic token counters cannot accidentally send a
-        very long no-whitespace string as one provider request.
+        a character guard independent of tokenizer availability.
         """
         max_tokens = _positive_int(
             self.config.get(
@@ -1023,13 +1037,10 @@ class CostRoutingCoordinator:
         )
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
-        """Count tokens for embedding split decisions, tolerating adapters."""
-        try:
-            value = int(self.token_counter.count_text(text, model))
-        except Exception:
-            value = len(text.split())
+        """Count embedding tokens authoritatively or propagate unavailability."""
+        value = int(self.embedding_token_counter.count_text(text, model))
         if text and value <= 0:
-            return 1
+            raise RuntimeError("an authoritative tokenizer returned a non-positive count")
         return max(0, value)
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
@@ -1070,9 +1081,11 @@ class CostRoutingCoordinator:
             source_index = request.source_index if request else item.index
             prompt_tokens = int(item.prompt_tokens)
             if prompt_tokens <= 0 and request is not None:
-                prompt_tokens = request.token_count or int(
-                    self.token_counter.count_text(request.input_text, item.model)
-                )
+                prompt_tokens = request.token_count
+                if request.input_text and prompt_tokens <= 0:
+                    prompt_tokens = int(
+                        self.embedding_token_counter.count_text(request.input_text, item.model)
+                    )
             parts_by_source.setdefault(source_index, []).append(
                 {
                     "part_index": request.part_index if request else 0,

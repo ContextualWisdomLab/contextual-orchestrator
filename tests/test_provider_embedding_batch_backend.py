@@ -16,6 +16,12 @@ class _SyntheticProviderClient(ModelClient):
         return [[float(len(text))] for text in texts]
 
 
+class _SyntheticExactCounter:
+    def count_text(self, text, model):
+        """Return a deterministic synthetic authoritative count."""
+        return len(text.split())
+
+
 def test_provider_batch_returns_before_terminal_result() -> None:
     release = threading.Event()
 
@@ -54,7 +60,8 @@ def test_remote_embedding_member_selects_provider_backend() -> None:
         tags=("embedding",),
     )
     coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([agent], client=_SyntheticProviderClient())
+        TaskOrchestrator([agent], client=_SyntheticProviderClient()),
+        embedding_token_counter=_SyntheticExactCounter(),
     )
     job = coordinator.submit_embeddings_batch(
         ["synthetic one", "synthetic two"], model=agent.model, agent_id=agent.id

@@ -26,6 +26,11 @@ from contextual_orchestrator.cost_router import (
     _provider_from_base_url,
     _weighted_average_embedding,
 )
+from contextual_orchestrator.token_counting import (
+    HeuristicTokenCounter,
+    TokenCountUnavailable,
+    UnavailableEmbeddingTokenCounter,
+)
 
 
 def _coordinator(**kwargs: Any) -> Coordinator:
@@ -41,6 +46,8 @@ def _coordinator(**kwargs: Any) -> Coordinator:
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
+    if "token_counter" not in kwargs and "embedding_token_counter" not in kwargs:
+        kwargs["embedding_token_counter"] = HeuristicTokenCounter()
     return Coordinator(orchestrator, config, price_book=price_book, **kwargs)
 
 
@@ -177,11 +184,10 @@ class _ExplodingCounter:
         return 3
 
 
-def test_embedding_token_count_tolerates_counter_failure_and_clamps() -> None:
+def test_embedding_token_count_propagates_counter_failure() -> None:
     coordinator = _coordinator(token_counter=_ExplodingCounter())
-    # Adapter failure falls back to whitespace units.
-    assert coordinator._count_embedding_tokens("alpha beta gamma", "mock-e") == 3
-    assert coordinator._count_embedding_tokens("", "mock-e") == 0
+    with pytest.raises(RuntimeError, match="counter backend offline"):
+        coordinator._count_embedding_tokens("alpha beta gamma", "mock-e")
 
 
 class _ZeroCounter:
@@ -192,9 +198,10 @@ class _ZeroCounter:
         return 1
 
 
-def test_embedding_token_count_clamps_positive_text_to_one() -> None:
+def test_embedding_token_count_rejects_non_positive_authoritative_result() -> None:
     coordinator = _coordinator(token_counter=_ZeroCounter())
-    assert coordinator._count_embedding_tokens("nonempty", "mock-e") == 1
+    with pytest.raises(RuntimeError, match="non-positive"):
+        coordinator._count_embedding_tokens("nonempty", "mock-e")
 
 
 def test_split_empty_input_yields_single_empty_part() -> None:
@@ -303,6 +310,21 @@ class _DroppingEmbeddingBackend:
             )
             for index, request in enumerate(kept)
         ]
+
+
+def test_embedding_submission_stops_before_backend_when_count_is_unavailable() -> None:
+    """No provider work or cost record may follow an unavailable exact count."""
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(
+        embedding_batch_backend=backend,
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
+    )
+
+    with pytest.raises(TokenCountUnavailable, match="no authoritative tokenizer"):
+        coordinator.submit_embeddings_batch(["synthetic input"], model="unknown-embedding")
+
+    assert backend.jobs == {}
+    assert coordinator.ledger.records() == []
 
 
 def test_embeddings_document_reports_placeholder_for_missing_parts() -> None:

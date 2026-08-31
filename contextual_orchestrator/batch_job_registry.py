@@ -52,6 +52,46 @@ class ClaimNotAcquired(RuntimeError):
     """Another worker owns a non-blocking durable job claim."""
 
 
+class _ClaimLease:
+    def __init__(
+        self,
+        claim: Any = None,
+        *,
+        lease_seconds: float | None = None,
+        lost_ownership: threading.Event | None = None,
+    ) -> None:
+        self._claim = claim
+        self._lease_seconds = lease_seconds
+        self._lost_ownership = lost_ownership or threading.Event()
+
+    def mark_lost(self) -> None:
+        """Record that this worker can no longer prove claim ownership."""
+        self._lost_ownership.set()
+
+    def ensure_owned(self, *, refresh: bool = False) -> None:
+        """Fail closed unless this worker still owns the durable claim."""
+        if self._claim is None:
+            return
+        if self._lost_ownership.is_set():
+            raise ClaimNotAcquired("durable job claim ownership was lost")
+        try:
+            if refresh:
+                if self._lease_seconds is None:
+                    raise ClaimNotAcquired("durable job claim lease is unavailable")
+                retained = self._claim.extend(
+                    self._lease_seconds,
+                    replace_ttl=True,
+                )
+            else:
+                retained = self._claim.owned()
+        except Exception as exc:  # noqa: BLE001 - redis is optional.
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership is unavailable") from exc
+        if not retained:
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership was lost")
+
+
 def _encode(value: Any) -> str:
     """Serialize one registry value (dataclasses included) to JSON."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -169,6 +209,12 @@ class JobRegistryFactory:
                 if not claim.acquire():
                     raise ClaimNotAcquired(lock_name)
                 stop_renewal = threading.Event()
+                lost_ownership = threading.Event()
+                lease = _ClaimLease(
+                    claim,
+                    lease_seconds=lease_seconds,
+                    lost_ownership=lost_ownership,
+                )
                 renewal_thread = None
                 if renew_until_epoch is not None:
 
@@ -177,6 +223,7 @@ class JobRegistryFactory:
                         while not stop_renewal.wait(interval):
                             remaining = renew_until_epoch - time.time()
                             if remaining <= 0:
+                                lease.mark_lost()
                                 return
                             try:
                                 # redis-py's Lock.extend script checks the
@@ -186,10 +233,11 @@ class JobRegistryFactory:
                                     replace_ttl=True,
                                 )
                                 if not renewed:
+                                    lease.mark_lost()
                                     return
-                            except Exception as exc:  # noqa: BLE001 - redis is optional.
-                                if type(exc).__name__ in {"LockError", "LockNotOwnedError"}:
-                                    return
+                            except Exception:  # noqa: BLE001 - redis is optional.
+                                lease.mark_lost()
+                                return
 
                     renewal_thread = threading.Thread(
                         target=renew_claim,
@@ -198,7 +246,7 @@ class JobRegistryFactory:
                     )
                     renewal_thread.start()
                 try:
-                    yield claim
+                    yield lease
                 finally:
                     stop_renewal.set()
                     if renewal_thread is not None:
@@ -215,7 +263,13 @@ class JobRegistryFactory:
             if lock is None:
                 lock = threading.Lock()
                 self._local_locks[lock_name] = lock
-            return lock
+
+            @contextmanager
+            def acquired_local_claim():
+                with lock:
+                    yield _ClaimLease()
+
+            return acquired_local_claim()
 
     @property
     def durable(self) -> bool:

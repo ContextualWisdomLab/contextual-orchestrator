@@ -774,8 +774,16 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
     def fail_reselection(*_args, **_kwargs):
         raise AssertionError("the selected embedding member must not be re-resolved")
 
+    class _SyntheticExactCounter:
+        def count_text(self, text, model):
+            return 1
+
     orchestrator.select_capability_agent = fail_reselection  # type: ignore[method-assign]
-    coordinator = CostRoutingCoordinator(orchestrator, embedding_batch_backend=backend)
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
     document = coordinator.complete_embeddings_batch(
         ["private"], model=second.model, zdr_only=True, agent_id=second.id
     )

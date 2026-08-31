@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Provider-embedding workers now propagate durable-claim renewal loss and
+  refresh ownership before terminal publication. Embedding token accounting
+  uses configured `pg_tiktoken` or the packaged Rust cl100k counter for exact
+  declared models, and otherwise fails closed without publishing estimated
+  usage or cost (ADR 0005). Legacy chat estimation remains a documented gap.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

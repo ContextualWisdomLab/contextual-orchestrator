@@ -11,12 +11,17 @@ their results.
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_job_registry import (
+    ClaimNotAcquired,
     DEFAULT_RETENTION_SECONDS,
     JobRegistryFactory,
     ValkeyJsonMapping,
@@ -26,7 +31,9 @@ from contextual_orchestrator.batch_routing import (
     BatchJob,
     BatchRequest,
     BatchResultItem,
+    EmbeddingBatchRequest,
     LocalBatchBackend,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.kv_config import InMemoryConfigStore
 
@@ -37,6 +44,36 @@ class FakeValkeyClient:
     def __init__(self) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
+        self.execution_extension_attempted = threading.Event()
+
+    class LockNotOwnedError(RuntimeError):
+        pass
+
+    class _Lock:
+        def __init__(self, client: "FakeValkeyClient", name: str) -> None:
+            self._client = client
+            self._lose_on_extend = "provider_embedding_job_execution" in name
+            self._owned = False
+
+        def acquire(self) -> bool:
+            self._owned = True
+            return True
+
+        def extend(self, _seconds: float, *, replace_ttl: bool) -> bool:
+            assert replace_ttl is True
+            if self._lose_on_extend:
+                self._owned = False
+                self._client.execution_extension_attempted.set()
+                return False
+            return self._owned
+
+        def owned(self) -> bool:
+            return self._owned
+
+        def release(self) -> None:
+            if not self._owned:
+                raise self._client.LockNotOwnedError("claim no longer owned")
+            self._owned = False
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
@@ -68,6 +105,9 @@ class FakeValkeyClient:
     def expire(self, key: str, seconds: int) -> bool:
         self.expirations[key] = seconds
         return True
+
+    def lock(self, name: str, **_kwargs: Any) -> "FakeValkeyClient._Lock":
+        return self._Lock(self, name)
 
 
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
@@ -156,6 +196,45 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
 def test_default_retention_is_a_week() -> None:
     """Documented default: abandoned jobs expire after seven days."""
     assert DEFAULT_RETENTION_SECONDS == 7 * 24 * 3600
+
+
+def test_renewal_loss_is_visible_to_the_claim_holder() -> None:
+    """A failed CAS renewal fences the worker instead of becoming background noise."""
+    client = FakeValkeyClient()
+    factory = JobRegistryFactory(client)
+    with factory.lock(
+        "provider_embedding_job_execution",
+        "job",
+        lease_seconds=0.15,
+        renew_until_epoch=time.time() + 1,
+    ) as claim:
+        assert client.execution_extension_attempted.wait(timeout=1)
+        with pytest.raises(ClaimNotAcquired, match="ownership was lost"):
+            claim.ensure_owned()
+
+
+def test_provider_result_is_not_published_after_claim_renewal_loss() -> None:
+    """A stale provider worker leaves recovery state for the succeeding claimant."""
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=2)
+
+    def runner(_requests):
+        assert client.execution_extension_attempted.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=registry,
+        claim_lease_seconds=0.15,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "running"
+    assert backend.retrieve(job) == []
+    assert backend.usage(job) == {}
+    backend.close()
 
 
 if __name__ == "__main__":

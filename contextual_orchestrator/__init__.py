@@ -61,7 +61,13 @@ from .reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import (
+    HeuristicTokenCounter,
+    NativeCl100kTokenCounter,
+    TokenCountUnavailable,
+    build_embedding_token_counter,
+    build_token_counter,
+)
 from .response_cache import (
     RedisResponseCacheProvider,
     ResponseCacheProvider,
@@ -120,6 +126,9 @@ __all__ = [
     "InMemoryConfigStore",
     "get_config_store",
     "HeuristicTokenCounter",
+    "NativeCl100kTokenCounter",
+    "TokenCountUnavailable",
+    "build_embedding_token_counter",
     "build_token_counter",
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",
