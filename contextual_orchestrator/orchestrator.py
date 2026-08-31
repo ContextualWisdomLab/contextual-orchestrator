@@ -96,6 +96,12 @@ _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+_DNS_RESOLVER_WORKERS = 4
+_DNS_RESOLVER = ThreadPoolExecutor(
+    max_workers=_DNS_RESOLVER_WORKERS,
+    thread_name_prefix="provider_dns",
+)
+_DNS_RESOLVER_CAPACITY = threading.BoundedSemaphore(_DNS_RESOLVER_WORKERS)
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
@@ -1519,7 +1525,7 @@ class ModelClient:
         ), _local_provider_slot(
             agent,
             self.local_concurrency,
-            self.timeout if request_timeout is None else request_timeout,
+            self._local_slot_timeout(),
         ):
             if deadline is None:
                 return self._send_with_retry(agent, payload, destination)
@@ -1803,30 +1809,21 @@ class ModelClient:
 
     def _resolve_addresses(self, hostname: str, port: int) -> list[ProviderDestination]:
         deadline = self.request_settings_snapshot()["deadline"]
-        result: list[Any] = []
-
-        def resolve() -> None:
-            try:
-                result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
-            except BaseException as exc:
-                result.append(exc)
-
-        if deadline is None:
-            resolve()
-        else:
-            worker = threading.Thread(target=resolve, daemon=True)
-            worker.start()
-            worker.join(max(0.0, deadline - time.monotonic()))
-            if worker.is_alive():
-                raise TimeoutError("provider DNS resolution deadline exceeded")
-        if result and isinstance(result[0], BaseException):
-            exc = result[0]
-            if isinstance(exc, socket.gaierror):
-                raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
-            raise exc
         try:
-            addresses = result[0]
-        except IndexError:
+            if deadline is None:
+                addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            else:
+                remaining = max(0.0, deadline - time.monotonic())
+                if not _DNS_RESOLVER_CAPACITY.acquire(timeout=remaining):
+                    raise TimeoutError("provider DNS resolver capacity deadline exceeded")
+                future = _DNS_RESOLVER.submit(
+                    socket.getaddrinfo, hostname, port, type=socket.SOCK_STREAM
+                )
+                future.add_done_callback(lambda _future: _DNS_RESOLVER_CAPACITY.release())
+                addresses = future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except socket.gaierror as exc:
+            raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+        except TimeoutError:
             raise TimeoutError("provider DNS resolution deadline exceeded") from None
         resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
         if not resolved:
@@ -5413,6 +5410,11 @@ class TaskOrchestrator:
             if len(tried_ids) >= max_attempts:
                 break
             if deadline is not None and time.monotonic() >= deadline:
+                if tried_ids:
+                    raise RouteDeadlineExceededError(
+                        "request deadline exceeded before the next route candidate",
+                        trace=trace_rows,
+                    )
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()

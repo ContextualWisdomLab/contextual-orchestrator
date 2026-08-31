@@ -50,7 +50,13 @@ from .cefr_language_observation import (
 )
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
-from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .orchestrator import (
+    ModelAgent,
+    RouteDeadlineExceededError,
+    TaskOrchestrator,
+    WorkflowStep,
+    load_agents,
+)
 from .release_authorization import evaluate_release_authorization
 from .reasoning_effort_profile import (
     EffortProfileError,
@@ -78,6 +84,7 @@ from .tool_fallback import (
 
 __all__ = [
     "ModelAgent",
+    "RouteDeadlineExceededError",
     "TaskOrchestrator",
     "WorkflowStep",
     "load_agents",
