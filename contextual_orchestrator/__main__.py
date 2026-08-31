@@ -38,6 +38,7 @@ from .orchestrator import (
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
+from .reasoning_effort_profile import default_role_effort_catalog
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -594,6 +595,21 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    parser.add_argument(
+        "--role-effort-catalog",
+        choices=["default"],
+        default=None,
+        help=(
+            "Opt in to the issue #568 per-role reasoning-effort catalog (ADR 0021). "
+            "'default' loads default_role_effort_catalog(), applying each workflow "
+            "role's temperature/top_p/seed/max_tokens and (only where a provider "
+            "proves support) native reasoning_effort, and attaching a replayable "
+            "reasoning_effort_snapshot to complete/run/stream_route/batch_route "
+            "results. Omit to keep today's payload unchanged -- this does not "
+            "change route/conduct selection defaults, which stay locked until "
+            "production_default_change_allowed is true."
+        ),
+    )
     args = parser.parse_args(arguments)
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -614,6 +630,9 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        role_effort_catalog=(
+            default_role_effort_catalog() if args.role_effort_catalog == "default" else None
+        ),
     )
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)

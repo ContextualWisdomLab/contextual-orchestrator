@@ -12,6 +12,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Added the missing CLI on-ramp for the issue #568 / ADR 0021 per-role
+  reasoning-effort catalog: the new `--role-effort-catalog default` flag now
+  loads `default_role_effort_catalog()` and passes it into `TaskOrchestrator`.
+  Previously `role_effort_catalog` had no caller anywhere in `__main__.py`, so
+  `apply_effort_profile` always ran its `profile=None` no-op branch in the
+  shipped CLI/server and the catalog's temperature/top_p/seed/reasoning_effort
+  injection and replayable `reasoning_effort_snapshot` were unreachable in
+  production. Omitting the flag keeps every payload byte-for-byte unchanged;
+  this does not touch the locked route/conduct selection defaults.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
