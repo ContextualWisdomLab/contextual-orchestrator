@@ -5345,6 +5345,47 @@ def _orchestrated_response(
     return response
 
 
+def _debug_request_method(raw_method: object) -> str:
+    """Bound the request-line method token before it reaches a DEBUG log line.
+
+    ``BaseHTTPRequestHandler.handle_one_request`` bounds only the *whole*
+    request line to 65536 bytes (rejecting anything longer with a 414
+    before ``parse_request`` even runs) -- it never separately bounds the
+    method token itself. A request line such as ``"A" * 65000 + " / HTTP/
+    1.1"`` puts tens of kilobytes into ``self.command``, which would flow
+    unbounded into every DEBUG log line for that request (CodeRabbit
+    review). 32 characters comfortably covers every real HTTP/WebDAV method
+    name (the longest, e.g. ``UNCHECKOUT``, is under 16) while capping the
+    worst case.
+    """
+    return str(raw_method)[:32]
+
+
+def _debug_request_path(raw_path: str) -> str:
+    """Best-effort, query-free, bounded request path for DEBUG-only logging.
+
+    ``urllib.parse.urlparse`` can raise ``ValueError`` ("Invalid IPv6 URL")
+    on some malformed absolute-form request targets -- e.g. an unmatched
+    IPv6 bracket in ``GET http://[::1:8080/ HTTP/1.1`` -- that the stdlib
+    HTTP parser itself accepts without validating (``BaseHTTPRequestHandler
+    .parse_request`` only splits the request line on whitespace; it never
+    parses the target as a URL). Devin's review caught this: with DEBUG
+    logging enabled, that same unguarded ``urlparse`` call inside
+    ``Handler.parse_request``/``Handler.handle_one_request`` raised *before*
+    routing or method dispatch, so the connection was dropped with no HTTP
+    response at all -- a debug-only code path silently changing production
+    behavior. This helper must never raise: a malformed target degrades the
+    debug log line only, never the real response. On a parse failure it
+    falls back to slicing off everything from the first ``?`` without
+    parsing -- still stripping a query string that could carry a leaked
+    secret token, just like the ``.path`` attribute on a successful parse.
+    """
+    try:
+        return urllib.parse.urlparse(raw_path).path[:256]
+    except ValueError:
+        return raw_path.split("?", 1)[0][:256]
+
+
 def build_server(
     orchestrator: TaskOrchestrator,
     host: str = "127.0.0.1",
@@ -5460,8 +5501,8 @@ def build_server(
                 ):
                     _LOGGER.debug(
                         "http_response_sent method=%s path=%s status=%s latency_ms=%s",
-                        getattr(self, "command", "-"),
-                        urllib.parse.urlparse(getattr(self, "path", "")).path[:256],
+                        _debug_request_method(getattr(self, "command", "-")),
+                        _debug_request_path(getattr(self, "path", "")),
                         self._debug_response_code,
                         round(
                             (time.perf_counter() - self._debug_request_started_at) * 1000,
@@ -5492,8 +5533,8 @@ def build_server(
             if parsed_ok and _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
                     "http_request_received method=%s path=%s",
-                    self.command,
-                    urllib.parse.urlparse(self.path).path[:256],
+                    _debug_request_method(self.command),
+                    _debug_request_path(self.path),
                 )
             return parsed_ok
 

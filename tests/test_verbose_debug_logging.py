@@ -16,6 +16,8 @@ import io
 import json
 import logging
 import re
+import socket
+import threading
 import time
 import urllib.error
 from contextlib import contextmanager
@@ -253,14 +255,36 @@ def test_verbose_env_var_enables_debug_without_a_new_cli_flag(monkeypatch, resto
     assert logging.getLogger("contextual_orchestrator.orchestrator").level == logging.DEBUG
 
 
-def test_discover_models_and_register_credential_accept_verbose_flag(restore_root_logger) -> None:
-    """The bootstrap subcommands expose the same flag for CLI consistency."""
+def test_discover_models_and_register_credential_accept_verbose_flag(
+    monkeypatch, restore_root_logger
+) -> None:
+    """The bootstrap subcommands expose the same flag for CLI consistency.
+
+    CodeRabbit review: the docstring and name claimed both subcommands were
+    exercised, but the body only ever called ``discover-models`` -- the
+    ``register-credential`` path was untested. Both are covered now.
+    """
     with (
         patch("contextual_orchestrator.__main__.discover_all_models", return_value=([], [])),
         patch("contextual_orchestrator.__main__._bootstrap_discovery_sources", return_value=()),
     ):
         main(["discover-models", "--verbose"])
     assert logging.getLogger("contextual_orchestrator.model_discovery").level == logging.DEBUG
+
+    monkeypatch.setenv("TEST_KEY_VALUE", "fixture-secret-value")  # noqa: S105 - fixture value, not a real key
+    with patch("contextual_orchestrator.__main__.register_credential") as register_credential_mock:
+        main(
+            [
+                "register-credential",
+                "--name",
+                "TEST_KEY",
+                "--from-env",
+                "TEST_KEY_VALUE",
+                "--verbose",
+            ]
+        )
+    register_credential_mock.assert_called_once_with("TEST_KEY", "fixture-secret-value")
+    assert logging.getLogger("contextual_orchestrator.orchestrator").level == logging.DEBUG
 
 
 # -- orchestration control-flow: dispatch / route / conduct ----------------
@@ -667,6 +691,164 @@ def test_http_request_lifecycle_debug_logs_absent_by_default(monkeypatch, caplog
         handler.handle_one_request()
         assert "http_request_received" not in caplog.text
         assert "http_response_sent" not in caplog.text
+    finally:
+        server.server_close()
+
+
+def test_parse_request_debug_log_survives_a_malformed_request_target(
+    monkeypatch, caplog
+) -> None:
+    """SEC/availability regression: an unparsable target must not crash DEBUG logging.
+
+    Devin's review caught this: ``urllib.parse.urlparse`` raises
+    ``ValueError`` ("Invalid IPv6 URL") on some malformed absolute-form
+    request targets (an unmatched IPv6 bracket) that stdlib's own
+    ``parse_request`` accepts without validating -- it only splits the
+    request line on whitespace, never parses the target as a URL. The old
+    unguarded ``urlparse`` call in the DEBUG log line raised *before*
+    ``do_GET``/``do_POST`` ever ran, so ``parse_request`` itself crashed and
+    the connection was dropped with no HTTP response at all whenever DEBUG
+    logging happened to be enabled. It must now fall back to a bounded,
+    query-free string instead.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    malformed_target = "http://[::1:8080/foo?leaked-secret-token=1"
+
+    def fake_super_parse_request(self) -> bool:
+        self.command = "TRACE"
+        self.path = malformed_target
+        return True
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "parse_request", fake_super_parse_request)
+
+    try:
+        with caplog.at_level("DEBUG"):
+            assert handler.parse_request() is True
+        assert "http_request_received method=TRACE" in caplog.text
+        # Best-effort fallback: the query string is still stripped even
+        # though the malformed target could not be run through urlparse.
+        assert "leaked-secret-token" not in caplog.text
+    finally:
+        server.server_close()
+
+
+def test_malformed_request_target_gets_identical_response_verbose_or_not(
+    restore_root_logger,
+) -> None:
+    """Socket-level regression: verbose and non-verbose modes must respond identically.
+
+    Reproduces Devin's finding end-to-end over a real socket: a malformed
+    absolute-form request target combined with an unsupported method (no
+    ``do_TRACE`` handler, so stdlib's own routing never touches the path)
+    used to get a clean stdlib 501 response with DEBUG off, but silently
+    dropped the connection -- zero bytes back -- with DEBUG on, because the
+    debug-only ``urlparse`` call in ``parse_request`` raised before method
+    dispatch. Both modes must now return the same response.
+    """
+    request = (
+        b"TRACE http://[::1:8080/foo HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\n"
+        b"Connection: close\r\n\r\n"
+    )
+
+    def _send(port: int) -> bytes:
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
+            connection.sendall(request)
+            chunks: list[bytes] = []
+            while True:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+
+    def _run(*, verbose: bool) -> bytes:
+        logging.getLogger("contextual_orchestrator.server").setLevel(
+            logging.DEBUG if verbose else logging.WARNING
+        )
+        server = build_server(
+            TaskOrchestrator([ModelAgent("malformed_target_agent", "mock-agent")]),
+            port=0,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            return _send(server.server_address[1])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def _drop_date_header(response: bytes) -> bytes:
+        # Everything else about the two responses must be byte-identical;
+        # only the ``Date:`` header legitimately differs between the two
+        # sequential requests.
+        return b"\r\n".join(
+            line for line in response.split(b"\r\n") if not line.startswith(b"Date:")
+        )
+
+    quiet_response = _run(verbose=False)
+    verbose_response = _run(verbose=True)
+
+    assert quiet_response.startswith(b"HTTP/1.1 501 ")
+    assert verbose_response.startswith(b"HTTP/1.1 501 "), (
+        "verbose mode's debug-only request-target parsing must never drop "
+        f"the connection instead of the normal HTTP response: {verbose_response!r}"
+    )
+    assert _drop_date_header(quiet_response) == _drop_date_header(verbose_response)
+
+
+def test_debug_logs_bound_an_oversized_method_token(monkeypatch, caplog) -> None:
+    """CodeRabbit review: an unbounded method token must not bloat DEBUG log lines.
+
+    ``BaseHTTPRequestHandler`` bounds only the whole request line (65536
+    bytes total, rejected with a 414 before ``parse_request`` ever runs) --
+    never the method token by itself. A pathological request line
+    (``"A" * 65000 + " / HTTP/1.1"``) would otherwise put tens of kilobytes
+    into ``self.command`` and, unbounded, into both DEBUG log call sites for
+    that request. Covers parse_request's entry log and handle_one_request's
+    completion log.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    oversized_method = "A" * 65000
+
+    def fake_super_parse_request(self) -> bool:
+        self.command = oversized_method
+        self.path = "/healthz"
+        return True
+
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    monkeypatch.setattr(BaseHTTPRequestHandler, "parse_request", fake_super_parse_request)
+    try:
+        with caplog.at_level("DEBUG"):
+            assert handler.parse_request() is True
+        match = re.search(r"http_request_received method=(\S+) path=", caplog.text)
+        assert match is not None, caplog.text
+        assert match.group(1) == "A" * 32
+        assert oversized_method not in caplog.text
+    finally:
+        server.server_close()
+
+    caplog.clear()
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+
+    def fake_super_handle_one_request(self) -> None:
+        self.command = oversized_method
+        self.path = "/healthz"
+        self.log_request(200)
+
+    monkeypatch.setattr(
+        BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request
+    )
+    monkeypatch.setattr(handler, "_reset_session", lambda: None)
+    try:
+        with caplog.at_level("DEBUG"):
+            handler.handle_one_request()
+        match = re.search(r"http_response_sent method=(\S+) path=", caplog.text)
+        assert match is not None, caplog.text
+        assert match.group(1) == "A" * 32
+        assert oversized_method not in caplog.text
     finally:
         server.server_close()
 
