@@ -47,7 +47,10 @@ trained Fugu, TRINITY, or Conductor clone.
 3. **Access lists.** Each `WorkflowStep` carries an access list so a worker
    sees only the prior outputs deliberately exposed to it (Conductor-style
    visibility, implemented as data on the step, not as a trained topology
-   policy).
+   policy). The worker preserves the caller message array exactly once, then
+   receives only its subtask and deliberately exposed prior outputs in the
+   added worker envelope. The envelope does not repeat the current task,
+   caller instructions, or source attachments.
 4. **Deterministic policy.** Worker and role selection uses a deterministic
    capability-hint heuristic so the lab runs without training data, GPUs, or
    vendor credentials. The heuristic is never an answer-quality,
