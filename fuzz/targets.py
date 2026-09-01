@@ -55,6 +55,7 @@ from contextual_orchestrator.model_discovery import (
     _parse_openai_compatible,
 )
 from contextual_orchestrator.orchestrator import (
+    EndpointUnavailableError,
     ModelAgent,
     TaskOrchestrator,
     _parse_model_judge_reply,
@@ -62,6 +63,7 @@ from contextual_orchestrator.orchestrator import (
     chat_completion_chunks,
     redact_text,
     redact_value,
+    normalize_endpoint_selector,
     sse_stream_body,
 )
 from contextual_orchestrator.pii_protection import PiiProtectionError, _decode_secret
@@ -77,6 +79,16 @@ from contextual_orchestrator.reasoning_effort_profile import (
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
 RequestError = server.RequestError
+
+
+def exercise_endpoint_selector(value: str) -> None:
+    """Normalize arbitrary endpoint text or reject it with the stable error."""
+    try:
+        normalized = normalize_endpoint_selector(value)
+    except EndpointUnavailableError:
+        return
+    assert normalized == normalize_endpoint_selector(normalized)
+    assert normalized.startswith(("http://", "https://"))
 
 # Malformed bytes/JSON must surface only as these.
 _EXPECTED_BODY_EXC = (

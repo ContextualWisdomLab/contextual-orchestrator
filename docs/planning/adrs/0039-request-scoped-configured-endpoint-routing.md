@@ -41,6 +41,14 @@ artifacts.
 
 ## References
 
+NIST AI 600-1 treats third-party model and data-flow controls as explicit risk
+management boundaries; that supports selecting only an operator-configured
+endpoint, not converting caller input into a new destination. The Conductor and
+TRINITY papers describe orchestration across specialized agents, which motivates
+applying the same request constraint to every role and retry path. Redistribution
+permission for these publications has not been established, so this ADR links
+and summarizes them instead of vendoring PDFs.
+
 National Institute of Standards and Technology. (2024). *Artificial
 intelligence risk management framework: Generative artificial intelligence
 profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1

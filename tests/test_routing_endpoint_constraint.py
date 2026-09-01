@@ -139,6 +139,49 @@ def test_invalid_endpoint_selector_is_rejected(endpoint: str) -> None:
     assert exc_info.value.code == "endpoint_unavailable"
 
 
+def test_malformed_ipv6_endpoint_selector_preserves_error_contract() -> None:
+    with pytest.raises(RequestError) as exc_info:
+        _validate_routing({"endpoint": "https://[::1"}, allow_endpoint=True)
+    assert exc_info.value.code == "endpoint_unavailable"
+
+
+def test_endpoint_capacity_check_performs_no_provider_io() -> None:
+    class _ProbeRecordingClient(_RecordingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embed_calls = 0
+
+        def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:
+            self.embed_calls += 1
+            return [[0.0] for _text in texts]
+
+    client = _ProbeRecordingClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "chat_agent",
+                "chat-model",
+                base_url="https://a.example/v1",
+            ),
+            ModelAgent(
+                "embedding_agent",
+                "embedding-model",
+                base_url="https://a.example/v1",
+                tags=("embedding",),
+            ),
+        ],
+        client=client,
+    )
+
+    with orchestrator.routing_endpoint_scope(
+        "https://a.example", TaskOrchestrator.AUTO_MODEL
+    ):
+        pass
+
+    assert client.agent_ids == []
+    assert client.embed_calls == 0
+
+
 def test_endpoint_is_limited_to_supported_surfaces_and_forces_sync() -> None:
     with pytest.raises(RequestError) as exc_info:
         _validate_routing({"endpoint": "https://a.example"})

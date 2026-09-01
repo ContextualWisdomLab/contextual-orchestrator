@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_endpoint_selector,
     exercise_model_judge_reply,
     exercise_models_dev_cost,
     exercise_orchestration,
@@ -83,6 +84,12 @@ def test_request_body_rejects_unhashable_message_role() -> None:
 @given(_json_values)
 def test_agent_config_parser(value: object) -> None:
     exercise_agent_config(value)
+
+
+@_SETTINGS
+@given(st.text(max_size=4096))
+def test_endpoint_selector_normalization_is_stable(value: str) -> None:
+    exercise_endpoint_selector(value)
 
 
 @_SETTINGS

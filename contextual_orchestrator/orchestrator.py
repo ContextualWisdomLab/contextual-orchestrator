@@ -102,9 +102,9 @@ class EndpointUnavailableError(ValueError):
 
 def normalize_endpoint_selector(value: str) -> str:
     """Normalize an endpoint selector without ever using it as transport input."""
-    parsed = urlparse(value)
-    scheme = parsed.scheme.casefold()
     try:
+        parsed = urlparse(value)
+        scheme = parsed.scheme.casefold()
         hostname = parsed.hostname
         port = parsed.port
     except ValueError as exc:
@@ -4554,7 +4554,7 @@ class TaskOrchestrator:
         return normalized
 
     def _request_endpoint_supports_model(self, requested_model: Any) -> bool:
-        """Fail closed only for real endpoint/model conflicts on the active request."""
+        """Check endpoint-local eligibility without ranking or provider I/O."""
         if requested_model is _INVALID_REQUESTED_MODEL:
             return True
         if requested_model in {
@@ -4563,15 +4563,15 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }:
-            try:
-                ranked = self._ranked_agents(
-                    "request endpoint probe",
-                    "worker",
-                    free_only=requested_model == self.FREE_MODEL,
-                )
-            except RuntimeError:
-                return False
-            return bool(ranked)
+            free_only = requested_model == self.FREE_MODEL
+            return any(
+                not agent.disabled
+                and _agent_matches_request_endpoint(agent)
+                and self._zdr_agent_allowed(agent)
+                and _is_general_chat_agent(agent)
+                and (not free_only or self._is_general_free_agent(agent))
+                for agent in self.agents
+            )
         try:
             self._requested_agent(requested_model)
         except ValueError:
