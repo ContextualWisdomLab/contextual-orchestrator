@@ -1,9 +1,9 @@
 """Fail-closed model selection that requires identified routing evidence.
 
 This module is a compatibility bridge while the historical static ranking code
-is removed from ``orchestrator.py``.  It deliberately exposes no priority,
+is removed from ``orchestrator.py``. It deliberately exposes no priority,
 metadata-similarity, provider-name, discovery-order, or transport-composite
-fallback.  Multiple eligible candidates require complete exact-context
+fallback. Multiple eligible candidates require complete exact-context
 fast-mlsirm evidence; otherwise selection is unresolved.
 """
 
@@ -178,3 +178,38 @@ def measured_member_order_fail_closed(self: Any, member_ids: list[str]) -> list[
     raise RuntimeError(
         "multiple model-group members require explicit or validated routing evidence"
     )
+
+
+def get_model_group_diagnostic(self: Any, group_name: str) -> dict[str, Any]:
+    """Return group observations without presenting a diagnostic score as a route order.
+
+    Agent identifiers are sorted only to provide canonical serialization for the
+    admin/read surface. That order is not used by any inference selector.
+    """
+    from .orchestrator import MODEL_CAPABILITIES
+
+    name = canonical_group_name(group_name)
+    members = [
+        agent
+        for agent in self.candidates
+        if agent.group_name and canonical_group_name(agent.group_name) == name
+    ]
+    if not members:
+        raise KeyError(name)
+    members_by_id = {agent.id: agent for agent in members}
+    display_ids = sorted(members_by_id)
+    return {
+        "group_name": name,
+        "member_agent_ids": display_ids,
+        "member_order_authority": "none",
+        "enabled_member_count": sum(1 for agent in members if not agent.disabled),
+        "capability_coverage": {
+            capability: sum(capability in agent.tags for agent in members)
+            for capability in sorted(MODEL_CAPABILITIES)
+            if any(capability in agent.tags for agent in members)
+        },
+        "members": [
+            self._agent_to_admin_payload(members_by_id[agent_id])
+            for agent_id in display_ids
+        ],
+    }
