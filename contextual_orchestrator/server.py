@@ -35,11 +35,13 @@ from .cost_router import (
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
+    EndpointUnavailableError,
     MAX_LOCAL_CONCURRENCY,
     ProviderRequestTooLargeError,
     ProviderResponseError,
     ModelAgent,
     TaskOrchestrator,
+    normalize_endpoint_selector,
     _new_chat_completion_id,
     _responses_to_chat_payload,
     chat_completion_chunks,
@@ -3159,7 +3161,9 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
-def _validate_routing(routing: Any) -> dict[str, Any] | None:
+def _validate_routing(
+    routing: Any, *, allow_endpoint: bool = False
+) -> dict[str, Any] | None:
     """OpenAI-adjacent routing hints for sync vs batch channel selection.
 
     Fail closed on shape so callers cannot smuggle non-boolean latency flags or
@@ -3170,7 +3174,10 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
-    unknown = sorted(set(routing) - {"channel", "latency_tolerant", "priority"})
+    allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_endpoint:
+        allowed.add("endpoint")
+    unknown = sorted(set(routing) - allowed)
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
@@ -3214,6 +3221,30 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         priority = routing.get("priority")
         if isinstance(priority, str) and priority.strip():
             cleaned["priority"] = priority.strip().lower()
+    if "endpoint" in routing:
+        endpoint = routing.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            )
+        try:
+            normalize_endpoint_selector(endpoint.strip())
+        except EndpointUnavailableError:
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            ) from None
+        cleaned["endpoint"] = endpoint.strip()
+    if "endpoint" in cleaned and (
+        cleaned.get("channel") == "batch"
+        or cleaned.get("latency_tolerant") is True
+    ):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.endpoint cannot be combined with deferred batch routing",
+        )
+    if "endpoint" in cleaned:
+        cleaned["channel"] = "sync"
     return cleaned if cleaned else {}
 
 
@@ -6250,6 +6281,7 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
             request_policy = None
+            endpoint_policy = None
             try:
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
@@ -6389,6 +6421,24 @@ def build_server(
                 zdr_only = _validate_zdr_only(body)
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
+                if path in {"/v1/chat/completions", "/v1/responses"}:
+                    endpoint_routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    endpoint_policy = orchestrator.routing_endpoint_scope(
+                        endpoint_routing.get("endpoint") if endpoint_routing else None,
+                        body.get("model"),
+                        model_was_provided="model" in body,
+                    )
+                    try:
+                        endpoint_policy.__enter__()
+                    except EndpointUnavailableError as exc:
+                        endpoint_policy = None
+                        raise RequestError(
+                            400,
+                            "endpoint_unavailable",
+                            "routing.endpoint is unavailable",
+                        ) from exc
                 metadata_values = [
                     value
                     for key in ("metadata", "client_metadata")
@@ -6812,7 +6862,9 @@ def build_server(
                             )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(body.get("routing"))
+                            structured_routing = _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            )
                             if structured_routing and (
                                 structured_routing.get("channel") == "batch"
                                 or structured_routing.get("latency_tolerant") is True
@@ -6913,7 +6965,9 @@ def build_server(
                         self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(body.get("routing"))
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
@@ -7386,7 +7440,9 @@ def build_server(
                     if "metadata" in body:
                         _validate_openai_metadata(body)
                     if "routing" in body:
-                        routing = _validate_routing(body.get("routing"))
+                        routing = _validate_routing(
+                            body.get("routing"), allow_endpoint=True
+                        )
                         # Responses passthrough has no batch channel plane yet.
                         if routing and routing.get("channel") == "batch":
                             raise RequestError(
@@ -7554,7 +7610,9 @@ def build_server(
                         responses_attribution.setdefault("model_name", body["model"])
                         responses_attribution.setdefault("service", "responses_api")
                         responses_routing = dict(
-                            _validate_routing(body.get("routing")) or {}
+                            _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            ) or {}
                         )
                         # Responses has no batch job envelope on this path;
                         # force the coordinator's synchronous contract even
@@ -7650,7 +7708,9 @@ def build_server(
                                 responses_messages,
                                 mode="conduct",
                                 attribution=responses_attribution,
-                                hints=_validate_routing(body.get("routing")),
+                                hints=_validate_routing(
+                                    body.get("routing"), allow_endpoint=True
+                                ),
                                 model_name=body["model"],
                                 provider_request=body,
                                 provider_endpoint="responses",
@@ -7764,6 +7824,8 @@ def build_server(
                 traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
             finally:
+                if endpoint_policy is not None:
+                    endpoint_policy.__exit__(None, None, None)
                 if request_policy is not None:
                     request_policy.__exit__(None, None, None)
 

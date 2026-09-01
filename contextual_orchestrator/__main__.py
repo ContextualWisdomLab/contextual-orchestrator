@@ -415,7 +415,7 @@ def _probe_configured_gateway_structured_chat(
         "messages": [
             {
                 "role": "user",
-                "content": 'Return only {"status":"ok"}.',
+                "content": 'Return only this JSON object: {"status":"ok"}.',
             }
         ],
         "response_format": {"type": "json_object"},

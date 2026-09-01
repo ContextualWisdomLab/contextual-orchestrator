@@ -390,6 +390,7 @@ def test_configured_gateway_structured_probe_is_bounded_and_validates_output() -
     assert _probe_configured_gateway_structured_chat(orchestrator, model) is True
     assert observed["payload"]["max_tokens"] == 8
     assert observed["payload"]["response_format"] == {"type": "json_object"}
+    assert "json" in observed["payload"]["messages"][0]["content"].casefold()
 
 
 def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(

@@ -87,6 +87,74 @@ from .reasoning_effort_profile import (
 from .token_counting import TokenCountUnavailable, build_token_counter
 
 
+_REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
+    "contextual_orchestrator_request_endpoint_agent_ids", default=None
+)
+_REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
+    "contextual_orchestrator_request_endpoint_identity", default=None
+)
+_INVALID_REQUESTED_MODEL = object()
+
+
+class EndpointUnavailableError(ValueError):
+    """The requested configured endpoint cannot serve this request."""
+
+
+def normalize_endpoint_selector(value: str) -> str:
+    """Normalize an endpoint selector without ever using it as transport input."""
+    try:
+        parsed = urlparse(value)
+        scheme = parsed.scheme.casefold()
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise EndpointUnavailableError("endpoint_unavailable") from exc
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise EndpointUnavailableError("endpoint_unavailable")
+    host = hostname.casefold()
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None and port != (443 if scheme == "https" else 80):
+        host = f"{host}:{port}"
+    path = parsed.path.rstrip("/").removesuffix("/v1")
+    return urlunsplit((scheme, host, path, "", ""))
+
+
+def _configured_endpoint_matches(value: str, normalized: str) -> bool:
+    """Return exact normalized equality for one already-configured transport."""
+    try:
+        return normalize_endpoint_selector(value) == normalized
+    except EndpointUnavailableError:
+        return False
+
+
+def _agent_matches_request_endpoint(agent: ModelAgent) -> bool:
+    """Revalidate both agent id and configured endpoint for the active request."""
+    endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+    endpoint_identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if endpoint_ids is None or endpoint_identity is None:
+        return endpoint_ids is None and endpoint_identity is None
+    return agent.id in endpoint_ids and _configured_endpoint_matches(
+        agent.base_url, endpoint_identity
+    )
+
+
+def _request_endpoint_partition() -> str:
+    """Return a non-reversible cache partition for the configured endpoint."""
+    identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if identity is None:
+        return "endpoint:auto"
+    return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
@@ -4436,6 +4504,80 @@ class TaskOrchestrator:
         }
         return raw
 
+    @contextmanager
+    def routing_endpoint_scope(
+        self,
+        endpoint: str | None,
+        requested_model: Any,
+        *,
+        model_was_provided: bool = True,
+    ):
+        """Constrain this request to agents whose configured endpoint matches exactly."""
+        if endpoint is None:
+            yield
+            return
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise EndpointUnavailableError("endpoint_unavailable")
+        normalized = normalize_endpoint_selector(endpoint.strip())
+        matching = frozenset(
+            agent.id
+            for agent in self.agents
+            if _configured_endpoint_matches(agent.base_url, normalized)
+        )
+        if not matching:
+            raise EndpointUnavailableError("endpoint_unavailable")
+        ids_token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
+        identity_token = _REQUEST_ENDPOINT_IDENTITY.set(normalized)
+        try:
+            if not self._request_endpoint_supports_model(
+                self._normalize_endpoint_requested_model(
+                    requested_model, model_was_provided=model_was_provided
+                )
+            ):
+                raise EndpointUnavailableError("endpoint_unavailable")
+            yield
+        finally:
+            _REQUEST_ENDPOINT_IDENTITY.reset(identity_token)
+            _REQUEST_ENDPOINT_AGENT_IDS.reset(ids_token)
+
+    def _normalize_endpoint_requested_model(
+        self, requested_model: Any, *, model_was_provided: bool
+    ) -> Any:
+        """Reuse request-model normalization without preempting later HTTP errors."""
+        if requested_model is None:
+            return _INVALID_REQUESTED_MODEL if model_was_provided else None
+        if type(requested_model) is not str:
+            return _INVALID_REQUESTED_MODEL
+        normalized = requested_model.strip()
+        if not normalized or len(normalized) > 256:
+            return _INVALID_REQUESTED_MODEL
+        return normalized
+
+    def _request_endpoint_supports_model(self, requested_model: Any) -> bool:
+        """Check endpoint-local eligibility without ranking or provider I/O."""
+        if requested_model is _INVALID_REQUESTED_MODEL:
+            return True
+        if requested_model in {
+            None,
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }:
+            free_only = requested_model == self.FREE_MODEL
+            return any(
+                not agent.disabled
+                and _agent_matches_request_endpoint(agent)
+                and self._zdr_agent_allowed(agent)
+                and _is_general_chat_agent(agent)
+                and (not free_only or self._is_general_free_agent(agent))
+                for agent in self.agents
+            )
+        try:
+            self._requested_agent(requested_model)
+        except ValueError:
+            return False
+        return True
+
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
@@ -4449,6 +4591,7 @@ class TaskOrchestrator:
             for candidate in self.candidates
             if (
                 candidate.model == requested_model
+                and _agent_matches_request_endpoint(candidate)
                 and self._zdr_agent_allowed(candidate)
                 and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
             )
@@ -4670,6 +4813,12 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        endpoint_partition = _request_endpoint_partition()
+        cache_partition = (
+            endpoint_partition
+            if cache_partition is None
+            else f"{cache_partition}|{endpoint_partition}"
+        )
         return build_response_cache_key(
             messages,
             mode,
@@ -5796,7 +5945,9 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
+            if _is_general_chat_agent(agent)
+            and self._zdr_agent_allowed(agent)
+            and _agent_matches_request_endpoint(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5828,7 +5979,11 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id: agent for agent in self.agents}
+        known_agents = {
+            agent.id: agent
+            for agent in self.agents
+            if _agent_matches_request_endpoint(agent)
+        }
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -5942,6 +6097,7 @@ class TaskOrchestrator:
             agent
             for agent in source
             if not agent.disabled
+            and _agent_matches_request_endpoint(agent)
             and self._zdr_agent_allowed(agent)
             if (
                 not free_only
@@ -6182,7 +6338,9 @@ class TaskOrchestrator:
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure."""
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            f"{_request_endpoint_partition()}\x1f{text}".encode("utf-8")
+        ).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
         if cached is not None:
@@ -6202,7 +6360,13 @@ class TaskOrchestrator:
     def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
         """Cached embedding of one agent's operator-declared metadata document."""
         fingerprint = hashlib.sha256(
-            "\x1f".join([agent.id, self._agent_descriptor_text(agent)]).encode("utf-8")
+            "\x1f".join(
+                [
+                    _request_endpoint_partition(),
+                    agent.id,
+                    self._agent_descriptor_text(agent),
+                ]
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._descriptor_vector_cache.get(fingerprint)
@@ -6267,7 +6431,12 @@ class TaskOrchestrator:
         no evidence source exists at all. Verdicts are cached by content hash.
         """
         digest = hashlib.sha256(
-            (text + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")).encode("utf-8")
+            (
+                _request_endpoint_partition()
+                + "\x1f"
+                + text
+                + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
@@ -6284,7 +6453,9 @@ class TaskOrchestrator:
         except RuntimeError:
             candidates = []
         if not candidates and not _REQUEST_ZDR_ONLY.get():
-            candidates = list(self.agents)
+            candidates = [
+                agent for agent in self.agents if _agent_matches_request_endpoint(agent)
+            ]
         if not candidates:
             return False
         triage_agent = candidates[0]
@@ -6989,7 +7160,7 @@ class TaskOrchestrator:
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
-            if agent.id == agent_id:
+            if agent.id == agent_id and _agent_matches_request_endpoint(agent):
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
 
