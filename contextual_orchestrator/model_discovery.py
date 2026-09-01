@@ -63,6 +63,216 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+<<<<<<< HEAD
+=======
+DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
+DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
+
+
+def discovery_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
+    """Return public capability evidence with its discovery-ownership marker."""
+    if model.supports_parallel_tool_calls is True:
+        return ("tool_call:multi", DISCOVERY_TOOL_CALL_MULTI_TAG)
+    if model.supports_parallel_tool_calls is False:
+        return ("tool_call:single", DISCOVERY_TOOL_CALL_SINGLE_TAG)
+    return ()
+
+
+def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None:
+    """Return the strongest tool-call parallelism signal in a parameter list.
+
+    Provider ``supported_parameters`` entries (e.g. from OpenRouter or a
+    LiteLLM-model-info proxy) name request fields the model accepts. A literal
+    ``"parallel_tool_calls"`` parameter is direct evidence the model can receive
+    multiple tool-call requests at once. A ``"tools"`` parameter alone tells us
+    only that some form of tool calling is accepted, not whether multiple calls
+    may be requested simultaneously; without an explicit ``parallel_tool_calls``
+    signal we stay honest and report ``None`` rather than guessing ``False``.
+    """
+    if not isinstance(supported_parameters, list):
+        return None
+    params = {
+        value.strip().casefold()
+        for value in supported_parameters
+        if isinstance(value, str) and value.strip()
+    }
+    if "parallel_tool_calls" in params:
+        return True
+    return None
+
+
+def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
+    """Return ``False`` when a provider's 400 clearly rejects multi-tool calls.
+
+    The only negative signal this function trusts is a provider error whose
+    message explicitly says the model accepts only one tool call at a time, or
+    that ``parallel_tool_calls`` is not supported. Ambiguous 400s (malformed
+    payload, auth, rate limits, etc.) return ``None`` so the pool stays open
+    rather than excluding a model on a misunderstood error.
+    """
+    if isinstance(error_payload, dict):
+        error = error_payload.get("error", {})
+        if not isinstance(error, dict):
+            error = error_payload
+        message = str(error.get("message", ""))
+        if not message and isinstance(error_payload.get("message"), str):
+            message = error_payload["message"]
+    elif isinstance(error_payload, str):
+        message = error_payload
+    else:
+        return None
+    text = message.casefold()
+    single_tool_limit_patterns = (
+        r"\bonly supports?\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?(?:\s+at\s+(?:once|a\s+time))?\b",
+        r"\b(?:single|one)\s+tool(?:-?calls?)?\s+at\s+(?:once|a\s+time)\b",
+        r"\b(?:accepts?|allows?)\s+only\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?\b",
+        r"\bmax(?:imum)?\s+of\s+one\s+tool(?:-?calls?)?\b",
+    )
+    if (
+        any(re.search(pattern, text) for pattern in single_tool_limit_patterns)
+        or (
+            "parallel_tool_calls" in text
+            and any(phrase in text for phrase in ("not supported", "unsupported"))
+        )
+    ):
+        return False
+    return None
+
+
+def _response_contains_parallel_probe_tool_calls(payload: Any) -> bool:
+    """Return whether a probe response clearly contains both requested tool calls."""
+    if not isinstance(payload, dict):
+        return False
+    seen: set[str] = set()
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict) or tool_call.get("type") != "function":
+                    continue
+                function = tool_call.get("function")
+                name = function.get("name") if isinstance(function, dict) else None
+                if name in {"probe_a", "probe_b"}:
+                    seen.add(name)
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            name = item.get("name")
+            if name in {"probe_a", "probe_b"}:
+                seen.add(name)
+    return seen == {"probe_a", "probe_b"}
+
+
+def probe_discovered_model_tool_call_capability(
+    discovered: DiscoveredModel,
+    *,
+    timeout: float = 30.0,
+) -> bool | None:
+    """Probe whether a discovered model accepts multi-tool-call requests.
+
+    Sends a minimal ``/chat/completions`` request with ``parallel_tool_calls: true``
+    and two tool definitions, using the provider credential registered in the KV.
+    A successful response counts as positive evidence only when the body
+    demonstrably contains tool calls to both probe functions. A 400 whose error
+    text clearly says the model only supports a single tool call means it does
+    not (``False``). Any network, auth, malformed, or ambiguous response
+    returns ``None`` so the pool stays open rather than excluding a model on a
+    flaky probe.
+
+    This is real runtime evidence, not a model-name heuristic. It is deliberately
+    separate from :func:`discover_all_models` so callers decide when the extra
+    latency and token cost are justified.
+    """
+    api_key = get_credential(discovered.credential_name)
+    if not api_key:
+        return None
+    parsed = urlsplit(discovered.chat_base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    url = discovered.chat_base_url.rstrip("/") + "/chat/completions"
+    client = ModelClient(
+        timeout=max(1, math.ceil(timeout)),
+        allowed_provider_hosts={parsed.hostname},
+    )
+    agent = ModelAgent(
+        "tool_call_capability_probe",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        credential_key=discovered.credential_name,
+        auth_scheme=discovered.auth_scheme,
+    )
+    try:
+        destination = client._validate_provider(agent)
+    except (NotConfigured, RuntimeError, ValueError):
+        return None
+    payload = {
+        "model": discovered.model_id,
+        "messages": [{"role": "user", "content": "Call both functions."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_a",
+                    "description": "Probe function A",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_b",
+                    "description": "Probe function B",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+        "parallel_tool_calls": True,
+        "max_tokens": 32,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    headers = {
+        "content-type": "application/json",
+        "user-agent": _HTTP_USER_AGENT,
+        "authorization": format_authorization_header(discovered.auth_scheme, api_key),
+    }
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with client._open_provider(request, destination, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            return None
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(body)
+        except json.JSONDecodeError:
+            error_payload = {"message": body}
+        return _tool_call_parallelism_from_error(error_payload)
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    try:
+        response_payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return True if _response_contains_parallel_probe_tool_calls(response_payload) else None
+
+
+>>>>>>> a68fc5c1 (fix(discovery): reject echoed tool probe definitions)
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Small bounded retry budget for the one shared, unauthenticated, third-party
 # Models.dev fetch that every ``models_dev_provider_id``-joined source's

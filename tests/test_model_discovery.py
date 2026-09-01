@@ -2704,6 +2704,37 @@ def test_discover_provider_models_debug_logs_attempt_and_result() -> None:
     assert "discovery_result account=openai model_count=2" in output
 
 
+def test_response_contains_parallel_probe_tool_calls_recognizes_responses_api_shape() -> None:
+    assert _response_contains_parallel_probe_tool_calls(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "probe_a",
+                },
+                {
+                    "type": "function_call",
+                    "name": "probe_b",
+                },
+            ]
+        }
+    )
+
+
+def test_parallel_probe_does_not_treat_echoed_tool_definitions_as_calls() -> None:
+    echoed_tools = [
+        {"type": "function", "function": {"name": name}}
+        for name in ("probe_a", "probe_b")
+    ]
+
+    assert not _response_contains_parallel_probe_tool_calls(
+        {
+            "request": {"tools": echoed_tools},
+            "choices": [{"message": {"content": "no tool calls"}}],
+        }
+    )
+
+
 def test_discover_provider_models_debug_logs_are_silent_without_debug() -> None:
     register_credential("OPENAI_API_KEY", "sk-router")
     with (
