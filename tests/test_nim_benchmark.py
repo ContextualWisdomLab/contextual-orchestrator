@@ -1515,6 +1515,32 @@ def test_evaluate_policies_preserves_reported_usage_source() -> None:
     )
 
 
+def test_equal_budget_take_usage_reconciles_prompt_and_completion_independently() -> None:
+    """A small reported prompt cannot turn failed-cell completion usage negative."""
+
+    class ReportedUsageClient(ModelClient):
+        def chat(self, *args, **kwargs):
+            return "estimated completion is deliberately longer"
+
+        def take_usage(self):
+            return {"prompt_tokens": 1, "completion_tokens": 0}
+
+    agent = _mock_agents("dryrun/chat-basic")[0]
+    cell = nb.EqualBudgetModelClient(
+        ReportedUsageClient(), total_token_budget=100, maximum_calls=1
+    )
+    cell.chat(agent, [{"role": "user", "content": "a deliberately long prompt"}])
+    cell.take_usage()
+
+    assert cell.observed_prompt_tokens == 1
+    assert cell.observed_completion_tokens == 0
+    assert cell.observed_tokens == 1
+    assert cell.estimated_usage_by_model[agent.model] == {
+        "prompt_tokens": 1,
+        "completion_tokens": 0,
+    }
+
+
 def test_evaluate_policies_records_observed_budget_overflow() -> None:
     class OversizedAnswerClient(ModelClient):
         def chat(self, *args, **kwargs) -> str:  # type: ignore[override]

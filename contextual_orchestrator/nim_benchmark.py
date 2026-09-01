@@ -520,9 +520,10 @@ class EqualBudgetModelClient:
         self.observed_calls = 0
         self.observed_tokens = 0
         self.observed_prompt_tokens = 0
+        self.observed_completion_tokens = 0
         self.attempted_models: list[dict[str, Any]] = []
         self.estimated_usage_by_model: dict[str, dict[str, int]] = {}
-        self._pending_estimated_tokens: int | None = None
+        self._pending_estimated_usage: tuple[str, int, int] | None = None
         self._exceeded = False
         self._contract_error: BenchmarkContractError | None = None
 
@@ -615,11 +616,11 @@ class EqualBudgetModelClient:
             if isinstance(delegate_error, BenchmarkContractError):
                 self._contract_error = delegate_error
 
-        estimated_total = prompt_tokens + estimate_tokens(answer)
         completion_tokens = estimate_tokens(answer)
         self.observed_tokens += completion_tokens
+        self.observed_completion_tokens += completion_tokens
         usage["completion_tokens"] += completion_tokens
-        self._pending_estimated_tokens = estimated_total
+        self._pending_estimated_usage = (agent.model, prompt_tokens, completion_tokens)
         self._exceeded = self.observed_tokens > self.total_token_budget
         return answer
 
@@ -659,6 +660,7 @@ class EqualBudgetModelClient:
         answer = ModelClient._response_content(agent, response)
         completion_tokens = estimate_tokens(answer)
         self.observed_tokens += completion_tokens
+        self.observed_completion_tokens += completion_tokens
         model_usage["completion_tokens"] += completion_tokens
         usage = response.get("usage")
         if isinstance(usage, dict):
@@ -666,6 +668,7 @@ class EqualBudgetModelClient:
             reported_completion = self._coerce_usage_count(usage.get("completion_tokens"))
             if reported_prompt is not None and reported_completion is not None:
                 self.observed_prompt_tokens += reported_prompt - prompt_tokens
+                self.observed_completion_tokens += reported_completion - completion_tokens
                 self.observed_tokens += (
                     reported_prompt + reported_completion - prompt_tokens - completion_tokens
                 )
@@ -683,15 +686,21 @@ class EqualBudgetModelClient:
     def take_usage(self) -> dict[str, Any] | None:
         """Return delegated usage and replace the latest estimate when valid."""
         usage = self._delegate.take_usage()
-        pending_estimate = self._pending_estimated_tokens
-        self._pending_estimated_tokens = None
-        if pending_estimate is None or not isinstance(usage, dict):
+        pending = self._pending_estimated_usage
+        self._pending_estimated_usage = None
+        if pending is None or not isinstance(usage, dict):
             return usage
         prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
         completion_tokens = self._coerce_usage_count(usage.get("completion_tokens"))
         if prompt_tokens is None or completion_tokens is None:
             return usage
-        self.observed_tokens += prompt_tokens + completion_tokens - pending_estimate
+        model, estimated_prompt, estimated_completion = pending
+        self.observed_prompt_tokens += prompt_tokens - estimated_prompt
+        self.observed_completion_tokens += completion_tokens - estimated_completion
+        self.observed_tokens = self.observed_prompt_tokens + self.observed_completion_tokens
+        model_usage = self.estimated_usage_by_model[model]
+        model_usage["prompt_tokens"] += prompt_tokens - estimated_prompt
+        model_usage["completion_tokens"] += completion_tokens - estimated_completion
         self._exceeded = self.observed_tokens > self.total_token_budget
         return usage
 
@@ -2230,10 +2239,7 @@ def evaluate_policies(
             lambda: {
                 "call_count": cell_client.observed_calls,
                 "prompt_tokens": cell_client.observed_prompt_tokens,
-                "completion_tokens": (
-                    cell_client.observed_tokens
-                    - cell_client.observed_prompt_tokens
-                ),
+                "completion_tokens": cell_client.observed_completion_tokens,
                 "total_tokens": cell_client.observed_tokens,
                 "models_used": cell_client.attempted_models,
             },
@@ -2251,8 +2257,7 @@ def evaluate_policies(
             cell.update(
                 {
                     "prompt_tokens": cell_client.observed_prompt_tokens,
-                    "completion_tokens": cell_client.observed_tokens
-                    - cell_client.observed_prompt_tokens,
+                    "completion_tokens": cell_client.observed_completion_tokens,
                     "total_tokens": cell_client.observed_tokens,
                     "hypothetical_cost_usd": hypothetical_cost_usd(
                         pricing_scenario, cell_client.estimated_usage_by_model
