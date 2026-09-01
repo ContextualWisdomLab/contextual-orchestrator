@@ -29,7 +29,6 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_from_discovered,
     discover_provider_models,
     refresh_price_book,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 from contextual_orchestrator.orchestrator import (  # noqa: E402
@@ -197,7 +196,6 @@ def test_non_chat_discovery_is_not_priced_or_selected_for_chat() -> None:
     assert price_book.get_price(
         "enterprise_gateway", "azure/text-embedding-3-large"
     ) is None
-    assert select_cheapest_discovered_agent([embedding_model], price_book) is None
     assert select_top_n_cheapest_discovered_agents(
         [embedding_model], price_book, 1
     ) == []
