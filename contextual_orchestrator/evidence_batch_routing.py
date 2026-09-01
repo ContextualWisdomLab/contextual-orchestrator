@@ -94,6 +94,64 @@ def cheapest_upstream(
     return winners[0] if len(winners) == 1 else None
 
 
+def resolve_embedding_target_evidence_only(
+    coordinator: Any,
+    model: str,
+    zdr_only: bool,
+    agent_id: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """Resolve an embedding route only from explicit or uniquely eligible evidence.
+
+    A concrete non-ZDR model remains explicit caller intent and therefore does
+    not require capability-pool ranking.  Virtual-model and ZDR requests must
+    either identify an exact eligible ``agent_id`` or have exactly one eligible
+    candidate.  Price, discovery order, and static rank never break ambiguity.
+
+    Candidate identity and model are snapshotted exactly once before comparison
+    so changing getters or Proxy-like objects cannot pass one check and return a
+    different routing identity later in the same decision.
+    """
+    virtual_models = {
+        "contextual-orchestrator",
+        getattr(coordinator.orchestrator, "AUTO_MODEL", ""),
+    }
+    unspecified_model = model in virtual_models
+    if agent_id is None and not zdr_only and not unspecified_model:
+        return model, None
+
+    selection_model = None if unspecified_model else model
+    with coordinator.orchestrator.request_policy(zdr_only):
+        candidates = list(
+            coordinator.orchestrator._capability_agents("embedding", selection_model)
+        )
+
+    snapshots: list[tuple[str, str]] = []
+    for candidate in candidates:
+        candidate_id = getattr(candidate, "id", None)
+        candidate_model = getattr(candidate, "model", None)
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise RuntimeError("eligible embedding candidate omitted a stable agent id")
+        if not isinstance(candidate_model, str) or not candidate_model:
+            raise RuntimeError("eligible embedding candidate omitted a stable model id")
+        snapshots.append((candidate_id, candidate_model))
+
+    if agent_id is None:
+        if not snapshots:
+            raise RuntimeError("no eligible embedding agent is available for this request")
+        if len(snapshots) != 1:
+            raise RuntimeError(
+                "multiple eligible embedding agents require an explicit agent_id "
+                "or an independently evaluated routing model"
+            )
+        candidate_id, candidate_model = snapshots[0]
+        return candidate_model, candidate_id
+
+    for candidate_id, candidate_model in snapshots:
+        if candidate_id == agent_id:
+            return candidate_model, candidate_id
+    raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
+
+
 def prohibited_heuristic_embedding(
     text: str,
     dimension: int = 8,
