@@ -366,6 +366,7 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     served_model: str | None = None
     served_usage: dict[str, Any] | None = None
+    served_usage_source: str | None = None
     served_output: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
@@ -381,6 +382,17 @@ class _FastMLSIJudgeAdapter:
         """Expose the existing gateway client capability to fast-mlsirm."""
         return self.orchestrator.client
 
+    @staticmethod
+    def _usage_source_for_agent(agent: ModelAgent, usage: Any) -> str | None:
+        """Classify transport-boundary usage without guessing from token counts."""
+        if not isinstance(usage, dict):
+            return None
+        return (
+            "synthetic_mock"
+            if agent.base_url.startswith("mock://")
+            else "provider_reported"
+        )
+
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
@@ -393,6 +405,9 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
             excluded_agent_ids=self.excluded_agent_ids,
+        )
+        self.served_usage_source = self._usage_source_for_agent(
+            self.orchestrator._agent(served_id), usage
         )
         return self._completion_payload(
             output, served_id, served_model, usage, self.mode if mode is None else mode
@@ -434,8 +449,12 @@ class _FastMLSIJudgeAdapter:
         # must survive validation failing on how to interpret its result.
         self.served_agent_id = agent.id
         self.served_model = agent.model
+        response_usage = response.get("usage")
         self.served_usage = (
-            response.get("usage") if isinstance(response.get("usage"), dict) else None
+            dict(response_usage) if isinstance(response_usage, dict) else None
+        )
+        self.served_usage_source = self._usage_source_for_agent(
+            agent, self.served_usage
         )
         output = ModelClient._response_content(agent, response)
         return self._completion_payload(
@@ -453,7 +472,8 @@ class _FastMLSIJudgeAdapter:
         """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
         self.served_model = served_model
-        self.served_usage = usage
+        usage_snapshot = dict(usage) if isinstance(usage, dict) else None
+        self.served_usage = usage_snapshot
         self.served_output = output
         trace = [
             {
@@ -464,8 +484,8 @@ class _FastMLSIJudgeAdapter:
                 "output": output,
             }
         ]
-        if usage is not None:
-            trace[0]["usage"] = usage
+        if usage_snapshot is not None:
+            trace[0]["usage"] = dict(usage_snapshot)
         return {
             "answer": output,
             "mode": mode,
@@ -8165,18 +8185,14 @@ class TaskOrchestrator:
                 "judge": "model",
             }
             verification.update(self._judge_adapter_accounting_fields(judge_adapter))
-            # The adapter's provider-boundary capture is authoritative for
-            # usage. fast-mlsirm aggregates a missing trace usage into a
-            # non-empty zero-token mapping, which must not turn an unmeasured
-            # call into provider-reported zero spend here -- neither
-            # `result.usage` nor `judge_adapter.served_usage` proves a real
-            # measurement on its own unless at least one carries a positive
-            # token count (a plain `is not None`/truthy check on either
-            # accepts that same fabricated zero-token mapping).
-            if self._usage_has_positive_evidence(
-                result.usage
-            ) or self._usage_has_positive_evidence(judge_adapter.served_usage):
-                verification["judge_usage"] = result.usage
+            # Prefer the adapter's transport-boundary snapshot, including an
+            # authoritative all-zero provider report. Only fall back to a
+            # positive fast-mlsirm aggregate when no boundary usage survived.
+            if (
+                "judge_usage" not in verification
+                and self._usage_has_positive_evidence(result.usage)
+            ):
+                verification["judge_usage"] = dict(result.usage)
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage
@@ -8247,15 +8263,20 @@ class TaskOrchestrator:
     def _usage_has_positive_evidence(usage: Any) -> bool:
         """Return whether a usage mapping reports at least one positive token count.
 
-        fast-mlsirm aggregates a missing trace usage into a non-empty
-        zero-token mapping (every count present but 0), which is truthy as a
-        dict yet carries no real measurement. Both judge-accounting call
-        sites must reject that shape identically, or one site's fabricated
-        "reported" zero-token usage silently disagrees with the other's
-        honest "unmeasured" verdict for the exact same underlying call.
+        This remains the compatibility rule for aggregate usage whose origin
+        is unknown. A provider-boundary zero measurement is handled separately
+        by ``_usage_is_reported_token_mapping`` plus explicit provenance.
         """
         return isinstance(usage, Mapping) and any(
             type(usage.get(key)) is int and usage[key] > 0
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+
+    @staticmethod
+    def _usage_is_reported_token_mapping(usage: Any) -> bool:
+        """Validate the canonical non-negative token fields of reported usage."""
+        return isinstance(usage, Mapping) and all(
+            type(usage.get(key)) is int and usage[key] >= 0
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
         )
 
@@ -8283,17 +8304,18 @@ class TaskOrchestrator:
             fields["judge_agent_id"] = judge_adapter.served_agent_id
         if judge_adapter.served_model is not None:
             fields["judge_model"] = judge_adapter.served_model
-        if TaskOrchestrator._usage_has_positive_evidence(judge_adapter.served_usage):
-            # A missing/invalid/all-zero served_usage is left genuinely
-            # absent rather than fabricated as reported-zero (Devin review
-            # on #961, on this same fix, and a later review finding the
-            # plain-truthy check here still let a non-empty-but-all-zero
-            # fast-mlsirm mapping through): judge_agent_id/judge_model above
-            # already keep a completed-but-unmeasured call attributable, and
-            # downstream budget/spend consumers derive an honest estimated
-            # fallback from the judge's own served_output text instead of
-            # trusting a fabricated "reported" usage dict.
-            fields["judge_usage"] = judge_adapter.served_usage
+        if TaskOrchestrator._usage_has_positive_evidence(
+            judge_adapter.served_usage
+        ) or (
+            judge_adapter.served_usage_source == "provider_reported"
+            and TaskOrchestrator._usage_is_reported_token_mapping(
+                judge_adapter.served_usage
+            )
+        ):
+            # Positive aggregate usage remains backward-compatible. Exact
+            # provider-boundary zero usage is accepted only with explicit
+            # provenance; synthetic mock/fast-mlsirm zero remains unmeasured.
+            fields["judge_usage"] = dict(judge_adapter.served_usage)
         if judge_adapter.served_output is not None:
             # The judge's own generated text, not the verifier_output text
             # it was judging (Devin review on #961, on this same fallback
