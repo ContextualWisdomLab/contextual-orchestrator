@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 from dataclasses import replace
 
@@ -13,6 +14,12 @@ from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .debug_logging import configure_logging, parse_log_level_name
+from .openrouter_canary import (
+    OpenRouterCanaryError,
+    OpenRouterCanaryLimits,
+    prune_expired_openrouter_canary_evidence,
+    run_openrouter_free_canary,
+)
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
@@ -382,6 +389,77 @@ def _check_fast_mlsirm_command(argv: list[str]) -> None:
     print(json.dumps(status, ensure_ascii=False, sort_keys=True))
     if not available:
         raise SystemExit(1)
+
+
+def _openrouter_free_canary_command(argv: list[str]) -> None:
+    """Run the bounded, opt-in OpenRouter free-model canary diagnostic."""
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator openrouter-free-canary",
+        description="Run the bounded, opt-in OpenRouter free-model canary diagnostic.",
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.add_argument("--live", action="store_true", help="Send a single live completion to the discovered model.")
+    parser.add_argument("--max-requests", type=_positive_int, help="Maximum requests allowed (must be 1 for live).")
+    parser.add_argument("--max-output-tokens", type=_positive_int, help="Maximum tokens allowed for the canary request.")
+    parser.add_argument("--timeout-seconds", type=_positive_int, help="Per-request timeout cap in seconds.")
+    parser.add_argument("--evidence-output", help="Path to write the audited JSON evidence artifact.")
+    parser.add_argument("--retention-days", type=_positive_int, help="Number of days the evidence is valid before expiration.")
+    parser.add_argument(
+        "--prune-expired-evidence",
+        help="Remove this evidence file if its recorded retention deadline has passed; never contacts OpenRouter.",
+    )
+    args = parser.parse_args(argv)
+    if args.prune_expired_evidence:
+        if args.live or any(
+            value is not None
+            for value in (
+                args.max_requests,
+                args.max_output_tokens,
+                args.timeout_seconds,
+                args.evidence_output,
+                args.retention_days,
+            )
+        ):
+            parser.error("--prune-expired-evidence cannot be combined with canary options")
+        try:
+            removed = prune_expired_openrouter_canary_evidence(
+                Path(args.prune_expired_evidence)
+            )
+        except OpenRouterCanaryError as exc:
+            print(
+                json.dumps({"error": {"code": exc.code, "message": str(exc)}}),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        print(json.dumps({"expired_evidence_removed": removed}, sort_keys=True))
+        return
+    supplied = (
+        args.max_requests,
+        args.max_output_tokens,
+        args.timeout_seconds,
+        args.retention_days,
+    )
+    if args.live and (
+        any(value is None for value in supplied) or not args.evidence_output
+    ):
+        parser.error(
+            "--live requires positive request/output-token/timeout/retention caps and --evidence-output"
+        )
+    limits = OpenRouterCanaryLimits(*supplied) if args.live else None
+    try:
+        result = run_openrouter_free_canary(
+            live=args.live,
+            limits=limits,
+            evidence_output=Path(args.evidence_output) if args.evidence_output else None,
+        )
+    except OpenRouterCanaryError as exc:
+        print(
+            json.dumps({"error": {"code": exc.code, "message": str(exc)}}),
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(result, sort_keys=True))
 
 
 def _register_credential_command(argv: list[str]) -> None:
@@ -844,9 +922,16 @@ def main(argv: list[str] | None = None) -> None:
     if subcommand == "check-fast-mlsirm":
         _check_fast_mlsirm_command(arguments_after_subcommand)
         return
+    if subcommand == "openrouter-free-canary":
+        _openrouter_free_canary_command(arguments_after_subcommand)
+        return
 
     parser = argparse.ArgumentParser(
         description="Route or conduct chat requests across model agents.",
+        epilog=(
+            "Commands: register-credential, discover-models, "
+            "openrouter-free-canary, check-fast-mlsirm"
+        ),
         allow_abbrev=False,
     )
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
