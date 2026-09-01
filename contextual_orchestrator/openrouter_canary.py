@@ -143,8 +143,16 @@ def prune_expired_openrouter_canary_evidence(
     path: Path, *, now: Callable[[], float] = time.time
 ) -> bool:
     """Remove one expired evidence file without contacting a provider."""
-    if not path.parent.exists():
+    try:
+        parent_mode = path.parent.stat().st_mode
+    except FileNotFoundError:
         return False
+    except OSError as exc:
+        raise OpenRouterCanaryError(
+            "canary evidence directory could not be inspected"
+        ) from exc
+    if not stat.S_ISDIR(parent_mode):
+        raise OpenRouterCanaryError("canary evidence parent must be a directory")
     with _evidence_lock(path):
         return _prune_expired_openrouter_canary_evidence(path, now=now)
 

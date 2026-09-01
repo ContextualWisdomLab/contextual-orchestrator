@@ -147,6 +147,13 @@ def test_cleanup_rejects_unrelated_json_and_special_paths(tmp_path: Path) -> Non
     assert prune_expired_openrouter_canary_evidence(missing, now=lambda: 2) is False
     assert not missing.parent.exists()
 
+    non_directory = tmp_path / "not-a-directory"
+    non_directory.write_text("occupied", encoding="utf-8")
+    with pytest.raises(OpenRouterCanaryError, match="parent must be a directory"):
+        prune_expired_openrouter_canary_evidence(
+            non_directory / "evidence.json", now=lambda: 2
+        )
+
     symlink = tmp_path / "evidence-link.json"
     symlink.symlink_to(unrelated)
     with pytest.raises(OpenRouterCanaryError, match="regular file"):
