@@ -1342,10 +1342,14 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
         lambda: {
             "call_count": 1,
             "prompt_tokens": 7,
+            "completion_tokens": 5,
+            "total_tokens": 12,
             "models_used": [{"model_id": "vendor/model-a"}],
         },
     )
-    assert incurred["call_count"] == 1 and incurred["total_tokens"] == 7
+    assert incurred["call_count"] == 1 and incurred["total_tokens"] == 12
+    assert incurred["prompt_tokens"] == 7
+    assert incurred["completion_tokens"] == 5
     assert incurred["models_used"] == [{"model_id": "vendor/model-a"}]
 
     def slow() -> dict:

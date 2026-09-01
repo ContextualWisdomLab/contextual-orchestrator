@@ -1941,6 +1941,11 @@ def run_policy_cell(
         raise
     except Exception as exc:  # noqa: BLE001 - classified into the contract outcomes
         incurred = failure_evidence() if failure_evidence is not None else {}
+        prompt_tokens = incurred.get("prompt_tokens", 0)
+        completion_tokens = incurred.get("completion_tokens", 0)
+        total_tokens = incurred.get(
+            "total_tokens", prompt_tokens + completion_tokens
+        )
         return {
             "policy_name": policy_name,
             "task_id": task["task_id"],
@@ -1954,9 +1959,9 @@ def run_policy_cell(
             "provider_latency_ms": None,
             "call_count": incurred.get("call_count", 0),
             "workflow_depth": incurred.get("call_count", 0),
-            "prompt_tokens": incurred.get("prompt_tokens", 0),
-            "completion_tokens": 0,
-            "total_tokens": incurred.get("prompt_tokens", 0),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
             "token_usage_source": "estimated" if incurred else "unavailable",
             "actual_cost_usd": 0.0,
             "hypothetical_cost_usd": "unknown",
@@ -2225,6 +2230,11 @@ def evaluate_policies(
             lambda: {
                 "call_count": cell_client.observed_calls,
                 "prompt_tokens": cell_client.observed_prompt_tokens,
+                "completion_tokens": (
+                    cell_client.observed_tokens
+                    - cell_client.observed_prompt_tokens
+                ),
+                "total_tokens": cell_client.observed_tokens,
                 "models_used": cell_client.attempted_models,
             },
         )
