@@ -21,7 +21,7 @@ jobs:
   # Always-on, cross-platform property tests. Fast, deterministic, no native deps.
   property_tests:
     name: Hypothesis property tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -45,7 +45,7 @@ jobs:
   # so CI stays cheap; schedule/dispatch runs use a longer budget.
   coverage_guided:
     name: Atheris coverage-guided
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
