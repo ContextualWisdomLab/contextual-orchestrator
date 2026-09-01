@@ -112,6 +112,7 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
     assert second["cost"] == {
         "cost_amount": 0.0,
         "currency_code": "USD",
+        "price_known": True,
         "measurement_status": "measured",
     }
 

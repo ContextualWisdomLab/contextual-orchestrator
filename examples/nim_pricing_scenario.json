@@ -1,0 +1,10 @@
+{
+  "scenario_version": "2026-08-04.1",
+  "scenario_status": "example_unreviewed",
+  "scenario_notes": "Schema-demonstration scenario for dry runs and tests. These are HYPOTHETICAL USD-per-million-token assumptions, not authoritative NVIDIA rates: the hosted NIM catalog is currently free to the caller (actual cost 0). A live paid-cost analysis requires a reviewed scenario ('scenario_status': 'reviewed') supplied by the operator; models absent from this table are honestly reported as 'unknown'. Rates below deliberately price only some dry-run models so the 'unknown' path stays exercised.",
+  "usd_per_million_tokens": {
+    "dryrun/chat-basic": {"input": 0.2, "output": 0.6},
+    "dryrun/chat-vision": {"input": 0.35, "output": 1.1},
+    "dryrun/chat-omni": {"input": 0.5, "output": 1.6}
+  }
+}

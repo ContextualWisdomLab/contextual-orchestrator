@@ -53,6 +53,52 @@ def test_runs_audit_analytics_survive_restart() -> None:
             second.close()
 
 
+def test_completed_run_with_empty_answer_survives_restart() -> None:
+    """A genuinely-judged run with an empty answer must not vanish on reload.
+
+    Devin review (PR #961): the recent-run reload gate must distinguish a
+    not-yet-judged batch_route row from every other persisted run using an
+    explicit "pending_verification" marker, not _is_trace_complete()'s
+    truthy-"answer" requirement -- a completed route/stream/conduct run can
+    legitimately report an empty answer and must stay visible in
+    list_recent_runs() after a restart the same as it was before one.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        record = {
+            "workflow_run_id": "run_empty_answer",
+            "created_at": 0,
+            "mode": "route",
+            "policy_mode": "route",
+            "prompt_text": "prompt",
+            "answer": "",
+            "trace": [
+                {
+                    "id": 0, "role": "worker", "agent_id": "general_agent",
+                    "subtask": "Direct route", "access": [], "output": "",
+                }
+            ],
+            "policy_snapshot": first.policy.as_dict(),
+            "verification": {"accepted": True, "reason": "ok"},
+        }
+        first._replace_workflow_run(record)
+        first._run_order.appendleft(record["workflow_run_id"])
+        first._store.save("workflow_run", record["workflow_run_id"], record)
+        assert "run_empty_answer" in first._run_order  # visible before a restart
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert "run_empty_answer" in second._run_order
+            assert any(
+                run["workflow_run_id"] == "run_empty_answer"
+                for run in second.list_recent_runs(page_size=10)
+            )
+        finally:
+            second.close()
+
+
 def test_default_is_purely_in_memory() -> None:
     orchestrator = _orch()  # no state_db
     assert orchestrator._store is None
