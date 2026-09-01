@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.ci import repair_pr1000_nim_evidence_v4 as v4
 
 TESTS = Path("tests/test_nim_benchmark.py")
+ADR = Path("docs/adr/0002-control-plane-orchestrator.md")
 
 
 def _replace_once(path: Path, old: str, new: str, label: str) -> None:
@@ -88,6 +89,11 @@ def patch_fail_closed_benchmark_contract_tests() -> None:
     )
 
 
+def normalize_repaired_docs() -> None:
+    """Keep generated ADR edits compatible with git diff --check."""
+    ADR.write_text(ADR.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+
+
 def emit_dry_run_diagnostic() -> None:
     """Print bounded policy outcomes from the repaired in-process benchmark."""
     from contextual_orchestrator import nim_benchmark as nb
@@ -129,6 +135,7 @@ def main() -> None:
     v4.main()
     patch_frozen_agent_test()
     patch_fail_closed_benchmark_contract_tests()
+    normalize_repaired_docs()
     emit_dry_run_diagnostic()
 
 
