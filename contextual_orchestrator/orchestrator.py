@@ -6399,7 +6399,9 @@ class TaskOrchestrator:
         ]
         if not ranked:
             raise RuntimeError(f"no enabled agent available for capability={capability}")
-        return ranked
+        healthy = [agent for agent in ranked if not self._circuit_open(agent.id)]
+        # A half-open probe remains possible when every capable endpoint is open.
+        return healthy or ranked
 
     def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
         """Select a measured member supporting a capability, optionally within one group."""
@@ -6976,6 +6978,28 @@ class TaskOrchestrator:
             state["failures"] += 1.0
             if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
+
+    def _record_embedding_failure(
+        self, agent: ModelAgent, endpoint_path: str, exc: BaseException
+    ) -> None:
+        """Quarantine one failing embedding endpoint and retain secret-free evidence."""
+        self._group_router.observe_failure(agent.id)
+        self._record_failure(agent.id)
+        provider_status = getattr(exc, "provider_status", None)
+        if provider_status is None and isinstance(exc, urllib.error.HTTPError):
+            provider_status = exc.code
+        if isinstance(provider_status, bool) or not isinstance(provider_status, int):
+            provider_status = None
+        self.record_analytics_event(
+            "embedding_endpoint_failed",
+            {
+                "endpoint_path": endpoint_path,
+                "agent_id": agent.id,
+                "model": agent.model,
+                "error_type": type(exc).__name__,
+                "provider_status": provider_status,
+            },
+        )
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:

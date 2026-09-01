@@ -7023,13 +7023,16 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/embeddings", exc
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                            orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(
@@ -7104,13 +7107,16 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", exc
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                            orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(

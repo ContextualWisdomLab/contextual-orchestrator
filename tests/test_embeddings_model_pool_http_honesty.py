@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
@@ -101,6 +101,90 @@ def test_select_capability_agent_skips_disabled_and_excluded_agents() -> None:
         assert str(exc) == "no enabled agent available for capability=embedding"
     else:
         raise AssertionError("an unavailable capability must fail closed")
+
+
+def test_embedding_capability_skips_circuit_open_endpoint_until_half_open_probe() -> None:
+    """Repeated endpoint failures quarantine one member without losing recovery."""
+    first = ModelAgent("first_embedding", "embed-v1", tags=("embedding",))
+    second = ModelAgent("second_embedding", "embed-v2", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(first.id)
+
+    assert [agent.id for agent in orchestrator._capability_agents("embedding")] == [
+        second.id
+    ]
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(second.id)
+
+    assert {agent.id for agent in orchestrator._capability_agents("embedding")} == {
+        first.id,
+        second.id,
+    }
+
+
+def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
+    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics."""
+    first = ModelAgent(
+        "rejected_embedding", "embed-v1", tags=("embedding",), priority=1
+    )
+    second = ModelAgent("healthy_embedding", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    attempted: list[str] = []
+
+    def complete_embeddings_batch(_inputs, *, agent_id, **_kwargs):
+        attempted.append(agent_id)
+        if agent_id == first.id:
+            raise urllib.error.HTTPError(
+                "https://provider.invalid/embeddings", 400, "Bad Request", {}, None
+            )
+        return {
+            "status": "completed",
+            "embeddings": [{"index": 0, "embedding": [0.25]}],
+            "total_tokens": 1,
+        }
+
+    coordinator.complete_embeddings_batch = complete_embeddings_batch
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(orchestrator.circuit_failure_threshold + 1):
+            status, body = _post(
+                server.server_address[1],
+                "/v1/embeddings",
+                {"model": "embed-v1", "input": "invoice search chunk"},
+            )
+            assert status == 200, body
+
+        assert attempted == [
+            first.id,
+            second.id,
+            first.id,
+            second.id,
+            first.id,
+            second.id,
+            second.id,
+        ]
+        failures = [
+            event
+            for event in orchestrator._analytics_events
+            if event["event_name"] == "embedding_endpoint_failed"
+        ]
+        assert len(failures) == orchestrator.circuit_failure_threshold
+        assert all(event["event_detail"]["provider_status"] == 400 for event in failures)
+        assert all("provider.invalid" not in json.dumps(event) for event in failures)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
