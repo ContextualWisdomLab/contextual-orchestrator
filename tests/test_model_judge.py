@@ -151,11 +151,26 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     call, and a different length here on purpose so the two can't pass
     by coincidence.
     """
+    class _ZeroAggregateUsageJudge(_ScriptedFastJudge):
+        def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+            result = super().judge(task=task, answer=answer, criteria=criteria)
+            result.usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            return result
+
+    components = orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_ZeroAggregateUsageJudge,
+        criterion_cls=_ScriptedCriterion,
+        format_error=ValueError,
+    )
     orchestrator, _ = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
     with patch.object(
         orchestrator_module,
         "_resolve_fast_mlsirm_components",
-        return_value=_scripted_fast_components(),
+        return_value=components,
     ):
         result = orchestrator.conduct(MESSAGES)
     verification = result["verification"]

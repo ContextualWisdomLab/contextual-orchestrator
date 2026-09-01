@@ -7207,17 +7207,17 @@ class TaskOrchestrator:
                 "judge": "model",
             }
             verification.update(self._judge_adapter_accounting_fields(judge_adapter))
-            # result.usage can be falsy when the response carried no valid
-            # usage dict. Devin review on #961: recording a fabricated
-            # zero-token usage here (an earlier revision of this fix) let a
-            # completed-but-unmeasured call masquerade as provider-reported
-            # zero cost in spend_analytics's usage_source labeling. Leave
-            # judge_usage genuinely absent when unmeasured -- judge_agent_id/
-            # judge_model above already keep the call attributable, and
-            # _run_budget_output_by_model/spend_analytics now derive an
-            # honest estimated-token fallback from judge_output_text
-            # (below) instead of trusting a fabricated "reported" dict.
-            if result.usage and "judge_agent_id" in verification:
+            # The adapter's provider-boundary capture is authoritative for
+            # usage. fast-mlsirm aggregates a missing trace usage into a
+            # non-empty zero-token mapping, which must not turn an unmeasured
+            # call into provider-reported zero spend here.
+            result_usage_has_positive_evidence = isinstance(result.usage, Mapping) and any(
+                type(result.usage.get(key)) is int and result.usage[key] > 0
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+            if result.usage and (
+                judge_adapter.served_usage is not None or result_usage_has_positive_evidence
+            ):
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
