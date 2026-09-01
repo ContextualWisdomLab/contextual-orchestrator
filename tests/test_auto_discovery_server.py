@@ -472,6 +472,28 @@ def test_auto_discovery_refreshes_discovered_limits_across_restart(
     preserved = restarted._agent(existing.id)
     assert (preserved.max_output_tokens, preserved.context_window) == (8192, 256000)
 
+    conflicted_limits = replace(
+        unavailable_limits,
+        max_output_tokens_conflicted=True,
+        context_window_conflicted=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([conflicted_limits], []),
+    )
+    assert _auto_discover_runtime_agents(restarted)["updated"] == [existing.id]
+    cleared = restarted._agent(existing.id)
+    assert (cleared.max_output_tokens, cleared.context_window) == (None, None)
+
+    after_conflict_restart = TaskOrchestrator(
+        [bootstrap, existing], agents_db=database
+    )
+    restored_clear = after_conflict_restart._agent(existing.id)
+    assert (restored_clear.max_output_tokens, restored_clear.context_window) == (
+        None,
+        None,
+    )
+
 
 def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
     monkeypatch,

@@ -430,8 +430,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         elif "discovered" not in existing.tags:
             continue
         else:
-            max_output_tokens = model.max_output_tokens or existing.max_output_tokens
-            context_window = model.context_window or existing.context_window
+            max_output_tokens = (
+                None
+                if model.max_output_tokens_conflicted
+                else model.max_output_tokens or existing.max_output_tokens
+            )
+            context_window = (
+                None
+                if model.context_window_conflicted
+                else model.context_window or existing.context_window
+            )
             limits_changed = (
                 existing.max_output_tokens != max_output_tokens
                 or existing.context_window != context_window
