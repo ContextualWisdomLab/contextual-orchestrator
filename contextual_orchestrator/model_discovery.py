@@ -63,8 +63,6 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
-<<<<<<< HEAD
-=======
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
@@ -272,7 +270,6 @@ def probe_discovered_model_tool_call_capability(
     return True if _response_contains_parallel_probe_tool_calls(response_payload) else None
 
 
->>>>>>> a68fc5c1 (fix(discovery): reject echoed tool probe definitions)
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Small bounded retry budget for the one shared, unauthenticated, third-party
 # Models.dev fetch that every ``models_dev_provider_id``-joined source's

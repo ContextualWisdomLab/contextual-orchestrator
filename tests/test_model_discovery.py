@@ -53,6 +53,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
+    _response_contains_parallel_probe_tool_calls,
     select_top_n_cheapest_discovered_agents,
 )
 
