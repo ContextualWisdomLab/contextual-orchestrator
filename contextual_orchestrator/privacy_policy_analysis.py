@@ -176,7 +176,7 @@ async def _render_policy_document_with_camoufox(url: str) -> str:
 def crawl_policy_document(
     url: str,
     *,
-    timeout: float | None = None,
+    timeout: float = 15.0,
     camoufox_renderer: Callable[[str], str] | None = None,
 ) -> str:
     """Fetch one policy through Wardnet's DNS-pinned outbound boundary."""
@@ -214,7 +214,7 @@ def crawl_policy_document(
         },
         method="POST",
     )
-    client = ModelClient(timeout=timeout, allowed_provider_hosts={wardnet.hostname})
+    client = ModelClient(timeout=max(1, int(timeout)), allowed_provider_hosts={wardnet.hostname})
     if wardnet.scheme == "http":
         origin = urlunsplit(("local", wardnet.netloc, "", "", ""))
         agent = ModelAgent(
