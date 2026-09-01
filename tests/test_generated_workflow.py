@@ -112,6 +112,22 @@ def test_workflow_step_carries_current_task_and_source_context_once() -> None:
     assert "CURRENT_TASK_SENTINEL" not in step_messages[-1]["content"]
 
 
+def test_workflow_step_reasserts_multipart_caller_instructions() -> None:
+    """Text content parts retain system authority in every worker stage."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    orchestrator.conduct(
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "MULTIPART_POLICY_SENTINEL"}],
+            },
+            {"role": "user", "content": "solve it"},
+        ]
+    )
+
+    assert "Caller instructions:\nMULTIPART_POLICY_SENTINEL" in client.calls[1][0]["content"]
+
+
 def test_planner_prompt_lists_the_agent_pool() -> None:
     orchestrator, client = _orch(json.dumps(PLAN))
     orchestrator.conduct([{"role": "user", "content": "solve it"}])
