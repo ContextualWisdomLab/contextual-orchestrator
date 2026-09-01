@@ -298,22 +298,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   ACCEPT-path verdict, and `_judge_adapter_accounting_fields`'s two
   fail-closed branches) only included it when the provider response's own
   `usage` was a truthy dict — a completed call whose response carried no
-  valid usage (missing, `None`, or the wrong type; the same case
-  fast-mlsirm's own `_usage(trace)` zero-fills rather than drops) still
-  vanished from `judge_usage` entirely, making that real, incurred call
-  invisible to `_run_budget_output_by_model`/`spend_analytics` — not even
-  counted as estimated, just silently absent. This directly contradicts
-  the "missing/invalid judge usage stays absent" framing two paragraphs
-  above; that description is now superseded. All three sites now record
-  an explicit `{"prompt_tokens": 0, "completion_tokens": 0,
-  "total_tokens": 0}` whenever a call is known to have completed (real
-  usage still passes through unchanged when present), matching
-  fast-mlsirm's own normalization and keeping the call visible as a real,
-  reported zero-cost step. New regression test
-  `test_completed_judge_call_with_no_reported_usage_still_records_zero_usage`
+  valid usage (missing, `None`, or the wrong type) still vanished from
+  `judge_usage` entirely, making that real, incurred call invisible to
+  `_run_budget_output_by_model`/`spend_analytics` — not even counted as
+  estimated, just silently absent.
+  **Correction (Devin review on the same #961 fix)**: the first attempt at
+  this fix recorded an explicit `{"prompt_tokens": 0, "completion_tokens":
+  0, "total_tokens": 0}` whenever a call completed, matching fast-mlsirm's
+  own `_usage(trace)` zero-fill. That made a genuinely unmeasured call
+  indistinguishable from one the provider actually reported as zero-cost
+  — `spend_analytics`'s `usage_source` labeling then presented an
+  unmeasured paid call as `"reported"`, contradicting this repo's own
+  Honest metrics convention (`CLAUDE.md`; the
+  "missing/invalid judge usage stays absent" framing several paragraphs
+  above is also superseded by this correction, back to its original
+  intent). `judge_usage` is now left genuinely absent when unmeasured;
+  `judge_agent_id`/`judge_model` alone keep the call attributable, and
+  both `_run_budget_output_by_model` (budget enforcement) and
+  `spend_analytics` (buyer-facing reporting) now fall back to
+  `estimate_tokens(verification["verifier_output"])` — the same
+  ~4-chars/token heuristic estimate the worker-step trace loop already
+  uses for a step with no reported usage — routed through the same
+  `_step_output_tokens` helper so the honest reported-vs-estimated split
+  (`usage_source: estimated/reported/mixed`) falls out for free instead of
+  being hand-rolled. Real provider-reported usage still passes through
+  unchanged and is still preferred whenever present.
+  `tests/test_batch_optimizer.py::test_batch_route_budget_counts_only_the_current_uncommitted_worker`
+  updated: its scripted judge never reports usage, so its expected budget
+  total now includes the two judge calls' honest token estimates (7 real
+  worker tokens + 2×2 estimated judge tokens = 11, not 7). New regression
+  test `test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget`
   drives the existing scripted-client ACCEPT path (which never supplies a
-  usage dict) and asserts `judge_usage` is now the explicit zero-token
-  dict instead of missing.
+  usage dict), asserts `judge_usage` stays absent, and asserts
+  `_run_budget_output_by_model` still counts a positive, honestly
+  estimated contribution for that model.
 
 ### Added
 

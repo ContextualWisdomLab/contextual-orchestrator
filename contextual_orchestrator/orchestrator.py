@@ -7213,19 +7213,18 @@ class TaskOrchestrator:
             # otherwise let a fast-moving pool change mis-attribute this exact
             # call's spend to the wrong (or no longer existing) model.
             verification["judge_model"] = judge_adapter.served_model or judge.model
-            # A verdict (accepted/rejected + rationale) only exists once the
-            # provider call itself returned, so this branch always represents
-            # a completed call -- but result.usage can still be falsy when
-            # the response carried no valid usage dict. Recording an
-            # explicit zero-token usage (the same normalization fast-mlsirm's
-            # own _usage(trace) applies) keeps this call visible to budget/
-            # spend accounting as a real, reported zero-cost step instead of
-            # silently vanishing (see _judge_adapter_accounting_fields).
-            verification["judge_usage"] = result.usage or {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
+            # result.usage can be falsy when the response carried no valid
+            # usage dict. Devin review on #961: recording a fabricated
+            # zero-token usage here (an earlier revision of this fix) let a
+            # completed-but-unmeasured call masquerade as provider-reported
+            # zero cost in spend_analytics's usage_source labeling. Leave
+            # judge_usage genuinely absent when unmeasured -- judge_agent_id/
+            # judge_model above already keep the call attributable, and
+            # _run_budget_output_by_model/spend_analytics now derive an
+            # honest estimated-token fallback from verifier_output (below)
+            # instead of trusting a fabricated "reported" dict.
+            if result.usage:
+                verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage
@@ -7311,19 +7310,15 @@ class TaskOrchestrator:
             fields["judge_agent_id"] = judge_adapter.served_agent_id
         if judge_adapter.served_model is not None:
             fields["judge_model"] = judge_adapter.served_model
-        if judge_adapter.served_agent_id is not None:
-            # The provider call completed (served_agent_id is only ever set
-            # once the response returns), but its usage dict may be missing
-            # or invalid. Recording an explicit zero-token usage — the same
-            # normalization fast-mlsirm's own `_usage(trace)` applies —
-            # keeps this call visible to budget/spend accounting as a real,
-            # reported (not estimated) zero-cost step, instead of the call
-            # silently vanishing from analytics entirely.
-            fields["judge_usage"] = judge_adapter.served_usage or {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
+        if judge_adapter.served_usage:
+            # A falsy served_usage (missing/invalid response usage) is left
+            # genuinely absent rather than fabricated as reported-zero
+            # (Devin review on #961, on this same fix): judge_agent_id/
+            # judge_model above already keep a completed-but-unmeasured call
+            # attributable, and downstream budget/spend consumers derive an
+            # honest estimated fallback from verifier_output instead of
+            # trusting a fabricated "reported" usage dict.
+            fields["judge_usage"] = judge_adapter.served_usage
         return fields
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
@@ -7632,16 +7627,24 @@ class TaskOrchestrator:
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
         verification = record.get("verification")
         if isinstance(verification, Mapping):
-            usage = verification.get("judge_usage")
             judge_agent_id = verification.get("judge_agent_id")
-            judge_model_stored = verification.get("judge_model")
-            completion_tokens = (
-                usage.get("completion_tokens", usage.get("output_tokens"))
-                if isinstance(usage, Mapping)
-                else None
-            )
-            if type(completion_tokens) is int and completion_tokens >= 0:
-                judge_model = judge_model_stored or model_by_agent.get(
+            if judge_agent_id is not None:
+                # A completed judge call (judge_agent_id is only ever set
+                # once one has) whose response carried no valid usage must
+                # still count toward the budget meter, or a run of
+                # unmeasured judge calls could exceed a spend cap this
+                # conservative-by-design check exists to enforce. Fall back
+                # to the same estimate-from-real-text _step_output_tokens
+                # already applies to worker steps with no reported usage
+                # (Devin review on #961: an earlier revision of this fix
+                # fabricated a "reported" zero-token dict instead).
+                completion_tokens, _judge_reported = _step_output_tokens(
+                    {
+                        "usage": verification.get("judge_usage"),
+                        "output": verification.get("verifier_output", ""),
+                    }
+                )
+                judge_model = verification.get("judge_model") or model_by_agent.get(
                     judge_agent_id, "unknown"
                 )
                 output_by_model[judge_model] = (
@@ -7734,46 +7737,51 @@ class TaskOrchestrator:
                 total_output_tokens += effective
 
             verification = run.get("verification")
-            judge_usage = (
-                verification.get("judge_usage")
-                if isinstance(verification, Mapping)
-                else None
-            )
             judge_agent_id = (
                 verification.get("judge_agent_id")
                 if isinstance(verification, Mapping)
                 else None
             )
-            judge_model_stored = (
-                verification.get("judge_model")
-                if isinstance(verification, Mapping)
-                else None
-            )
-            if isinstance(judge_usage, Mapping):
-                judge_output, judge_reported = _step_output_tokens(
-                    {"usage": dict(judge_usage), "output": ""}
+            if judge_agent_id is not None:
+                # A completed judge call (judge_agent_id is only ever set
+                # once one has) must stay visible here even when its
+                # response carried no valid usage, or a real, incurred
+                # judge call is silently absent from buyer-facing spend
+                # analytics entirely. Mirror the worker-step loop above
+                # exactly: estimate from the real judged text, and let
+                # _step_output_tokens report the honest reported/estimated
+                # split instead of a fabricated "reported" dict (Devin
+                # review on #961: an earlier revision of this fix fed a
+                # zero-token usage that _step_output_tokens then counted
+                # as genuinely provider-reported).
+                judge_usage = verification.get("judge_usage")
+                judge_text = verification.get("verifier_output", "")
+                judge_model = verification.get("judge_model") or model_by_agent.get(
+                    judge_agent_id, "unknown"
                 )
-                if judge_reported:
-                    judge_model = judge_model_stored or model_by_agent.get(
-                        judge_agent_id, "unknown"
-                    )
+                judge_estimated = estimate_tokens(judge_text)
+                judge_output, judge_reported = _step_output_tokens(
+                    {"usage": judge_usage, "output": judge_text}
+                )
+                if judge_reported and isinstance(judge_usage, Mapping):
                     judge_prompt = judge_usage.get("prompt_tokens")
                     if type(judge_prompt) is int and judge_prompt >= 0:
                         reported_prompt_tokens += judge_prompt
                         any_reported_prompt = True
-                    bucket = by_model.setdefault(
-                        judge_model,
-                        {
-                            "estimated_output_tokens": 0,
-                            "output_tokens": 0,
-                            "step_count": 0,
-                            "reported_steps": 0,
-                        },
-                    )
-                    bucket["output_tokens"] += judge_output
-                    bucket["step_count"] += 1
-                    bucket["reported_steps"] += 1
-                    total_output_tokens += judge_output
+                bucket = by_model.setdefault(
+                    judge_model,
+                    {
+                        "estimated_output_tokens": 0,
+                        "output_tokens": 0,
+                        "step_count": 0,
+                        "reported_steps": 0,
+                    },
+                )
+                bucket["estimated_output_tokens"] += judge_estimated
+                bucket["output_tokens"] += judge_output
+                bucket["step_count"] += 1
+                bucket["reported_steps"] += 1 if judge_reported else 0
+                total_output_tokens += judge_output
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []

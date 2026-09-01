@@ -127,8 +127,8 @@ def test_structured_model_judge_accepts() -> None:
     assert result["answer"] == "step-output(4)"
 
 
-def test_completed_judge_call_with_no_reported_usage_still_records_zero_usage() -> None:
-    """A completed judge call must never vanish from spend accounting.
+def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget() -> None:
+    """A completed judge call must never vanish from budget/spend accounting.
 
     ``_ScriptedClient`` (used by ``_orch``) has no ``take_usage``, so
     ``_invoke`` returns ``usage=None`` even though a real provider call
@@ -136,9 +136,15 @@ def test_completed_judge_call_with_no_reported_usage_still_records_zero_usage() 
     included ``judge_usage`` when ``served_usage`` was truthy, so this
     genuinely-completed call was entirely invisible to
     ``_run_budget_output_by_model``/spend analytics — not even counted as
-    an estimated-usage step, just silently dropped. It must instead record
-    an explicit zero-token usage, the same normalization fast-mlsirm's own
-    ``_usage(trace)`` applies to a missing/invalid usage dict.
+    an estimated-usage step, just silently dropped.
+
+    An earlier revision of this fix fabricated an explicit zero-token
+    ``judge_usage`` dict instead, but that made an unmeasured call
+    indistinguishable from one the provider genuinely reported as
+    zero-cost (Devin review on #961) — ``judge_usage`` must stay genuinely
+    absent when unmeasured. ``judge_agent_id``/``judge_model`` alone keep
+    the call attributable, and budget/spend consumers derive an honest
+    estimated-token fallback from ``verifier_output`` instead.
     """
     orchestrator, _ = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
     with patch.object(
@@ -151,11 +157,15 @@ def test_completed_judge_call_with_no_reported_usage_still_records_zero_usage() 
     assert verification["accepted"] is True
     assert verification["judge_agent_id"] == "general_agent"
     assert verification["judge_model"] == "model-x"
-    assert verification["judge_usage"] == {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
+    assert "judge_usage" not in verification
+    assert verification["verifier_output"]
+
+    isolated_record = {"trace": [], "verification": verification}
+    budget_contribution = orchestrator._run_budget_output_by_model(isolated_record)
+    assert budget_contribution["model-x"] == orchestrator_module.estimate_tokens(
+        verification["verifier_output"]
+    )
+    assert budget_contribution["model-x"] > 0
 
 
 def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:

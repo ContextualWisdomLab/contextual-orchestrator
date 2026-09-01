@@ -322,7 +322,12 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
         records = orchestrator.batch_route(["task one", "task three"])
 
     assert len(records) == 2
-    assert orchestrator.budget_status()["spent_output_tokens"] == 7
+    # 7 real worker tokens (6 + 1) plus an honest estimated-token fallback
+    # for each of the two judge calls, whose scripted response carries no
+    # usage: estimate_tokens("task_0") == estimate_tokens("task_1") == 2
+    # (Devin review on #961: a completed-but-unmeasured judge call must
+    # still count toward the budget meter, not silently contribute 0).
+    assert orchestrator.budget_status()["spent_output_tokens"] == 11
 
 
 def test_batch_route_blocks_first_judge_call_when_aggregate_batch_spend_exceeds_cap() -> None:
