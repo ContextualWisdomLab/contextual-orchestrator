@@ -115,7 +115,12 @@ def test_conduct_config_stays_serial_even_with_use_batch() -> None:
 
 def test_mock_default_batch_route_works_without_usage() -> None:
     orchestrator = _orch()  # plain ModelClient: mock batch_chat is sync, usage None
-    records = orchestrator.batch_route(["hello there"])
+    # This test isolates the worker batch's no-usage fallback.  The optional
+    # fast-mlsirm extra is installed in the full CI environment and would add
+    # a separate, reported judge call, legitimately making the aggregate
+    # usage source mixed instead of estimated.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        records = orchestrator.batch_route(["hello there"])
     assert records[0]["answer"].startswith("[general_agent:")
     assert orchestrator.spend_analytics()["by_model"][0]["usage_source"] == "estimated"
 
