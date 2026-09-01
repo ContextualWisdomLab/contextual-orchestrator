@@ -786,6 +786,61 @@ def test_virtual_passthrough_fails_over_on_provider_tool_description_limit() -> 
     ]
 
 
+def test_virtual_passthrough_fails_over_on_single_tool_call_limit() -> None:
+    """A model that rejects multi-tool-call turns advances to the next provider.
+
+    Reproduces the exact NVIDIA NIM litellm error shape observed live (Strix
+    scan, ContextualWisdomLab/naruon#1486, 2026-09-01): a generic
+    ``invalid_request_error`` code (not ``invalid_tools``) with the model's
+    own capability-limit sentence embedded in a longer, agent-prefixed
+    message. Recognizing this is what stops that single-tool-call-only model
+    from ending an entire scan instead of the orchestrator just moving on to
+    a capability-matched agent.
+    """
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "invalid_request_error",
+                "message": (
+                    "Model 'meta/llama-3.2-11b-vision-instruct' via agent "
+                    "'nvidia_nim_meta_llama_3_2_11b_vision_instruct': This "
+                    "model only supports single tool-calls at once! This "
+                    "model only supports single tool-calls at once!. Adjust "
+                    "the request parameters and retry."
+                ),
+            }
+        },
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use two tools at once"}],
+            "tools": [
+                {"type": "function", "function": {"name": "inspect", "description": "x"}},
+                {"type": "function", "function": {"name": "scan", "description": "y"}},
+            ],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
 @pytest.mark.parametrize(
     "provider_error",
     [

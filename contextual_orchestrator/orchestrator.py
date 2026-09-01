@@ -95,6 +95,7 @@ _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
+_SINGLE_TOOL_CALL_LIMIT_MESSAGE = "this model only supports single tool-calls at once"
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -764,6 +765,29 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     )
 
 
+def _is_single_tool_call_limit_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize a model that rejects a request making more than one tool call.
+
+    Some NVIDIA NIM-hosted models (observed: a vision-capable Llama variant)
+    reject any turn with more than one tool call, wrapping the sentence in a
+    longer agent-prefixed message under the generic ``invalid_request_error``
+    code rather than a distinct error code -- unlike the tool-description
+    limit above, the message text is the only reliable signal here.
+    """
+    if error.code != 400:
+        return False
+    payload = _http_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    message = (
+        details.get("message")
+        if isinstance(details, dict)
+        else details
+        if isinstance(details, str)
+        else None
+    )
+    return isinstance(message, str) and _SINGLE_TOOL_CALL_LIMIT_MESSAGE in message.casefold()
+
+
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
     """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
@@ -1250,6 +1274,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if (
             isinstance(current, urllib.error.HTTPError)
             and _is_provider_tool_description_limit_error(current)
+        ):
+            return True
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and _is_single_tool_call_limit_error(current)
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
