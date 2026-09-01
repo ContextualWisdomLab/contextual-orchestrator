@@ -60,6 +60,14 @@ class _CandidateClient(ModelClient):
     proxy_send = proxy_send_once
 
 
+class _ConductTriageClient(_CandidateClient):
+    def chat(self, agent, messages, effort_profile=None):
+        self.calls.append(agent.id)
+        if messages and "workflow_required" in str(messages[0].get("content")):
+            return '{"workflow_required": true}'
+        return "candidate b"
+
+
 def _post(port: int, token: str, body: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -111,15 +119,18 @@ def _post_responses(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        raw = response.read().decode()
-        if stream:
-            return response.status, [
-                json.loads(line.removeprefix("data: "))
-                for line in raw.splitlines()
-                if line.startswith("data: {")
-            ]
-        return response.status, json.loads(raw)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode()
+            if stream:
+                return response.status, [
+                    json.loads(line.removeprefix("data: "))
+                    for line in raw.splitlines()
+                    if line.startswith("data: {")
+                ]
+            return response.status, json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
 
 
 def _serve():
@@ -480,6 +491,51 @@ def test_candidate_pin_is_honored_by_responses_json_and_stream_paths() -> None:
     completed = next(event for event in stream_events if event["type"] == "response.completed")
     assert completed["response"]["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
     assert set(client.calls) == {"candidate_b"}
+
+
+def test_responses_preflight_rejects_conduct_ineligible_pin_before_provider_calls() -> None:
+    client = _ConductTriageClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                provider_exclusions=("verifier",),
+            )
+        ],
+        client=client,
+    )
+    token = "candidate-routing-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        responses = [
+            _post_responses(
+                server.server_address[1],
+                token,
+                {
+                    "model": "orchestrator/auto",
+                    "input": "conduct this",
+                    "stream": stream,
+                    "routing": {"candidate_id": "worker_only"},
+                },
+                stream=stream,
+            )
+            for stream in (False, True)
+        ]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert all(status == 400 for status, _body in responses)
+    assert all(
+        isinstance(body, dict) and body["error"]["code"] == "invalid_routing"
+        for _status, body in responses
+    )
+    assert client.calls == []
 
 
 def test_auto_stream_triage_and_completion_both_honor_the_pin() -> None:

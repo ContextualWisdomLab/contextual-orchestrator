@@ -7522,6 +7522,23 @@ def build_server(
                         TaskOrchestrator.AUTO_MODEL,
                         TaskOrchestrator.FREE_MODEL,
                     } and stream:
+                        messages = _responses_to_chat_payload(body)["messages"]
+                        _validate_candidate_routing(
+                            orchestrator,
+                            responses_routing_control,
+                            model_name,
+                            required_roles=(
+                                "thinker",
+                                "worker",
+                                "verifier",
+                                "synthesizer",
+                            ),
+                            required_tags=(
+                                ("vision",)
+                                if orchestrator._source_image_parts(messages)
+                                else ()
+                            ),
+                        )
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
                                 400,
@@ -7548,7 +7565,6 @@ def build_server(
                                 "invalid_response_format",
                                 "structured output is not supported for streamed orchestrated Responses requests",
                             )
-                        messages = _responses_to_chat_payload(body)["messages"]
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
                             orchestrator,
@@ -7588,6 +7604,22 @@ def build_server(
                         and not _responses_virtual_requires_provider_path(input_value, body)
                     ):
                         messages = _responses_to_chat_payload(body)["messages"]
+                        _validate_candidate_routing(
+                            orchestrator,
+                            responses_routing_control,
+                            model_name,
+                            required_roles=(
+                                "thinker",
+                                "worker",
+                                "verifier",
+                                "synthesizer",
+                            ),
+                            required_tags=(
+                                ("vision",)
+                                if orchestrator._source_image_parts(messages)
+                                else ()
+                            ),
+                        )
                         responses_attribution = dict(
                             _validate_attribution(body.get("attribution")) or {}
                         )
