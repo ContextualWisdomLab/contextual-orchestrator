@@ -651,7 +651,7 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
     assert {"input:text", "output:embeddings"} <= set(
-        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+        agent_from_discovered(embedding).tags
     )
 
 
@@ -763,7 +763,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == "model_vendor_free_model_7959c29fc9"
+    assert agent_from_discovered(discovered[0]).group_name == "model_vendor_free_model_7959c29fc9"
 
 
 def _nim_vision_model() -> DiscoveredModel:
@@ -2164,11 +2164,12 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
 
 
 def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    """Any row explicitly marked evidence_only stays unroutable, regardless of provider."""
     discovered = DiscoveredModel(
-        provider_name="openrouter",
+        provider_name="example_evidence_provider",
         model_id="provider/evidence-model",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="EXAMPLE_EVIDENCE_PROVIDER_API_KEY",
+        chat_base_url="https://example-evidence-provider.example/v1",
         auth_scheme="Bearer",
         evidence_only=True,
     )

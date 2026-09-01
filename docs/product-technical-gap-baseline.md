@@ -26,7 +26,7 @@ design was not actually serving as a useful signal.
 
 **Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
 `PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
-(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+(`https://api.bytez.com/models/v2/list/models?task=chat`), prefix-free `Authorization: <token>` header, and
 response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
 every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
 is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
@@ -346,9 +346,9 @@ completion finishes within any particular bound — the gateway preflight's
 separate curl timeout (originally 30s) was itself later found to be too
 tight for real reasoning-model latency and raised to 120s in
 `ContextualWisdomLab/.github#1440` (see that entry above); the two timeouts
-are independent and this entry originally conflated them. Per owner review
-on that PR, source correctness alone does not establish
-operational acceptance: the fix also carries a RED→GREEN parity test
+are independent and this entry originally conflated them. Source correctness
+alone does not establish operational acceptance: the fix also carries a
+RED→GREEN parity test
 (`test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe`,
 confirmed to fail on the pre-fix `16` literal and pass once synchronized) and
 a negative control
@@ -2397,6 +2397,80 @@ to add an overall `_invoke` deadline is withdrawn. PR #971 removes fixed
 wall-clock limits from inference, discovery, OpenRouter ZDR lookup, and
 local readiness paths; only operator cancellation or a superseded PR head
 may terminate that work.
+
+## 2026-08-31 OpenRouter is a normal, routable provider again
+
+Supersedes the 2026-08-30 entry above's characterization of `evidence_only=True`
+on `openrouter` (commit `952996ec`) as settled ZDR hardening: that
+characterization was false, as the entry above now records. On direct review
+this pass, "ZDR eligibility is grounds to block a whole provider account"
+turns out to be backwards -- ZDR is a route/model-level property, never a
+provider-account-level one. `PROVIDER_MODEL_SOURCES`'s `openrouter` entry no
+longer sets `evidence_only=True`. Concretely this fixes two bugs at once:
+
+1. **`orchestrator/free` structural emptiness (ADR 0041's own finding).**
+   OpenRouter is the one provider source with genuinely reliable native
+   pricing/`is_free` evidence; excluding it from serving regardless of that
+   evidence directly caused the "structurally empty in practice" state ADR
+   0041 documented. OpenRouter can now serve like any other discovered
+   provider.
+2. **A backwards ZDR-evidence exclusion.** `_apply_discovered_model_evidence`
+   computed `zdr_capable=not model.evidence_only and matches(...)`, which
+   meant OpenRouter's own rows could never be marked ZDR-capable even when
+   they exactly matched OpenRouter's own declared ZDR feed
+   (`https://openrouter.ai/api/v1/endpoints/zdr`). That exclusion is gone;
+   OpenRouter's own matching rows are now credited exactly like every other
+   provider's.
+
+**What is preserved, not removed**: the underlying reason a "provider-neutral,
+not OpenRouter-only" evidence-application contract was insisted on during
+PR #901's review (matching model ids from OpenRouter's feed onto *other*
+providers' discovered rows, not just OpenRouter's own) is completely
+untouched -- `_apply_discovered_model_evidence` still applies evidence to
+every provider's rows identically; OpenRouter's own rows simply stop being
+the one arbitrary exception to that rule.
+
+**The genuine technical risk this raises, and how it is closed**: OpenRouter
+can multiplex one model id across several backing providers, so a
+discovery-time ZDR feed snapshot proves a route *was* attested when fetched,
+not which provider serves a *later* request. Client-side endpoint tracking
+to predict this would only be as reliable as the last snapshot. Instead,
+`ModelClient` now applies OpenRouter's own documented request-time
+enforcement -- `"provider": {"zdr": true}` in the request body
+(https://openrouter.ai/docs/features/provider-routing) -- via
+`_pin_openrouter_zdr`, called from every wire-level transport an OpenRouter
+agent can reach under an active `zdr_only` request scope: `_send` (the
+`route`/`conduct` chat path), `_stream_send` (SSE streaming), and
+`_send_raw` (the tools/structured-output passthrough path both
+`proxy_send` and `proxy_send_once` funnel through), plus `proxy_send_bytes`
+(binary speech responses whose request body is still JSON). This is OpenRouter's own
+server-side enforcement for the request being sent right now, not a
+client-side prediction — strictly stronger than what discovery-time
+filtering could ever guarantee.
+
+**The asynchronous Batch API path is pinned too**: `_batch_run` (JSONL file
+upload then a separate `/batches` job) does not go through the three
+transport functions above, but it independently calls `_pin_openrouter_zdr`
+on each request body it serializes into the uploaded JSONL, so a `zdr_only`
+batch request against OpenRouter gets the same `"provider": {"zdr": true}`
+enforcement as the synchronous paths.
+
+Embedding Batch JSONL follows the same contract. After `zdr_only` resolves an
+attested OpenRouter embedding agent, `CostRoutingCoordinator` records the
+provider-routing pin on each `EmbeddingBatchRequest`; its JSONL body emits
+`"provider": {"zdr": true}` without exposing the internal `zdr_only` field.
+
+Verified: `tests/test_orchestrator_client_boundaries.py` adds direct unit
+coverage of `_pin_openrouter_zdr` (no-op outside `zdr_only`, no-op for
+non-OpenRouter agents, adds/merges the pin correctly) plus wiring-verification
+tests on `_send`/`_stream_send`/`_send_raw`/`_batch_run` that capture the actual
+outgoing JSON body. `tests/test_model_discovery.py`,
+`tests/test_auto_discovery_server.py`, and `tests/test_review_gateway.py`
+were updated where they asserted the old, now-reversed
+`openrouter` + `evidence_only=True` behavior; the general `evidence_only`
+mechanism itself (for any future provider that might legitimately need it)
+is untouched and still tested, just no longer applied to OpenRouter by
+default. Full suite green; `interrogate` 100% on the touched modules.
 
 ### GAP RESOLVED ON PR HEAD — 2026-08-31: model groups, free discovery, and measured capacity
 
