@@ -1,2 +1,2 @@
 repair NIM benchmark token and price evidence
-attempt=v2-red-green
+attempt=v3-diagnostic-red-green
