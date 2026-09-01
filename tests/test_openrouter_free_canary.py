@@ -143,6 +143,10 @@ def test_cleanup_rejects_unrelated_json_and_special_paths(tmp_path: Path) -> Non
         prune_expired_openrouter_canary_evidence(unrelated, now=lambda: 2)
     assert unrelated.exists()
 
+    missing = tmp_path / "missing" / "evidence.json"
+    assert prune_expired_openrouter_canary_evidence(missing, now=lambda: 2) is False
+    assert not missing.parent.exists()
+
     symlink = tmp_path / "evidence-link.json"
     symlink.symlink_to(unrelated)
     with pytest.raises(OpenRouterCanaryError, match="regular file"):
@@ -309,6 +313,33 @@ def test_live_serializes_one_evidence_path_across_invocations(tmp_path: Path) ->
     finally:
         set_backend(None)
     assert calls == ["transport"]
+
+
+def test_live_creates_nested_evidence_parent_before_locking(tmp_path: Path) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    output = tmp_path / "new" / "nested" / "evidence.json"
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, _agent, _messages):
+            return "OK"
+
+    try:
+        result = run_openrouter_free_canary(
+            live=True,
+            limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+            evidence_output=output,
+            discover=lambda *_a, **_k: [_model("current-free")],
+            client_factory=Client,
+            now=lambda: 100,
+        )
+    finally:
+        set_backend(None)
+    assert result["outcome"] == "completed" and output.is_file()
 
 
 def test_live_rejects_fifo_before_discovery_or_completion_transport(

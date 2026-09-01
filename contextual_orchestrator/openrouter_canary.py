@@ -143,6 +143,8 @@ def prune_expired_openrouter_canary_evidence(
     path: Path, *, now: Callable[[], float] = time.time
 ) -> bool:
     """Remove one expired evidence file without contacting a provider."""
+    if not path.parent.exists():
+        return False
     with _evidence_lock(path):
         return _prune_expired_openrouter_canary_evidence(path, now=now)
 
@@ -199,6 +201,10 @@ def run_openrouter_free_canary(
             )
         limits.validate()
         assert evidence_output is not None
+        try:
+            evidence_output.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise OpenRouterCanaryError("evidence output is not writable") from exc
         with _evidence_lock(evidence_output):
             return _run_openrouter_free_canary_locked(
                 live=live,
