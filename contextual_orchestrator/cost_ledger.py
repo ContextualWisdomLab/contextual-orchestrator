@@ -359,6 +359,7 @@ class UsageTelemetryEvent:
             "contextual_orchestrator.request_channel": record.request_channel,
             "contextual_orchestrator.usage.export_state": export_state,
             "contextual_orchestrator.usage.price_known": record.price_known,
+            "contextual_orchestrator.usage.measurement_status": record.measurement_status,
         }
         if record.workflow_run_id:
             attributes["contextual_orchestrator.workflow_run_id"] = record.workflow_run_id
@@ -369,14 +370,17 @@ class UsageTelemetryEvent:
         if error_type:
             attributes["error.type"] = error_type
 
-        metrics = {
-            "gen_ai.usage.input_tokens": float(record.prompt_tokens),
-            "gen_ai.usage.output_tokens": float(record.completion_tokens),
-            "gen_ai.usage.total_tokens": float(record.total_tokens),
-            "contextual_orchestrator.usage.records": 1.0,
-        }
-        if record.price_known:
-            metrics["gen_ai.usage.cost"] = float(record.cost_amount)
+        metrics = {"contextual_orchestrator.usage.records": 1.0}
+        if record.measurement_status != "unavailable":
+            metrics.update(
+                {
+                    "gen_ai.usage.input_tokens": float(record.prompt_tokens),
+                    "gen_ai.usage.output_tokens": float(record.completion_tokens),
+                    "gen_ai.usage.total_tokens": float(record.total_tokens),
+                }
+            )
+            if record.price_known and record.cost_amount is not None:
+                metrics["gen_ai.usage.cost"] = float(record.cost_amount)
         if error_type:
             metrics["contextual_orchestrator.usage.export_failures"] = 1.0
         return cls(
@@ -1507,6 +1511,7 @@ class CostLedger:
                         "known": Decimal("0"), "unknown": Decimal("0")
                     },
                     "record_count_by_price_status": {"known": 0, "unknown": 0},
+                    "_measurement_statuses": set(),
                 },
             )
             status = _measurement_status_of(row)
@@ -1521,9 +1526,22 @@ class CostLedger:
             bucket["record_count_by_status"][status] += 1
             bucket["cost_amount_by_price_status"][price_status] += row_cost
             bucket["record_count_by_price_status"][price_status] += 1
+            bucket["_measurement_statuses"].add(status)
         for bucket in buckets.values():
-            bucket["cost_amount"] = float(
-                bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+            statuses = bucket.pop("_measurement_statuses")
+            bucket["measurement_status"] = (
+                "unavailable" if "unavailable" in statuses
+                else "estimated" if "estimated" in statuses
+                else "measured"
+            )
+            bucket["cost_amount"] = (
+                None
+                if bucket["measurement_status"] == "unavailable"
+                else float(
+                    bucket["cost_amount"].quantize(
+                        Decimal("0.000001"), rounding=ROUND_HALF_UP
+                    )
+                )
             )
             bucket["cost_amount_by_status"] = {
                 status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
@@ -1550,7 +1568,12 @@ class CostLedger:
         """
         buckets = self.rollup(dimension, start, end)
         items = sorted(
-            buckets.values(), key=lambda item: item["cost_amount"], reverse=True
+            buckets.values(),
+            key=lambda item: (
+                item["cost_amount"] is not None,
+                item["cost_amount"] or 0.0,
+            ),
+            reverse=True,
         )
         grand_total = self.total(start, end)
         return {
@@ -1576,6 +1599,7 @@ class CostLedger:
         record_count_by_status = {status: 0 for status in MEASUREMENT_STATUSES}
         cost_amount_by_price_status = {"known": Decimal("0"), "unknown": Decimal("0")}
         record_count_by_price_status = {"known": 0, "unknown": 0}
+        statuses = set()
         for row in rows:
             status = _measurement_status_of(row)
             price_status = "known" if row.get("price_known") else "unknown"
@@ -1584,13 +1608,24 @@ class CostLedger:
             record_count_by_status[status] += 1
             cost_amount_by_price_status[price_status] += row_cost
             record_count_by_price_status[price_status] += 1
+            statuses.add(status)
         total_cost = sum(cost_amount_by_status.values(), Decimal("0"))
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
         return {
             "record_count": len(rows),
             "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in rows),
             "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in rows),
             "total_tokens": sum(int(row.get("total_tokens", 0)) for row in rows),
-            "cost_amount": float(total_cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            "cost_amount": (
+                None
+                if measurement_status == "unavailable"
+                else float(total_cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+            ),
+            "measurement_status": measurement_status,
             "cost_amount_by_status": {
                 status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
                 for status, amount in cost_amount_by_status.items()

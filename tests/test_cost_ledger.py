@@ -280,6 +280,23 @@ def test_usage_telemetry_event_is_prompt_and_answer_safe() -> None:
     assert all("answer" not in key for key in event.attributes)
 
 
+def test_unavailable_usage_telemetry_does_not_export_false_zero_metrics() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(telemetry_sink=sink)
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=0,
+        completion_tokens=0,
+        measurement_status="unavailable",
+    )
+
+    event = sink.events()[-1]
+    assert event.attributes["contextual_orchestrator.usage.measurement_status"] == "unavailable"
+    assert event.metrics == {"contextual_orchestrator.usage.records": 1.0}
+
+
 def test_non_blocking_store_records_p2028_like_failure_as_telemetry_only() -> None:
     sink = InMemoryUsageTelemetrySink()
     ledger = _priced_ledger(
@@ -357,6 +374,26 @@ def test_multi_dimensional_rollup_correctness() -> None:
     assert ledger.total()["cost_amount"] == 17.0
 
 
+def test_unavailable_usage_nulls_rollup_and_total_cost() -> None:
+    ledger = _priced_ledger()
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000,
+        completion_tokens=0, attribution={"team": "alpha"},
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=0,
+        completion_tokens=0, attribution={"team": "alpha"},
+        measurement_status="unavailable",
+    )
+
+    bucket = ledger.rollup("team")["alpha"]
+    assert bucket["measurement_status"] == "unavailable"
+    assert bucket["cost_amount"] is None
+    assert ledger.total()["measurement_status"] == "unavailable"
+    assert ledger.total()["cost_amount"] is None
+    assert ledger.report("team")["grand_total"]["cost_amount"] is None
+
+
 def test_rollup_by_every_declared_dimension_is_supported() -> None:
     ledger = _priced_ledger()
     ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=100, completion_tokens=100,
@@ -416,24 +453,27 @@ def test_rollup_report_total_break_down_cost_by_measurement_status() -> None:
     )  # 0.0, unpriced
 
     total = ledger.total()
-    assert total["cost_amount"] == 3.0  # unchanged, backward-compatible flat total
+    assert total["cost_amount"] is None
+    assert total["measurement_status"] == "unavailable"
     assert total["cost_amount_by_status"] == {
         "measured": 2.0, "estimated": 1.0, "unavailable": 0.0,
     }
     assert total["record_count_by_status"] == {
         "measured": 1, "estimated": 1, "unavailable": 1,
     }
-    # The breakdown must sum back to the flat total exactly.
-    assert sum(total["cost_amount_by_status"].values()) == total["cost_amount"]
+    assert sum(total["cost_amount_by_status"].values()) == 3.0
 
     by_provider = ledger.rollup("provider")
     assert by_provider["openai"]["cost_amount"] == 3.0
+    assert by_provider["openai"]["measurement_status"] == "estimated"
     assert by_provider["openai"]["cost_amount_by_status"] == {
         "measured": 2.0, "estimated": 1.0, "unavailable": 0.0,
     }
     assert by_provider["openai"]["record_count_by_status"] == {
         "measured": 1, "estimated": 1, "unavailable": 0,
     }
+    assert by_provider["mystery"]["cost_amount"] is None
+    assert by_provider["mystery"]["measurement_status"] == "unavailable"
     assert by_provider["mystery"]["cost_amount_by_status"]["unavailable"] == 0.0
     assert by_provider["mystery"]["record_count_by_status"]["unavailable"] == 1
 

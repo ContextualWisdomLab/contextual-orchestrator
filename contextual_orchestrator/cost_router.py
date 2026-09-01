@@ -191,14 +191,33 @@ class CostRoutingCoordinator:
             usage = value[2]
         elif isinstance(value, dict):
             usage = value.get("usage")
-        counts = self._provider_usage(usage)
-        if counts is None:
-            return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
         )
         if agent is None:  # pragma: no cover - endpoint came from the current pool
+            return
+        counts = self._provider_usage(usage)
+        provider_model = self._agent_provider_model(agent, context["model_name"])
+        if counts is None:
+            # The provider call genuinely completed and is billable, but its
+            # usage payload could not be parsed. Record an honest
+            # "unavailable" row rather than silently dropping this spend —
+            # mirrors record_stream_usage's measurement_status="unavailable"
+            # fallback for the same "call happened, can't measure it" case.
+            provider, model = provider_model
+            record = self.ledger.record_usage(
+                provider=provider,
+                model=model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                request_channel="sync",
+                route_mode=context["route_mode"],
+                workflow_run_id=context["workflow_run_id"],
+                attribution=context["attribution"],
+                measurement_status="unavailable",
+            )
+            context["records"].append(record)
             return
         record = self._record_completion(
             messages=[],
@@ -207,7 +226,7 @@ class CostRoutingCoordinator:
             request_channel="sync",
             attribution=context["attribution"],
             model_name=context["model_name"],
-            provider_model=self._agent_provider_model(agent, context["model_name"]),
+            provider_model=provider_model,
             workflow_run_id=context["workflow_run_id"],
             prompt_tokens=counts[0],
             completion_tokens=counts[1],
@@ -376,21 +395,28 @@ class CostRoutingCoordinator:
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
+            # "unavailable" (a billable race-loser call whose usage payload
+            # could not be parsed, see _record_race_endpoint_usage) outranks
+            # "estimated": a completion combining a measured winner with an
+            # unavailable loser must not present a confident-looking summed
+            # total, the same honesty precedence record_stream_usage uses.
+            statuses = {record.measurement_status for record in records}
+            aggregate_measurement_status = (
+                "unavailable" if "unavailable" in statuses
+                else "estimated" if "estimated" in statuses
+                else "measured"
+            )
             provider_response["cost"] = {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if price_known and len(currencies) == 1
+                    if price_known and len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "price_known": price_known,
-                "measurement_status": (
-                    "estimated"
-                    if any(record.measurement_status == "estimated" for record in records)
-                    else "measured"
-                ),
+                "measurement_status": aggregate_measurement_status,
             }
-            if len(currencies) > 1:
+            if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
                 provider_response["cost"]["currency_components"] = [
                     {
                         "currency_code": currency,
@@ -507,22 +533,24 @@ class CostRoutingCoordinator:
             "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
+        statuses = {item.measurement_status for item in records}
+        aggregate_measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
         price_known = all(item.price_known for item in records)
         result["cost"] = {
             "cost_amount": (
                 round(sum(item.cost_amount for item in records), 6)
-                if price_known and len(currencies) == 1
+                if price_known and len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                 else None
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
             "price_known": price_known,
-            "measurement_status": (
-                "estimated"
-                if any(item.measurement_status == "estimated" for item in records)
-                else "measured"
-            ),
+            "measurement_status": aggregate_measurement_status,
         }
-        if len(currencies) > 1:
+        if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
             result["cost"]["currency_components"] = [
                 {
                     "currency_code": currency,

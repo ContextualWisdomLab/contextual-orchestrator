@@ -194,6 +194,37 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["workflow_run_id"] == "run_race"
 
 
+def test_race_loser_with_unparseable_usage_is_recorded_as_unavailable() -> None:
+    """A billable race-loser call with malformed usage still gets a ledger row."""
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": {"team": "alpha"},
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_race_unmeasurable",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+    records = coordinator.ledger.records()
+    assert len(records) == 1
+    record = records[0]
+    assert record["measurement_status"] == "unavailable"
+    assert record["prompt_tokens"] == 0
+    assert record["completion_tokens"] == 0
+    assert record["provider_name"] == "mock"
+    assert record["model_name"] == "mock-a"
+    assert record["workflow_run_id"] == "run_race_unmeasurable"
+
+
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
     """Race-loser spend uses the same provider identity as winner accounting."""
     agent = ModelAgent(
@@ -273,6 +304,45 @@ def test_race_loser_cost_does_not_inflate_openai_completion_usage() -> None:
     }
     assert len(coordinator.ledger.records()) == 2
     assert result["cost"]["cost_amount"] == 0.022
+
+
+def test_sync_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): the plain orchestrator.run() sync path's own cost
+    aggregation needs the same unavailable-outranks-estimated precedence as
+    the provider_request path -- a measured winner plus an unavailable race
+    loser must not report a confident "measured" total or sum a real cost
+    over an unknown one.
+    """
+    coordinator = _coordinator()
+
+    def run(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "workflow_run_id": "run_race_unavailable",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    result = coordinator.complete([{"role": "user", "content": "race"}], mode="route")
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    assert "currency_components" not in result["cost"]
+    assert {record["measurement_status"] for record in coordinator.ledger.records()} == {
+        "measured",
+        "unavailable",
+    }
 
 
 def test_ready_race_usage_without_workflow_id_is_not_discarded() -> None:
@@ -405,6 +475,106 @@ def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
         (7, 3),
     }
     assert len(result["usage_record_ids"]) == 2
+
+
+def test_structured_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): a measured winner plus an unavailable race loser
+    must not roll up into a confident "measured" total -- the aggregate cost
+    status and amount need the same honesty precedence record_stream_usage
+    already applies, not just the raw per-record ledger label.
+    """
+    coordinator = _coordinator()
+
+    def proxy_completion(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "model": "mock-a",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            "orchestration": {"workflow_run_id": "run_unavailable_loser"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_unavailable_loser",
+        "mode": "route",
+        "answer": "winner",
+        "trace": None,
+    }
+    result = coordinator.complete(
+        [{"role": "user", "content": "race unavailable"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "race unavailable"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    assert "currency_components" not in result["cost"]
+    records = coordinator.ledger.records()
+    assert {record["measurement_status"] for record in records} == {"measured", "unavailable"}
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_unavailable_mixed_currency_cost_suppresses_partial_components(
+    structured: bool,
+) -> None:
+    """Unknown loser spend must not expose complete-looking currency subtotals."""
+    agents = [
+        ModelAgent("winner_agent", "winner-model", provider_name="winner_provider"),
+        ModelAgent("loser_agent", "loser-model", provider_name="loser_provider"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("winner_provider", "winner-model", 1, 1, "USD"))
+    price_book.set_price(PriceEntry("loser_provider", "loser-model", 1, 1, "EUR"))
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    def workflow():
+        return {
+            "workflow_run_id": "run_mixed_unavailable",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [{
+                "agent_id": "winner_agent",
+                "output": "winner",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            }],
+        }
+
+    def emit_loser():
+        orchestrator._race_usage_sink(
+            "loser_agent", ("duplicate", "loser_agent", None)
+        )
+
+    if structured:
+        def proxy_completion(*_args, **_kwargs):
+            emit_loser()
+            return {"orchestration": {"workflow_run_id": "run_mixed_unavailable"}}
+        orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+        orchestrator.get_workflow_run = lambda _run_id: workflow()  # type: ignore[method-assign]
+        result = coordinator.complete(
+            [{"role": "user", "content": "mixed"}],
+            provider_request={"model": "winner-model", "messages": []},
+        )
+    else:
+        def run(*_args, **_kwargs):
+            emit_loser()
+            return workflow()
+        orchestrator.run = run  # type: ignore[method-assign]
+        result = coordinator.complete([{"role": "user", "content": "mixed"}])
+
+    assert result["cost"] == {
+        "cost_amount": None,
+        "currency_code": "MIXED",
+        "price_known": True,
+        "measurement_status": "unavailable",
+    }
 
 
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
