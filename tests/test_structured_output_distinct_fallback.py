@@ -7,7 +7,11 @@ from unittest.mock import patch
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ProviderResponseError
+from contextual_orchestrator.orchestrator import (
+    BudgetExceededError,
+    ProviderRequestTooLargeError,
+    ProviderResponseError,
+)
 
 
 def _response_format() -> dict[str, object]:
@@ -176,3 +180,127 @@ def test_requested_endpoint_scope_never_crosses_to_another_endpoint() -> None:
     assert type(exc_info.value).__name__ == "StructuredOutputExhaustedError"
     assert calls == [first.id, first.id]
     assert second.id not in calls
+
+
+def test_structured_budget_rejection_persists_incurred_usage_without_completed_run() -> None:
+    """A budget stop after synthesis must charge the call without publishing success KPIs."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    orchestrator = TaskOrchestrator([first], budget_max_output_tokens=1)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_failover_candidates", return_value=[first]),
+        patch.object(
+            orchestrator.client,
+            "proxy_send_once",
+            return_value=_completion('{"input_count":6}', 1),
+        ),
+        pytest.raises(BudgetExceededError),
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 1
+    assert len(orchestrator._workflow_runs) == 1
+    failed = next(iter(orchestrator._workflow_runs.values()))
+    assert failed["failure"]["code"] == "structured_budget_exceeded"
+    assert failed["trace"][-1]["validation_outcome"] == "schema_violation"
+    assert orchestrator.list_recent_runs() == []
+    assert orchestrator.count_workflow_runs() == 0
+
+
+def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
+    """A too-large repair never migrates its repair prompt to another candidate."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def send(agent: ModelAgent, _endpoint: str, payload: dict[str, object]):
+        calls.append((agent.id, payload))
+        if len(calls) == 1:
+            return _completion('{"input_count":6}', 1)
+        if len(calls) == 2:
+            raise ProviderRequestTooLargeError(
+                "repair request exceeds provider limit",
+                agent_id=agent.id,
+                model=agent.model,
+                transport="structured_repair",
+            )
+        assert agent.id == second.id
+        return _completion('{"input_count":10}', 2)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(
+            orchestrator,
+            "_failover_candidates",
+            return_value=[first, second],
+        ),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert [agent_id for agent_id, _payload in calls] == [
+        first.id,
+        first.id,
+        second.id,
+    ]
+    second_messages = calls[-1][1]["messages"]
+    assert isinstance(second_messages, list)
+    assert len(second_messages) == 1
+    assert second_messages[0]["role"] == "user"
+    run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    attempts = run["trace"][-3:]
+    assert [step["role"] for step in attempts] == [
+        "synthesizer",
+        "repair",
+        "synthesizer",
+    ]
+    assert [step["validation_outcome"] for step in attempts] == [
+        "schema_violation",
+        "request_too_large",
+        "accepted",
+    ]
+
+
+def test_failed_structured_run_stays_queryable_but_out_of_recent_completed_metrics(tmp_path) -> None:
+    """Failure evidence survives restart without inflating normal completed-run surfaces."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    state_db = tmp_path / "structured-failure.sqlite3"
+    orchestrator = TaskOrchestrator([first], state_db=str(state_db))
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_failover_candidates", return_value=[first]),
+        patch.object(
+            orchestrator.client,
+            "proxy_send_once",
+            return_value=_completion('{"input_count":6}', 1),
+        ),
+        pytest.raises(ProviderResponseError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    run_id = getattr(exc_info.value, "workflow_run_id", None)
+    assert isinstance(run_id, str)
+    assert orchestrator.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
+    assert orchestrator.list_recent_runs() == []
+    assert orchestrator.count_workflow_runs() == 0
+
+    reloaded = TaskOrchestrator([first], state_db=str(state_db))
+    assert reloaded.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
+    assert reloaded.list_recent_runs() == []
+    assert reloaded.count_workflow_runs() == 0
+    assert reloaded.budget_status()["spent_output_tokens"] == 2
