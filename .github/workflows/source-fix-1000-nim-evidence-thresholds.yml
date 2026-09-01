@@ -1,0 +1,57 @@
+name: Source fix PR1000 NIM evidence thresholds
+
+on:
+  push:
+    branches:
+      - fix/no-heuristic-batch-routing
+    paths:
+      - .github/source-fix-1000-nim-evidence-thresholds.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/no-heuristic-batch-routing
+      - uses: astral-sh/setup-uv@v6
+      - name: Prove threshold regression is RED before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          if uv run pytest -q tests/test_nim_benchmark_no_heuristic_tokens.py::test_fixed_sample_and_completion_floors_cannot_authorize_evidence; then
+            echo '::error::NIM evidence-threshold regression was not RED before production repair'
+            exit 1
+          fi
+      - name: Apply exact-text production repair
+        run: uv run python -m scripts.ci.repair_pr1000_nim_evidence_thresholds
+      - name: Verify focused repaired contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run pytest -q \
+            tests/test_nim_benchmark_no_heuristic_tokens.py \
+            tests/test_nim_benchmark_release_acceptance.py::test_smoke_manifest_cannot_authorize_production_routing
+          git diff --check
+      - name: Remove one-shot repair artifacts and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-1000-nim-evidence-thresholds.yml \
+            .github/source-fix-1000-nim-evidence-thresholds.trigger \
+            scripts/ci/repair_pr1000_nim_evidence_thresholds.py
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo '::error::repair produced no tracked change'
+            exit 1
+          fi
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git commit -m 'fix(nim): retire heuristic evidence sufficiency floors'
+          git push origin HEAD:fix/no-heuristic-batch-routing
