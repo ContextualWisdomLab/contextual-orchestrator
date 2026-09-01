@@ -34,6 +34,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
+from .conventions import legacy_discovered_agent_id
 from .credentials import get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
@@ -1421,9 +1422,7 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 def legacy_agent_id_for(discovered: DiscoveredModel) -> str:
     """Return the pre-fingerprint identifier used by durable discovered agents."""
-    return _SLUG_RE.sub(
-        "_", f"{discovered.provider_name}_{discovered.model_id}".casefold()
-    ).strip("_")
+    return legacy_discovered_agent_id(discovered.provider_name, discovered.model_id)
 
 
 def model_group_name_for(discovered: DiscoveredModel) -> str:

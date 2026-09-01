@@ -24,6 +24,9 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "python -m pip install --require-hashes -r requirements.lock" in workflow
     assert "while :; do" in workflow
     assert "seq 1 30" not in workflow
+    assert "gateway_pid=$!" in workflow
+    assert 'kill -0 "$gateway_pid"' in workflow
+    assert "gateway exited before becoming healthy" in workflow
     installer = Path("scripts/ci/install_locked_opencode.mjs").read_text()
     assert "optionalDependencies" in installer
     assert "installed.version !== expectedVersion" in installer

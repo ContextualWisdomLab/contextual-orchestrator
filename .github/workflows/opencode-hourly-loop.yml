@@ -106,11 +106,18 @@ jobs:
             --auth-token "$GATEWAY_BEARER_TOKEN" \
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
+          gateway_pid=$!
           while :; do
             if curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
               http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "gateway ready"
               exit 0
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              wait "$gateway_pid" || true
+              echo "::error::gateway exited before becoming healthy"
+              tail -50 /tmp/gateway.log
+              exit 1
             fi
             sleep 2
           done
