@@ -1,2 +1,2 @@
-repair weighted NIM cheapest-worker selector
-retry=live-branch-ref-authority
+repair weighted NIM cheapest-worker selector and character-token heuristic
+retry=evidence-only-token-accounting-v3
