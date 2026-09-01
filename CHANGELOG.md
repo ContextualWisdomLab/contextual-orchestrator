@@ -316,22 +316,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `judge_agent_id`/`judge_model` alone keep the call attributable, and
   both `_run_budget_output_by_model` (budget enforcement) and
   `spend_analytics` (buyer-facing reporting) now fall back to
-  `estimate_tokens(verification["verifier_output"])` — the same
-  ~4-chars/token heuristic estimate the worker-step trace loop already
-  uses for a step with no reported usage — routed through the same
-  `_step_output_tokens` helper so the honest reported-vs-estimated split
-  (`usage_source: estimated/reported/mixed`) falls out for free instead of
-  being hand-rolled. Real provider-reported usage still passes through
-  unchanged and is still preferred whenever present.
+  `estimate_tokens()` — the same ~4-chars/token heuristic estimate the
+  worker-step trace loop already uses for a step with no reported usage —
+  routed through the same `_step_output_tokens` helper so the honest
+  reported-vs-estimated split (`usage_source: estimated/reported/mixed`)
+  falls out for free instead of being hand-rolled. Real provider-reported
+  usage still passes through unchanged and is still preferred whenever
+  present.
+  **Second correction (a further Devin review on the same fallback)**:
+  that estimate was first taken from `verification["verifier_output"]` —
+  the *worker's answer*, i.e. the judge's own *input*, not what the judge
+  itself generated. A judge that reads a long answer but writes a short
+  "ACCEPT" verdict (or vice versa) would be mis-sized in either direction.
+  `_FastMLSIJudgeAdapter` now also records `served_output` (the judge's
+  raw completion text) at the same point it already captures
+  `served_agent_id`/`served_model`/`served_usage`; the ACCEPT-path verdict
+  builder separately records `verification["judge_output_text"] =
+  result.rationale` (kept as its own field rather than reusing `"reason"`,
+  since the IRT-projection-failure branches overwrite `"reason"` with a
+  static message but must still carry this text forward through
+  `accounting_fields`). Both budget/spend consumers now estimate from
+  `judge_output_text` instead of `verifier_output`.
   `tests/test_batch_optimizer.py::test_batch_route_budget_counts_only_the_current_uncommitted_worker`
-  updated: its scripted judge never reports usage, so its expected budget
-  total now includes the two judge calls' honest token estimates (7 real
-  worker tokens + 2×2 estimated judge tokens = 11, not 7). New regression
-  test `test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget`
+  updated twice in the course of this: its local scripted judge never
+  calls the adapter at all (bypassing `served_output`) and returns a
+  static `"scripted accept"` rationale directly, so the expected budget
+  total is 7 real worker tokens + 2×4 estimated judge tokens = 15 (its
+  original cap of 10 no longer leaves headroom for two full judge
+  estimates, raised to 30). New regression test
+  `test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget`
   drives the existing scripted-client ACCEPT path (which never supplies a
-  usage dict), asserts `judge_usage` stays absent, and asserts
-  `_run_budget_output_by_model` still counts a positive, honestly
-  estimated contribution for that model.
+  usage dict), asserts `judge_usage` stays absent, `judge_output_text`
+  holds the judge's own rationale, and the budget contribution matches an
+  estimate from that text specifically — deliberately different in length
+  from `verifier_output` so the two can't pass by coincidence.
 
 ### Added
 

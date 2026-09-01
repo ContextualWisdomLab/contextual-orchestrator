@@ -287,6 +287,7 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     served_model: str | None = None
     served_usage: dict[str, Any] | None = None
+    served_output: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
 
@@ -372,6 +373,7 @@ class _FastMLSIJudgeAdapter:
         self.served_agent_id = served_id
         self.served_model = served_model
         self.served_usage = usage
+        self.served_output = output
         trace = [
             {
                 "id": 0,
@@ -7221,10 +7223,20 @@ class TaskOrchestrator:
             # judge_usage genuinely absent when unmeasured -- judge_agent_id/
             # judge_model above already keep the call attributable, and
             # _run_budget_output_by_model/spend_analytics now derive an
-            # honest estimated-token fallback from verifier_output (below)
-            # instead of trusting a fabricated "reported" dict.
+            # honest estimated-token fallback from judge_output_text
+            # (below) instead of trusting a fabricated "reported" dict.
             if result.usage:
                 verification["judge_usage"] = result.usage
+            # The judge's own generated text (its rationale), not
+            # verifier_output (the worker answer it was judging) -- Devin
+            # review on #961, on the unmeasured-usage fallback fix below:
+            # estimating "judge output tokens" from what the judge
+            # evaluated rather than what it itself generated systematically
+            # mis-sizes the estimate whenever the two lengths differ. Kept
+            # as its own field (not reused from "reason") because the
+            # IRT-failure branches below overwrite "reason" with a static
+            # message but must still carry this text forward.
+            verification["judge_output_text"] = result.rationale
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage
@@ -7237,7 +7249,12 @@ class TaskOrchestrator:
             # publication is rejected (Devin review on #961).
             accounting_fields = {
                 key: verification[key]
-                for key in ("judge_agent_id", "judge_model", "judge_usage")
+                for key in (
+                    "judge_agent_id",
+                    "judge_model",
+                    "judge_usage",
+                    "judge_output_text",
+                )
                 if key in verification
             }
             criterion_scores = getattr(result, "criterion_scores", None)
@@ -7316,9 +7333,17 @@ class TaskOrchestrator:
             # (Devin review on #961, on this same fix): judge_agent_id/
             # judge_model above already keep a completed-but-unmeasured call
             # attributable, and downstream budget/spend consumers derive an
-            # honest estimated fallback from verifier_output instead of
-            # trusting a fabricated "reported" usage dict.
+            # honest estimated fallback from the judge's own served_output
+            # text instead of trusting a fabricated "reported" usage dict.
             fields["judge_usage"] = judge_adapter.served_usage
+        if judge_adapter.served_output is not None:
+            # The judge's own generated text, not the verifier_output text
+            # it was judging (Devin review on #961, on this same fallback
+            # fix): estimating "judge output tokens" from the worker
+            # answer it evaluated -- rather than what the judge itself
+            # generated -- systematically mis-sizes the estimate whenever
+            # the two lengths differ.
+            fields["judge_output_text"] = judge_adapter.served_output
         return fields
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
@@ -7637,11 +7662,15 @@ class TaskOrchestrator:
                 # to the same estimate-from-real-text _step_output_tokens
                 # already applies to worker steps with no reported usage
                 # (Devin review on #961: an earlier revision of this fix
-                # fabricated a "reported" zero-token dict instead).
+                # fabricated a "reported" zero-token dict instead). Estimate
+                # from judge_output_text (the judge's own generated
+                # rationale), not verifier_output (the worker answer it was
+                # judging) -- a second Devin review on this same fallback
+                # caught estimating from the wrong side of the call.
                 completion_tokens, _judge_reported = _step_output_tokens(
                     {
                         "usage": verification.get("judge_usage"),
-                        "output": verification.get("verifier_output", ""),
+                        "output": verification.get("judge_output_text", ""),
                     }
                 )
                 judge_model = verification.get("judge_model") or model_by_agent.get(
@@ -7753,9 +7782,13 @@ class TaskOrchestrator:
                 # split instead of a fabricated "reported" dict (Devin
                 # review on #961: an earlier revision of this fix fed a
                 # zero-token usage that _step_output_tokens then counted
-                # as genuinely provider-reported).
+                # as genuinely provider-reported). Estimate from
+                # judge_output_text (the judge's own generated rationale),
+                # not verifier_output (the worker answer it was judging) --
+                # a second Devin review on this same fallback caught
+                # estimating from the wrong side of the call.
                 judge_usage = verification.get("judge_usage")
-                judge_text = verification.get("verifier_output", "")
+                judge_text = verification.get("judge_output_text", "")
                 judge_model = verification.get("judge_model") or model_by_agent.get(
                     judge_agent_id, "unknown"
                 )

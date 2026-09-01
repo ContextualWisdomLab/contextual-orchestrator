@@ -311,7 +311,12 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
         [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
         client=client,
         price_per_million={"model-x": 10.0},
-        budget_max_output_tokens=10,
+        # 30 comfortably covers the real total below (21) with headroom;
+        # were worker spend double-counted (the bug this test guards
+        # against) the running total would exceed even this before both
+        # items finished, so the len(records) == 2 assertion below still
+        # catches a regression.
+        budget_max_output_tokens=30,
     )
 
     with patch.object(
@@ -323,11 +328,15 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
 
     assert len(records) == 2
     # 7 real worker tokens (6 + 1) plus an honest estimated-token fallback
-    # for each of the two judge calls, whose scripted response carries no
-    # usage: estimate_tokens("task_0") == estimate_tokens("task_1") == 2
-    # (Devin review on #961: a completed-but-unmeasured judge call must
-    # still count toward the budget meter, not silently contribute 0).
-    assert orchestrator.budget_status()["spent_output_tokens"] == 11
+    # for each of the two judge calls: this file's local _ScriptedFastJudge
+    # never calls the adapter (usage=None, no served_output either), so
+    # both prompts accept with rationale="scripted accept" (both answers
+    # avoid the reject marker) -- estimate_tokens("scripted accept") == 4,
+    # twice (Devin review on #961: a completed-but-unmeasured judge call
+    # must still count toward the budget meter, not silently contribute 0,
+    # and must be estimated from the judge's own generated text, not the
+    # worker answer it judged).
+    assert orchestrator.budget_status()["spent_output_tokens"] == 15
 
 
 def test_batch_route_blocks_first_judge_call_when_aggregate_batch_spend_exceeds_cap() -> None:

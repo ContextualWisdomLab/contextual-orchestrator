@@ -144,7 +144,12 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     zero-cost (Devin review on #961) — ``judge_usage`` must stay genuinely
     absent when unmeasured. ``judge_agent_id``/``judge_model`` alone keep
     the call attributable, and budget/spend consumers derive an honest
-    estimated-token fallback from ``verifier_output`` instead.
+    estimated-token fallback from ``judge_output_text`` (the judge's own
+    generated rationale) instead. A second Devin review on that same
+    fallback caught a first attempt estimating from ``verifier_output``
+    (the worker answer being judged) instead — the wrong side of the
+    call, and a different length here on purpose so the two can't pass
+    by coincidence.
     """
     orchestrator, _ = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
     with patch.object(
@@ -158,11 +163,15 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     assert verification["judge_agent_id"] == "general_agent"
     assert verification["judge_model"] == "model-x"
     assert "judge_usage" not in verification
-    assert verification["verifier_output"]
+    assert verification["judge_output_text"] == "The report supports the answer."
+    assert verification["verifier_output"] != verification["judge_output_text"]
 
     isolated_record = {"trace": [], "verification": verification}
     budget_contribution = orchestrator._run_budget_output_by_model(isolated_record)
     assert budget_contribution["model-x"] == orchestrator_module.estimate_tokens(
+        verification["judge_output_text"]
+    )
+    assert budget_contribution["model-x"] != orchestrator_module.estimate_tokens(
         verification["verifier_output"]
     )
     assert budget_contribution["model-x"] > 0
