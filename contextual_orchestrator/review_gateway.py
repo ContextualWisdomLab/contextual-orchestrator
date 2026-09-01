@@ -5,6 +5,11 @@ transport. They are immediately registered in the process-local KV, after
 which model discovery and every provider request use the normal credential
 registry path. This keeps the review sidecar useful without pretending that a
 short-lived runner has a durable production credential store.
+
+Credential registration and ``orchestrator/free`` candidate admission are
+separate contracts. A deployment may register every configured provider,
+including OpenAI, while the free review pool admits only the provider-account
+sources explicitly authorized for that pool.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from .credentials import NotConfigured, get_credential, register_credential
 from .cost_ledger import PriceBook
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
     refresh_price_book,
@@ -32,6 +38,19 @@ from .provider_bootstrap import (
 from .server import SecurityConfig, serve
 
 REVIEW_CREDENTIAL_NAMES = PROVIDER_CREDENTIAL_NAMES
+REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
+    "BYTEZ_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENROUTER_API_KEY",
+)
+"""Provider-account sources authorized to contribute to ``orchestrator/free``.
+
+This is a pool-admission policy, not the bootstrap credential inventory.
+``OPENAI_API_KEY`` may be registered and globally discovered, but a model whose
+credential source is OpenAI is never admitted to this free review pool.
+"""
+
 DEFAULT_REVIEW_AGENT_LIMIT = 12
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
@@ -54,26 +73,44 @@ def register_review_credentials(
     *,
     credential_names: Sequence[str] | None = None,
 ) -> tuple[str, ...]:
-    """Register only caller-declared non-empty CI credentials in the KV.
+    """Register caller-declared non-empty CI credentials in the process KV.
 
-    ``environment`` is bootstrap input only. ``credential_names`` is the
-    deployment-supplied array/list policy boundary; surrounding environment
-    variables that are not named there are deliberately not detected. The
-    returned names contain no secret values and are suitable for diagnostics
-    or tests.
+    ``environment`` is bootstrap input only. ``credential_names`` is an ordered
+    caller-supplied credential specification; it controls what bootstrap copies
+    into this process, not what ``orchestrator/free`` is allowed to serve.
+    Mounted CR/LF line endings are removed while every other credential byte is
+    preserved, matching the provider bootstrap normalization contract.
     """
     requested_names = _validated_credential_names(credential_names)
     registered: list[str] = []
     for name in requested_names:
-        value = environment.get(name, "").strip()
-        if value:
+        raw_value = environment.get(name, "")
+        value = raw_value.rstrip("\r\n") if isinstance(raw_value, str) else ""
+        if value and value.strip():
             register_credential(name, value)
             registered.append(name)
-    auth_value = environment.get(REVIEW_AUTH_CREDENTIAL_NAME, "").strip()
-    if auth_value:
+    raw_auth_value = environment.get(REVIEW_AUTH_CREDENTIAL_NAME, "")
+    auth_value = (
+        raw_auth_value.rstrip("\r\n") if isinstance(raw_auth_value, str) else ""
+    )
+    if auth_value and auth_value.strip():
         register_credential(REVIEW_AUTH_CREDENTIAL_NAME, auth_value)
         registered.append(REVIEW_AUTH_CREDENTIAL_NAME)
     return tuple(registered)
+
+
+def _free_review_candidates(
+    discovered: Sequence[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Apply the explicit provider-source and zero-cost free-pool contract."""
+    admitted_credentials = frozenset(REVIEW_FREE_POOL_CREDENTIAL_NAMES)
+    return [
+        model
+        for model in discovered
+        if model.credential_name in admitted_credentials
+        and model.is_free
+        and is_chat_serving_candidate(model)
+    ]
 
 
 def build_review_orchestrator(
@@ -82,12 +119,15 @@ def build_review_orchestrator(
     max_agents: int = DEFAULT_REVIEW_AGENT_LIMIT,
     credential_names: Sequence[str] | None = None,
 ) -> TaskOrchestrator:
-    """Build an enabled, cost-ranked orchestrator from discovered providers.
+    """Build the free review orchestrator from globally discovered providers.
 
-    A missing requested provider key is allowed so the sidecar can use an
-    available subset. Starting with no requested provider key or no discovered
-    model fails closed rather than silently falling back to a mock or fabricated
-    model. Credentials present outside ``credential_names`` never enter the KV.
+    A missing requested provider key is allowed so bootstrap can use an
+    available subset. All requested credentials, including ``OPENAI_API_KEY``,
+    may be registered and globally discovered. Candidate admission is a
+    separate source-boundary check: only models sourced from
+    ``REVIEW_FREE_POOL_CREDENTIAL_NAMES`` with explicit zero-cost evidence may
+    enter the review pool. Therefore a previously stored OpenAI credential also
+    cannot bypass the free-pool boundary.
     """
     if type(max_agents) is not int or max_agents < 1:
         raise ValueError("max_agents must be a positive integer")
@@ -105,12 +145,16 @@ def build_review_orchestrator(
         detail = f"; failed providers: {providers}" if providers else ""
         raise NotConfigured(f"review gateway discovered no provider models{detail}")
 
-    chat_discovered = [model for model in discovered if is_chat_serving_candidate(model)]
-    if not chat_discovered:
-        raise NotConfigured("review gateway discovered no general chat models")
+    free_discovered = _free_review_candidates(discovered)
+    if not free_discovered:
+        raise NotConfigured(
+            "review gateway discovered no eligible zero-cost general chat models"
+        )
     price_book = PriceBook(InMemoryConfigStore())
-    refresh_price_book(chat_discovered, price_book)
-    selected = select_bootstrap_discovered_agents(chat_discovered, price_book, max_agents)
+    refresh_price_book(free_discovered, price_book)
+    selected = select_bootstrap_discovered_agents(
+        free_discovered, price_book, max_agents
+    )
     if not selected:
         raise NotConfigured("review gateway selected no provider models")
 
@@ -118,7 +162,7 @@ def build_review_orchestrator(
         replace(
             agent_from_discovered(model, priority=index),
             disabled=False,
-            tags=("review",),
+            tags=("review", "cost:free"),
             priority=-index,
         )
         for index, model in enumerate(selected)
