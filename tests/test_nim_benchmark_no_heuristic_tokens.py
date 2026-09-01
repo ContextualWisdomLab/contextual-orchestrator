@@ -1,5 +1,7 @@
 """Regression contracts for heuristic-free NIM benchmark decisions."""
 
+import inspect
+
 import pytest
 
 from contextual_orchestrator import nim_benchmark as nb
@@ -111,3 +113,9 @@ def test_fixed_sample_and_completion_floors_cannot_authorize_evidence() -> None:
     assert summary["minimum_paired_task_count"] is None
     assert summary["required_completion_fraction"] is None
     assert summary["routing_recommendation"] is None
+
+
+def test_output_token_allocation_has_no_hand_selected_default() -> None:
+    """A historical dry-run margin must not silently allocate test-time compute."""
+    parameter = inspect.signature(nb.run_benchmark).parameters["max_output_tokens"]
+    assert parameter.default is None
