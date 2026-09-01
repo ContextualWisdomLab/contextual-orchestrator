@@ -98,22 +98,25 @@ Hosted exact-head checks and independent review remain the merge authority.
 
 ## Redistribution boundary and source summaries
 
-No third-party paper PDF is copied into this PR. The repository rule permits a
-citation, source link, redistribution explanation, and summary when a local copy
-is not appropriate. This change does not need a bundled paper to execute, and the
-PR does not assert a redistribution license for the arXiv/TMLR author manuscripts;
-the stable source records below are therefore used instead of republishing those
-files. NIST publications are linked to their authoritative DOI/publication
-records rather than duplicated so the repository keeps the controlling revision
-and provenance visible.
+FrugalGPT and RouteLLM are already vendored in `docs/papers/` and their
+redistribution basis is documented in `docs/papers/README.md`; this note reuses
+that repository evidence rather than creating duplicate paper copies. The newer
+MMR-Bench source is cited and summarized here rather than vendored because this
+change does not need a local copy to execute and this PR does not assert a
+redistribution license for that manuscript. NIST publications are linked to
+their authoritative DOI/publication records rather than duplicated so the
+controlling revision and provenance remain explicit.
 
-- **FrugalGPT (Chen et al., 2024):** formulates cost/quality-aware use of LLMs and
-  evaluates cascades that can reduce serving cost while preserving or improving
-  task performance. It is relevant only after provider authorization and
-  capability admission; it does not authorize a provider credential.
-- **RouteLLM (Ong et al., 2024):** trains routers from preference data to choose
-  between candidate LLMs under a quality/cost trade-off. It supports learned,
-  evidence-evaluated routing rather than a hand-authored provider ordering.
+- **FrugalGPT (Chen et al., 2024):** the vendored
+  `docs/papers/frugalgpt-cost-2305.05176.pdf` formulates cost/quality-aware use of
+  LLMs and evaluates cascades that can reduce serving cost while preserving or
+  improving task performance. It is relevant only after provider authorization
+  and capability admission; it does not authorize a provider credential.
+- **RouteLLM (Ong et al., 2024):** the vendored
+  `docs/papers/routellm-routing-2406.18665.pdf` trains routers from preference
+  data to choose between candidate LLMs under a quality/cost trade-off. It
+  supports learned, evidence-evaluated routing rather than a hand-authored
+  provider ordering.
 - **MMR-Bench (Ma et al., 2026):** evaluates multimodal routing with controlled
   candidate sets, modality-aware inputs, compute budgets, and cost/accuracy
   frontiers. It supports retaining explicit modality evidence before routing.
