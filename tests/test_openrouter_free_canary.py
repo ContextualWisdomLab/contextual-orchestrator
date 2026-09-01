@@ -1,7 +1,9 @@
 """Contracts for the bounded OpenRouter free-model canary."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import threading
 import pytest
 
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
@@ -264,6 +266,49 @@ def test_live_persists_attempt_and_validates_response(tmp_path: Path) -> None:
         set_backend(None)
     assert '"outcome": "invalid_response"' in output.read_text(encoding="utf-8")
     assert '"discovered_at": 200' in output.read_text(encoding="utf-8")
+
+
+def test_live_serializes_one_evidence_path_across_invocations(tmp_path: Path) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    output = tmp_path / "evidence.json"
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, _agent, _messages):
+            calls.append("transport")
+            entered.set()
+            assert release.wait(timeout=2)
+            return "OK"
+
+    def invoke():
+        return run_openrouter_free_canary(
+            live=True,
+            limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+            evidence_output=output,
+            discover=lambda *_a, **_k: [_model("current-free")],
+            client_factory=Client,
+            now=lambda: 100,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(invoke)
+            assert entered.wait(timeout=2)
+            second = pool.submit(invoke)
+            release.set()
+            assert first.result()["outcome"] == "completed"
+            with pytest.raises(OpenRouterCanaryError, match="already exists"):
+                second.result()
+    finally:
+        set_backend(None)
+    assert calls == ["transport"]
 
 
 def test_live_rejects_fifo_before_discovery_or_completion_transport(

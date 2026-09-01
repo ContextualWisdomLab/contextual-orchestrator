@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import json
 import os
@@ -9,7 +10,7 @@ from pathlib import Path
 import stat
 import tempfile
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .credentials import get_credential
 from .model_discovery import (
@@ -21,6 +22,7 @@ from .model_discovery import (
     discover_provider_models,
     is_discovered_chat_candidate,
 )
+from .nim_evidence import NimEvidenceError, _publication_lock
 from .orchestrator import ModelClient
 
 
@@ -28,6 +30,16 @@ class OpenRouterCanaryError(RuntimeError):
     """Raised before transport when the canary contract is incomplete."""
 
     code = "openrouter_canary_failed"
+
+
+@contextmanager
+def _evidence_lock(path: Path) -> Iterator[None]:
+    """Serialize operations for one evidence path using the shared safe lock."""
+    try:
+        with _publication_lock(path):
+            yield
+    except NimEvidenceError as exc:
+        raise OpenRouterCanaryError("canary evidence lock is unavailable") from exc
 
 
 @dataclass(frozen=True)
@@ -131,6 +143,14 @@ def prune_expired_openrouter_canary_evidence(
     path: Path, *, now: Callable[[], float] = time.time
 ) -> bool:
     """Remove one expired evidence file without contacting a provider."""
+    with _evidence_lock(path):
+        return _prune_expired_openrouter_canary_evidence(path, now=now)
+
+
+def _prune_expired_openrouter_canary_evidence(
+    path: Path, *, now: Callable[[], float]
+) -> bool:
+    """Inspect and remove one expired evidence file while its path is locked."""
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
@@ -178,6 +198,39 @@ def run_openrouter_free_canary(
                 "live mode requires all caps and an evidence output path"
             )
         limits.validate()
+        assert evidence_output is not None
+        with _evidence_lock(evidence_output):
+            return _run_openrouter_free_canary_locked(
+                live=live,
+                source=source,
+                limits=limits,
+                evidence_output=evidence_output,
+                discover=discover,
+                client_factory=client_factory,
+                now=now,
+            )
+    return _run_openrouter_free_canary_locked(
+        live=live,
+        source=source,
+        limits=limits,
+        evidence_output=evidence_output,
+        discover=discover,
+        client_factory=client_factory,
+        now=now,
+    )
+
+
+def _run_openrouter_free_canary_locked(
+    *,
+    live: bool,
+    source: Any,
+    limits: OpenRouterCanaryLimits | None,
+    evidence_output: Path | None,
+    discover: Callable[..., list[DiscoveredModel]],
+    client_factory: Callable[..., ModelClient],
+    now: Callable[[], float],
+) -> dict[str, Any]:
+    """Run discovery and optional transport under the live evidence-path lock."""
     if live:
         assert evidence_output is not None
         try:
