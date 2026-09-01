@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
     BatchBackend,
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     BatchResultItem,
@@ -50,6 +51,7 @@ _RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
+_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
@@ -100,9 +102,7 @@ class CostRoutingCoordinator:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
-                runner=lambda messages, mode, model: orchestrator.complete(
-                    messages, mode=mode, model_name=model
-                ),
+                runner=self._run_local_batch,
                 max_concurrency=local_concurrency,
                 job_registry=registry,
                 request_context=lambda request: orchestrator.request_policy(request.zdr_only),
@@ -129,6 +129,38 @@ class CostRoutingCoordinator:
         self._embedding_part_counts = registry.mapping("embedding_part_counts")
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
+        self._batch_documents = registry.mapping("batch_documents")
+
+    def _run_local_batch(
+        self, messages: List[Dict[str, str]], mode: str, model: str
+    ) -> Dict[str, Any]:
+        """Run one local item while retaining completed endpoint-race usage."""
+        context = {
+            "route_mode": mode, "attribution": None, "model_name": model,
+            "workflow_run_id": None, "workflow_ready": False, "records": [],
+            "pending_usage": [],
+        }
+        token = self._race_usage_context.set(context)
+        try:
+            result = self.orchestrator.complete(messages, mode=mode, model_name=model)
+        finally:
+            self._race_usage_context.reset(token)
+        race_usage = []
+        for endpoint_id, value in context["pending_usage"]:
+            if isinstance(value, tuple) and len(value) == 3:
+                usage = value[2]
+            elif isinstance(value, dict):
+                usage = value.get("usage")
+            else:
+                usage = None
+            counts = self._provider_usage(usage)
+            if counts is not None:
+                race_usage.append({
+                    "agent_id": endpoint_id,
+                    "usage": {"prompt_tokens": counts[0], "completion_tokens": counts[1]},
+                })
+        result["_batch_race_usage"] = race_usage
+        return result
 
     # ------------------------------------------------------------------
     # Provider / model resolution
@@ -582,6 +614,7 @@ class CostRoutingCoordinator:
         workflow_run_id: Optional[str],
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
+        usage_record_id: Optional[str] = None,
     ):
         """Record one completion's usage + cost and return its ledger record.
 
@@ -616,6 +649,7 @@ class CostRoutingCoordinator:
             workflow_run_id=workflow_run_id,
             attribution=attribution,
             measurement_status=measurement_status,
+            usage_record_id=usage_record_id,
         )
 
     def record_stream_usage(
@@ -745,7 +779,14 @@ class CostRoutingCoordinator:
         return self.batch_backend.poll(job)
 
     def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
-        """Retrieve results for a batch owned by ``owner_id`` and record usage."""
+        """Retrieve results for a batch owned by ``owner_id`` and record usage.
+
+        Raises :class:`~contextual_orchestrator.batch_routing.BatchDownloadError`
+        unchanged when the backend reports an explicit download failure
+        (mirroring how ``KeyError`` from an unknown/unowned job id already
+        propagates to the caller) rather than masking it as a zero-result
+        success -- see ``batch_routing.BatchDownloadError`` for why.
+        """
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         prompt_token_estimates = dict(job.prompt_token_estimates)
@@ -757,43 +798,151 @@ class CostRoutingCoordinator:
         request_by_custom_id = (
             self._legacy_batch_requests(job) if needs_legacy_lookup else {}
         )
-        recorded: List[Dict[str, Any]] = []
+
+        item_records = []
         for item in items:
-            provider_model = self._resolve_batch_provider_model(item)
-            usage_valid = self._batch_item_usage_valid(item)
-            if not usage_valid and item.custom_id not in prompt_token_estimates:
-                original_request = request_by_custom_id.get(item.custom_id)
-                if original_request is not None:
-                    prompt_token_estimates[item.custom_id] = self.token_counter.count_messages(
-                        original_request.messages, item.model
+            # Prefer the real request prompt the batch item carries (e.g. from
+            # LocalBatchBackend) over a blank placeholder when the estimate
+            # fallback below is triggered, so an "estimated" row is actually
+            # estimated from what was asked rather than from empty content.
+            fallback_messages = item.messages or [{"role": "user", "content": ""}]
+            records = []
+            if item.cache_status == "hit":
+                records.append(
+                    self._record_completion(
+                        messages=[],
+                        answer="",
+                        route_mode=item.mode,
+                        request_channel="cache",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=("cache", "response"),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "cache", 0
+                        ),
                     )
-            record = self._record_completion(
-                messages=[{"role": "user", "content": ""}],
-                answer=item.answer,
-                route_mode=item.mode,
-                request_channel="batch",
-                attribution=item.attribution,
-                model_name=item.model,
-                provider_model=provider_model,
-                workflow_run_id=job.job_id,
-                prompt_tokens=(
-                    item.prompt_tokens
-                    if usage_valid
-                    else prompt_token_estimates.get(item.custom_id)
-                ),
-                completion_tokens=item.completion_tokens if usage_valid else None,
+                )
+            request_prompt_attributed = False
+            billable_steps = (
+                [] if item.cache_status == "hit" else [*item.race_usage, *item.trace]
             )
+            for index, step in enumerate(billable_steps):
+                counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
+                records.append(
+                    self._record_completion(
+                        messages=fallback_messages if attribute_request_prompt else [],
+                        answer=step.get("output", "") if counts is None else "",
+                        route_mode=item.mode,
+                        request_channel="batch",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=self._served_provider_model(
+                            {"trace": [step]}, item.model
+                        ),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "step", index
+                        ),
+                    )
+                )
+            if not records:
+                usage_valid = self._batch_item_usage_valid(item)
+                if not usage_valid and item.custom_id not in prompt_token_estimates:
+                    original_request = request_by_custom_id.get(item.custom_id)
+                    if original_request is not None:
+                        prompt_token_estimates[item.custom_id] = self.token_counter.count_messages(
+                            original_request.messages, item.model
+                        )
+                records.append(
+                    self._record_completion(
+                        messages=fallback_messages,
+                        answer=item.answer,
+                        route_mode=item.mode,
+                        request_channel="batch",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=self._resolve_batch_provider_model(item),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=(
+                            item.prompt_tokens
+                            if usage_valid
+                            else prompt_token_estimates.get(item.custom_id)
+                        ),
+                        completion_tokens=item.completion_tokens if usage_valid else None,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "result", 0
+                        ),
+                    )
+                )
+            item_records.append((item, records))
+
+        record_ids = {
+            record.usage_record_id
+            for _item, records in item_records
+            for record in records
+        }
+        persistence_settled = self.ledger.wait_for_usage_record_ids(
+            list(record_ids),
+            timeout=_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS,
+        )
+        settled = {
+            row["usage_record_id"]: row
+            for row in self.ledger.records()
+            if row.get("usage_record_id") in record_ids
+        } if persistence_settled else {}
+        recorded: List[Dict[str, Any]] = []
+        for item, records in item_records:
+            record_rows = [
+                settled.get(record.usage_record_id, record.as_dict())
+                for record in records
+            ]
+            currencies = {row["currency_code"] for row in record_rows}
+            price_known = all(row.get("price_known", True) for row in record_rows)
             recorded.append(
                 {
                     "custom_id": item.custom_id,
                     "answer": item.answer,
-                    "usage_record_id": record.usage_record_id,
-                    "cost_amount": record.cost_amount if record.price_known else None,
-                    "currency_code": record.currency_code,
-                    "price_known": record.price_known,
-                    "prompt_tokens": record.prompt_tokens,
-                    "completion_tokens": record.completion_tokens,
-                    "measurement_status": record.measurement_status,
+                    "usage_record_id": records[-1].usage_record_id,
+                    "usage_record_ids": [record.usage_record_id for record in records],
+                    "cost_amount": (
+                        round(sum(row["cost_amount"] for row in record_rows), 6)
+                        if price_known and len(currencies) == 1
+                        else None
+                    ),
+                    "currency_code": (
+                        next(iter(currencies)) if len(currencies) == 1 else "MIXED"
+                    ),
+                    "price_known": price_known,
+                    "prompt_tokens": sum(row["prompt_tokens"] for row in record_rows),
+                    "completion_tokens": sum(
+                        row["completion_tokens"] for row in record_rows
+                    ),
+                    "measurement_status": (
+                        "estimated"
+                        if any(
+                            row["measurement_status"] == "estimated"
+                            for row in record_rows
+                        )
+                        else "measured"
+                    ),
+                    **({"currency_components": [
+                        {
+                            "currency_code": currency,
+                            "cost_amount": round(sum(
+                                row["cost_amount"] for row in record_rows
+                                if row["currency_code"] == currency
+                            ), 6),
+                        }
+                        for currency in sorted(currencies)
+                    ]} if len(currencies) > 1 and price_known else {}),
                 }
             )
         if prompt_token_estimates != job.prompt_token_estimates:
@@ -804,7 +953,15 @@ class CostRoutingCoordinator:
             "backend": job.backend,
             "result_count": len(recorded),
             "results": recorded,
+            "usage_persistence_status": (
+                "settled" if persistence_settled else "pending"
+            ),
         }
+
+    @staticmethod
+    def _batch_usage_record_id(job_id: str, custom_id: str, kind: str, index: int) -> str:
+        identity = f"{job_id}\x00{custom_id}\x00{kind}\x00{index}"
+        return "usage_batch_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _batch_item_usage_valid(item: BatchResultItem) -> bool:
@@ -1117,7 +1274,23 @@ class CostRoutingCoordinator:
                 "embeddings": None,
             }
 
-        items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        try:
+            items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        except BatchDownloadError as exc:
+            # Deliberately NOT cached: an explicit download failure must stay
+            # retryable. Caching this under "completed" (as a bare `return []`
+            # from the backend used to force) would permanently poison
+            # ``batch_id`` with fabricated zero-vectors that no later retry
+            # could ever repair, since a cache hit above short-circuits
+            # poll/retrieve entirely.
+            return {
+                "batch_id": batch_id,
+                "status": "failed",
+                "backend": job.backend,
+                "model": model_name,
+                "embeddings": None,
+                "error": str(exc),
+            }
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)

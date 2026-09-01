@@ -12,6 +12,59 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Batch cost retrieval now preserves cache hits, completed endpoint-race loser
+  usage, and strict provider usage evidence. Remote fallbacks retain the real
+  submitted prompt, repeated result retrieval reuses deterministic ledger ids,
+  and mixed-currency results expose per-currency components.
+- Batch result retrieval no longer converts an explicit download failure into
+  a silent empty result. `PgLlmBatchBackend.retrieve()` and
+  `PgLlmBatchEmbeddingBackend.retrieve()` now raise a new
+  `BatchDownloadError` (carrying the job id and the client's reported
+  `reason`/`error`) instead of returning `[]`, which used to be
+  indistinguishable from a batch that legitimately completed with zero
+  items. `CostRoutingCoordinator.retrieve_batch()` now lets the error
+  propagate rather than reporting a fake `result_count: 0` success (a new
+  `except BatchDownloadError` handler in `server.py` maps it to `502
+  batch_download_failed`, matching how other typed batch/provider errors are
+  already routed there). `embeddings_batch_document()` catches it and returns
+  `status: "failed"` with an `error` field, and — the severe half of this bug
+  — deliberately does **not** cache that result: a bare `return []` on
+  download failure used to be treated as a legitimately completed batch and
+  cached under `status: "completed"` with a fabricated `{"embedding": []}`
+  for every input, permanently poisoning that `batch_id` since the cache
+  short-circuits all future poll/retrieve calls before ever touching the
+  backend again. A failed retrieval now stays retryable.
+- `LocalBatchBackend` (the default `batch_backend` whenever
+  `CostRoutingCoordinator` is constructed without an explicit override, i.e.
+  every standalone/self-hosted-without-pg-llm-batch deployment) no longer
+  discards the real usage its runner reports. `BatchResultItem` gained a
+  `messages` field carrying the original request through, and
+  `LocalBatchBackend.submit()` now aggregates real `prompt_tokens`/
+  `completion_tokens` from `result["trace"][i]["usage"]` (usage has no
+  top-level key on `orchestrator.complete()`'s result; it is nested per
+  workflow step) instead of leaving both at the dataclass's `0` default. The
+  minimal per-step usage trace is retained so heterogeneous conduct calls are
+  charged to their actual served provider/model rather than collapsed into one
+  `unknown` row; malformed counts fail closed to estimates without coercion.
+  `retrieve_batch()`'s heuristic-estimate fallback (triggered whenever a
+  batch item reports no usage) now estimates from the batch item's real
+  request messages instead of a hardcoded blank `""` prompt — previously
+  every such row was labeled `measurement_status="estimated"` while actually
+  being a constant ~3-token count derived from empty content regardless of
+  the real prompt's length, misrepresenting what "estimated" meant to a
+  buyer reading the ledger.
+- Fixed a stale test assumption left behind by the per-step batch usage
+  attribution above:
+  `test_batch_routing_jobs_endpoint_submits_multiple_requests` still
+  hardcoded "one ledger row per batch item," which was already false for
+  `CostRoutingCoordinator.complete()`'s documented per-trace-step
+  attribution contract (each conduct-mode step is a separate billable
+  provider call). Two 2-request submissions through
+  `/api/v1/batch_routing_jobs` with the default single-agent mock pool
+  triage to the conduct path (4 steps each), producing 8 ledger rows, not
+  2 — the assertion now derives its expectation from the retrieved results'
+  own `usage_record_ids`, matching the fix already applied to the sibling
+  assertions in `tests/test_cost_router.py`.
 - The cost ledger no longer fabricates a $0.00 price for an unpriced
   provider/model. `PriceBook.compute_cost()` now returns a
   `(cost_amount, currency_code, price_known)` 3-tuple; `UsageRecord` gains a

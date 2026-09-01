@@ -560,6 +560,42 @@ class NonBlockingLedgerStore:
         """Query the backing store; queued writes may still be in flight."""
         return self.backend.query(start, end)
 
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return only requested records that are durably visible."""
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return set()
+        lookup = getattr(self.backend, "existing_usage_record_ids", None)
+        if callable(lookup):
+            return set(lookup(usage_record_ids))
+        expected = set(usage_record_ids)
+        return {
+            row.get("usage_record_id")
+            for row in self.backend.query(None, None)
+            if row.get("usage_record_id") in expected
+        }
+
+    def settle_usage_record_ids(self, persisted_ids: set[str]) -> None:
+        """Release deferred exports for confirmed IDs without draining other work."""
+        if not persisted_ids:
+            return
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return
+        with self._deferred_usage_exports_lock:
+            settled = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id in persisted_ids
+            ]
+            self._deferred_usage_exports = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id not in persisted_ids
+            ]
+        for record in settled:
+            self._record_stored(record)
+
     def flush(self, timeout: Optional[float] = None) -> bool:
         """Wait for queued writes to finish. Returns ``False`` on timeout."""
         deadline = time.monotonic() + timeout if timeout is not None else None
@@ -1448,6 +1484,34 @@ class CostLedger:
         if complete:
             self._flush_deferred_usage_exports()
         return complete
+
+    def wait_for_usage_record_ids(
+        self, usage_record_ids: List[str], *, timeout: Optional[float] = None
+    ) -> bool:
+        """Wait boundedly for this caller's records, independent of other traffic."""
+        expected = set(usage_record_ids)
+        if not expected:
+            return True
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            lookup = getattr(self.store, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted = set(lookup(list(expected)))
+            else:
+                persisted = {
+                    row.get("usage_record_id")
+                    for row in self.store.query(None, None)
+                    if row.get("usage_record_id") in expected
+                }
+            if expected.issubset(persisted):
+                settle = getattr(self.store, "settle_usage_record_ids", None)
+                if callable(settle):
+                    settle(persisted)
+                self._flush_deferred_usage_exports()
+                return True
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
 
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""

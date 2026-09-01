@@ -6,9 +6,12 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchDownloadError,
     BatchRequest,
     EmbeddingBatchRequest,
     LocalBatchBackend,
@@ -225,14 +228,41 @@ def test_pg_llm_batch_backend_submits_and_retrieves() -> None:
     assert "download_results" in client.calls
 
 
-def test_pg_llm_batch_backend_incomplete_download_returns_empty() -> None:
+def test_pg_llm_batch_backend_incomplete_download_raises_download_error() -> None:
     class _IncompleteClient(_FakeBatchApiClient):
         async def download_results(self, batch_id, endpoint_alias):
             return {"success": False, "reason": "Batch not complete"}
 
     backend = PgLlmBatchBackend(_IncompleteClient())
     job = backend.submit([BatchRequest(messages=[{"role": "user", "content": "x"}], custom_id="a")])
-    assert backend.retrieve(job) == []
+    with pytest.raises(BatchDownloadError) as excinfo:
+        backend.retrieve(job)
+    assert excinfo.value.job_id == job.job_id
+    assert excinfo.value.reason == "Batch not complete"
+
+
+def test_pg_llm_batch_backend_rejects_partial_success_without_returning_data() -> None:
+    class _PartialClient(_FakeBatchApiClient):
+        async def download_results(self, batch_id, endpoint_alias):
+            return {
+                "success": True,
+                "responses": [{
+                    "custom_id": "a",
+                    "response": {
+                        "status_code": 200,
+                        "body": {"choices": [{"message": {"content": "partial"}}]},
+                    },
+                }],
+            }
+
+    backend = PgLlmBatchBackend(_PartialClient())
+    job = backend.submit([
+        BatchRequest(messages=[{"role": "user", "content": "a"}], custom_id="a"),
+        BatchRequest(messages=[{"role": "user", "content": "b"}], custom_id="b"),
+    ])
+
+    with pytest.raises(BatchDownloadError, match="incomplete result set"):
+        backend.retrieve(job)
 
 
 def test_build_jsonl_body_uses_openai_batch_line_shape() -> None:
