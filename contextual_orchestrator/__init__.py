@@ -167,3 +167,12 @@ __all__ = [
     "observe_language_response_criteria",
     "evaluate_release_authorization",
 ]
+
+# The durable registry keeps legacy name=/key= kwargs at a bounded adapter
+# while publishing truthful required semantic parameters to introspection.
+from .registry_signature_contract import (
+    install_registry_signature_contract as _install_registry_signature_contract,
+)
+
+_install_registry_signature_contract()
+del _install_registry_signature_contract
