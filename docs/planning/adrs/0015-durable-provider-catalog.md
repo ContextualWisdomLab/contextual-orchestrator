@@ -64,10 +64,15 @@ realtime transports. They are never used to infer reasoning, verification,
 coding, vision, or provider-native effort capabilities. Those require explicit
 catalog or measured evidence under the gateway-owned policy.
 Provider-declared `supported_parameters=response_format` is retained as the
-`response_format` serving tag. Virtual structured synthesis requires that tag
-when selecting from an automatically discovered pool; unknown support does not
-become presumed support. An explicitly requested operator-managed model remains
-the operator's transport contract.
+`response_format` serving tag and preferred for virtual structured synthesis.
+Missing catalog metadata does not itself prove support; configured-gateway rows
+must instead pass the runtime probe below. An explicitly requested
+operator-managed model remains the operator's transport contract.
+Configured-gateway runtime activation additionally performs one bounded,
+synthetic `json_object` probe per discovered chat row. Only rows that return a
+valid structured object remain chat-serving candidates; a listing alone is not
+readiness evidence. Embedding rows retain their separate capability route and
+are never subjected to a chat probe.
 When live discovery activates a real chat model, only agents explicitly tagged
 `bootstrap_seed` are retired. A `mock://` transport alone is not proof that an
 agent is disposable; operator-configured mock agents remain in the declared
@@ -98,7 +103,8 @@ equivalent machine-readable balance contract.
 The merge gate covers normalized DDL, secret-column absence, provider-account
 isolation, parameterized PostgreSQL statements, last-known-good retention,
 withdrawal after authoritative success, non-chat filtering, secret-free
-evidence, and end-to-end recovery when one provider fails.
+evidence, bounded configured-gateway capability probes, and end-to-end recovery
+when one provider fails.
 
 ## References
 

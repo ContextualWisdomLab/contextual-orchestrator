@@ -23,7 +23,8 @@ Design:
 
 DB object names are two-or-more-word snake_case per the repository convention:
 ``llm_usage_records``, ``cost_attribution_dimensions``, ``llm_price_entries``,
-``cost_attribution_values``, and ``usage_record_attributions``.
+``cost_attribution_values``, ``usage_record_attributions``,
+``usage_measurements``, and ``usage_price_knowledge``.
 """
 
 from __future__ import annotations
@@ -218,15 +219,26 @@ class PriceBook:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
-    ) -> tuple[float, str]:
-        """Return ``(cost_amount, currency_code)`` for a request.
+    ) -> tuple[float, str, bool]:
+        """Return ``(cost_amount, currency_code, price_known)`` for a request.
 
         An unpriced provider/model yields ``0.0`` in the default currency so
-        recording never fails on a missing price row.
+        recording never fails on a missing price row — but ``price_known`` is
+        ``False`` for that case so callers can tell "priced at zero" apart
+        from "we do not know the price" instead of silently fabricating a
+        free price for an unpriced model.
+
+        Zero usage is the one exception: zero tokens cost zero regardless of
+        whether this provider/model's per-token price is known, since zero
+        times any finite price is still zero. A cache hit (and any other
+        genuinely zero-token record, priced or not) is therefore always
+        ``price_known=True`` -- there is no unknown quantity left to guess.
         """
         entry = self.get_price(provider, model)
+        if prompt_tokens == 0 and completion_tokens == 0:
+            return 0.0, entry.currency_code if entry is not None else self.default_currency, True
         if entry is None:
-            return 0.0, self.default_currency
+            return 0.0, self.default_currency, False
         prompt_cost = (Decimal(prompt_tokens) / Decimal(1000)) * Decimal(
             str(entry.prompt_price_per_1k)
         )
@@ -236,12 +248,17 @@ class PriceBook:
         total = (prompt_cost + completion_cost).quantize(
             Decimal("0.000001"), rounding=ROUND_HALF_UP
         )
-        return float(total), entry.currency_code
+        return float(total), entry.currency_code, True
 
 
 # ---------------------------------------------------------------------------
 # Usage records + stores
 # ---------------------------------------------------------------------------
+
+# The only recognized provenance labels for a recorded usage row's token
+# counts. Shared between ``record_usage``'s validation and the rollup/total
+# per-status breakdown so the two never drift apart.
+MEASUREMENT_STATUSES: tuple[str, ...] = ("measured", "estimated", "unavailable")
 
 
 @dataclass
@@ -261,6 +278,12 @@ class UsageRecord:
     cost_amount: float
     currency_code: str
     measurement_status: str = "measured"
+    # Whether ``cost_amount`` reflects a real configured price rather than the
+    # fallback zero used when a provider/model has no price row. Defaults to
+    # ``True`` so callers that set ``cost_amount`` explicitly (bypassing
+    # ``PriceBook.compute_cost``) are not force-changed by this field's
+    # addition.
+    price_known: bool = True
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -281,6 +304,7 @@ class UsageRecord:
             "cost_amount": self.cost_amount,
             "currency_code": self.currency_code,
             "measurement_status": self.measurement_status,
+            "price_known": self.price_known,
         }
         row.update(
             {
@@ -334,6 +358,8 @@ class UsageTelemetryEvent:
             "contextual_orchestrator.usage_record_id": record.usage_record_id,
             "contextual_orchestrator.request_channel": record.request_channel,
             "contextual_orchestrator.usage.export_state": export_state,
+            "contextual_orchestrator.usage.price_known": record.price_known,
+            "contextual_orchestrator.usage.measurement_status": record.measurement_status,
         }
         if record.workflow_run_id:
             attributes["contextual_orchestrator.workflow_run_id"] = record.workflow_run_id
@@ -344,13 +370,17 @@ class UsageTelemetryEvent:
         if error_type:
             attributes["error.type"] = error_type
 
-        metrics = {
-            "gen_ai.usage.input_tokens": float(record.prompt_tokens),
-            "gen_ai.usage.output_tokens": float(record.completion_tokens),
-            "gen_ai.usage.total_tokens": float(record.total_tokens),
-            "gen_ai.usage.cost": float(record.cost_amount),
-            "contextual_orchestrator.usage.records": 1.0,
-        }
+        metrics = {"contextual_orchestrator.usage.records": 1.0}
+        if record.measurement_status != "unavailable":
+            metrics.update(
+                {
+                    "gen_ai.usage.input_tokens": float(record.prompt_tokens),
+                    "gen_ai.usage.output_tokens": float(record.completion_tokens),
+                    "gen_ai.usage.total_tokens": float(record.total_tokens),
+                }
+            )
+            if record.price_known and record.cost_amount is not None:
+                metrics["gen_ai.usage.cost"] = float(record.cost_amount)
         if error_type:
             metrics["contextual_orchestrator.usage.export_failures"] = 1.0
         return cls(
@@ -529,6 +559,42 @@ class NonBlockingLedgerStore:
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Query the backing store; queued writes may still be in flight."""
         return self.backend.query(start, end)
+
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return only requested records that are durably visible."""
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return set()
+        lookup = getattr(self.backend, "existing_usage_record_ids", None)
+        if callable(lookup):
+            return set(lookup(usage_record_ids))
+        expected = set(usage_record_ids)
+        return {
+            row.get("usage_record_id")
+            for row in self.backend.query(None, None)
+            if row.get("usage_record_id") in expected
+        }
+
+    def settle_usage_record_ids(self, persisted_ids: set[str]) -> None:
+        """Release deferred exports for confirmed IDs without draining other work."""
+        if not persisted_ids:
+            return
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return
+        with self._deferred_usage_exports_lock:
+            settled = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id in persisted_ids
+            ]
+            self._deferred_usage_exports = [
+                record
+                for record in self._deferred_usage_exports
+                if record.usage_record_id not in persisted_ids
+            ]
+        for record in settled:
+            self._record_stored(record)
 
     def flush(self, timeout: Optional[float] = None) -> bool:
         """Wait for queued writes to finish. Returns ``False`` on timeout."""
@@ -721,6 +787,14 @@ CREATE TABLE IF NOT EXISTS usage_measurements (
         ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS usage_price_knowledge (
+    usage_record_id TEXT PRIMARY KEY,
+    price_known     INTEGER NOT NULL,
+    CONSTRAINT usage_price_knowledge_record_foreign_key
+        FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS cost_attribution_values (
     dimension_name  TEXT NOT NULL,
     dimension_value TEXT NOT NULL,
@@ -779,6 +853,7 @@ _USAGE_COLUMNS = (
     "cost_amount",
     "currency_code",
     "measurement_status",
+    "price_known",
 )
 _RELATIONAL_ATTRIBUTION_COLUMNS = {
     "account": "account_name",
@@ -870,6 +945,16 @@ _USAGE_MEASUREMENT_INSERT_SQL = {
         "VALUES (%s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
+_USAGE_PRICE_KNOWLEDGE_INSERT_SQL = {
+    "qmark": (
+        "INSERT INTO usage_price_knowledge (usage_record_id, price_known) "
+        "VALUES (?, ?) ON CONFLICT (usage_record_id) DO NOTHING"
+    ),
+    "pyformat": (
+        "INSERT INTO usage_price_knowledge (usage_record_id, price_known) "
+        "VALUES (%s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
+    ),
+}
 _USAGE_SELECT_SQL = (
     "SELECT u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, "
@@ -880,15 +965,18 @@ _USAGE_SELECT_SQL = (
     "COALESCE(MAX(CASE WHEN a.dimension_name = 'group' THEN a.dimension_value END), 'unattributed') AS group_name, "
     "COALESCE(MAX(CASE WHEN a.dimension_name = 'company' THEN a.dimension_value END), 'unattributed') AS company_name, "
     "u.prompt_tokens, u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code, "
-    "COALESCE(m.measurement_status, 'unavailable') AS measurement_status "
+    "COALESCE(m.measurement_status, 'unavailable') AS measurement_status, "
+    "COALESCE(k.price_known, 0) AS price_known "
     "FROM llm_usage_records AS u "
     "LEFT JOIN usage_record_attributions AS a ON a.usage_record_id = u.usage_record_id "
-    "LEFT JOIN usage_measurements AS m ON m.usage_record_id = u.usage_record_id"
+    "LEFT JOIN usage_measurements AS m ON m.usage_record_id = u.usage_record_id "
+    "LEFT JOIN usage_price_knowledge AS k ON k.usage_record_id = u.usage_record_id"
 )
 _USAGE_GROUP_ORDER_SQL = (
     " GROUP BY u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, u.prompt_tokens, "
-    "u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code, m.measurement_status "
+    "u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code, m.measurement_status, "
+    "k.price_known "
     "ORDER BY u.created_at, u.usage_record_id"
 )
 _USAGE_QUERY_SQL = {
@@ -1012,6 +1100,13 @@ class SqlLedgerStore:
                 _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
                 (row["usage_record_id"], "unavailable"),
             )
+            # A flattened legacy row predates this signal entirely, so
+            # whether its stored cost reflects a real price is genuinely
+            # unknown — mark it unknown (0) rather than assume it was known.
+            cur.execute(
+                _USAGE_PRICE_KNOWLEDGE_INSERT_SQL[self._paramstyle],
+                (row["usage_record_id"], 0),
+            )
             self._insert_normalized_attribution(cur, row)
 
     def _create_schema(self) -> None:
@@ -1130,11 +1225,26 @@ class SqlLedgerStore:
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
             accepted = getattr(cur, "rowcount", 1) != 0
-            cur.execute(
-                _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
-                (row["usage_record_id"], row.get("measurement_status", "unavailable")),
-            )
-            self._insert_normalized_attribution(cur, row)
+            # A rejected duplicate parent insert (a retried usage_record_id)
+            # must stay fully idempotent: skipping the satellite writes below
+            # keeps a duplicate append a true no-op. Without this guard, a
+            # retry whose parent row already exists but predates one of
+            # these satellite tables (e.g. a pre-upgrade row with no
+            # usage_price_knowledge child, intentionally read as
+            # price-unknown) would insert that child using the retry's
+            # *current* price/measurement state -- silently relabeling a
+            # historical unknown-price row's provenance from an unrelated
+            # later call, not from what actually priced that original spend.
+            if accepted:
+                cur.execute(
+                    _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
+                    (row["usage_record_id"], row.get("measurement_status", "unavailable")),
+                )
+                cur.execute(
+                    _USAGE_PRICE_KNOWLEDGE_INSERT_SQL[self._paramstyle],
+                    (row["usage_record_id"], 1 if row.get("price_known", True) else 0),
+                )
+                self._insert_normalized_attribution(cur, row)
             if outer_transaction:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
             else:
@@ -1199,6 +1309,18 @@ def _within_window(created_at: int, start: Optional[int], end: Optional[int]) ->
     if end is not None and created_at >= end:
         return False
     return True
+
+
+def _measurement_status_of(row: Dict[str, Any]) -> str:
+    """Return a row's recognized measurement status, defaulting to unavailable.
+
+    Covers a row whose ``measurement_status`` is missing entirely (a caller
+    or store bypassing the normal write path) the same way a genuinely
+    unrecognized value is covered: fail closed to the most conservative
+    label rather than silently attributing it to ``measured``.
+    """
+    status = row.get("measurement_status")
+    return status if status in MEASUREMENT_STATUSES else "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -1286,10 +1408,12 @@ class CostLedger:
         if provider:
             dims.upstream_api = provider
 
-        cost_amount, currency = self.price_book.compute_cost(
+        cost_amount, currency, price_known = self.price_book.compute_cost(
             provider, model, prompt_tokens, completion_tokens
         )
-        if measurement_status not in {"measured", "estimated", "unavailable"}:
+        if measurement_status == "unavailable" and self.price_book.get_price(provider, model) is None:
+            price_known = False
+        if measurement_status not in MEASUREMENT_STATUSES:
             raise ValueError("measurement_status must be measured, estimated, or unavailable")
         record = UsageRecord(
             usage_record_id=usage_record_id or f"usage_{uuid.uuid4().hex}",
@@ -1305,6 +1429,7 @@ class CostLedger:
             cost_amount=cost_amount,
             currency_code=currency,
             measurement_status=measurement_status,
+            price_known=price_known,
             attribution=dims,
         )
         accepted = False
@@ -1362,6 +1487,34 @@ class CostLedger:
             self._flush_deferred_usage_exports()
         return complete
 
+    def wait_for_usage_record_ids(
+        self, usage_record_ids: List[str], *, timeout: Optional[float] = None
+    ) -> bool:
+        """Wait boundedly for this caller's records, independent of other traffic."""
+        expected = set(usage_record_ids)
+        if not expected:
+            return True
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            lookup = getattr(self.store, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted = set(lookup(list(expected)))
+            else:
+                persisted = {
+                    row.get("usage_record_id")
+                    for row in self.store.query(None, None)
+                    if row.get("usage_record_id") in expected
+                }
+            if expected.issubset(persisted):
+                settle = getattr(self.store, "settle_usage_record_ids", None)
+                if callable(settle):
+                    settle(persisted)
+                self._flush_deferred_usage_exports()
+                return True
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""
         with self._inline_health_lock:
@@ -1386,6 +1539,15 @@ class CostLedger:
         ``dimension`` is one of the attribution dimension names (``account``,
         ``service``, ``upstream_api``/``provider``, ``model_name``, ``team``,
         ``group``, ``company``). Returns a mapping of dimension value to totals.
+
+        Each bucket's ``cost_amount`` sums every row regardless of provenance
+        (unchanged, backward-compatible meaning). Alongside it,
+        ``cost_amount_by_status``/``record_count_by_status`` break the same
+        bucket down by row ``measurement_status`` (``measured``, ``estimated``,
+        ``unavailable``) so a caller can tell how much of a total is real
+        provider-measured spend versus an estimate or an unpriced/unmeasured
+        row. The corresponding ``*_by_price_status`` fields distinguish known
+        prices from unknown-price fallback zeros.
         """
         column = _DIMENSION_TO_COLUMN.get(dimension)
         if column is None:
@@ -1407,17 +1569,54 @@ class CostLedger:
                     "total_tokens": 0,
                     "cost_amount": Decimal("0"),
                     "currency_code": row.get("currency_code", "USD"),
+                    "cost_amount_by_status": {
+                        status: Decimal("0") for status in MEASUREMENT_STATUSES
+                    },
+                    "record_count_by_status": {status: 0 for status in MEASUREMENT_STATUSES},
+                    "cost_amount_by_price_status": {
+                        "known": Decimal("0"), "unknown": Decimal("0")
+                    },
+                    "record_count_by_price_status": {"known": 0, "unknown": 0},
+                    "_measurement_statuses": set(),
                 },
             )
+            status = _measurement_status_of(row)
+            price_status = "known" if row.get("price_known") else "unknown"
+            row_cost = Decimal(str(row.get("cost_amount") or 0))
             bucket["record_count"] += 1
-            bucket["prompt_tokens"] += int(row.get("prompt_tokens", 0))
-            bucket["completion_tokens"] += int(row.get("completion_tokens", 0))
-            bucket["total_tokens"] += int(row.get("total_tokens", 0))
-            bucket["cost_amount"] += Decimal(str(row.get("cost_amount", 0)))
+            bucket["prompt_tokens"] += int(row.get("prompt_tokens") or 0)
+            bucket["completion_tokens"] += int(row.get("completion_tokens") or 0)
+            bucket["total_tokens"] += int(row.get("total_tokens") or 0)
+            bucket["cost_amount"] += row_cost
+            bucket["cost_amount_by_status"][status] += row_cost
+            bucket["record_count_by_status"][status] += 1
+            bucket["cost_amount_by_price_status"][price_status] += row_cost
+            bucket["record_count_by_price_status"][price_status] += 1
+            bucket["_measurement_statuses"].add(status)
         for bucket in buckets.values():
-            bucket["cost_amount"] = float(
-                bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+            statuses = bucket.pop("_measurement_statuses")
+            bucket["measurement_status"] = (
+                "unavailable" if "unavailable" in statuses
+                else "estimated" if "estimated" in statuses
+                else "measured"
             )
+            bucket["cost_amount"] = (
+                None
+                if bucket["measurement_status"] == "unavailable"
+                else float(
+                    bucket["cost_amount"].quantize(
+                        Decimal("0.000001"), rounding=ROUND_HALF_UP
+                    )
+                )
+            )
+            bucket["cost_amount_by_status"] = {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in bucket["cost_amount_by_status"].items()
+            }
+            bucket["cost_amount_by_price_status"] = {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in bucket["cost_amount_by_price_status"].items()
+            }
         return buckets
 
     def report(
@@ -1426,10 +1625,21 @@ class CostLedger:
         start: Optional[int] = None,
         end: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Return a report envelope: per-value rollup plus a grand total."""
+        """Return a report envelope: per-value rollup plus a grand total.
+
+        Both ``items`` (from :meth:`rollup`) and ``grand_total`` (from
+        :meth:`total`) carry the ``cost_amount_by_status``/
+        ``record_count_by_status`` measured/estimated/unavailable breakdown
+        alongside their existing flat ``cost_amount`` totals.
+        """
         buckets = self.rollup(dimension, start, end)
         items = sorted(
-            buckets.values(), key=lambda item: item["cost_amount"], reverse=True
+            buckets.values(),
+            key=lambda item: (
+                item["cost_amount"] is not None,
+                item["cost_amount"] or 0.0,
+            ),
+            reverse=True,
         )
         grand_total = self.total(start, end)
         return {
@@ -1440,20 +1650,73 @@ class CostLedger:
         }
 
     def total(self, start: Optional[int] = None, end: Optional[int] = None) -> Dict[str, Any]:
-        """Return grand totals (cost + tokens + record count) over the window."""
+        """Return grand totals (cost + tokens + record count) over the window.
+
+        ``cost_amount`` remains the sum over every row regardless of
+        provenance (unchanged, backward-compatible meaning). It is joined by
+        ``cost_amount_by_status``/``record_count_by_status``, the same total
+        broken down by row ``measurement_status`` (``measured``, ``estimated``,
+        ``unavailable``) so measured, estimated, and unavailable-priced spend
+        are never opaquely blended into one authoritative-looking number. The
+        corresponding ``*_by_price_status`` fields expose unknown-price rows.
+        """
         rows = self.store.query(start, end)
-        cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in rows), Decimal("0"))
+        cost_amount_by_status = {status: Decimal("0") for status in MEASUREMENT_STATUSES}
+        record_count_by_status = {status: 0 for status in MEASUREMENT_STATUSES}
+        cost_amount_by_price_status = {"known": Decimal("0"), "unknown": Decimal("0")}
+        record_count_by_price_status = {"known": 0, "unknown": 0}
+        statuses = set()
+        for row in rows:
+            status = _measurement_status_of(row)
+            price_status = "known" if row.get("price_known") else "unknown"
+            row_cost = Decimal(str(row.get("cost_amount") or 0))
+            cost_amount_by_status[status] += row_cost
+            record_count_by_status[status] += 1
+            cost_amount_by_price_status[price_status] += row_cost
+            record_count_by_price_status[price_status] += 1
+            statuses.add(status)
+        total_cost = sum(cost_amount_by_status.values(), Decimal("0"))
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
         return {
             "record_count": len(rows),
-            "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in rows),
-            "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in rows),
-            "total_tokens": sum(int(row.get("total_tokens", 0)) for row in rows),
-            "cost_amount": float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in rows),
+            "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in rows),
+            "total_tokens": sum(int(row.get("total_tokens") or 0) for row in rows),
+            "cost_amount": (
+                None
+                if measurement_status == "unavailable"
+                else float(total_cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+            ),
+            "measurement_status": measurement_status,
+            "cost_amount_by_status": {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in cost_amount_by_status.items()
+            },
+            "record_count_by_status": record_count_by_status,
+            "cost_amount_by_price_status": {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in cost_amount_by_price_status.items()
+            },
+            "record_count_by_price_status": record_count_by_price_status,
         }
 
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return raw usage record rows in the optional window."""
-        return self.store.query(start, end)
+        rows = self.store.query(start, end)
+        for row in rows:
+            if row.get("measurement_status") == "unavailable":
+                for field in (
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "cost_amount",
+                ):
+                    row[field] = None
+        return rows
 
     def _mark_inline_success(self) -> None:
         with self._inline_health_lock:
