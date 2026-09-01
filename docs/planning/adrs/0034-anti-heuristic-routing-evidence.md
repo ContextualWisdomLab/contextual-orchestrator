@@ -41,6 +41,37 @@ The replacement ordering ladder is evidence-only:
    responses per second. Token throughput remains separately observable and
    never changes the comparable-unit score.
 
+### Psychometric item identity: no nearest-item substitution
+
+Fast-MLSIRM routing evidence is defined on the model-by-prompt response matrix
+that was actually fitted. A previously implemented fallback used cosine
+similarity to select the single nearest observed prompt and then copied that
+item's fitted acceptance probability onto an unseen prompt. That substitution
+was not an IRT calibration or linking procedure and had no held-out predictive
+validation demonstrating that semantic-nearest prompt identity preserves the
+item parameters relevant to acceptance. It therefore changed model ordering on
+an unvalidated proxy and is prohibited by the no-heuristics contract.
+
+The operational rule is now fail-closed: psychometric routing may rank models
+only when the exact canonical prompt interaction is an observed item in the
+converged Fast-MLSIRM fit. An unseen interaction produces no psychometric rank
+until observations calibrate that item, or until a separately specified
+explanatory-item model is validated out-of-item and adopted in a new ADR.
+Embedding vectors may be retained as future model inputs, but cosine proximity
+alone never transfers a fitted item score. This follows the core IRT requirement
+that item and ability parameters be estimated/calibrated for valid operational
+use; contemporary CAT tooling likewise treats new-item parameter calibration as
+an explicit estimation problem rather than assigning parameters from a nearest
+item (Lim & Kang, 2024).
+
+The earlier implicit 512-context eviction cap is removed from this evidence
+ledger as well. Discarding a calibrated item because it crossed an arbitrary
+count boundary changed future routing decisions without a statistical or
+resource-contract basis. Any future retention policy that can remove decision
+evidence must be specified independently with an explicit capacity invariant
+and validation evidence; until then, the psychometric ledger does not invent a
+cutoff.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is
@@ -71,6 +102,10 @@ without a judge-capable member.
 - Pure latency routing: ignores whether answers were actually acceptable;
   the quality ledger exists precisely because fast wrong answers are worse
   than slower verified ones.
+- Copying the nearest observed prompt's Fast-MLSIRM score onto an unseen
+  prompt: semantic proximity is not psychometric item calibration. Without an
+  explanatory IRT model and held-out validation, the inferred score is not an
+  identified routing quantity.
 
 ## Consequences
 
@@ -82,6 +117,9 @@ without a judge-capable member.
   fixture (`MOCK_EMBEDDING_DIMENSION = 8`) and never serve production.
 - Admin surfaces gain `routing_evidence.quality` alongside the existing
   transport ledger so operators can see both accuracy and throughput.
+- An unseen prompt does not receive psychometric model ordering merely because
+  an embedding-nearest observed prompt exists. This intentionally trades
+  speculative coverage for identified evidence.
 
 ```mermaid
 flowchart LR
@@ -105,6 +143,10 @@ flowchart LR
   failover within budget.
 - `tests/test_chat_model_capability_isolation.py::test_stale_embedding_agent_cannot_win_synthesizer_selection`
   proves the capability gate survives the rewrite.
+- `tests/test_psychometric_unseen_item_fail_closed.py` proves that an unseen
+  prompt cannot borrow a fitted score from an embedding-identical observed
+  item and that the former arbitrary context-count eviction no longer discards
+  calibrated item evidence.
 - Full suite green: 1891 unit/contract tests plus 12 property/fuzz tests.
 
 ## References
@@ -112,3 +154,8 @@ flowchart LR
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021).
+
+Lim, H., & Kang, K. (2024). The irtQ R package: A user-friendly tool for item
+response theory-based test data analysis and calibration. *Journal of
+Educational Evaluation for Health Professions, 21*, 23.
+https://doi.org/10.3352/jeehp.2024.21.23
