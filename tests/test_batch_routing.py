@@ -241,6 +241,30 @@ def test_pg_llm_batch_backend_incomplete_download_raises_download_error() -> Non
     assert excinfo.value.reason == "Batch not complete"
 
 
+def test_pg_llm_batch_backend_rejects_partial_success_without_returning_data() -> None:
+    class _PartialClient(_FakeBatchApiClient):
+        async def download_results(self, batch_id, endpoint_alias):
+            return {
+                "success": True,
+                "responses": [{
+                    "custom_id": "a",
+                    "response": {
+                        "status_code": 200,
+                        "body": {"choices": [{"message": {"content": "partial"}}]},
+                    },
+                }],
+            }
+
+    backend = PgLlmBatchBackend(_PartialClient())
+    job = backend.submit([
+        BatchRequest(messages=[{"role": "user", "content": "a"}], custom_id="a"),
+        BatchRequest(messages=[{"role": "user", "content": "b"}], custom_id="b"),
+    ])
+
+    with pytest.raises(BatchDownloadError, match="incomplete result set"):
+        backend.retrieve(job)
+
+
 def test_build_jsonl_body_uses_openai_batch_line_shape() -> None:
     requests = [BatchRequest(messages=[{"role": "user", "content": "hi"}], custom_id="a", model="gpt-x")]
     body = build_jsonl_body(requests)

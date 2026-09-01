@@ -240,6 +240,48 @@ class BatchDownloadError(RuntimeError):
         super().__init__(message)
 
 
+def _validated_download_responses(
+    payload: Dict[str, Any],
+    *,
+    expected_custom_ids: set[str],
+    request_count: int,
+    job_id: str,
+) -> List[Dict[str, Any]]:
+    """Return a complete one-to-one set of successful downloaded rows."""
+    responses = payload.get("responses")
+    if not isinstance(responses, list):
+        raise BatchDownloadError(job_id, "malformed response list")
+    if request_count and not expected_custom_ids:
+        raise BatchDownloadError(job_id, "submitted request metadata is unavailable")
+
+    seen: set[str] = set()
+    for entry in responses:
+        if not isinstance(entry, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        custom_id = entry.get("custom_id")
+        if (
+            not isinstance(custom_id, str)
+            or custom_id not in expected_custom_ids
+            or custom_id in seen
+        ):
+            raise BatchDownloadError(job_id, "response identifiers do not match the submission")
+        seen.add(custom_id)
+        if entry.get("error") is not None:
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+        response = entry.get("response")
+        if not isinstance(response, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        status_code = response.get("status_code")
+        if status_code is not None and (
+            type(status_code) is not int or not 200 <= status_code < 300
+        ):
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+
+    if seen != expected_custom_ids or len(responses) != request_count:
+        raise BatchDownloadError(job_id, "download returned an incomplete result set")
+    return responses
+
+
 class BatchBackend(Protocol):
     """Submit/poll/retrieve contract shared by every batch backend."""
 
@@ -476,8 +518,14 @@ class PgLlmBatchBackend:
             )
             raise BatchDownloadError(job.job_id, reason)
         tracked = self._jobs.get(job.job_id, {}).get("requests", {})
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
         items: List[BatchResultItem] = []
-        for entry in payload.get("responses", []):
+        for entry in responses:
             custom_id = entry.get("custom_id", "")
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
@@ -816,9 +864,15 @@ class PgLlmBatchEmbeddingBackend:
         tracked = self._jobs.get(job.job_id, {})
         tracked_requests = tracked.get("requests", {})
         order = tracked.get("order", [])
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked_requests),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
         position_by_custom_id = {custom_id: pos for pos, custom_id in enumerate(order)}
         items: List[EmbeddingBatchResultItem] = []
-        for entry in payload.get("responses", []):
+        for entry in responses:
             custom_id = entry.get("custom_id", "")
             body = (entry.get("response") or {}).get("body", {})
             embedding = _extract_embedding(body)

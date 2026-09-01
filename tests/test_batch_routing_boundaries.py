@@ -226,7 +226,7 @@ def test_pg_embedding_backend_full_lifecycle_with_assembler() -> None:
     assert items[1].model == "contextual-orchestrator"
 
 
-def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
+def test_pg_embedding_backend_rejects_untracked_response_ids() -> None:
     client = _FakeEmbeddingClient()
     backend = PgLlmBatchEmbeddingBackend(client, endpoint_alias="nim-east")
     requests = [EmbeddingBatchRequest(input_text="solo input", custom_id="emb_solo")]
@@ -250,12 +250,8 @@ def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
             "response": {"body": {}},
         },
     ]
-    items = backend.retrieve(job)
-    assert len(items) == 2
-    # Untracked ids fall back to positional indexes and default model naming.
-    assert [item.index for item in items] == [0, 1]
-    assert all(item.model == "contextual-orchestrator" for item in items)
-    assert items[1].embedding == []
+    with pytest.raises(BatchDownloadError, match="identifiers do not match"):
+        backend.retrieve(job)
 
 
 def test_pg_embedding_backend_failed_download_raises_download_error() -> None:
