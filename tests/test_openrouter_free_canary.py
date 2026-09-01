@@ -1,5 +1,6 @@
 """Contracts for the bounded OpenRouter free-model canary."""
 
+import json
 from pathlib import Path
 import pytest
 
@@ -119,14 +120,32 @@ def test_live_fails_before_transport_when_evidence_path_is_unwritable(
 
 def test_expired_evidence_cleanup_never_contacts_provider(tmp_path: Path) -> None:
     output = tmp_path / "evidence.json"
-    output.write_text('{"expires_at": 100}\n')
+    output.write_text(
+        '{"schema_version":1,"provider":"openrouter","mode":"live","expires_at":100}\n'
+    )
     assert prune_expired_openrouter_canary_evidence(output, now=lambda: 100) is True
     assert not output.exists()
     assert prune_expired_openrouter_canary_evidence(output, now=lambda: 101) is False
 
-    output.write_text('{"expires_at": 200}\n')
+    output.write_text(
+        '{"schema_version":1,"provider":"openrouter","mode":"live","expires_at":200}\n'
+    )
     assert prune_expired_openrouter_canary_evidence(output, now=lambda: 199) is False
     assert output.exists()
+
+
+def test_cleanup_rejects_unrelated_json_and_special_paths(tmp_path: Path) -> None:
+    unrelated = tmp_path / "unrelated.json"
+    unrelated.write_text('{"expires_at": 1}\n')
+    with pytest.raises(OpenRouterCanaryError, match="not OpenRouter"):
+        prune_expired_openrouter_canary_evidence(unrelated, now=lambda: 2)
+    assert unrelated.exists()
+
+    symlink = tmp_path / "evidence-link.json"
+    symlink.symlink_to(unrelated)
+    with pytest.raises(OpenRouterCanaryError, match="regular file"):
+        prune_expired_openrouter_canary_evidence(symlink, now=lambda: 2)
+    assert unrelated.exists()
 
 
 def test_canary_fails_closed_on_missing_credential_or_price() -> None:
@@ -176,12 +195,17 @@ def test_live_preflights_output_and_removes_expired_evidence(tmp_path: Path) -> 
     backend.set("OPENROUTER_API_KEY", "secret")
     set_backend(backend)
     expired = tmp_path / "expired.json"
-    expired.write_text('{"provider":"openrouter","expires_at":99}', encoding="utf-8")
+    expired.write_text(
+        '{"schema_version":1,"provider":"openrouter","mode":"live","expires_at":99}',
+        encoding="utf-8",
+    )
     seen = {}
 
     class Client:
         def __init__(self, **_kwargs):
-            seen["expired_before_transport"] = not expired.exists()
+            seen["outcome_before_transport"] = json.loads(
+                expired.read_text(encoding="utf-8")
+            )["outcome"]
 
         def chat(self, _agent, _messages):
             return "OK"
@@ -206,8 +230,40 @@ def test_live_preflights_output_and_removes_expired_evidence(tmp_path: Path) -> 
             )
     finally:
         set_backend(None)
-    assert seen["expired_before_transport"] is True
+    assert seen["outcome_before_transport"] == "pending"
     assert expired.stat().st_mode & 0o777 == 0o600
+
+
+def test_live_persists_attempt_and_validates_response(tmp_path: Path) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    output = tmp_path / "evidence.json"
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, _agent, _messages):
+            document = output.read_text(encoding="utf-8")
+            assert '"outcome": "pending"' in document
+            assert '"request_count": 1' in document
+            return "not ok"
+
+    try:
+        with pytest.raises(OpenRouterCanaryError, match="invalid response"):
+            run_openrouter_free_canary(
+                live=True,
+                limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+                evidence_output=output,
+                discover=lambda *_a, **_k: [_model("current-free")],
+                client_factory=Client,
+                now=iter((100, 200)).__next__,
+            )
+    finally:
+        set_backend(None)
+    assert '"outcome": "invalid_response"' in output.read_text(encoding="utf-8")
+    assert '"discovered_at": 200' in output.read_text(encoding="utf-8")
 
 
 def test_live_rejects_fifo_before_discovery_or_completion_transport(

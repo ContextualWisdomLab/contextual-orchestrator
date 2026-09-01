@@ -148,15 +148,19 @@ python -m contextual_orchestrator openrouter-free-canary --live \
 Every live cap and the evidence path/retention choice is mandatory. The command
 uses only the KV-registered `OPENROUTER_API_KEY`, disables retries, makes one
 fixed prompt request, and writes atomic JSON evidence containing neither the
-prompt, response, nor credential. Before transport it removes expired evidence
-at the same output path and proves that a mode-`0600` atomic write is possible;
+prompt, response, nor credential. It records the attempt as `pending` before
+transport, then atomically records the validated `OK` outcome. Before transport
+it removes expired evidence at the same output path and proves that a
+mode-`0600` atomic write is possible; unrelated, malformed, or unexpired files
+are never overwritten;
 retention cleanup therefore runs whenever the canary is invoked. The file also
 records `expires_at`; run
 `python -m contextual_orchestrator openrouter-free-canary
 --prune-expired-evidence ./openrouter-canary.json` from the operator's chosen
-retention lifecycle. Cleanup reads only that local file, removes it at or after
-its deadline, and never resolves a credential, discovers a model, or calls a
-provider. This repository deliberately adds no scheduler.
+retention lifecycle. Cleanup reads only that local file, verifies the canary
+schema/provider/mode identity, removes it at or after its deadline, and never
+resolves a credential, discovers a model, or calls a provider. This repository
+deliberately adds no scheduler.
 
 Seed the credential into the KV once at bootstrap:
 

@@ -88,6 +88,16 @@ def _write_evidence(path: Path, evidence: dict[str, Any]) -> None:
         raise
 
 
+def _is_live_canary_evidence(document: object) -> bool:
+    """Return whether a document carries this canary's deletion identity."""
+    return (
+        isinstance(document, dict)
+        and document.get("schema_version") == 1
+        and document.get("provider") == "openrouter"
+        and document.get("mode") == "live"
+    )
+
+
 def _prepare_evidence_path(path: Path, current_time: int) -> None:
     """Remove expired prior evidence and prove a secure atomic write is possible."""
     try:
@@ -96,17 +106,19 @@ def _prepare_evidence_path(path: Path, current_time: int) -> None:
         mode = None
     if mode is not None and not stat.S_ISREG(mode):
         raise OpenRouterCanaryError("evidence output must be a regular file path")
-    try:
-        prior = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
-        prior = None
-    if (
-        isinstance(prior, dict)
-        and prior.get("provider") == "openrouter"
-        and type(prior.get("expires_at")) is int
-        and prior["expires_at"] <= current_time
-    ):
-        path.unlink(missing_ok=True)
+    if mode is not None:
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise OpenRouterCanaryError("existing evidence could not be inspected") from exc
+        if not _is_live_canary_evidence(prior):
+            raise OpenRouterCanaryError("evidence output contains unrelated data")
+        expires_at = prior.get("expires_at")
+        if type(expires_at) is not int:
+            raise OpenRouterCanaryError("existing canary evidence has no valid expiry")
+        if expires_at > current_time:
+            raise OpenRouterCanaryError("unexpired canary evidence already exists")
+        path.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.preflight.", dir=path.parent
@@ -120,11 +132,17 @@ def prune_expired_openrouter_canary_evidence(
 ) -> bool:
     """Remove one expired evidence file without contacting a provider."""
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        mode = path.lstat().st_mode
     except FileNotFoundError:
         return False
+    if not stat.S_ISREG(mode):
+        raise OpenRouterCanaryError("canary evidence must be a regular file")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise OpenRouterCanaryError("canary evidence could not be inspected") from exc
+    if not _is_live_canary_evidence(document):
+        raise OpenRouterCanaryError("file is not OpenRouter canary evidence")
     expires_at = document.get("expires_at") if isinstance(document, dict) else None
     if type(expires_at) is not int:
         raise OpenRouterCanaryError("canary evidence has no valid expiry")
@@ -160,11 +178,10 @@ def run_openrouter_free_canary(
                 "live mode requires all caps and an evidence output path"
             )
         limits.validate()
-    discovered_at = int(now())
     if live:
         assert evidence_output is not None
         try:
-            _prepare_evidence_path(evidence_output, discovered_at)
+            _prepare_evidence_path(evidence_output, int(now()))
         except OSError as exc:
             raise OpenRouterCanaryError("evidence output is not writable") from exc
     candidates = _eligible(
@@ -177,6 +194,7 @@ def run_openrouter_free_canary(
             "current discovery has no unambiguous zero-price chat candidate"
         )
     selected = candidates[0]
+    discovered_at = int(now())
     evidence: dict[str, Any] = {
         "schema_version": 1,
         "mode": "live" if live else "dry_run",
@@ -192,22 +210,34 @@ def run_openrouter_free_canary(
     }
     if live:
         assert limits is not None and evidence_output is not None
+        evidence.update(
+            {
+                "request_count": 1,
+                "limits": asdict(limits),
+                "expires_at": discovered_at + limits.retention_days * 86400,
+                "outcome": "pending",
+            }
+        )
+        _write_evidence(evidence_output, evidence)
         client = client_factory(
             timeout=limits.timeout_seconds,
             max_output_tokens=limits.max_output_tokens,
             max_retries=0,
             temperature=0.0,
         )
-        client.chat(
-            agent_from_discovered(selected), [{"role": "user", "content": "Reply OK."}]
-        )
-        evidence.update(
-            {
-                "request_count": 1,
-                "limits": asdict(limits),
-                "expires_at": discovered_at + limits.retention_days * 86400,
-                "outcome": "completed",
-            }
-        )
+        try:
+            response = client.chat(
+                agent_from_discovered(selected),
+                [{"role": "user", "content": "Reply OK."}],
+            )
+        except Exception as exc:
+            evidence["outcome"] = "failed"
+            _write_evidence(evidence_output, evidence)
+            raise OpenRouterCanaryError("OpenRouter canary request failed") from exc
+        if not isinstance(response, str) or response.strip() != "OK":
+            evidence["outcome"] = "invalid_response"
+            _write_evidence(evidence_output, evidence)
+            raise OpenRouterCanaryError("OpenRouter canary returned an invalid response")
+        evidence["outcome"] = "completed"
         _write_evidence(evidence_output, evidence)
     return evidence
