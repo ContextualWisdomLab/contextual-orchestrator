@@ -18,7 +18,7 @@ returned lease, versions that changed lease contract as `1.1.0`, and locks its c
 with a golden vector plus schema regression test. Real-Podman job `99758127137` passed isolation,
 readiness, cleanup, and leak rejection at that exact head. The remaining hosted gates are pending.
 This proves the profile on its Linux acceptance runner but not current-head release readiness. It
-do not prove that a consumable cross-process contract has been published or that protected upstream
+does not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
 
