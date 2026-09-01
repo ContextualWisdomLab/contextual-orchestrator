@@ -51,7 +51,6 @@ jobs:
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
-    timeout-minutes: 210
     permissions:
       contents: write # required for reviewed branch fixes; scoped to this job
       pull-requests: write
@@ -103,7 +102,6 @@ jobs:
           echo "GATEWAY_BEARER_TOKEN=$gateway_token" >> "$GITHUB_ENV"
 
       - name: Start the contextual-orchestrator gateway with auto-discovery
-        timeout-minutes: 10
         run: |
           set -euo pipefail
           nohup python -m scripts.ci.serve_seeded_gateway \
@@ -164,9 +162,6 @@ jobs:
             > /tmp/trusted-pr-numbers.txt
 
       - name: Run the hourly loop agent
-        # The bounded setup steps plus this two-and-a-half-hour review budget
-        # fit inside the 210-minute job budget with room for failure evidence.
-        timeout-minutes: 150
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
