@@ -58,7 +58,7 @@ jobs:
             tests/test_structured_output_distinct_fallback.py \
             tests/test_model_judge.py \
             tests/test_chat_response_format_http_honesty.py \
-            tests/test_candidate_routing_controls.py \
+            tests/test_routing_endpoint_constraint.py \
             tests/test_provider_error_taxonomy.py
 
           uv run --locked --extra api --extra db --extra queue --group dev \
