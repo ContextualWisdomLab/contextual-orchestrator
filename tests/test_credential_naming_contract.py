@@ -9,6 +9,7 @@ import pytest
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     delete_credential,
+    get_backend,
     get_credential,
     register_credential,
     set_backend,
@@ -30,13 +31,16 @@ def test_public_credential_helpers_expose_semantic_identifier_names() -> None:
     get_parameters = signature(get_credential).parameters
     register_parameters = signature(register_credential).parameters
     delete_parameters = signature(delete_credential).parameters
+    backend_parameters = signature(set_backend).parameters
 
     assert tuple(get_parameters) == ("credential_name",)
     assert tuple(register_parameters) == ("credential_name", "credential_value")
     assert tuple(delete_parameters) == ("credential_name",)
+    assert tuple(backend_parameters) == ("credential_backend",)
     assert get_parameters["credential_name"].default is Parameter.empty
     assert register_parameters["credential_name"].default is Parameter.empty
     assert register_parameters["credential_value"].default is Parameter.empty
+    assert backend_parameters["credential_backend"].default is Parameter.empty
 
 
 def test_semantic_keyword_calls_roundtrip_through_active_backend() -> None:
@@ -51,8 +55,11 @@ def test_semantic_keyword_calls_roundtrip_through_active_backend() -> None:
 
 def test_legacy_generic_keywords_remain_bounded_compatibility_aliases() -> None:
     """Preserve historical keyword callers without keeping generic public metadata."""
-    register_credential(name="OPENAI_API_KEY", value="legacy-secret")
+    legacy_backend = InMemoryCredentialBackend()
+    set_backend(backend=legacy_backend)
+    assert get_backend() is legacy_backend
 
+    register_credential(name="OPENAI_API_KEY", value="legacy-secret")
     assert get_credential(name="OPENAI_API_KEY") == "legacy-secret"
 
     delete_credential(name="OPENAI_API_KEY")
@@ -70,6 +77,9 @@ def test_semantic_and_legacy_keywords_cannot_compete_for_authority() -> None:
             credential_value="semantic-secret",
             value="legacy-secret",
         )
+
+    with pytest.raises(TypeError, match="credential_backend"):
+        set_backend(credential_backend=InMemoryCredentialBackend(), backend=None)
 
 
 def test_unknown_credential_keywords_fail_closed() -> None:
