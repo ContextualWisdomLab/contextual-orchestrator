@@ -710,6 +710,8 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("unit_pricing", None)
         row.pop("max_output_tokens", None)
         row.pop("context_window", None)
+        row.pop("context_length", None)
+        row.pop("max_completion_tokens", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",

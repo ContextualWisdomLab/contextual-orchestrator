@@ -116,6 +116,36 @@ def test_model_normalization_withholds_non_positive_limit_metadata() -> None:
 
     assert normalized.max_output_tokens is None
     assert normalized.context_window is None
+    assert normalized.max_output_tokens_conflicted is True
+    assert normalized.context_window_conflicted is True
+
+
+def test_successful_refresh_clears_known_limits_after_invalid_metadata() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    invalid = replace(known, max_output_tokens=0, context_window=-1)
+    store.record_success(
+        source,
+        [invalid],
+        eligible_model_ids={invalid.model_id},
+        serving_tags={invalid.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert refreshed.max_output_tokens is None
+    assert refreshed.context_window is None
 
 
 def test_model_normalization_preserves_signed_64_bit_limit_metadata() -> None:
@@ -592,6 +622,36 @@ def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
         [conflicted],
         eligible_model_ids={conflicted.model_id},
         serving_tags={conflicted.model_id: ("discovered", "chat")},
+    )
+
+    statement, params = next(
+        call
+        for call in connection.cursor_object.calls
+        if "INSERT INTO provider_model" in call[0]
+    )
+    assert "CASE WHEN %s THEN NULL" in statement
+    assert params[3:5] == (None, None)
+    assert params[-2:] == (True, True)
+
+
+def test_postgres_success_clears_invalid_limit_metadata() -> None:
+    source = _source()
+    connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: connection,
+    )
+    invalid = replace(
+        _model(source, "model-a"),
+        max_output_tokens=0,
+        context_window=-1,
+    )
+
+    store.record_success(
+        source,
+        [invalid],
+        eligible_model_ids={invalid.model_id},
+        serving_tags={invalid.model_id: ("discovered", "chat")},
     )
 
     statement, params = next(

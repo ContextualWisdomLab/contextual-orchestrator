@@ -544,7 +544,9 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
             {
                 "id": "mismatch-model",
                 "context_window": 999_999,
+                "context_length": 888_888,
                 "max_output_tokens": 99_999,
+                "max_completion_tokens": 88_888,
             },
             {
                 "id": "missing-model",
@@ -604,7 +606,9 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
     assert merged["data"][0]["context_window"] == 128000
     assert merged["data"][0]["max_output_tokens"] == 4096
     assert "context_window" not in merged["data"][1]
+    assert "context_length" not in merged["data"][1]
     assert "max_output_tokens" not in merged["data"][1]
+    assert "max_completion_tokens" not in merged["data"][1]
     assert merged["data"][1]["_context_window_conflicted"] is True
     assert merged["data"][1]["_max_output_tokens_conflicted"] is True
     assert "context_window" not in merged["data"][2]

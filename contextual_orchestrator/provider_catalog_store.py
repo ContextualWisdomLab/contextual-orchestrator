@@ -336,24 +336,26 @@ def normalize_discovered_model(
         if item.dimension in UNIT_PRICE_DIMENSIONS
         and (price := _normalize_price(item.price)) is not None
     )
+    max_output_tokens = _normalize_positive_int(model.max_output_tokens)
+    context_window = _normalize_positive_int(model.context_window)
+    max_output_tokens_conflicted = bool(
+        model.max_output_tokens_conflicted
+        or (model.max_output_tokens is not None and max_output_tokens is None)
+    )
+    context_window_conflicted = bool(
+        model.context_window_conflicted
+        or (model.context_window is not None and context_window is None)
+    )
     return DiscoveredModel(
         provider_name=source.provider_name,
         model_id=name,
         credential_name=source.credential_name,
         chat_base_url=source.chat_base_url,
         auth_scheme=source.auth_scheme,
-        max_output_tokens=(
-            None
-            if model.max_output_tokens_conflicted
-            else _normalize_positive_int(model.max_output_tokens)
-        ),
-        context_window=(
-            None
-            if model.context_window_conflicted
-            else _normalize_positive_int(model.context_window)
-        ),
-        max_output_tokens_conflicted=bool(model.max_output_tokens_conflicted),
-        context_window_conflicted=bool(model.context_window_conflicted),
+        max_output_tokens=None if max_output_tokens_conflicted else max_output_tokens,
+        context_window=None if context_window_conflicted else context_window,
+        max_output_tokens_conflicted=max_output_tokens_conflicted,
+        context_window_conflicted=context_window_conflicted,
         prompt_price_per_1k=_normalize_price(model.prompt_price_per_1k),
         completion_price_per_1k=_normalize_price(
             model.completion_price_per_1k
