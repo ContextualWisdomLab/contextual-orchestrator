@@ -842,6 +842,66 @@ def test_virtual_passthrough_fails_over_on_single_tool_call_limit() -> None:
 
 
 @pytest.mark.parametrize(
+    "failure",
+    [
+        _http_error(
+            400,
+            {
+                "error": {
+                    "code": "invalid_tools",
+                    "message": "each tool.function.description must be at most 1024 characters",
+                }
+            },
+        ),
+        _http_error(
+            400,
+            {
+                "error": {
+                    "code": "invalid_request_error",
+                    "message": "This model only supports single tool-calls at once!",
+                }
+            },
+        ),
+    ],
+    ids=["provider_tool_description_limit", "single_tool_call_limit"],
+)
+def test_capability_mismatch_failover_does_not_penalize_the_model(
+    failure: urllib.error.HTTPError,
+) -> None:
+    """A structural capability mismatch must not trip the circuit breaker.
+
+    Codex Review (ContextualWisdomLab/contextual-orchestrator#986): a model
+    rejecting a request shape it can never support (too many tool
+    descriptions, more than one tool call per turn) says nothing about that
+    model's health for a differently-shaped future request. Unlike a
+    reliability failure, this must not count as a failed stability
+    observation -- otherwise an ordinary, differently-shaped future request
+    to the same model could be wrongly deprioritized or circuit-broken.
+    """
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": "contextual-orchestrator",
+            "messages": [{"role": "user", "content": "use two tools at once"}],
+            "tools": [
+                {"type": "function", "function": {"name": "inspect", "description": "x"}},
+                {"type": "function", "function": {"name": "scan", "description": "y"}},
+            ],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert orchestrator._circuit.get("primary_agent") in (None, {"failures": 0.0, "opened_at": 0.0})
+
+
+@pytest.mark.parametrize(
     "provider_error",
     [
         "each tool.function.description must be at most 1024 characters",

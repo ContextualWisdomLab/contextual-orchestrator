@@ -1292,6 +1292,38 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
+    """Recognize a structural capability mismatch, not a reliability failure.
+
+    A model rejecting a request shape it can never support (too many tool
+    descriptions, more than one tool call per turn) says nothing about that
+    model's health for a differently-shaped future request -- unlike an
+    oversized-payload rejection (already exempted via
+    _is_request_too_large_error), this failure is not size-dependent, but the
+    same principle applies: it must not trip the circuit breaker or count as
+    a failed stability observation for the model or its group (Codex Review,
+    ContextualWisdomLab/contextual-orchestrator#986).
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError) and (
+            _is_provider_tool_description_limit_error(current)
+            or _is_single_tool_call_limit_error(current)
+        ):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -3830,9 +3862,10 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large
                     and request_too_large
                 )
-                if not request_too_large:
+                capability_mismatch = _is_capability_mismatch_failover_error(exc)
+                if not (request_too_large or capability_mismatch):
                     self._record_failure(candidate.id)
-                if candidate.group_name and not request_too_large:
+                if candidate.group_name and not (request_too_large or capability_mismatch):
                     self._group_router.observe_failure(candidate.id)
                 continue
             self._record_success(candidate.id)
