@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_AGENT_POOL_INTEGER_MAX = 9_223_372_036_854_775_807
+
 OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
@@ -20,6 +22,61 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "AuthoritativeUsage": {
+                "type": ["object", "null"],
+                "required": ["prompt_tokens", "completion_tokens"],
+                "properties": {
+                    "prompt_tokens": {"type": "integer", "minimum": 0},
+                    "completion_tokens": {"type": "integer", "minimum": 0},
+                    "total_tokens": {"type": "integer", "minimum": 0},
+                },
+            },
+            "UsageCost": {
+                "type": "object",
+                "required": ["cost_amount", "currency_code", "measurement_status"],
+                "properties": {
+                    "cost_amount": {"type": ["number", "null"]},
+                    "currency_code": {"type": "string"},
+                    "measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                },
+            },
+            "ChatCompletionResponse": {
+                "type": "object",
+                "required": ["id", "object", "created", "model", "choices", "usage", "usage_measurement_status"],
+                "oneOf": [
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "measured"},
+                            "usage": {
+                                "type": "object",
+                                "required": ["prompt_tokens", "completion_tokens"],
+                            },
+                        }
+                    },
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "unavailable"},
+                            "usage": {"type": "null"},
+                        }
+                    },
+                ],
+                "properties": {
+                    "id": {"type": "string"},
+                    "object": {"type": "string"},
+                    "created": {"type": "integer"},
+                    "model": {"type": "string"},
+                    "choices": {"type": "array", "items": {"type": "object"}},
+                    "usage": {"$ref": "#/components/schemas/AuthoritativeUsage"},
+                    "usage_measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                    "orchestration": {"type": "object"},
+                },
+            },
             "ModelGroupWrite": {
                 "type": "object",
                 "required": ["group_name", "member_agent_ids"],
@@ -167,7 +224,15 @@ OPENAPI_SPEC = {
                     },
                 },
                 "responses": {
-                    "200": {"description": "Chat completion or SSE response"},
+                    "200": {
+                        "description": "Chat completion or SSE response; missing provider usage is explicitly unavailable",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ChatCompletionResponse"}
+                            },
+                            "text/event-stream": {"schema": {"type": "string"}},
+                        },
+                    },
                     "400": {"description": "Invalid request"},
                 },
             }
@@ -437,6 +502,26 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
+                                    "max_output_tokens": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
+                                    "context_window": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
                                     "stream_usage_supported": {"type": "boolean"},
                                 },
                             },
@@ -963,7 +1048,13 @@ OPENAPI_SPEC = {
                             "input_part_counts, map_reduce}"
                         )
                     },
-                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "202": {
+                        "description": (
+                            "Batch accepted with registry-owned job_retention_ms and "
+                            "backend-owned poll_after_ms; poll GET "
+                            "/v1/batch/embeddings/{batch_id}"
+                        )
+                    },
                     "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }

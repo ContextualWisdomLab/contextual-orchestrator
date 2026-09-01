@@ -1,0 +1,151 @@
+name: NIM benchmark
+
+# Evidence-grade NVIDIA NIM model discovery and cost-quality benchmark.
+# Manual dispatch defaults to a deterministic dry run. Monthly scheduled runs
+# are live but use a conservative hard request cap. The first-of-month schedule
+# keeps the next run inside the current reviewed evidence window; stale evidence
+# still fails closed. Dry execution receives no provider credential; only the
+# live step can read NVIDIA_NIM_API_KEY.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run without contacting NVIDIA"
+        type: boolean
+        default: true
+      max_total_requests:
+        description: "Hard cap on provider requests for this run"
+        type: number
+        default: 2000
+      pricing_scenario:
+        description: "Optional reviewed pricing-scenario JSON path"
+        type: string
+        default: ""
+  schedule:
+    - cron: "23 3 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nim-benchmark
+  cancel-in-progress: false
+
+jobs:
+  dry_run_benchmark:
+    name: Deterministic NIM benchmark dry run
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned runtime
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+
+      - name: Run dry benchmark
+        env:
+          MAX_REQUESTS: ${{ inputs.max_total_requests }}
+          PRICING_SCENARIO: ${{ inputs.pricing_scenario }}
+          PROVENANCE_GIT_SHA: ${{ github.sha }}
+          PROVENANCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [ -n "$PRICING_SCENARIO" ]; then
+            extra_args+=(--pricing-scenario "$PRICING_SCENARIO")
+          fi
+          python -m contextual_orchestrator nim-benchmark \
+            --dry-run \
+            "${extra_args[@]}" \
+            --task-manifest examples/nim_task_manifest.json \
+            --output-dir benchmark_artifacts \
+            --max-total-requests "$MAX_REQUESTS" \
+            --git-sha "$PROVENANCE_GIT_SHA" \
+            --workflow-run-id "$PROVENANCE_RUN_ID"
+
+      - name: Upload dry-run artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: nim-benchmark-dry-${{ github.run_id }}
+          path: benchmark_artifacts/
+          retention-days: 30
+          if-no-files-found: error
+
+  live_benchmark:
+    name: Live NIM catalog benchmark
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned runtime
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+
+      - name: Resolve live parameters
+        id: live_params
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MAX_REQUESTS: ${{ inputs.max_total_requests }}
+          INPUT_PRICING: ${{ inputs.pricing_scenario }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            echo "max_requests=2000" >> "$GITHUB_OUTPUT"
+            echo "pricing_scenario=" >> "$GITHUB_OUTPUT"
+          else
+            echo "max_requests=${INPUT_MAX_REQUESTS}" >> "$GITHUB_OUTPUT"
+            echo "pricing_scenario=${INPUT_PRICING}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run live benchmark
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          MAX_REQUESTS: ${{ steps.live_params.outputs.max_requests }}
+          PRICING_SCENARIO: ${{ steps.live_params.outputs.pricing_scenario }}
+          PROVENANCE_GIT_SHA: ${{ github.sha }}
+          PROVENANCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [ -n "$PRICING_SCENARIO" ]; then
+            extra_args+=(--pricing-scenario "$PRICING_SCENARIO")
+          fi
+          python -m contextual_orchestrator nim-benchmark \
+            "${extra_args[@]}" \
+            --task-manifest examples/nim_task_manifest.json \
+            --output-dir benchmark_artifacts \
+            --max-total-requests "$MAX_REQUESTS" \
+            --git-sha "$PROVENANCE_GIT_SHA" \
+            --workflow-run-id "$PROVENANCE_RUN_ID"
+
+      - name: Upload live benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: nim-benchmark-live-${{ github.run_id }}
+          path: benchmark_artifacts/
+          retention-days: 90
+          if-no-files-found: warn
