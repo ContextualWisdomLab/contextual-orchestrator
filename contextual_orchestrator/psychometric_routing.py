@@ -9,18 +9,23 @@ from typing import Iterable
 
 
 class PsychometricRoutingEvidence:
-    """Fit judged model-by-prompt responses and score the nearest prompt item.
+    """Fit judged model-by-prompt responses and score calibrated prompt items.
 
     The response matrix is model (person) by system/user interaction (item).
     A fast-mlsirm MLSRM fit estimates model ability and latent interaction
-    distance together. New prompts use the single nearest observed interaction
-    by embedding cosine; there is no hand-tuned similarity threshold or score
-    weight. Candidates without a fitted estimate remain unranked so the caller
-    can preserve its existing measured-routing order.
+    distance jointly for *observed* prompt items. Routing evidence is therefore
+    emitted only for an exact prompt item whose parameters participated in the
+    fitted response matrix. Unseen prompts remain unranked until they acquire
+    observations (or a separately validated explanatory-item model is added).
+
+    Earlier code copied the score of the single cosine-nearest observed prompt
+    to an unseen prompt. That 1-nearest-neighbour substitution had no calibrated
+    item-linking model or validation evidence and could change a serving
+    decision; it is deliberately removed rather than hidden behind a similarity
+    cutoff or another hand-tuned rule.
     """
 
-    def __init__(self, max_contexts: int = 512) -> None:
-        self.max_contexts = max_contexts
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._contexts: OrderedDict[str, list[float] | None] = OrderedDict()
         self._responses: dict[tuple[str, str, int], int] = {}
@@ -70,11 +75,6 @@ class PsychometricRoutingEvidence:
                 del self._responses[key]
             for item_index, value in enumerate(values):
                 self._responses[(agent_id, context_id, item_index)] = value
-            while len(self._contexts) > self.max_contexts:
-                removed, _ = self._contexts.popitem(last=False)
-                self._responses = {
-                    key: value for key, value in self._responses.items() if key[1] != removed
-                }
             self._revision += 1
 
     def ranked_evidence(
@@ -83,25 +83,20 @@ class PsychometricRoutingEvidence:
         prompt_interaction: str,
         vector: list[float] | None,
     ) -> list[tuple[str, float]]:
-        """Return only candidates with a fitted contextual success estimate."""
+        """Return fitted evidence only for the exact calibrated prompt item.
+
+        ``vector`` remains in the public signature for persisted-state and
+        caller compatibility, but it is not used to transfer scores between
+        items. A future explanatory-item model may consume vectors only after
+        its out-of-item predictive validity is established explicitly.
+        """
+        del vector
         with self._lock:
             self._fit_locked()
             if not self._scores:
                 return []
-            exact_id = self.context_id(prompt_interaction)
-            if exact_id in self._scores:
-                context_id = exact_id
-            elif vector is not None:
-                comparable = [
-                    (self._cosine(vector, stored_vector), stored_id)
-                    for stored_id, stored_vector in self._contexts.items()
-                    if stored_id in self._scores and stored_vector is not None
-                ]
-                comparable = [item for item in comparable if item[0] is not None]
-                if not comparable:
-                    return []
-                context_id = max(comparable, key=lambda item: (item[0], item[1]))[1]
-            else:
+            context_id = self.context_id(prompt_interaction)
+            if context_id not in self._scores:
                 return []
             scored = [
                 (agent_id, self._scores[context_id][agent_id])
@@ -111,7 +106,7 @@ class PsychometricRoutingEvidence:
             return sorted(scored, key=lambda item: (-item[1], item[0]))
 
     def has_observations(self) -> bool:
-        """Return whether embedding/fit work can affect a ranking."""
+        """Return whether fit work can affect an exact-item ranking."""
         with self._lock:
             return bool(self._responses)
 
@@ -184,15 +179,3 @@ class PsychometricRoutingEvidence:
             # Missing package, insufficient IRT evidence, or failed native fit
             # means "no psychometric evidence", never a fabricated rank.
             return
-
-    @staticmethod
-    def _cosine(left: list[float], right: list[float]) -> float | None:
-        """Cosine similarity for two finite, equal-length embedding vectors."""
-        if not left or len(left) != len(right):
-            return None
-        dot = sum(a * b for a, b in zip(left, right))
-        left_norm = sum(value * value for value in left) ** 0.5
-        right_norm = sum(value * value for value in right) ** 0.5
-        if left_norm == 0.0 or right_norm == 0.0:
-            return None
-        return dot / (left_norm * right_norm)
