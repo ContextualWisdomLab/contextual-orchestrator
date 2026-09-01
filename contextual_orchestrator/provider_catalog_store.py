@@ -327,6 +327,7 @@ def normalize_discovered_model(
         supports_no_prompt_retention=model.supports_no_prompt_retention,
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
+        spend_admitted=bool(model.spend_admitted),
     )
 
 
@@ -353,6 +354,7 @@ def _restore_model_semantics(
         currency_code=model.currency_code,
         unit_prices=model.unit_prices,
         is_free="cost:free" in normalized,
+        spend_admitted="spend:blocked" not in normalized,
         supports_zero_data_retention=(
             True if "privacy:zdr" in normalized else False if "privacy:no_zdr" in normalized else None
         ),

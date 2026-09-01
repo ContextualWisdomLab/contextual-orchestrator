@@ -187,6 +187,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
+                *(("spend:blocked",) if not model.spend_admitted else ()),
                 *privacy_tags_for_discovered(model),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
