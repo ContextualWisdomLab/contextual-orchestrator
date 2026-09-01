@@ -1,0 +1,376 @@
+name: PR 1004 review findings GREEN
+
+on:
+  push:
+    branches:
+      - fix/structured-output-distinct-fallback-998
+    paths:
+      - .github/workflows/pr1004-review-green.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr1004-review-findings-writer
+  cancel-in-progress: false
+
+jobs:
+  green:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: fix/structured-output-distinct-fallback-998
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+      - name: Apply causal repairs, verify, and self-remove
+        env:
+          TARGET_BRANCH: fix/structured-output-distinct-fallback-998
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("    def _orchestrated_provider_completion(")
+          end = text.index("\n    @contextmanager\n    def routing_endpoint_scope(", start)
+          segment = text[start:end]
+
+          old = '''        def send_synthesis(
+              payload: dict[str, Any],
+          ) -> tuple[dict[str, Any], ModelAgent]:
+              """Handle transport fallback while the outer loop owns JSON recovery."""
+          '''
+          new = '''        def send_synthesis(
+              payload: dict[str, Any],
+              *,
+              allow_cross_candidate_fallback: bool = True,
+          ) -> tuple[dict[str, Any], ModelAgent]:
+              """Handle transport fallback while the outer loop owns JSON recovery."""
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"send_synthesis signature anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          old = '''            ordered_candidates = [
+                  *([preferred] if preferred.id not in request_exclusions else []),
+                  *(
+                      candidate
+                      for candidate in synthesis_candidates
+                      if candidate.id != preferred.id
+                      and candidate.id not in request_exclusions
+                  ),
+              ]
+          '''
+          new = '''            ordered_candidates = (
+                  [preferred]
+                  if not allow_cross_candidate_fallback
+                  else [
+                      *([preferred] if preferred.id not in request_exclusions else []),
+                      *(
+                          candidate
+                          for candidate in synthesis_candidates
+                          if candidate.id != preferred.id
+                          and candidate.id not in request_exclusions
+                      ),
+                  ]
+              )
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"ordered candidate anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          marker = '''                    saw_request_too_large = saw_request_too_large or request_too_large
+                      if request_too_large and not virtual_model:
+          '''
+          insertion = '''                    saw_request_too_large = saw_request_too_large or request_too_large
+                      if not allow_cross_candidate_fallback:
+                          if request_too_large:
+                              if isinstance(exc, ProviderUpstreamError):
+                                  raise
+                              raise ProviderRequestTooLargeError(
+                                  "request body exceeds provider limit",
+                                  agent_id=candidate.id,
+                                  model=candidate.model,
+                                  transport="structured_repair",
+                              ) from exc
+                          if isinstance(exc, ProviderResponseError):
+                              raise
+                          raise classify_provider_failure(
+                              exc,
+                              agent_id=candidate.id,
+                              model=candidate.model,
+                              transport="structured_repair",
+                          ) from None
+                      if request_too_large and not virtual_model:
+          '''
+          if segment.count(marker) != 1:
+              raise SystemExit(f"transport boundary anchor count={segment.count(marker)}")
+          segment = segment.replace(marker, insertion, 1)
+
+          old = '''            self._replace_workflow_run(record)
+              self._run_order.appendleft(workflow_run_id)
+              if self._store is not None:
+          '''
+          new = '''            self._replace_workflow_run(record)
+              if failure_code is None:
+                  self._run_order.appendleft(workflow_run_id)
+              if self._store is not None:
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"structured persistence anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          budget = '''            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                  [*workflow["trace"], *structured_attempt_steps]
+              )
+              self._raise_if_spend_budget_exceeded(
+                  additional_output_tokens=in_flight_tokens,
+                  additional_cost_usd=in_flight_cost,
+              )
+          '''
+          if segment.count(budget) != 2:
+              raise SystemExit(f"structured budget anchor count={segment.count(budget)}")
+          segment = segment.replace(budget, "            enforce_structured_budget()\n", 2)
+
+          marker = '''            return workflow_run_id
+  
+          while True:
+          '''
+          helper = '''            return workflow_run_id
+  
+          def enforce_structured_budget() -> None:
+              """Charge completed attempts before propagating a budget stop."""
+              in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                  [*workflow["trace"], *structured_attempt_steps]
+              )
+              try:
+                  self._raise_if_spend_budget_exceeded(
+                      additional_output_tokens=in_flight_tokens,
+                      additional_cost_usd=in_flight_cost,
+                  )
+              except BudgetExceededError:
+                  persist_structured_record(
+                      "", failure_code="structured_budget_exceeded"
+                  )
+                  raise
+  
+          def next_structured_candidate(failed_agent: ModelAgent) -> ModelAgent:
+              """Retire one failed virtual candidate and return the next eligible one."""
+              request_exclusions.add(failed_agent.id)
+              next_agent = next(
+                  (
+                      candidate
+                      for candidate in synthesis_candidates
+                      if candidate.id not in request_exclusions
+                  ),
+                  None,
+              )
+              if next_agent is None:
+                  workflow_run_id = persist_structured_record(
+                      "", failure_code="structured_output_exhausted"
+                  )
+                  raise StructuredOutputExhaustedError(
+                      "every eligible structured-output candidate violated "
+                      "response_format",
+                      workflow_run_id=workflow_run_id,
+                  )
+              return next_agent
+  
+          while True:
+          '''
+          if segment.count(marker) != 1:
+              raise SystemExit(f"structured helper anchor count={segment.count(marker)}")
+          segment = segment.replace(marker, helper, 1)
+
+          old = "                repaired, final_agent = send_synthesis(repair_upstream)\n"
+          new = '''                repaired, final_agent = send_synthesis(
+                      repair_upstream,
+                      allow_cross_candidate_fallback=False,
+                  )
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"repair send anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          old = '''            except ProviderUpstreamError as exc:
+                  if not _is_request_too_large_error(exc):
+                      self._record_failure(final_agent.id)
+                  if (
+                      final_agent.group_name
+                      and not _is_request_too_large_error(exc)
+                  ):
+                      self._group_router.observe_failure(final_agent.id)
+                  persist_structured_record(
+                      "",
+                      failure_code=exc.error_code,
+                  )
+                  raise
+          '''
+          new = '''            except ProviderUpstreamError as exc:
+                  if virtual_model and _is_request_too_large_error(exc):
+                      repair_step = {
+                          "id": len(workflow["trace"]) + len(structured_attempt_steps),
+                          "role": "repair",
+                          "agent_id": final_agent.id,
+                          "subtask": "Strict structured-output repair",
+                          "access": [synthesis_step["id"]],
+                          "latency_ms": round(
+                              (time.perf_counter() - repair_started) * 1000, 2
+                          ),
+                          "output": "",
+                          "validation_outcome": "request_too_large",
+                      }
+                      structured_attempt_steps.append(repair_step)
+                      next_agent = next_structured_candidate(final_agent)
+                      enforce_structured_budget()
+                      final_agent = next_agent
+                      synthesis_started = time.perf_counter()
+                      continue
+                  if not _is_request_too_large_error(exc):
+                      self._record_failure(final_agent.id)
+                  if (
+                      final_agent.group_name
+                      and not _is_request_too_large_error(exc)
+                  ):
+                      self._group_router.observe_failure(final_agent.id)
+                  persist_structured_record(
+                      "",
+                      failure_code=exc.error_code,
+                  )
+                  raise
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"repair exception anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          old = '''            request_exclusions.add(failed_agent.id)
+              next_agent = next(
+                  (
+                      candidate
+                      for candidate in synthesis_candidates
+                      if candidate.id not in request_exclusions
+                  ),
+                  None,
+              )
+              if next_agent is None:
+                  workflow_run_id = persist_structured_record(
+                      "",
+                      failure_code="structured_output_exhausted",
+                  )
+                  raise StructuredOutputExhaustedError(
+                      "every eligible structured-output candidate violated "
+                      "response_format",
+                      workflow_run_id=workflow_run_id,
+                  )
+              enforce_structured_budget()
+          '''
+          new = '''            next_agent = next_structured_candidate(failed_agent)
+              enforce_structured_budget()
+          '''
+          if segment.count(old) != 1:
+              raise SystemExit(f"candidate advance anchor count={segment.count(old)}")
+          segment = segment.replace(old, new, 1)
+
+          text = text[:start] + segment + text[end:]
+
+          old = '            if not record.get("pending_verification"):\n                self._run_order.appendleft(record["workflow_run_id"])\n'
+          new = '            if not record.get("pending_verification") and not record.get("failure"):\n                self._run_order.appendleft(record["workflow_run_id"])\n'
+          if text.count(old) != 1:
+              raise SystemExit(f"reload visibility anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''        return [
+              run for run in self._workflow_runs.values()
+              if not run.get("pending_verification")
+          ]
+          '''
+          new = '''        return [
+              run
+              for run in self._workflow_runs.values()
+              if not run.get("pending_verification") and not run.get("failure")
+          ]
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"completed-run filter anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+          adr = Path("docs/planning/adrs/0035-structured-provider-orchestration.md")
+          adr_text = adr.read_text(encoding="utf-8")
+          marker = "## References\n"
+          research = '''## Research artifact reuse and redistribution
+  
+          This correctness repair does not introduce a new routing objective; it
+          restores ADR 0035's already-accepted bounded candidate-recovery semantics.
+          The relevant routing literature is already committed in this repository as
+          redistributable artifacts: [`RouteLLM`](../../papers/routellm-routing-2406.18665.pdf)
+          and [`Hybrid LLM`](../../papers/hybrid-llm-query-routing-2404.14618.pdf).
+          Their cost/quality-aware routing evidence supports selecting among eligible
+          model candidates; it does not authorize bypassing caller endpoint, privacy,
+          or budget constraints. Conductor and TRINITY remain cite-link-summary
+          references in `docs/papers/README.md` because this repository has not
+          independently established a redistribution grant for those newer preprints;
+          duplicating their PDFs in this PR would therefore weaken, not strengthen,
+          the repository's copyright rule.
+  
+          ## References
+          '''
+          if adr_text.count(marker) != 1:
+              raise SystemExit(f"ADR references anchor count={adr_text.count(marker)}")
+          adr.write_text(adr_text.replace(marker, research, 1), encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          change_text = changelog.read_text(encoding="utf-8")
+          marker = "### Fixed\n\n"
+          note = '''### Fixed
+  
+          - Structured-output review follow-up now charges already-incurred synthesis
+            and repair usage before propagating a budget stop, keeps failed workflow
+            evidence queryable without counting it as a normal recent/completed KPI,
+            and binds a repair to the candidate whose synthesis failed. A repair-only
+            413 retires that candidate and starts a fresh synthesis on the next
+            already-eligible candidate instead of forwarding the repair prompt across
+            providers. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
+            (Devin Review, PR #1004).
+          '''
+          if change_text.count(marker) != 1:
+              raise SystemExit(f"changelog Fixed anchor count={change_text.count(marker)}")
+          changelog.write_text(change_text.replace(marker, note, 1), encoding="utf-8")
+          PY
+
+          uv run --locked --extra api --extra db --extra queue --group dev \
+            python -m pytest -q \
+            tests/test_structured_output_distinct_fallback.py \
+            tests/test_model_judge.py \
+            tests/test_passthrough_provider_failover.py \
+            tests/test_budget_enforcement.py \
+            tests/test_persistence.py \
+            tests/test_paper_contracts.py
+
+          uv run --locked --extra api --extra db --extra queue --group dev \
+            python -m pytest -q \
+            --deselect 'tests/test_orchestrated_responses_stream.py::test_virtual_models_stream_openai_reasoning_summaries[orchestrator/free]' \
+            --deselect tests/test_orchestrated_responses_stream.py::test_http_virtual_responses_preserves_message_array_and_sampling_controls \
+            --deselect tests/test_orchestrated_responses_stream.py::test_stream_failure_emits_terminal_responses_event
+
+          python -m compileall -q contextual_orchestrator tests
+          git diff --check
+
+          rm -f \
+            .github/workflows/pr1004-review-red.yml \
+            .github/workflows/pr1004-review-green.yml
+          git diff --check
+
+          git config user.name "CWL PR 1004 review repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(structured-output): close review recovery gaps"
+          git push origin "HEAD:${TARGET_BRANCH}"
