@@ -18,7 +18,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import (  # noqa: E402
+    ModelAgent,
+    ReasoningEffortProfile,
+    TaskOrchestrator,
+)
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     _responses_to_chat_payload,
@@ -255,6 +259,56 @@ def test_structured_auto_uses_explicit_response_format_capability_for_synthesis(
     assert run["trace"][-1]["agent_id"] == "structured_agent"
 
 
+def test_structured_synthesis_honors_explicit_effort_profile_override_for_selection() -> None:
+    """A caller-supplied effort_profile must gate synthesizer selection/failover too.
+
+    The higher-priority agent has unproven reasoning_effort support, so a
+    fail-closed override (``unsupported_provider_fallback="error"``) must
+    exclude it from both the initial synthesizer pick and its failover list
+    -- exactly like the plain passthrough path already does (see
+    ``test_virtual_effort_profile_selects_a_supported_provider`` in
+    tests/test_passthrough_provider_failover.py). Before the fix, the
+    override reached only the outgoing payload via ``apply_effort_profile``,
+    so the unsupported agent was still selected and the call failed outright
+    with ``EffortProfileError`` instead of failing over to the supported one.
+    """
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "unsupported_agent",
+                "unsupported-model",
+                priority=10,
+                reasoning_effort_supported=False,
+            ),
+            ModelAgent(
+                "supported_agent",
+                "supported-model",
+                priority=1,
+                reasoning_effort_supported=True,
+            ),
+        ]
+    )
+    profile = ReasoningEffortProfile(
+        reasoning_effort="medium",
+        unsupported_provider_fallback="error",
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "messages": [{"role": "user", "content": "return JSON"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+        effort_profile=profile,
+    )
+
+    assert result["model"] == "supported-model"
+    run = orchestrator.get_workflow_run(
+        result["orchestration"]["workflow_run_id"]
+    )
+    assert run["trace"][-1]["agent_id"] == "supported_agent"
+
+
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
     try:
         _build().proxy_completion({
@@ -381,6 +435,58 @@ def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
     assert status == 413
     assert body["error"]["code"] == "request_too_large"
     assert body["error_message"] == "request body exceeds every eligible provider limit"
+
+
+def test_http_virtual_structured_synthesis_failure_returns_provider_error() -> None:
+    """A final provider failure is classified, not an internal server bug."""
+
+    class FailingSynthesisClient(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            del agent, endpoint, payload
+            raise urllib.error.URLError("synthetic provider outage")
+
+        proxy_send = proxy_send_once
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_agent", "worker-model", tags=("response_format",))],
+        client=FailingSynthesisClient(),  # type: ignore[arg-type]
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [{
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_agent",
+            "subtask": "Evidence",
+            "access": [],
+            "output": "evidence",
+        }],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 502
+    assert body["error"]["code"] == "provider_connection_error"
+    assert body["error"]["detail"]["retryable"] is True
+    assert "synthetic provider outage" not in json.dumps(body)
 
 
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:

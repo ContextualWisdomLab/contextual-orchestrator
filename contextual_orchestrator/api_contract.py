@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_AGENT_POOL_INTEGER_MAX = 9_223_372_036_854_775_807
+
 OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
@@ -500,6 +502,26 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
+                                    "max_output_tokens": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
+                                    "context_window": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
                                     "stream_usage_supported": {"type": "boolean"},
                                 },
                             },

@@ -16,6 +16,7 @@ from contextual_orchestrator import (
     ModelAgent,
     ReasoningEffortProfile,
     TaskOrchestrator,
+    default_role_effort_catalog,
 )
 from contextual_orchestrator.orchestrator import (
     ModelClient,
@@ -541,7 +542,7 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
         "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
     }
 
-    with pytest.raises(RuntimeError, match="fallback unavailable"):
+    with pytest.raises(ProviderUpstreamError) as exc_info:
         orchestrator.proxy_completion(
             {
                 "model": TaskOrchestrator.AUTO_MODEL,
@@ -551,6 +552,9 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
             single_agent=False,
         )
 
+    assert exc_info.value.agent_id == "fallback_agent"
+    assert exc_info.value.error_code == "api_error"
+    assert "fallback unavailable" not in str(exc_info.value)
     assert orchestrator._circuit["fallback_agent"]["failures"] == 1.0
     assert "primary_agent" not in orchestrator._circuit
 
@@ -1226,6 +1230,45 @@ def test_virtual_effort_profile_selects_a_supported_provider() -> None:
 
     assert result["model"] == "supported-model"
     assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]
+
+
+def test_explicit_omit_profile_overrides_fail_closed_catalog_ranking() -> None:
+    """A request override may intentionally use an unsupported provider."""
+    client = SequencedProxyClient(
+        {
+            "unsupported_agent": {"model": "unsupported-model"},
+            "supported_agent": {"model": "supported-model"},
+        }
+    )
+    unsupported = ModelAgent(
+        "unsupported_agent",
+        "unsupported-model",
+        base_url="https://unsupported.example/v1",
+        priority=10,
+        provider_name="unsupported",
+        reasoning_effort_supported=False,
+    )
+    supported = ModelAgent(
+        "supported_agent",
+        "supported-model",
+        base_url="https://supported.example/v1",
+        priority=1,
+        provider_name="supported",
+        reasoning_effort_supported=True,
+    )
+    orchestrator = TaskOrchestrator(
+        [unsupported, supported],
+        client=client,
+        role_effort_catalog=default_role_effort_catalog(),
+    )
+
+    result = orchestrator.proxy_completion(
+        {"messages": [{"role": "user", "content": "x"}]},
+        effort_profile=ReasoningEffortProfile(unsupported_provider_fallback="omit"),
+    )
+
+    assert result["model"] == "unsupported-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unsupported_agent"]
 
 
 def test_passthrough_with_no_ranked_provider_fails_cleanly(monkeypatch) -> None:

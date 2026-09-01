@@ -162,6 +162,190 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
 
 
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key: str) -> None:
+    expensive = ModelAgent(
+        "ranked_first", "expensive-embedding", "mock://expensive",
+        provider_name="expensive-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "cheapest_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([expensive, cheap])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-provider", expensive.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "cheapest_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {input_key: ["cost aware"]},
+        )
+        assert status == 200, document
+        assert backend.requests[0].agent_id == cheap.id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_demote_a_failed_cheapest_member(
+    path: str, input_key: str
+) -> None:
+    cheap = ModelAgent(
+        "cheap_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    fallback = ModelAgent(
+        "fallback_member", "fallback-embedding", "mock://fallback",
+        provider_name="fallback-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    orchestrator = TaskOrchestrator([cheap, fallback])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    price_book.set_price(PriceEntry("fallback-provider", fallback.model, 5.0, 0.0))
+
+    class _FailCheapBackend(_RecordingEmbeddingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts: list[str | None] = []
+
+        def submit(self, requests, metadata=None):
+            self.attempts.append(requests[0].agent_id)
+            if requests[0].agent_id == cheap.id:
+                raise RuntimeError("cheap member unavailable")
+            return super().submit(requests, metadata)
+
+    backend = _FailCheapBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "health_order_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+        payload = {input_key: ["cost aware"]}
+        assert _request("POST", url, token, payload)[0] == 200
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts == [cheap.id, fallback.id, fallback.id]
+        orchestrator._group_router.observe_success(cheap.id, 1.0)
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts[-2:] == [cheap.id, fallback.id]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_omitted_model_reports_the_actually_served_model(
+    path: str, input_key: str
+) -> None:
+    """Devin follow-up: an omitted model's response/attribution must match who served it.
+
+    ``ranked_first`` outranks ``cheap`` under the orchestrator's own static
+    priority order, so ``_validate_embeddings_model``'s price-blind
+    auto-selection resolves the omitted ``model`` to ``ranked_first`` before
+    cost-based candidate discovery ever runs. Candidate discovery (using
+    ``TaskOrchestrator.AUTO_MODEL`` for the omitted case) then correctly picks
+    the cheaper ``cheap`` to actually serve the request — so the initially
+    "validated" model and the actually-served model genuinely differ. The
+    HTTP response's ``model`` field must report ``cheap`` (who actually
+    served it), not ``ranked_first`` (the pre-failover, price-blind guess).
+
+    Also asserts the cost ledger's own ``model_name`` attribution (the
+    dimension used for spend rollups) is ``cheap``, not ``ranked_first``:
+    ``CostLedger.record_usage`` deliberately strips and overwrites a caller-
+    supplied ``attribution["model_name"]`` with the actual served ``model``
+    argument ("execution identity always wins" — buyer-bill honesty), so
+    this is already protected independently of the response-body fix above;
+    this assertion locks that existing protection in as a regression test.
+    """
+    ranked_first = ModelAgent(
+        "served_ranked_first", "expensive-served-embedding", "mock://expensive-served",
+        provider_name="expensive-served-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "served_cheapest_member", "cheap-served-embedding", "mock://cheap-served",
+        provider_name="cheap-served-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheap])
+    with orchestrator.request_policy(False):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheap.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-served-provider", ranked_first.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-served-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "served_model_identity_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Deliberately no "model" key: the omitted-model case.
+        status, response_body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {input_key: ["served model identity check"]},
+        )
+        assert status == 200, response_body
+        assert backend.requests[0].agent_id == cheap.id
+        assert response_body.get("model") == cheap.model
+
+        records = coordinator.ledger.records()
+        assert records, "expected one usage record for the served request"
+        assert records[-1]["model_name"] == cheap.model
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
     orchestrator = TaskOrchestrator(
         [

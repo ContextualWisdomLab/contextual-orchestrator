@@ -28,6 +28,30 @@ from contextual_orchestrator.telemetry import (
 )
 
 
+def _wait_for_caplog(caplog, predicate, *, timeout: float = 1.0, interval: float = 0.02) -> None:
+    """Poll ``predicate(caplog.text)`` until true or ``timeout`` elapses.
+
+    The per-request INFO summary is logged by a real server thread strictly
+    *after* it has already flushed the HTTP response back to the client
+    (`server.py`'s ``handle_one_request`` logs in its ``finally`` block,
+    which runs after ``super().handle_one_request()`` -- and therefore the
+    response write -- completes). A test that asserts on this log line
+    immediately after its client call returns has no guarantee the server
+    thread has reached that ``finally`` block yet; bounded polling closes
+    that race deterministically and quickly in the common case, rather than
+    a fixed sleep that is either too short (still flaky) or wastefully long.
+    Call this while the relevant ``caplog.at_level(...)`` scope is still
+    open, so a late record is not filtered out by the time it arrives.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate(caplog.text):
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(interval)
+
+
 def test_session_id_accepts_lineageweave_header_and_metadata():
     """The two compatible transport forms identify the same processing session."""
     assert (
@@ -92,6 +116,20 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
                 b"session-safe"
             ).hexdigest(),
         }
+    finally:
+        reset_session_id(token)
+
+
+def test_session_id_hash_matches_safe_attributes_convention():
+    """The shared correlation-hash helper agrees with _safe_attributes' own hashing."""
+    assert telemetry_module.session_id_hash() is None
+    token = set_session_id("session-safe")
+    try:
+        assert telemetry_module.session_id_hash() == hashlib.sha256(b"session-safe").hexdigest()
+        assert (
+            telemetry_module._safe_attributes({})["contextual_orchestrator.session_id_hash"]
+            == telemetry_module.session_id_hash()
+        )
     finally:
         reset_session_id(token)
 
@@ -271,6 +309,45 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         server.server_close()
 
 
+def test_handle_one_request_resets_command_and_path_before_each_call(monkeypatch):
+    """Deterministic unit-level counterpart to
+    test_keep_alive_close_does_not_log_phantom_request below, which proves
+    the same property end to end through a real socket but can occasionally
+    flake on unrelated threaded-server teardown timing.
+
+    Simulates stdlib's own `handle_one_request`: the first call "parses" a
+    request (setting `command`/`path`, as `parse_request` would), the second
+    call reads nothing at all (an empty `raw_requestline` -- a closed
+    keep-alive connection) and touches neither attribute, matching real
+    stdlib behavior on that path. Without resetting them first, the second
+    call would leave the *first* call's `command`/`path` in place, causing
+    `_log_request_summary`'s "nothing to report" guard to never fire.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    call_count = {"n": 0}
+
+    def fake_super_handle_one_request(self):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            self.command = "GET"
+            self.path = "/healthz"
+        # Second call: nothing read, nothing touched (matches stdlib on a
+        # closed connection).
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request)
+    try:
+        handler.handle_one_request()
+        assert handler.command == "GET"
+        assert handler.path == "/healthz"
+
+        handler.handle_one_request()
+        assert handler.command is None
+        assert handler.path is None
+    finally:
+        server.server_close()
+
+
 def test_handler_replaces_trace_context_on_reauthorization(monkeypatch):
     """A second authorization cannot leave the first trace context attached."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -349,6 +426,354 @@ def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeyp
     assert "client_disconnected" in caplog.text
     assert "private-record" not in caplog.text
     server.server_close()
+
+
+def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(caplog):
+    """The DEBUG response summary never carries a secret from an error message.
+
+    Superseded mechanism, same property: this used to prove the secret was
+    caught by redact_value and replaced with "[REDACTED]" in an otherwise
+    logged error message. It now logs only allowlisted metadata
+    (response_metadata_for_log) and never the error message text at all --
+    a strictly stronger guarantee, since the secret (and the rest of the
+    message) is absent rather than merely masked.
+    """
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "error": {"message": f"upstream rejected request: api_key={fake_secret}"},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert "has_error" in caplog.text
+    assert fake_secret not in caplog.text
+
+
+def test_response_payload_debug_log_redacts_credential_shaped_json_keys(caplog):
+    """A secret under a credential-shaped key never reaches the response summary.
+
+    `redact_value`/`redact_text` only pattern-match the literal in-string
+    shape `(api[_-]?key|token|secret|password)[:=]<value>` or `bearer
+    <value>` -- they never inspect the JSON *key name* a string value is
+    nested under. A response payload shaped like `{"private_key": "..."}`,
+    `{"key": "..."}`, `{"auth": "..."}`, or `{"credential": "..."}` is now
+    caught structurally: the response summary logs only an allowlisted
+    metadata shape that never includes these fields at all (see
+    `response_metadata_for_log`), with the key-name-based
+    `redact_credential_shaped_keys` pass applied on top as a second,
+    defense-in-depth layer in case a future allowlist field ever collides
+    with a credential-shaped key name.
+    """
+    fake_private_key = "-----BEGIN PRIVATE KEY-----\nMIIFAKEFAKEFAKE\n-----END PRIVATE KEY-----"
+    fake_api_key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE12"
+    fake_auth = "sk-live-FAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    fake_credential = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "metadata": {
+            "private_key": fake_private_key,
+            "key": fake_api_key,
+            "auth": fake_auth,
+        },
+        "credential": fake_credential,
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert fake_private_key not in caplog.text
+    assert fake_api_key not in caplog.text
+    assert fake_auth not in caplog.text
+    assert fake_credential not in caplog.text
+
+
+def test_response_payload_debug_log_never_includes_ordinary_response_content(caplog):
+    """CWE-532 (CodeRabbit): the DEBUG summary must never carry response *content*.
+
+    `redact_value`/`redact_credential_shaped_keys` only mask credential-shaped
+    content -- ordinary response text (`choices[].message.content`, tool-call
+    arguments, an `error.message` that can echo caller-supplied input) is not
+    a credential, so it was never masked and reached DEBUG output verbatim.
+    That text can carry PII or business-sensitive content that has nothing to
+    do with secrets. The summary now logs only an allowlisted metadata shape
+    (whether the response is error-shaped, the model name, the choice count,
+    and numeric usage counts) and never the payload's actual text.
+    """
+    sensitive_content = "My SSN is 123-45-6789 and I live at 42 Example Lane."
+    sensitive_tool_argument = "wire $50000 to account 000111222 routing 333444555"
+    sensitive_error_text = "rejected request containing patient record MRN-778899"
+    payload = {
+        "id": "chatcmpl-abc123",
+        "model": "gpt-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": sensitive_content,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "wire_transfer", "arguments": sensitive_tool_argument},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        "error": {"message": sensitive_error_text},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert sensitive_content not in caplog.text
+    assert sensitive_tool_argument not in caplog.text
+    assert sensitive_error_text not in caplog.text
+    # The allowlisted metadata itself is still present.
+    assert "gpt-test" in caplog.text
+    assert "choice_count" in caplog.text
+    assert "46" in caplog.text  # total_tokens, allowlisted numeric usage
+
+
+def test_response_payload_debug_log_is_silent_without_debug(caplog):
+    payload = {"choices": [{"message": {"content": "ok"}}]}
+
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" not in caplog.text
+
+
+def test_per_request_info_summary_reports_method_path_and_status(caplog):
+    """One body-free INFO line per completed request, using method/path/status/latency."""
+    import threading
+    import time
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        # ThreadingHTTPServer's per-connection handler threads are daemon
+        # threads server_close() does not wait for; a brief settle avoids a
+        # straggler's own _log_request_summary call landing inside a *later*
+        # test's caplog window instead of being filtered out here at the
+        # default WARNING level once this test's own caplog.at_level scope
+        # has already exited.
+        time.sleep(0.2)
+
+    assert "http_request" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert "status=200" in caplog.text
+
+
+def test_per_request_info_summary_never_includes_query_string(caplog):
+    """The INFO per-request summary logs the bare path only, never a query string.
+
+    A caller could plausibly put a token in a query parameter (a common
+    client habit) even though this server's own auth is header-only; the
+    summary line's own docstring already claims to be body-free and never
+    carry "a query string beyond the raw path", so the raw query string
+    (and anything in it) must never reach this log line.
+    """
+    import threading
+    import time
+    import urllib.request
+
+    fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/healthz?api_key={fake_token}", timeout=5
+            ) as response:
+                assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert fake_token not in caplog.text
+    assert "?" not in caplog.text
+
+
+def test_keep_alive_close_does_not_log_phantom_request(caplog):
+    """A keep-alive connection closing without a second request logs nothing extra.
+
+    `handle_one_request` never reset `self.command`/`self.path` before each
+    call, so when a persistent connection's next read returns nothing (the
+    client closed it), those attributes were still whatever the *previous*
+    real request left them as. The per-request summary's own "nothing to
+    report" guard (`if not method and not path: return`) therefore never
+    fired, and the prior request got logged a second time with a statusless
+    "phantom" entry.
+    """
+    import http.client
+    import threading
+    import time as time_module
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            assert response.status == 200
+            response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+            connection.close()  # keep-alive connection closed with no second request
+            time_module.sleep(0.3)  # let the server's connection thread observe the close
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time_module.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert caplog.text.count("http_request") == 1
+    assert "path=/healthz" in caplog.text
+
+
+def test_framework_generated_error_status_is_captured_in_log(caplog):
+    """A status the framework sends itself (not via our own writers) is still logged.
+
+    `_last_status` used to be updated only by this module's own
+    `_send`/`_send_text`/`_send_bytes`/`_send_sse` writers.
+    `BaseHTTPRequestHandler`'s own machinery -- e.g. its built-in 501 for an
+    HTTP method with no matching `do_*` handler -- calls `send_response`
+    directly and bypasses all of those writers, so the INFO per-request
+    summary logged `status=-` even though a real status (501) was already
+    sent to the client.
+    """
+    import http.client
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("PUT", "/healthz")  # no do_PUT -- stdlib's own 501 path
+            response = connection.getresponse()
+            assert response.status == 501
+            response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=501" in caplog.text
+
+
+def test_malformed_request_line_is_captured_in_log(caplog):
+    """A malformed request line that still got a real response is not silently skipped.
+
+    ``BaseHTTPRequestHandler.parse_request`` rejects an unparsable request
+    line via ``send_error`` -- captured by the ``send_response`` override
+    into ``_last_status`` -- *before* ``self.command``/``self.path`` are
+    ever assigned: stdlib's own ``parse_request`` explicitly resets
+    ``self.command`` to ``None`` "in case of error on the first line" and
+    only reaches the later assignment that would set ``path`` once parsing
+    succeeds. The per-request summary's old "nothing to report" guard only
+    checked method/path, so a connection that *did* deliver real bytes and
+    *did* get a real 400 response left no log trace at all -- indistinguishable,
+    from the log's perspective, from a keep-alive connection closing with
+    zero bytes (see ``test_keep_alive_close_does_not_log_phantom_request``,
+    which must stay silent).
+    """
+    import socket
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+                # A single-token request line: too few words for
+                # parse_request's `2 <= len(words) <= 3` shape check, so it
+                # calls send_error(400, ...) without ever assigning
+                # self.command/self.path. A request line this malformed never
+                # reaches the branch that promotes `self.request_version`
+                # past stdlib's own "HTTP/0.9" default, so `send_error`'s
+                # underlying `send_response_only`/`send_header` calls
+                # deliberately write no status line or headers at all (a
+                # documented stdlib quirk for an unparsable first line) --
+                # only the HTML error body reaches the wire. The 400 is still
+                # real: it is what `send_response` records into
+                # `_last_status`, which is what this test is actually about.
+                connection.sendall(b"GARBAGE\r\n\r\n")
+                response = b""
+                while True:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            assert b"400" in response
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=400" in caplog.text
+
+
+def test_per_request_info_summary_absent_below_info(caplog):
+    import threading
+    import time
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" not in caplog.text
 
 
 def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):

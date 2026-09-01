@@ -38,7 +38,7 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert report["totals"]["output_tokens"] > 0
     assert report["totals"]["prompt_tokens"] is None
     assert report["totals"]["cost_usd"] is None
-    assert row["usage_source"] == "tokenizer"
+    assert row["usage_source"] == "mixed"
     assert row["cost_usd"] is None
     assert not any("estimated" in key for key in row | report["totals"])
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import pytest
 
 from contextual_orchestrator.batch_routing import (
+    BatchDownloadError,
     BatchRequest,
     EmbeddingBatchRequest,
     LocalBatchBackend,
@@ -28,9 +29,16 @@ class _StaticPriceBook:
 
     def compute_cost(
         self, provider: str, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> tuple[float, str]:
+    ) -> tuple[float, str, bool]:
         self.queries.append((provider, model))
-        return self._cost, "USD"
+        return self._cost, "USD", True
+
+
+class _MixedPriceBook:
+    def compute_cost(
+        self, provider: str, model: str, prompt_tokens: int, completion_tokens: int
+    ) -> tuple[float, str, bool]:
+        return (2.0, "USD", True) if provider == "known" else (0.0, "USD", False)
 
 
 def test_cheapest_upstream_returns_none_for_no_candidates() -> None:
@@ -42,6 +50,13 @@ def test_cheapest_upstream_tie_keeps_input_order() -> None:
     second = {"provider": "beta", "model": "model_two"}
     best = cheapest_upstream([first, second], _StaticPriceBook(0.5))
     assert best is first  # strict less-than keeps the earlier candidate on ties
+
+
+def test_cheapest_upstream_excludes_unknown_prices() -> None:
+    known = {"provider": "known", "model": "priced"}
+    unknown = {"provider": "unknown", "model": "unpriced"}
+    assert cheapest_upstream([unknown, known], _MixedPriceBook()) is known
+    assert cheapest_upstream([unknown], _MixedPriceBook()) is None
 
 
 def test_local_backend_rejects_invalid_concurrency() -> None:
@@ -226,7 +241,7 @@ def test_pg_embedding_backend_full_lifecycle_with_assembler() -> None:
     assert items[1].model == "contextual-orchestrator"
 
 
-def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
+def test_pg_embedding_backend_rejects_untracked_response_ids() -> None:
     client = _FakeEmbeddingClient()
     backend = PgLlmBatchEmbeddingBackend(client, endpoint_alias="nim-east")
     assert backend.poll_after_ms == int(client.poll_interval_seconds * 1000)
@@ -251,20 +266,18 @@ def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
             "response": {"body": {}},
         },
     ]
-    items = backend.retrieve(job)
-    assert len(items) == 2
-    # Untracked ids fall back to positional indexes and default model naming.
-    assert [item.index for item in items] == [0, 1]
-    assert all(item.model == "contextual-orchestrator" for item in items)
-    assert items[1].embedding == []
+    with pytest.raises(BatchDownloadError, match="identifiers do not match"):
+        backend.retrieve(job)
 
 
-def test_pg_embedding_backend_failed_download_returns_empty() -> None:
+def test_pg_embedding_backend_failed_download_raises_download_error() -> None:
     client = _FakeEmbeddingClient()
     client.success = False
     backend = PgLlmBatchEmbeddingBackend(client)
     job = backend.submit([EmbeddingBatchRequest(input_text="never retrieved")])
-    assert backend.retrieve(job) == []
+    with pytest.raises(BatchDownloadError) as excinfo:
+        backend.retrieve(job)
+    assert excinfo.value.job_id == job.job_id
     assert client.downloads == [job.job_id]
 
 

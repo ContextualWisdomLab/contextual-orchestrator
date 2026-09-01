@@ -24,6 +24,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import logging
 import threading
 import time
 import uuid
@@ -38,6 +39,8 @@ from .batch_job_registry import (
     JobRegistryFactory,
     _claim_renewal_interval_seconds,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _ROUTING_CATEGORY = "routing"
 _PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
@@ -142,8 +145,17 @@ def cheapest_upstream(
     Cost-optimising upstream selection for load balancing: given candidate
     provider/model pairs, price each against the configurable price table for a
     representative request shape and return the cheapest. Unpriced candidates
-    cost ``0`` and are treated as free (explicit, so a missing price is visible
-    rather than silently expensive). Ties keep input order.
+    are excluded because an unknown price is not free. Ties keep input order;
+    ``None`` is returned when no candidate has a known price.
+
+    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator`'s
+    ``_cheapest_capability_candidate`` helper plays a similar upstream
+    cost-based selection role — resolving one embedding member out of
+    several capability-matched candidates — looking up each candidate's
+    price directly via :meth:`~contextual_orchestrator.cost_ledger.PriceBook.get_price`
+    and comparing raw, unrounded prompt prices. This function remains a
+    standalone, table-driven upstream selector used elsewhere for load
+    balancing.
     """
     if not candidates:
         return None
@@ -152,9 +164,11 @@ def cheapest_upstream(
     for candidate in candidates:
         provider = candidate.get("provider", "")
         model = candidate.get("model", "")
-        cost, _currency = price_book.compute_cost(
+        cost, _currency, price_known = price_book.compute_cost(
             provider, model, assumed_prompt_tokens, assumed_completion_tokens
         )
+        if not price_known:
+            continue
         if best_cost is None or cost < best_cost:
             best_cost = cost
             best = candidate
@@ -201,6 +215,9 @@ class BatchJob:
     # HTTP callers bind this opaque digest to the authenticated principal;
     # library-only jobs may remain unowned for standalone use.
     owner_id: Optional[str] = None
+    # Prompt-token fallback estimates are safe metadata, stored atomically with
+    # the job handle rather than retaining submitted prompt text.
+    prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -214,6 +231,80 @@ class BatchResultItem:
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
+    # The original request messages, carried through so a caller whose
+    # backend reports no usage (e.g. LocalBatchBackend against a mock/local
+    # runner) can estimate from the real prompt instead of a blank placeholder.
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    # Local runs keep their per-call identities and usage intact so the cost
+    # router can meter heterogeneous conduct workflows one provider at a time.
+    trace: List[Dict[str, Any]] = field(default_factory=list)
+    cache_status: Optional[str] = None
+    race_usage: List[Dict[str, Any]] = field(default_factory=list)
+    usage_valid: Optional[bool] = None
+
+
+class BatchDownloadError(RuntimeError):
+    """A batch backend's result download explicitly failed.
+
+    Raised instead of silently returning an empty result list when the
+    injected client reports ``{"success": False, ...}`` — a transient
+    download error, or the batch having actually expired/errored upstream
+    after ``poll()`` already reported ``is_complete=True``. An empty list is
+    reserved for a batch that legitimately completed with zero items;
+    conflating the two hides real failures (and, for embeddings, can
+    permanently poison a cached "completed" document with fabricated
+    zero-vectors — see ``CostRoutingCoordinator.embeddings_batch_document``).
+    """
+
+    def __init__(self, job_id: str, reason: Optional[str] = None) -> None:
+        self.job_id = job_id
+        self.reason = reason
+        message = f"batch {job_id!r} result download failed"
+        if reason:
+            message = f"{message}: {reason}"
+        super().__init__(message)
+
+
+def _validated_download_responses(
+    payload: Dict[str, Any],
+    *,
+    expected_custom_ids: set[str],
+    request_count: int,
+    job_id: str,
+) -> List[Dict[str, Any]]:
+    """Return a complete one-to-one set of successful downloaded rows."""
+    responses = payload.get("responses")
+    if not isinstance(responses, list):
+        raise BatchDownloadError(job_id, "malformed response list")
+    if request_count and not expected_custom_ids:
+        raise BatchDownloadError(job_id, "submitted request metadata is unavailable")
+
+    seen: set[str] = set()
+    for entry in responses:
+        if not isinstance(entry, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        custom_id = entry.get("custom_id")
+        if (
+            not isinstance(custom_id, str)
+            or custom_id not in expected_custom_ids
+            or custom_id in seen
+        ):
+            raise BatchDownloadError(job_id, "response identifiers do not match the submission")
+        seen.add(custom_id)
+        if entry.get("error") is not None:
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+        response = entry.get("response")
+        if not isinstance(response, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        status_code = response.get("status_code")
+        if status_code is not None and (
+            type(status_code) is not int or not 200 <= status_code < 300
+        ):
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+
+    if seen != expected_custom_ids or len(responses) != request_count:
+        raise BatchDownloadError(job_id, "download returned an incomplete result set")
+    return responses
 
 
 class BatchBackend(Protocol):
@@ -279,12 +370,44 @@ class LocalBatchBackend:
             with context:
                 result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
+            # The runner (typically orchestrator.complete()) has no top-level
+            # "usage" key -- real provider usage is nested per-step inside
+            # "trace"[i]["usage"] (one step for route, possibly several for
+            # conduct). Aggregate it so batch results carry real token counts
+            # instead of the dataclass's zero defaults.
+            trace = [
+                {
+                    key: step[key]
+                    for key in ("agent_id", "served_agent_id", "usage", "output")
+                    if key in step
+                }
+                for step in result.get("trace") or []
+                if isinstance(step, dict)
+            ]
+
+            def reported(step: Dict[str, Any], key: str) -> int:
+                usage = step.get("usage")
+                value = usage.get(key) if isinstance(usage, dict) else None
+                return value if type(value) is int and value >= 0 else 0
+
+            prompt_tokens = sum(
+                reported(step, "prompt_tokens") for step in trace
+            )
+            completion_tokens = sum(
+                reported(step, "completion_tokens") for step in trace
+            )
             return BatchResultItem(
                 custom_id=request.custom_id,
                 answer=answer,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 attribution=dict(request.attribution),
                 model=request.model,
                 mode=result.get("mode", request.mode),
+                messages=list(request.messages),
+                trace=trace,
+                cache_status=result.get("cache_status"),
+                race_usage=list(result.get("_batch_race_usage") or []),
             )
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
@@ -400,42 +523,60 @@ class PgLlmBatchBackend:
         }
 
     def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
-        """Download + parse batch results, mapping them back to submitted requests."""
+        """Download + parse batch results, mapping them back to submitted requests.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
         payload = self._run(_download())
         if not payload.get("success"):
-            return []
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
         tracked = self._jobs.get(job.job_id, {}).get("requests", {})
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
         items: List[BatchResultItem] = []
-        for entry in payload.get("responses", []):
+        for entry in responses:
             custom_id = entry.get("custom_id", "")
-            body = (entry.get("response") or {}).get("body", {})
+            response = entry.get("response", {}) or {}
+            body = response.get("body", {}) or {}
             answer = _extract_answer(body)
-            usage = body.get("usage")
-            usage = usage if isinstance(usage, dict) else {}
+            usage = body.get("usage", {}) or {}
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
+            usage_valid = (
+                type(prompt_tokens) is int
+                and prompt_tokens >= 0
+                and type(completion_tokens) is int
+                and completion_tokens >= 0
+            )
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
                     answer=answer,
-                    prompt_tokens=(
-                        prompt_tokens
-                        if type(prompt_tokens) is int and prompt_tokens >= 0
-                        else None
-                    ),
-                    completion_tokens=(
-                        completion_tokens
-                        if type(completion_tokens) is int and completion_tokens >= 0
-                        else None
-                    ),
+                    prompt_tokens=prompt_tokens if usage_valid else 0,
+                    completion_tokens=completion_tokens if usage_valid else 0,
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
+                    messages=list(request.messages) if request else [],
+                    usage_valid=usage_valid,
                 )
             )
         return items
@@ -447,11 +588,6 @@ def _extract_answer(body: Dict[str, Any]) -> str:
         return ""
     message = choices[0].get("message") or {}
     return str(message.get("content", ""))
-
-
-def build_jsonl_body(requests: List[BatchRequest], endpoint: str = "/v1/chat/completions") -> str:
-    """Serialize batch requests into an OpenAI Batch API JSONL body."""
-    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)
 
 
 # ---------------------------------------------------------------------------
@@ -1145,19 +1281,37 @@ class PgLlmBatchEmbeddingBackend:
         }
 
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
-        """Download + parse embedding results, mapping them back to input order."""
+        """Download + parse embedding results, mapping them back to input order.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
         payload = self._run(_download())
         if not payload.get("success"):
-            return []
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "embeddings batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
         tracked = self._jobs.get(job.job_id, {})
         tracked_requests = tracked.get("requests", {})
         order = tracked.get("order", [])
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked_requests),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
         position_by_custom_id = {custom_id: pos for pos, custom_id in enumerate(order)}
         items: List[EmbeddingBatchResultItem] = []
-        for entry in payload.get("responses", []):
+        for entry in responses:
             custom_id = entry.get("custom_id", "")
             body = (entry.get("response") or {}).get("body", {})
             embedding = _extract_embedding(body)

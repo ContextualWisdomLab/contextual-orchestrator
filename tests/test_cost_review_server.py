@@ -248,9 +248,9 @@ def test_chat_completion_missing_usage_is_unavailable_end_to_end() -> None:
         )
         assert status == 200, report
         assert report["grand_total"]["measurement_status"] == "unavailable"
-        assert report["grand_total"]["unavailable_record_count"] == 1
+        assert report["grand_total"]["record_count_by_status"]["unavailable"] == 1
         assert report["items"][0]["measurement_status"] == "unavailable"
-        assert report["items"][0]["unavailable_record_count"] == 1
+        assert report["items"][0]["record_count_by_status"]["unavailable"] == 1
     finally:
         server.shutdown()
 
@@ -436,8 +436,16 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         status, retrieved = _request("POST", f"{base}/api/v1/batch_routing_jobs/{job['job_id']}/results", token)
         assert retrieved["result_count"] == 2
 
+        # Each conduct-mode trace step is a separate billable provider call
+        # (CostRoutingCoordinator.complete()'s per-step attribution contract),
+        # so the ledger records one row per step, not one row per batch item.
+        expected_record_count = sum(
+            len(result["usage_record_ids"]) for result in retrieved["results"]
+        )
+        assert expected_record_count >= 2
+
         status, records = _request("GET", f"{base}/api/v1/llm_usage_records", token)
-        assert records["total_count"] == 2
+        assert records["total_count"] == expected_record_count
     finally:
         server.shutdown()
 

@@ -520,8 +520,8 @@ def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> Non
     assert result["cost"]["cost_amount"] is None
     assert result["cost"]["currency_code"] == "MIXED"
     assert result["cost"]["currency_components"] == [
-        {"currency_code": "EUR", "cost_amount": 2.0},
-        {"currency_code": "USD", "cost_amount": 1.0},
+        {"currency_code": "EUR", "cost_amount": 2.0, "price_known": True},
+        {"currency_code": "USD", "cost_amount": 1.0, "price_known": True},
     ]
     assert "approved exchange-rate source" in result["cost"]["customer_action"]
 
@@ -567,9 +567,9 @@ def test_batch_completion_records_on_retrieve() -> None:
     retrieved = coordinator.retrieve_batch(submitted["job_id"])
     assert retrieved["result_count"] == 1
     records = coordinator.ledger.records()
-    assert len(records) == 1
-    assert records[0]["request_channel"] == "batch"
-    assert records[0]["team_name"] == "beta"
+    assert records
+    assert all(record["request_channel"] == "batch" for record in records)
+    assert all(record["team_name"] == "beta" for record in records)
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
@@ -597,7 +597,7 @@ def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator.retrieve_batch(job["job_id"])
 
     report = coordinator.cost_report("company")
-    assert report["grand_total"]["record_count"] == len(sync["usage_record_ids"]) + 1
+    assert report["grand_total"]["record_count"] == len(coordinator.ledger.records())
     assert report["items"][0]["dimension_value"] == "acme"
 
 
@@ -867,3 +867,355 @@ if __name__ == "__main__":  # pragma: no cover
             _fn()
             print(f"ok {_name}")
     print("ok")
+
+
+def test_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    ranked_first = ModelAgent(
+        "ranked_first_zdr_member",
+        "expensive-embedding",
+        "mock://expensive",
+        provider_name="expensive-provider",
+        tags=("embedding", "privacy:zdr"),
+        priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_zdr_member",
+        "cheap-embedding",
+        "mock://cheap",
+        provider_name="cheap-provider",
+        tags=("embedding", "privacy:zdr"),
+        priority=1,
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob("cheapest-pick", self.name, status="completed", request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model) for request in self.requests]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(True):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("expensive-provider", "expensive-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("cheap-provider", "cheap-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=type(
+            "ExactSyntheticCounter",
+            (),
+            {"count_text": lambda self, text, model="": len(text)},
+        )(),
+    )
+
+    document = coordinator.complete_embeddings_batch(["private"], zdr_only=True)
+
+    assert document["status"] == "completed"
+    assert backend.requests[0].model == cheaper.model
+    assert backend.requests[0].agent_id == cheaper.id
+
+
+def test_cheapest_capability_candidate_prefers_known_price_over_unpriced() -> None:
+    ranked_first = ModelAgent(
+        "ranked_first_member", "unpriced-embedding", "mock://unpriced",
+        provider_name="unpriced-provider", tags=("embedding",), priority=10,
+    )
+    priced = ModelAgent(
+        "priced_member", "paid-embedding", "mock://paid",
+        provider_name="paid-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, priced])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in candidates] == [ranked_first.id, priced.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("paid-provider", "paid-embedding", prompt_price_per_1k=1.0, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == priced.id
+
+
+def test_cheapest_capability_candidate_respects_health_filter() -> None:
+    sick_cheaper = ModelAgent(
+        "sick_cheaper_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), priority=1,
+    )
+    healthy_expensive = ModelAgent(
+        "healthy_expensive_member", "expensive-embedding", "mock://expensive",
+        provider_name="expensive-provider", tags=("embedding",), priority=10,
+    )
+    orchestrator = TaskOrchestrator([sick_cheaper, healthy_expensive])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("cheap-provider", "cheap-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("expensive-provider", "expensive-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+
+    for _ in range(5):
+        orchestrator._group_router.observe_failure(sick_cheaper.id)
+
+    ordered = coordinator._cost_ordered_capability_candidates(candidates)
+
+    assert [agent.id for agent in ordered] == [healthy_expensive.id, sick_cheaper.id]
+
+
+def test_cheapest_capability_candidate_ignores_uncomparable_currency() -> None:
+    ranked_first = ModelAgent(
+        "ranked_first_member", "eur-embedding", "mock://eur",
+        provider_name="eur-provider", tags=("embedding",), priority=10,
+    )
+    cheaper_mismatched = ModelAgent(
+        "cheaper_mismatched_member", "gbp-embedding", "mock://gbp",
+        provider_name="gbp-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper_mismatched])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in candidates] == [ranked_first.id, cheaper_mismatched.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("eur-provider", "eur-embedding", prompt_price_per_1k=1.0, completion_price_per_1k=0.0, currency_code="EUR")
+    )
+    price_book.set_price(
+        PriceEntry("gbp-provider", "gbp-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0, currency_code="GBP")
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == ranked_first.id
+
+
+def test_cheapest_capability_candidate_compares_same_currency_case_insensitively() -> None:
+    ranked_first = ModelAgent(
+        "ranked_first_member", "upper-embedding", "mock://upper",
+        provider_name="upper-provider", tags=("embedding",), priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_member", "lower-embedding", "mock://lower",
+        provider_name="lower-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in candidates] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("upper-provider", "upper-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0, currency_code="USD")
+    )
+    price_book.set_price(
+        PriceEntry("lower-provider", "lower-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0, currency_code=" usd ")
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == cheaper.id
+
+
+def test_cheapest_capability_candidate_differentiates_sub_cent_prices() -> None:
+    ranked_first = ModelAgent(
+        "ranked_first_member", "tiny-expensive-embedding", "mock://tiny-expensive",
+        provider_name="tiny-expensive-provider", tags=("embedding",), priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_member", "tiny-cheap-embedding", "mock://tiny-cheap",
+        provider_name="tiny-cheap-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in candidates] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("tiny-expensive-provider", "tiny-expensive-embedding", prompt_price_per_1k=0.00000049, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("tiny-cheap-provider", "tiny-cheap-embedding", prompt_price_per_1k=0.00000001, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == cheaper.id
+
+
+def test_non_zdr_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    ranked_first = ModelAgent(
+        "ranked_first_plain_member", "expensive-plain-embedding", "mock://expensive-plain",
+        provider_name="expensive-plain-provider", tags=("embedding",),
+        group_name="shared_embedding_model", priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_plain_member", "cheap-plain-embedding", "mock://cheap-plain",
+        provider_name="cheap-plain-provider", tags=("embedding",),
+        group_name="shared_embedding_model", priority=1,
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob("non-zdr-cheapest", self.name, status="completed", request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [
+                EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model)
+                for request in self.requests
+            ]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(False):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("expensive-plain-provider", "expensive-plain-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("cheap-plain-provider", "cheap-plain-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=type(
+            "ExactSyntheticCounter",
+            (),
+            {"count_text": lambda self, text, model="": len(text)},
+        )(),
+    )
+
+    coordinator.submit_embeddings_batch(["ordinary input"])
+
+    assert backend.requests[0].model == cheaper.model
+    assert backend.requests[0].agent_id == cheaper.id
+
+
+def test_non_zdr_complete_embeddings_batch_selects_cheapest_capability_candidate() -> None:
+    ranked_first = ModelAgent(
+        "ranked_first_public_member", "expensive-public-embedding", "mock://expensive-public",
+        provider_name="expensive-public-provider", tags=("embedding",), priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_public_member", "cheap-public-embedding", "mock://cheap-public",
+        provider_name="cheap-public-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("expensive-public-provider", "expensive-public-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("cheap-public-provider", "cheap-public-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=type(
+            "ExactSyntheticCounter",
+            (),
+            {"count_text": lambda self, text, model="": len(text)},
+        )(),
+    )
+
+    document = coordinator.complete_embeddings_batch(["ordinary input"])
+
+    assert document["model"] == cheaper.model
+
+
+def test_non_zdr_embedding_batch_preserves_explicit_model_outside_the_pool() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("configured_agent", "configured-embedding", tags=("embedding",))]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+
+    resolved_model, resolved_agent_id = coordinator._resolve_embedding_target(
+        "unconfigured-upstream-model", zdr_only=False, agent_id=None
+    )
+
+    assert resolved_model == "unconfigured-upstream-model"
+    assert resolved_agent_id is None
+
+
+def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
+    captured = []
+
+    class _CapturingBackend:
+        name = "capturing"
+
+        def submit(self, requests, metadata=None):
+            captured.extend(requests)
+            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
+
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
+        batch_backend=_CapturingBackend(),
+    )
+    request = BatchRequest(
+        messages=[{"role": "user", "content": "ordinary batch"}],
+        model="unconfigured-provider-model",
+    )
+
+    coordinator.submit_batch([request])
+
+    assert len(captured) == 1
+    assert captured[0].model == "unconfigured-provider-model"

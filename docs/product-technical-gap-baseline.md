@@ -1,5 +1,102 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-31 live continuation: PR queue recheck, worktree reconciliation, issue #940 deferral, and issue #927 closure
+
+Observation time: 2026-08-31 Asia/Seoul. GitHub authentication was
+re-verified first with `gh api user`. The primary checkout remained dirty
+(`uv.lock` modified, `.worktrees/` untracked), so code work continued in clean
+commercial-loop worktrees only.
+
+### Open PR queue recheck and duplicate avoidance
+
+Open PRs were re-fetched before any code change. The highest-updated queue
+segment remained the overlapping OpenRouter discovery cluster:
+
+- [#951](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/951)
+  `fix(discovery): stop blanket-excluding OpenRouter from serving on ZDR grounds`
+- [#950](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/950)
+  `fix(discovery): gate OpenRouter evidence_only/zdr_capable per model, not per provider`
+- [#949](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/949)
+  `fix(discovery): route OpenRouter by model evidence`
+
+Reconciliation evidence:
+
+- `gh api graphql` for PR `#951` returned **no review threads** and **no
+  reviews** at the observed head.
+- `git range-diff origin/main...origin/pr/949 origin/main...origin/pr/950
+  origin/main...origin/pr/951` showed PR `#951`'s root fix commit
+  `fa0cbc85d47c08a30926c57fcb2e272d8d3fa4c0` already exists inside the broader
+  `#949`/`#950` line, while `#950` adds the stricter per-model evidence gate.
+- PR `#950` already had exact-head focused/full/fuzz/security checks green
+  except the external `opencode-review` gate; pushing another branch with the
+  same semantic fix would have duplicated an active PR contract.
+
+Conclusion: no additional OpenRouter code was published in this invocation.
+The cluster was treated as already in flight.
+
+### Prior `commercial-loop-*` worktree reconciliation
+
+Existing local worktrees were inspected before selecting the next unit:
+
+| Existing worktree | Observed state on 2026-08-31 | Decision |
+|---|---|---|
+| `../commercial-loop-20260831-pr936-root-cause` | current head of open PR [#938](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/938) | Preserve; active PR head |
+| `../commercial-loop-20260831-pr911-removed-member` | current head of open PR [#911](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/911) | Preserve; active PR head |
+| `../commercial-loop-20260830-pr911-root-cause` | diverged local branch with uncommitted edits | Preserve; not authoritative |
+| `../commercial-loop-20260831-issue927-root` | committed root-cause branch with no open PR | Reuse for this invocation |
+
+No superseded worktree was removed because no exact diff-coverage proof was
+recorded for every local-only change still present.
+
+### Highest-leverage issue selection
+
+Issue [#940](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/940)
+was reviewed next because it is the highest-updated product-gap issue and
+directly affects `orchestrator/free` reliability. It was **deferred for this
+hour** rather than patched opportunistically because the issue's own root-cause
+record is correct: a production-safe fix needs an explicit, persisted,
+per-model negative tool-calling compatibility signal. This repo currently has
+persisted privacy assessments with source provenance and freshness, but no
+equivalent persisted tool-compatibility evidence plane. Shipping a hardcoded
+denylist, a message-sniffing retry, or an invented metadata heuristic would
+have violated the repository's evidence-honesty rules.
+
+The next complete, orthogonal unit was therefore issue
+[#927](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/927):
+capture and expose real per-model `max_output_tokens` and `context_window`
+metadata from discovery.
+
+### Issue #927 root-cause closure completed locally
+
+Reused worktree: `../commercial-loop-20260831-issue927-root` at commit
+`9257de4b3f950dc2cf813cbdae37f215461c5581`,
+`fix(discovery): persist provider token ceilings and context windows`.
+
+What the completed unit now does:
+
+- extends `DiscoveredModel` and `ModelAgent` with distinct
+  `max_output_tokens` and `context_window` fields
+- parses explicit limit metadata from current provider discovery sources
+  instead of guessing:
+  `top_provider.max_completion_tokens` and `context_length` for OpenRouter;
+  `limit.output` and `limit.context` for Models.dev-enriched providers; and
+  explicit completion/context fields from configured-gateway model info only
+  when all deployments for one logical model agree
+- preserves the two fields through agent JSON, durable pool persistence, CLI
+  `discover-models` output, and the public API contract
+- clamps only explicit outgoing output-budget request fields
+  (`max_tokens`, `max_completion_tokens`, `max_output_tokens`) to a known
+  per-agent `max_output_tokens`, without substituting `context_window`
+
+Focused and proportional verification run on the exact local head:
+
+- `uv run pytest tests/test_model_discovery.py tests/test_provider_catalog_store.py tests/test_discover_models_cli.py tests/test_orchestrator_client_boundaries.py tests/test_agent_pool_db.py`
+  -> `156 passed in 12.06s`
+- `uv run pytest tests/test_api_contract.py`
+  -> `7 passed in 2.88s`
+
+Total exact local evidence for this unit: `163 passed` across the touched
+discovery, persistence, client-boundary, CLI, and contract surfaces.
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
@@ -1164,9 +1261,9 @@ future regen cannot drift again. Full suite at exact head: **2428 passed**;
 Hypothesis, Atheris, and devin/opencode/noema reviews all pass.
 
 Merged to protected `main` as `5b3069d4`; protected-main runs for #887, #893,
-#883, #889 then landed, delivering bounded tool descriptions, the React +
-Storybook web admin, provider-affine video job ownership, and fail-closed
-commercial release authorization on one linear main sequence.
+#883, #889 then landed, delivering bounded tool descriptions, an unwired
+React + Storybook scaffold, provider-affine video job ownership, and
+fail-closed commercial release authorization on one linear main sequence.
 
 **Open queue:** `#879` (provider-failure taxonomy/telemetry, `BEHIND`), `#857`
 (provider-backed embeddings, `DIRTY`), `#868` (gateway-default chat surfaces,
@@ -1911,7 +2008,7 @@ live work item.
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
-| P2 | Frontend component inventory is not applicable here. | This repository is a backend stdlib lab and has no frontend/Storybook tree. | Keep the existing Figma artifact record; introduce Storybook only when a frontend package is actually added. |
+| P2 | Frontend component inventory is not applicable to the operative admin console. | An unwired `admin_ui/` React + Storybook scaffold and workspace entry exist, but the inline stdlib admin remains the served interface. | Keep the existing Figma artifact record; defer Storybook adoption until the frontend is built and wired under ADR 0033's triggers. |
 
 ## 7. Delivery gates
 
