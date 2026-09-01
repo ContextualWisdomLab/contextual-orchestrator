@@ -122,6 +122,26 @@ def test_build_review_orchestrator_excludes_preexisting_openai_credential(
     ]
 
 
+def test_build_review_orchestrator_excludes_unrequested_stored_free_provider(
+    monkeypatch,
+) -> None:
+    """A stored free-provider key cannot escape the caller's bootstrap scope."""
+    register_credential("OPENROUTER_API_KEY", "preexisting-router-secret")
+    discovered = [
+        _discovered("openrouter", "OPENROUTER_API_KEY"),
+        _discovered("bytez", "BYTEZ_API_KEY"),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"BYTEZ_API_KEY": "bytez-secret"},
+        credential_names=["BYTEZ_API_KEY"],
+    )
+
+    assert get_credential("OPENROUTER_API_KEY") == "preexisting-router-secret"
+    assert [agent.credential_key for agent in orchestrator.agents] == ["BYTEZ_API_KEY"]
+
+
 def test_register_review_credentials_rejects_duplicate_array_entries() -> None:
     """Duplicate credential specifications fail closed instead of hiding config drift."""
     with pytest.raises(ValueError, match="duplicate credential"):
