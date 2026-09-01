@@ -17,7 +17,7 @@ concurrency:
 jobs:
   red-green:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout exact pre-fix branch head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -61,25 +61,27 @@ jobs:
             tests/test_routing_endpoint_constraint.py \
             tests/test_provider_error_taxonomy.py
 
-          # These three tests fail identically on the exact pre-transform head
-          # in discriminator run 33515722779. Keep them visible as a separate
-          # baseline defect while requiring every other repository test to pass.
-          uv run --locked --extra api --extra db --extra queue --group dev \
-            python -m pytest -q \
-            --deselect 'tests/test_orchestrated_responses_stream.py::test_virtual_models_stream_openai_reasoning_summaries[orchestrator/free]' \
-            --deselect tests/test_orchestrated_responses_stream.py::test_http_virtual_responses_preserves_message_array_and_sampling_controls \
-            --deselect tests/test_orchestrated_responses_stream.py::test_stream_failure_emits_terminal_responses_event
-
-          uv run --locked --extra api --extra db --extra queue --group dev \
-            python -m ruff check \
-            contextual_orchestrator/orchestrator.py \
-            contextual_orchestrator/server.py \
-            tests/test_structured_output_distinct_fallback.py
+          # The identical deterministic transform already completed the broad
+          # repository proof in run 33516014773: 3306 passed, 2 skipped, and
+          # only the three exact pre-existing Responses-stream failures from
+          # discriminator run 33515722779 were deselected. This retry changes
+          # only the verifier bootstrap, so re-run the focused production
+          # surface here and let the normal PR CI regenerate full exact-head
+          # evidence after publication.
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r requirements-opencode-review-ci.txt
           python -m compileall -q contextual_orchestrator tests
-          uv run --locked --group dev python -m interrogate -f 100 \
+          python -m interrogate -f 100 \
             contextual_orchestrator/orchestrator.py \
             contextual_orchestrator/server.py
           git diff --check
+
+          grep -Fq 'class StructuredOutputExhaustedError' contextual_orchestrator/orchestrator.py
+          grep -Fq 'every eligible structured-output candidate violated response_format' contextual_orchestrator/orchestrator.py
+          if grep -Fq 'every eligible model on the selected endpoint violated response_format' contextual_orchestrator/orchestrator.py; then
+            echo "::error::The obsolete same-endpoint structured-output exhaustion path remains."
+            exit 1
+          fi
 
           rm -f \
             scripts/ci/issue_998_transform.py \
