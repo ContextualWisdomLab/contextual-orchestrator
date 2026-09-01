@@ -55,6 +55,7 @@ from contextual_orchestrator.model_discovery import (
     _parse_openai_compatible,
 )
 from contextual_orchestrator.orchestrator import (
+    EndpointUnavailableError,
     ModelAgent,
     TaskOrchestrator,
     _parse_model_judge_reply,
@@ -62,6 +63,7 @@ from contextual_orchestrator.orchestrator import (
     chat_completion_chunks,
     redact_text,
     redact_value,
+    normalize_endpoint_selector,
     sse_stream_body,
 )
 from contextual_orchestrator.pii_protection import PiiProtectionError, _decode_secret
@@ -77,6 +79,16 @@ from contextual_orchestrator.reasoning_effort_profile import (
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
 RequestError = server.RequestError
+
+
+def exercise_endpoint_selector(value: str) -> None:
+    """Normalize arbitrary endpoint text or reject it with the stable error."""
+    try:
+        normalized = normalize_endpoint_selector(value)
+    except EndpointUnavailableError:
+        return
+    assert normalized == normalize_endpoint_selector(normalized)
+    assert normalized.startswith(("http://", "https://"))
 
 # Malformed bytes/JSON must surface only as these.
 _EXPECTED_BODY_EXC = (
@@ -422,3 +434,45 @@ def exercise_structured_output_error(content: str, schema: Any) -> None:
     }
     result = _structured_output_error(content, response_format)
     assert result in {None, "invalid_json", "schema_missing", "schema_violation"}
+
+def exercise_nim_catalog(raw: bytes) -> None:
+    """Drive the NIM benchmark model-catalog parser over arbitrary bytes.
+
+    ``parse_model_catalog_body`` consumes an untrusted provider response
+    (``GET /v1/models``). Invariants for arbitrary input: structural failures
+    surface only as ``CatalogDiscoveryError`` (or a plain json RecursionError on
+    attacker-depth nesting); successful parses are deduplicated, sorted (immune
+    to provider response-order drift), machine-readably annotated, and stable
+    under reparse.
+    """
+    from contextual_orchestrator.nim_benchmark import (
+        CatalogDiscoveryError,
+        parse_model_catalog_body,
+    )
+
+    try:
+        catalog = parse_model_catalog_body(raw)
+    except CatalogDiscoveryError:
+        return
+    except RecursionError:
+        # json depth blowups mirror the request-body parser's accepted failure.
+        return
+
+    assert set(catalog) == {"models", "duplicate_model_ids", "invalid_entries"}
+    model_ids = [row["model_id"] for row in catalog["models"]]
+    assert model_ids == sorted(model_ids), "catalog must be order-drift immune"
+    assert len(model_ids) == len(set(model_ids)), "catalog must be deduplicated"
+    for row in catalog["models"]:
+        assert isinstance(row["model_id"], str) and row["model_id"].strip()
+        assert isinstance(row["owned_by"], str)
+    for entry in catalog["invalid_entries"]:
+        assert entry["invalid_reason"] in {"entry_not_an_object", "missing_model_id"}
+    assert catalog["duplicate_model_ids"] == sorted(catalog["duplicate_model_ids"])
+
+    # The whole result must be JSON-serialisable, and reparsing the surviving
+    # models must be a fixed point (parse . serialize . parse == parse).
+    reserialized = json.dumps(
+        {"data": [{"id": row["model_id"], "owned_by": row["owned_by"]} for row in catalog["models"]]}
+    ).encode("utf-8")
+    if catalog["models"]:
+        assert parse_model_catalog_body(reserialized)["models"] == catalog["models"]

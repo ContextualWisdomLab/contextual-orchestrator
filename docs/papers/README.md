@@ -85,6 +85,19 @@ SHA-256: `0ebad52c4a3aba971b3a707b056e57238d1c4ad8f212dffd461ff9f5fed1bdb6`
 and `bb1af3bab70d8589e71e9fce4a99d3e714a82dd7b2bc7a931c7458a6ab60bb52`,
 respectively.
 
+## Evaluation methodology (NIM cost-quality benchmark)
+
+- **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
+  Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
+  `helm-holistic-evaluation-2211.09110.pdf`
+  Grounds the **NIM benchmark harness** (`docs/nim_benchmark.md`): evaluate a
+  broad, explicitly enumerated model pool on multiple metrics at once (quality,
+  latency, cost) instead of a single leaderboard number; report incompleteness
+  honestly (skipped/unsupported/rate-limited cells stay machine-readable rather
+  than silently dropped); and standardize conditions across compared systems
+  (same tasks, scorers, caps, and budgets). Distributed under the arXiv
+non-exclusive license / CC BY as marked on arXiv.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
@@ -96,3 +109,24 @@ but not vendored here so this repository remains one deployable control plane.
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
+
+## APA 7th edition references
+
+Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
+models while reducing cost and improving performance. *arXiv*.
+https://doi.org/10.48550/arXiv.2305.05176
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan,
+L. V. S., & Awadallah, A. H. (2024). Hybrid LLM: Cost-efficient and
+quality-aware query routing. *arXiv*.
+https://doi.org/10.48550/arXiv.2404.14618
+
+Liang, P., Bommasani, R., Lee, T., Tsipras, D., Soylu, D., Yasunaga, M., Zhang,
+Y., Narayanan, D., Wu, Y., Kumar, A., Newman, B., Yuan, B., Yan, B., Zhang, C.,
+Cosgrove, C., Manning, C. D., Ré, C., Acosta-Navas, D., Hudson, D. A., … Koreeda,
+Y. (2023). Holistic evaluation of language models. *Transactions on Machine
+Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
+M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
+data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665

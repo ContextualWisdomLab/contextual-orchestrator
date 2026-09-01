@@ -326,6 +326,42 @@ def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> Non
     assert ledger.telemetry_health()["records_stored"] == 1
 
 
+def test_targeted_wait_releases_only_confirmed_transaction_exports() -> None:
+    """Confirmed batch IDs export without draining unrelated deferred records."""
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    backend = SqlLedgerStore(connection, paramstyle="qmark")
+    sink = _RecordingUsageSink()
+    ledger = CostLedger(
+        PriceBook(InMemoryConfigStore()),
+        store=backend,
+        non_blocking_store=True,
+        usage_sink=sink,
+    )
+
+    connection.execute("BEGIN")
+    for usage_record_id in ("usage_batch_target", "usage_unrelated"):
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id=usage_record_id,
+        )
+    connection.commit()
+
+    assert ledger.wait_for_usage_record_ids(["usage_batch_target"], timeout=0.1)
+    assert sink.ids == ["usage_batch_target"]
+    assert ledger.telemetry_health()["records_stored"] == 1
+    assert isinstance(ledger.store, NonBlockingLedgerStore)
+    assert [
+        record.usage_record_id for record in ledger.store._deferred_usage_exports
+    ] == ["usage_unrelated"]
+
+    assert ledger.flush(timeout=1.0)
+    assert sink.ids == ["usage_batch_target", "usage_unrelated"]
+    assert ledger.telemetry_health()["records_stored"] == 2
+
+
 def test_async_open_transaction_duplicate_is_reported_as_dropped() -> None:
     """A duplicate in the synchronous caller-transaction path remains observable."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)
