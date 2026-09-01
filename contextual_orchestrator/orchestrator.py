@@ -304,6 +304,66 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
+
+def _resolved_openrouter_provider(agent: ModelAgent) -> str:
+    """Canonical provider identity for the ZDR-pin decision, base_url-first.
+
+    ``ModelAgent.provider_name`` is free-text and unvalidated at construction
+    (hand-authored JSON, ``model_discovery.py`` auto-discovery, or KV-driven
+    config can all leave it empty or typo'd). Trusting it verbatim here would
+    let an agent whose ``base_url`` is OpenRouter's own endpoint silently skip
+    the ``provider.zdr=true`` enforcement pin under an explicit ``zdr_only``
+    scope while still routing bytes to OpenRouter (base_url decides where the
+    request goes; this function only decides whether the pin is applied) —
+    a silent ZDR-policy bypass, not a crash (CodeRabbit review on #953,
+    discussion_r3898471887). Treating the exact OpenRouter hostname as
+    authoritative also covers a nonempty typo in that free-text field. Every
+    call site that funnels through this shared choke point (chat, streaming,
+    raw, binary media, and non-embedding batch JSONL) therefore gets the same
+    protection the embedding batch path already has.
+    """
+    host = urlparse(agent.base_url).hostname or ""
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
+
+
+def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str, Any]:
+    """Force OpenRouter to enforce zero-data-retention at request time.
+
+    OpenRouter can multiplex one model id across several backing providers;
+    a discovery-time ZDR feed snapshot proves a route was ZDR-attested when
+    it was fetched, not which provider actually serves a later request. Their
+    documented ``provider: {"zdr": true}`` request field is OpenRouter's own
+    server-side enforcement (https://openrouter.ai/docs/features/provider-routing)
+    and is authoritative for the request being sent right now, so it is
+    applied here rather than trusted to have been decided correctly upstream.
+    A caller-supplied ``provider`` object (e.g. explicit routing preferences)
+    is preserved and only gains the ``zdr`` key.
+
+    ``provider`` is an optional caller passthrough field reaching this shared
+    choke point unvalidated from every call site (chat, streaming, tools and
+    binary-media passthrough, and the batch JSONL path). A malformed truthy
+    non-mapping value (an int, bool, list, or string) must fail with a named,
+    caller-actionable validation error here rather than an opaque ``TypeError``
+    from ``dict()`` deep inside provider-transport code (Devin review on #953).
+
+    The "is this agent OpenRouter" check itself goes through
+    ``_resolved_openrouter_provider`` rather than a bare ``agent.provider_name``
+    comparison, so a misconfigured agent (empty/wrong ``provider_name`` but a
+    ``base_url`` that is actually OpenRouter's) still gets pinned instead of
+    silently bypassing ZDR enforcement (CodeRabbit review on #953).
+    """
+    if not _REQUEST_ZDR_ONLY.get() or _resolved_openrouter_provider(agent) != "openrouter":
+        return payload
+    provider_routing = payload.get("provider")
+    if provider_routing is not None and not isinstance(provider_routing, dict):
+        raise ValueError("provider must be an object with optional OpenRouter routing keys")
+    provider_routing = dict(provider_routing or {})
+    provider_routing["zdr"] = True
+    return {**payload, "provider": provider_routing}
+
+
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
@@ -1732,6 +1792,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -2002,6 +2063,7 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -2178,6 +2240,7 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> tuple[bytes, str]:
         """Passthrough a provider response whose body is binary media."""
+        payload = _pin_openrouter_zdr(agent, payload)
         if agent.base_url.startswith("mock://"):
             return b"mock audio", "audio/mpeg"
         api_key = _provider_credential(agent)  # pragma: no cover
@@ -2330,6 +2393,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -2566,12 +2630,12 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": self.apply_effort_profile(agent, {
+                "body": _pin_openrouter_zdr(agent, self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
                     "temperature": settings["temperature"] if temperature is None else temperature,
                     "max_tokens": settings["max_output_tokens"],
-                }, effort_profile),
+                }, effort_profile)),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]

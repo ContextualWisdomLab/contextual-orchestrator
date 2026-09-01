@@ -291,6 +291,106 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
         server.shutdown()
 
 
+def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
+    agent = ModelAgent(
+        "zdr_embedding",
+        "openai/text-embedding-3-small",
+        provider_name="openrouter",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].to_jsonl_line()["body"]["provider"] == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
+    agent = ModelAgent(
+        "legacy_zdr_embedding",
+        "openai/text-embedding-3-small",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> None:
+    """The batch ZDR pin is applied even for a nonempty but wrong ``provider_name``.
+
+    Mirrors ``orchestrator._resolved_openrouter_provider``'s fix for the same
+    pattern: an agent whose ``base_url`` is OpenRouter's own endpoint but
+    whose ``provider_name`` is a typo/mislabel ("openai") must still resolve
+    to "openrouter" for the ZDR-pin decision, since ``base_url`` — not the
+    free-text ``provider_name`` — determines the actual outbound destination
+    (CodeRabbit review on #953, discussion_r3898659143).
+    """
+    agent = ModelAgent(
+        "mistyped_zdr_embedding",
+        "openai/text-embedding-3-small",
+        provider_name="openai",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch) -> None:
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("removed_agent", "openai/text-embedding-3-small")]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_resolve_embedding_target",
+        lambda *_args: ("openai/text-embedding-3-small", "removed_agent", "openrouter"),
+    )
+
+    coordinator.submit_embeddings_batch(["private"], zdr_only=True)
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
 def test_pending_batch_preserves_resolved_model_identity() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
     coordinator = CostRoutingCoordinator(

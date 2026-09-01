@@ -1334,6 +1334,11 @@ def discover_all_models(
     # OpenRouter's authenticated catalog supplies routable account-model rows;
     # its public ZDR endpoint adds route-specific privacy evidence without
     # turning the whole provider account into either ZDR-only or non-serving.
+    # Request-time ZDR enforcement for OpenRouter specifically is a runtime
+    # concern (see ModelClient's `provider: {"zdr": true}` pin), not a
+    # discovery-time exclusion: OpenRouter can multiplex a model across several
+    # backing providers, so a stale discovery-time snapshot cannot by itself
+    # guarantee which provider serves a given request.
     routed = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),

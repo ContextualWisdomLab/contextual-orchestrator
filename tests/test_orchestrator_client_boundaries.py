@@ -7,6 +7,7 @@ import sys
 import threading
 import types
 import urllib.error
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,10 @@ from contextual_orchestrator.orchestrator import (
     _coerce_message_content_text,
     _local_provider_slot,
     _local_provider_state,
+    _pin_openrouter_zdr,
+    _REQUEST_ZDR_ONLY,
     _resolve_fast_mlsirm_components,
+    _resolved_openrouter_provider,
     _validate_batch_results,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -444,6 +448,273 @@ def test_stream_wraps_mid_stream_transport_failure_without_provider_text() -> No
     assert "connection reset" not in str(excinfo.value)
 
 
+# -- OpenRouter request-time ZDR pin ------------------------------------------------
+
+
+def _openrouter_agent(**overrides) -> ModelAgent:
+    fields = {
+        "id": "openrouter_agent",
+        "model": "some-vendor/some-model",
+        "base_url": "https://openrouter.ai/api/v1",
+        "provider_name": "openrouter",
+        "credential_key": "OPENROUTER_API_KEY",
+    }
+    fields.update(overrides)
+    return ModelAgent(**fields)
+
+
+def test_pin_openrouter_zdr_is_noop_outside_zdr_only_context() -> None:
+    """Only an active zdr_only request scope may add the provider.zdr pin."""
+    agent = _openrouter_agent()
+    payload = {"model": agent.model, "messages": []}
+    assert _pin_openrouter_zdr(agent, payload) is payload
+
+
+def test_pin_openrouter_zdr_is_noop_for_non_openrouter_agents() -> None:
+    """The pin is OpenRouter-specific; every other provider is untouched."""
+    agent = _agent(provider_name="openai", base_url="https://api.openai.com/v1")
+    payload = {"model": agent.model, "messages": []}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        assert _pin_openrouter_zdr(agent, payload) is payload
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+
+
+def test_pin_openrouter_zdr_infers_provider_from_base_url_when_name_is_empty() -> None:
+    """An OpenRouter agent with an unset ``provider_name`` still gets pinned.
+
+    ``provider_name`` is free-text and unvalidated at construction; a
+    hand-authored or auto-discovered agent can carry ``base_url`` pointing at
+    OpenRouter's own endpoint while ``provider_name`` stays empty (its
+    default). Trusting ``provider_name`` verbatim here would silently skip
+    the ``provider.zdr=true`` enforcement pin under an active ``zdr_only``
+    scope even though the request still routes to OpenRouter (CodeRabbit
+    review on #953, discussion_r3898471887).
+    """
+    agent = _openrouter_agent(id="legacy_openrouter_agent", provider_name="")
+    assert _resolved_openrouter_provider(agent) == "openrouter"
+    payload = {"model": agent.model, "messages": []}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        pinned = _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+    assert pinned["provider"] == {"zdr": True}
+
+
+def test_pin_openrouter_zdr_overrides_mistyped_provider_name_from_exact_host() -> None:
+    """The actual OpenRouter destination wins over unvalidated provider text."""
+    agent = _openrouter_agent(provider_name="open_router")
+    payload = {"model": agent.model, "messages": []}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        pinned = _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+
+    assert pinned["provider"] == {"zdr": True}
+
+
+def test_pin_openrouter_zdr_adds_provider_zdr_flag() -> None:
+    """A zdr_only request to an OpenRouter agent gets OpenRouter's own enforcement pin."""
+    agent = _openrouter_agent()
+    payload = {"model": agent.model, "messages": []}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        pinned = _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+    assert pinned["provider"] == {"zdr": True}
+    assert "provider" not in payload  # the original payload is never mutated in place
+
+
+def test_pin_openrouter_zdr_preserves_caller_supplied_provider_routing() -> None:
+    """An explicit caller provider-routing preference keeps its other keys."""
+    agent = _openrouter_agent()
+    payload = {
+        "model": agent.model,
+        "messages": [],
+        "provider": {"order": ["mistral"], "allow_fallbacks": False},
+    }
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        pinned = _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+    assert pinned["provider"] == {
+        "order": ["mistral"],
+        "allow_fallbacks": False,
+        "zdr": True,
+    }
+
+
+@pytest.mark.parametrize("malformed_provider", [5, True, ["order"], "openrouter", 0, ""])
+def test_pin_openrouter_zdr_rejects_non_mapping_provider(malformed_provider: Any) -> None:
+    """A non-object ``provider`` under zdr_only fails closed with a named
+    validation error, not the bare ``TypeError`` ``dict()`` would raise
+    (Devin review on #953: malformed speech routing returned server errors).
+    """
+    agent = _openrouter_agent()
+    payload = {"model": agent.model, "messages": [], "provider": malformed_provider}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        with pytest.raises(ValueError, match="provider must be an object"):
+            _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+
+
+def _capture_request_body(sink: dict) -> Any:
+    """Return an ``_open_provider`` stand-in that records the outgoing JSON body."""
+
+    def _fake_open_provider(request, *_args, **_kwargs):
+        sink["body"] = json.loads(request.data.decode("utf-8"))
+        return _RegistryResponse({"choices": [{"message": {"content": "OK"}}]})
+
+    return _fake_open_provider
+
+
+def _capture_binary_request_body(sink: dict) -> Any:
+    def _fake_open_provider(request, *_args, **_kwargs):
+        sink["body"] = json.loads(request.data.decode("utf-8"))
+        response = _RegistryResponse({})
+        response.headers = types.SimpleNamespace(get_content_type=lambda: "audio/mpeg")
+        return response
+
+    return _fake_open_provider
+
+
+def test_send_pins_openrouter_zdr_on_the_wire() -> None:
+    """``_send`` (the normal chat transport) actually applies the pin, not just the helper."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._send(agent, {"model": agent.model, "messages": []})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
+def test_send_pins_openrouter_zdr_on_the_wire_for_legacy_provider_name() -> None:
+    """``_send`` still applies the pin for an agent with a missing ``provider_name``.
+
+    Proves the fix end-to-end on the real transport, not just against the
+    ``_pin_openrouter_zdr`` helper in isolation: an agent whose ``base_url``
+    is OpenRouter's own endpoint but whose ``provider_name`` was left at its
+    empty default must not reach the wire without ``provider.zdr=true`` under
+    an active ``zdr_only`` scope (CodeRabbit review on #953,
+    discussion_r3898471887).
+    """
+    agent = _openrouter_agent(id="legacy_openrouter_agent", provider_name="")
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._send(agent, {"model": agent.model, "messages": []})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
+def test_send_pins_openrouter_zdr_on_the_wire_for_mistyped_provider_name() -> None:
+    """``_send`` still applies the pin when ``provider_name`` is nonempty but wrong.
+
+    Closes the gap CodeRabbit and Devin Review both flagged against
+    ``df97709a``: ``_resolved_openrouter_provider`` used to return any
+    *nonempty* ``agent.provider_name`` before ever checking ``base_url``, so
+    an agent with ``provider_name="openai"`` and ``base_url`` actually
+    pointing at OpenRouter still reported ``"openai"`` and silently skipped
+    the ``provider.zdr=true`` enforcement pin — even though ``base_url``, not
+    the free-text ``provider_name`` label, decides where the request
+    actually goes. Proved end-to-end on the real ``_send`` transport (the
+    captured outgoing JSON body), not just against the
+    ``_resolved_openrouter_provider``/``_pin_openrouter_zdr`` helpers in
+    isolation, per CodeRabbit's explicit ask for on-wire coverage of this
+    exact case (CodeRabbit review on #953, discussion_r3898659143; Devin
+    review on #953, discussion_r3898661634).
+    """
+    agent = _openrouter_agent(id="mistyped_openrouter_agent", provider_name="openai")
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._send(agent, {"model": agent.model, "messages": []})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
+def test_stream_send_pins_openrouter_zdr_on_the_wire() -> None:
+    """``_stream_send`` applies the same pin as the non-streaming transport."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+
+    def _fake_open_provider(request, *_args, **_kwargs):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return _StreamResponse([b"data: [DONE]"])
+
+    with patch.object(client, "_open_provider", side_effect=_fake_open_provider):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            list(client._stream_send(agent, {"model": agent.model, "messages": [], "stream": True}))
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
+def test_send_raw_pins_openrouter_zdr_on_the_wire() -> None:
+    """``_send_raw`` (the passthrough transport) applies the same pin."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._send_raw(agent, "chat/completions", {"model": agent.model, "messages": []})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
+def test_send_does_not_pin_zdr_outside_zdr_only_context() -> None:
+    """A normal (non-zdr_only) request to OpenRouter is sent unmodified."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        client._send(agent, {"model": agent.model, "messages": []})
+    assert "provider" not in captured["body"]
+
+
+def test_proxy_send_bytes_pins_openrouter_zdr_only_in_policy_scope() -> None:
+    """Binary speech transport applies the same request-time ZDR boundary."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider", side_effect=_capture_binary_request_body(captured)
+    ):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider", side_effect=_capture_binary_request_body(captured)
+    ):
+        client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+    assert "provider" not in captured["body"]
+
+
 # -- batch success paths ------------------------------------------------------------
 
 
@@ -560,6 +831,36 @@ def test_batch_run_skips_blank_lines_in_output_content() -> None:
         )
     assert results["task_0"]["content"] == "ok"
     assert results["task_0"]["usage"] == {"prompt_tokens": 3}
+
+
+def test_batch_run_pins_openrouter_zdr_in_uploaded_jsonl() -> None:
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    raw = b'{"custom_id":"task_0","response":{"body":{"choices":[{"message":{"content":"ok"}}]}}}\n'
+
+    def capture_upload(_agent, content, _destination):
+        captured["line"] = json.loads(content.decode("utf-8"))
+        return "file_1"
+
+    def batch_json(_agent, method, _path, payload=None, destination=None):
+        del payload, destination
+        return {"id": "batch_1"} if method == "POST" else {
+            "status": "completed", "output_file_id": "file_9"
+        }
+
+    with patch.object(client, "_batch_upload", side_effect=capture_upload), patch.object(
+        client, "_batch_json", side_effect=batch_json
+    ), patch.object(client, "_batch_raw", return_value=raw):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._batch_run(
+                agent, {"task_0": [{"role": "user", "content": "hi"}]}, None, 0.01, 5.0
+            )
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    assert captured["line"]["body"]["provider"] == {"zdr": True}
 
 
 # -- Responses input coercion shapes -------------------------------------------------

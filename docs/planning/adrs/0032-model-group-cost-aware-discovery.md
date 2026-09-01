@@ -43,6 +43,12 @@ does not exclude non-ZDR routes from ordinary requests. Missing or failed ZDR
 evidence therefore fails closed only for `zdr_only` selection, not for general
 inference.
 
+Every OpenRouter wire transport applies the provider's documented
+`provider.zdr=true` request-time enforcement inside that policy scope. This
+includes JSON chat, streaming, structured passthrough, chat and embedding
+batch JSONL, and the binary-response speech transport; the response media
+type does not weaken the privacy contract of its JSON request body.
+
 OpenRouter discovery retains the concrete free-model list returned by its model
 catalog, including exact `vendor/model:free` identifiers and any row whose
 complete structured monetary price is zero. The aggregate `openrouter/free`

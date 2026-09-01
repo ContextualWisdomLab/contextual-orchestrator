@@ -2293,6 +2293,8 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
+    if "provider" in body and not isinstance(body["provider"], dict):
+        raise RequestError(400, "invalid_provider", "provider must be an object")
     if "model" in body:
         model = body["model"]
         if not isinstance(model, str):

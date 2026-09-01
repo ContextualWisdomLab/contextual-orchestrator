@@ -42,6 +42,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+- (Devin review on #953) `_pin_openrouter_zdr` no longer raises a bare
+  `TypeError` from `dict()` when a caller-supplied `provider` field is
+  present but not an object (an int, bool, list, or string) under an active
+  `zdr_only` scope. It now validates the field and raises a named `ValueError`
+  ("provider must be an object with optional OpenRouter routing keys")
+  instead, matching this codebase's existing convention for malformed
+  caller-input fields. Every call site sharing this one choke point (chat,
+  streaming, tools/binary-media passthrough, and the batch JSONL path)
+  benefits; a valid `provider` object or an absent/`None` one keep their
+  existing behavior unchanged.
+- OpenRouter embedding Batch JSONL now carries the same request-scoped
+  `provider.zdr=true` enforcement when `zdr_only` selects an attested
+  OpenRouter embedding agent.
 
 ### Added
 

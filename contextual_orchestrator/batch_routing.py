@@ -460,6 +460,7 @@ class EmbeddingBatchRequest:
     token_count: int = 0
     zdr_only: bool = False
     agent_id: Optional[str] = None
+    provider_routing: Optional[Dict[str, Any]] = None
 
     def wire_custom_id(self) -> str:
         """Return a provider-safe id while retaining the internal request mapping.
@@ -476,14 +477,16 @@ class EmbeddingBatchRequest:
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
+        body: Dict[str, Any] = {"model": self.model, "input": self.input_text}
+        if self.provider_routing is not None:
+            body["provider"] = dict(self.provider_routing)
         return {
             # The provider body stays OpenAI-compatible; the backend's tracked
             # request map carries the immutable route identity separately.
             "custom_id": self.wire_custom_id(),
             "method": "POST",
             "url": endpoint,
-            # ``zdr_only`` is enforced before this provider JSONL is built.
-            "body": {"model": self.model, "input": self.input_text},
+            "body": body,
         }
 
 
