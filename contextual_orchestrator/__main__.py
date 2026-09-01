@@ -45,12 +45,6 @@ from .orchestrator import (
     load_agents,
     redact_text,
 )
-from .openrouter_canary import (
-    OpenRouterCanaryError,
-    OpenRouterCanaryLimits,
-    prune_expired_openrouter_canary_evidence,
-    run_openrouter_free_canary,
-)
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )

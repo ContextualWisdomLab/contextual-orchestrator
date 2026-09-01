@@ -165,7 +165,7 @@ deliberately adds no scheduler.
 Seed the credential into the KV once at bootstrap:
 
 ```bash
-echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
+echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator register-credential --name OPENROUTER_API_KEY --value-stdin
 ```
 
 For a persistent KV-backed server token, seed a credential such as
