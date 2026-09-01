@@ -21,6 +21,11 @@ ZERO_USAGE = {
     "completion_tokens": 0,
     "total_tokens": 0,
 }
+RESPONSES_ZERO_USAGE = {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+}
 
 
 class _ChangingUsageResponse(dict[str, object]):
@@ -71,6 +76,16 @@ def test_provider_reported_all_zero_usage_remains_reported() -> None:
     )
 
     assert fields["judge_usage"] == ZERO_USAGE
+
+
+def test_provider_reported_responses_zero_usage_remains_reported() -> None:
+    """Responses-style input/output counters are equally authoritative evidence."""
+    adapter = _adapter(usage_source="provider_reported")
+    adapter.served_usage = dict(RESPONSES_ZERO_USAGE)
+
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+
+    assert fields["judge_usage"] == RESPONSES_ZERO_USAGE
 
 
 def test_synthetic_mock_all_zero_usage_remains_unmeasured() -> None:

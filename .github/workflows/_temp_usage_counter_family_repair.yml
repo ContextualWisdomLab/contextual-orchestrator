@@ -1,0 +1,112 @@
+name: One-shot usage counter family repair
+
+on:
+  push:
+    branches:
+      - fix/orchestrated-responses-stream-and-spend-analytics-20260901
+
+permissions:
+  contents: write
+
+concurrency:
+  group: usage-counter-family-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+
+      - name: Support Chat and Responses token families
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_positive = '''    @staticmethod
+    def _usage_has_positive_evidence(usage: Any) -> bool:
+        """Return whether a usage mapping reports at least one positive token count.
+
+        This remains the compatibility rule for aggregate usage whose origin
+        is unknown. A provider-boundary zero measurement is handled separately
+        by ``_usage_is_reported_token_mapping`` plus explicit provenance.
+        """
+        return isinstance(usage, Mapping) and any(
+            type(usage.get(key)) is int and usage[key] > 0
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+'''
+          new_positive = '''    @staticmethod
+    def _usage_has_positive_evidence(usage: Any) -> bool:
+        """Return whether Chat or Responses usage reports a positive token count.
+
+        This remains the compatibility rule for aggregate usage whose origin
+        is unknown. A provider-boundary zero measurement is handled separately
+        by ``_usage_is_reported_token_mapping`` plus explicit provenance.
+        """
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
+        )
+        return any(type(value) is int and value > 0 for value in counts)
+'''
+
+          old_reported = '''    @staticmethod
+    def _usage_is_reported_token_mapping(usage: Any) -> bool:
+        """Validate the canonical non-negative token fields of reported usage."""
+        return isinstance(usage, Mapping) and all(
+            type(usage.get(key)) is int and usage[key] >= 0
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+'''
+          new_reported = '''    @staticmethod
+    def _usage_is_reported_token_mapping(usage: Any) -> bool:
+        """Validate complete non-negative Chat or Responses token counters."""
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
+        )
+        return all(type(value) is int and value >= 0 for value in counts)
+'''
+
+          for old, new, label in (
+              (old_positive, new_positive, "positive usage helper"),
+              (old_reported, new_reported, "reported usage helper"),
+          ):
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label}: exact anchor missing or duplicated")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python -m py_compile contextual_orchestrator/orchestrator.py
+
+      - name: Commit source repair and remove writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/_temp_usage_counter_family_repair.yml
+          git add contextual_orchestrator/orchestrator.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(judge): accept Responses usage counters"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
