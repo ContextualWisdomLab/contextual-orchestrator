@@ -26,8 +26,13 @@ jobs:
         run: |
           set -euo pipefail
           starting_head="$GITHUB_SHA"
-          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.sha')"
-          test "$live_head" = "$starting_head"
+          branch_name="fix/no-heuristic-batch-routing"
+          live_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.state')"
+          pr_head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.ref')"
+          test "$live_ref" = "$starting_head"
+          test "$pr_state" = "open"
+          test "$pr_head_ref" = "$branch_name"
           python -m pip install --disable-pip-version-check -e '.[dev]'
           python3 <<'PY'
           from pathlib import Path
@@ -49,8 +54,12 @@ jobs:
           PY
           python -m pytest -q tests/test_nim_benchmark.py -k 'cheapest_priced_agent or evaluate_policies_all_arms_with_pricing or evaluate_policies_skip_reasons_without_pricing'
           git diff --check
-          latest_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.sha')"
-          test "$latest_head" = "$starting_head"
+          latest_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          latest_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.state')"
+          latest_head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.ref')"
+          test "$latest_ref" = "$starting_head"
+          test "$latest_state" = "open"
+          test "$latest_head_ref" = "$branch_name"
           rm -f .github/workflows/source-fix-1000-nim-cost-dominance.yml .github/source-fix-1000-nim-cost-dominance.trigger
           git add -A
           git diff --cached --check
