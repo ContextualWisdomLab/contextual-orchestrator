@@ -2324,6 +2324,22 @@ def test_configured_price_overrides_stale_free_discovery_flag(
     assert select_cheapest_discovered_agent([configured, cheaper], price_book) is cheaper
 
 
+def test_discovered_token_price_overrides_stale_free_flag() -> None:
+    price_book = PriceBook(InMemoryConfigStore())
+    stale_free = DiscoveredModel(
+        "bytez", "stale-free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, prompt_price_per_1k=1.0,
+        completion_price_per_1k=1.0, is_free=True,
+    )
+    cheaper = DiscoveredModel(
+        "openrouter", "cheaper", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+        prompt_price_per_1k=0.1, completion_price_per_1k=0.1,
+    )
+
+    assert select_cheapest_discovered_agent([stale_free, cheaper], price_book) is cheaper
+
+
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     expensive = DiscoveredModel(

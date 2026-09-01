@@ -1694,23 +1694,22 @@ def _discovery_price_key(
     except (TypeError, ValueError, OverflowError):
         return unknown
     if entry is None:
-        # An exact provider-declared zero price is comparable across billing
-        # units, but an operator-configured model or wildcard price remains
-        # authoritative when present.
-        if model.is_free:
-            return (0, 0.0, model.provider_name, model.model_id)
-        if not (
+        if (
             _valid_price_component(model.prompt_price_per_1k)
             and _valid_price_component(model.completion_price_per_1k)
             and _currency_is_comparable(model.currency_code, price_book.default_currency)
         ):
-            return unknown
-        return (
-            0,
-            float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
-            model.provider_name,
-            model.model_id,
-        )
+            return (
+                0,
+                float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
+                model.provider_name,
+                model.model_id,
+            )
+        # An exact provider-declared zero price is comparable across billing
+        # units, but complete token pricing remains authoritative when present.
+        if model.is_free:
+            return (0, 0.0, model.provider_name, model.model_id)
+        return unknown
     if not (
         _valid_price_component(entry.prompt_price_per_1k)
         and _valid_price_component(entry.completion_price_per_1k)
