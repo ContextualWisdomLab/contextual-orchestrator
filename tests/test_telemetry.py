@@ -543,6 +543,27 @@ def test_traced_logs_actionable_bounded_failure_evidence(monkeypatch, caplog):
     assert "private.example" not in caplog.text
 
 
+def test_traced_does_not_export_natural_language_provider_echo(monkeypatch, caplog):
+    """Unstructured provider prose is never evidence that request text is absent."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    echoed = "The supplied phrase customer-private-text is not valid JSON"
+    body = io.BytesIO(json.dumps({"error": {"message": echoed}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced("capability_probe.chat model-x"):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary", "invalid_request_error"
+    )
+    assert echoed not in caplog.text
+    assert "customer-private-text" not in caplog.text
+
+
 def test_annotate_and_usage_helpers_filter_to_allowed_genai_attributes():
     """Span annotation keeps approved scalars only; prompts never enter spans."""
     span = MagicMock()

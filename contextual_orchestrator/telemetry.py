@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+import urllib.error
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -39,6 +41,12 @@ _CONFIGURED = False
 # Match the OpenTelemetry SDK's default span-attribute budget so a single
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
+_SAFE_SCHEMA_DIAGNOSTIC = re.compile(
+    r"^['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
+    r"(?: in some form,)? to use "
+    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)\.?$",
+    re.IGNORECASE,
+)
 _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
         "gen_ai.operation.name",
@@ -315,7 +323,23 @@ def traced(
             classified = classify_provider_failure(exc, agent_id="", model="")
             failure_code = classified.error_code
             provider_status = classified.provider_status
-            error_summary = safe_provider_message(classified) or failure_code
+            # Arbitrary provider prose can echo caller content even when it has
+            # no assignment-shaped marker. Only one fixed-vocabulary schema
+            # diagnostic is safe enough to export; every other HTTP/provider
+            # failure uses the package-owned stable code.
+            provider_summary = (
+                safe_provider_message(exc)
+                if isinstance(exc, urllib.error.HTTPError)
+                else None
+            )
+            error_summary = (
+                provider_summary
+                if provider_summary is not None
+                and _SAFE_SCHEMA_DIAGNOSTIC.fullmatch(provider_summary)
+                else failure_code
+                if isinstance(exc, urllib.error.HTTPError)
+                else safe_provider_message(classified) or failure_code
+            )
             model_group = safe.get("contextual_orchestrator.model_group", "ungrouped")
             fallback_outcome = safe.get(
                 "contextual_orchestrator.fallback_outcome", "not_observed"
