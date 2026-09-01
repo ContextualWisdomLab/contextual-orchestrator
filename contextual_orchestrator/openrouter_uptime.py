@@ -145,7 +145,7 @@ class OpenRouterUptimeCollector:
         request = urllib.request.Request(url, method="GET")
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; model_id is percent-encoded before interpolation and never reaches the scheme/authority.
-            with urllib.request.urlopen(request, timeout=10.0) as response:
+            with urllib.request.urlopen(request, timeout=None) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
                 uptimes = [

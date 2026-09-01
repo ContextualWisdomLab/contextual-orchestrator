@@ -205,7 +205,7 @@ def test_policy_crawler_delegates_external_fetch_to_wardnet() -> None:
         set_backend(None)
 
     request = opened.call_args.args[0]
-    assert opened.call_args.kwargs["timeout"] == 15.0
+    assert opened.call_args.kwargs["timeout"] is None
     assert request.full_url == "http://127.0.0.1:8080/api/outbound/fetch"
     assert json.loads(request.data) == {
         "url": "https://provider.example/privacy",
