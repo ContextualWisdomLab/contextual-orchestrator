@@ -2496,12 +2496,13 @@ because this baseline commit necessarily advances it.
   provider should be silently excluded.
 
 Verification on the current PR working tree:
-local full suite `2873 passed, 1 skipped`;
-hosted Full unit/contract, Hypothesis, Atheris, CodeQL, dependency review,
-Python supply chain, OSV, Trivy, Semgrep, and OpenCode coverage checks passed.
-Devin and CodeRabbit reviews passed. Noema failed only because the central
-trusted workflow still used its pre-fix 120-second request limit; Strix remains
-in progress. Therefore this is verified PR-head behavior, not yet protected-main
-or deployed evidence. Central `.github` PR #1508 carries the shared no-timeout
-and independent-Noema fix and is configured for automatic merge after its
-required Security jobs obtain runners and pass.
+local full suite `2913 passed, 1 skipped`; the no-fixed-timeout revert-focused
+suite passed `15 passed, 1 skipped`. Hosted Security, unit, fuzz, OpenCode,
+Noema, and Strix checks for exact head
+`39c80927f89c1f1f955f42af0b9d1f14b1527b70` are queued, so earlier-head hosted
+success is not current-head merge evidence. Therefore this remains verified
+PR-head behavior, not yet protected-main or deployed evidence. Central
+`.github` PR #1546 merged as `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`,
+delivering the shared no-timeout, independent-Noema, stacked-PR, and exact-head
+review fixes; a fresh central scheduler run has been dispatched for this PR and
+is waiting for a GitHub-hosted runner.
