@@ -7300,8 +7300,14 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    embedding_deadline = time.monotonic() + float(
-                        orchestrator.client.timeout
+                    # A ``None`` client timeout (the default since #971's
+                    # removal of fixed inference deadlines) means "no
+                    # wall-clock deadline" rather than "zero" -- keep the
+                    # failover loop below waiting on every candidate instead
+                    # of raising out of float(None) or exiting immediately.
+                    client_timeout = orchestrator.client.timeout
+                    embedding_deadline = time.monotonic() + (
+                        float(client_timeout) if client_timeout else float("inf")
                     )
                     document = None
                     last_embedding_error: Exception | None = None

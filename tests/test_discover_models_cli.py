@@ -463,7 +463,7 @@ def test_enable_cheapest_reuses_and_activates_legacy_discovered_id(tmp_path) -> 
             ]),
             patch.object(sys, "stdout", stdout),
             patch(
-                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
                 return_value=_Response({
                     "data": [{
                         "id": "cheap-model",
@@ -511,7 +511,7 @@ def test_enable_cheapest_does_not_activate_matching_manual_agent(tmp_path) -> No
             ]),
             patch.object(sys, "stdout", stdout),
             patch(
-                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
                 return_value=_Response({"data": [{
                     "id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"},
                 }]}),
@@ -575,7 +575,7 @@ def test_enable_cheapest_preserves_manual_legacy_id_without_crashing(
             ),
             patch.object(sys, "stdout", stdout),
             patch(
-                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
                 return_value=_Response(
                     {
                         "data": [

@@ -498,7 +498,7 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
 def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
     agent = ModelAgent(
         "zdr_embedding",
-        "openai/text-embedding-3-small",
+        "text-embedding-3-small",
         provider_name="openrouter",
         tags=("embedding", "privacy:zdr"),
     )
@@ -522,7 +522,7 @@ def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
 def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
     agent = ModelAgent(
         "legacy_zdr_embedding",
-        "openai/text-embedding-3-small",
+        "text-embedding-3-small",
         base_url="https://openrouter.ai/api/v1",
         tags=("embedding", "privacy:zdr"),
     )
@@ -555,7 +555,7 @@ def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> No
     """
     agent = ModelAgent(
         "mistyped_zdr_embedding",
-        "openai/text-embedding-3-small",
+        "text-embedding-3-small",
         provider_name="openai",
         base_url="https://openrouter.ai/api/v1",
         tags=("embedding", "privacy:zdr"),
@@ -580,14 +580,14 @@ def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> No
 def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch) -> None:
     backend = _RecordingEmbeddingBackend()
     coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([ModelAgent("removed_agent", "openai/text-embedding-3-small")]),
+        TaskOrchestrator([ModelAgent("removed_agent", "text-embedding-3-small")]),
         InMemoryConfigStore(),
         embedding_batch_backend=backend,
     )
     monkeypatch.setattr(
         coordinator,
         "_resolve_embedding_target",
-        lambda *_args: ("openai/text-embedding-3-small", "removed_agent", "openrouter"),
+        lambda *_args: ("text-embedding-3-small", "removed_agent", "openrouter"),
     )
 
     coordinator.submit_embeddings_batch(["private"], zdr_only=True)

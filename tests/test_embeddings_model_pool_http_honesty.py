@@ -178,7 +178,18 @@ def test_explicit_embedding_model_returns_503_while_all_circuits_are_open() -> N
 
 
 def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
-    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics."""
+    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics.
+
+    The `/v1/embeddings` failover order is now cost-ordered (see
+    `CostRoutingCoordinator._cost_ordered_capability_candidates`): a single
+    recorded failure already drops the failing member's measured health
+    below the healthy threshold, demoting it behind every still-healthy
+    candidate on the very next request -- a strictly faster, price-aware
+    replacement for the older fixed `circuit_failure_threshold`-strikes
+    breaker this test originally pinned. The endpoint is still quarantined
+    (never selected again once a healthy alternative exists) and the
+    recorded failure evidence stays exception-message-free either way.
+    """
     first = ModelAgent(
         "rejected_embedding", "embed-v1", tags=("embedding",), priority=1
     )
@@ -217,21 +228,17 @@ def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() 
             )
             assert status == 200, body
 
-        assert attempted == [
-            first.id,
-            second.id,
-            first.id,
-            second.id,
-            first.id,
-            second.id,
-            second.id,
-        ]
+        # The first request attempts the rejected member once (demoting it),
+        # then falls back to the healthy member; every later request in this
+        # loop selects only the now-healthier member and never retries the
+        # quarantined one.
+        assert attempted == [first.id] + [second.id] * (orchestrator.circuit_failure_threshold + 1)
         failures = [
             event
             for event in orchestrator._analytics_events
             if event["event_name"] == "embedding_endpoint_failed"
         ]
-        assert len(failures) == orchestrator.circuit_failure_threshold
+        assert len(failures) == 1
         assert all(event["event_detail"]["provider_status"] == 400 for event in failures)
         assert all("provider.invalid" not in json.dumps(event) for event in failures)
     finally:

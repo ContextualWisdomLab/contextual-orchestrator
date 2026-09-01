@@ -232,7 +232,11 @@ class CostRoutingCoordinator:
 
     def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
         client = getattr(self.orchestrator, "client", None)
-        client_timeout = float(getattr(client, "timeout", 0))
+        # ``client.timeout`` is ``None`` when the client has no fixed
+        # wall-clock deadline (the default since #971's removal of fixed
+        # inference timeouts); treat that the same as an absent/zero
+        # attribute rather than raising out of ``float(None)``.
+        client_timeout = float(getattr(client, "timeout", None) or 0)
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,

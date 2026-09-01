@@ -778,7 +778,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             )
         )
     ]
-    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models}
+    # Include the legacy id form too: an already-persisted agent matched via
+    # the legacy_agent_id_for fallback below keeps its existing (pre-model-
+    # group) id rather than adopting the new hash-suffixed one, so a candidate
+    # that is genuinely one of the freshly-discovered chat models can still
+    # be persisted under either id.
+    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models} | {
+        legacy_agent_id_for(model) for model in chat_models
+    }
     agents = []
     for model in runtime_models:
         existing = existing_by_id.get(agent_id_for(model)) or existing_by_id.get(
@@ -867,7 +874,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     group_name=existing.group_name or agent_from_discovered(model).group_name,
                 )
             )
-        elif not existing.group_name:
+        elif existing is not None and not existing.group_name:
             agents.append(
                 replace(
                     existing,

@@ -153,7 +153,7 @@ def test_diverse_selection_prefers_provider_declared_free_over_unknown() -> None
         is_free=True,
     )
 
-    assert provider_bootstrap.select_provider_diverse_models(
+    assert provider_bootstrap.select_model_group_diverse_models(
         [unknown, free], limit=1
     ) == [free]
 

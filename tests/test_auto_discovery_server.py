@@ -138,7 +138,7 @@ def test_configured_gateway_discovery_retains_only_structured_probe_successes(
     result = _auto_discover_runtime_agents(orchestrator)
 
     assert probes == ["stale-model", "live-model"]
-    assert result["added"] == ["configured_gateway_live_model"]
+    assert result["added"] == [agent_id_for(models[1])]
     assert all(agent.model != "stale-model" for agent in orchestrator.agents)
 
 
@@ -719,9 +719,9 @@ def test_auto_discovery_adds_embedding_without_disabling_configured_chat_pool(mo
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result == {"added": ["openai_embedding_capable_model"], "updated": []}
+    assert result == {"added": [agent_id_for(embedding)], "updated": []}
     assert {agent.id for agent in orchestrator.agents} == {
-        "bootstrap_agent", "openai_embedding_capable_model"
+        "bootstrap_agent", agent_id_for(embedding)
     }
 
 
@@ -769,7 +769,7 @@ def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(mo
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result["added"] == ["openai_generic_deployment"]
+    assert result["added"] == [agent_id_for(generic_non_chat)]
     agent = orchestrator.select_capability_agent("embedding")
     assert agent.model == "generic-deployment"
     assert "chat" not in agent.tags
