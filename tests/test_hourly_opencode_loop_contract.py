@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import yaml
+
 
 def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() -> None:
     """Keep scheduled agent traffic on the seeded gateway and required key set."""
@@ -22,12 +24,27 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "node scripts/ci/install_locked_opencode.mjs" in workflow
     assert "python -m pip install --require-hashes -r requirements.lock" in workflow
-    assert "timeout-minutes: 10" in workflow
-    assert "Reserve at least 45 of the job's 55 minutes" in workflow
     assert "while :; do" in workflow
     assert "gateway_pid=$!" in workflow
     assert 'kill -0 "$gateway_pid"' in workflow
     assert "gateway exited before becoming healthy" in workflow
+    document = yaml.safe_load(workflow)
+    loop = document["jobs"]["loop"]
+    steps = loop["steps"]
+    maintenance_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Run the hourly loop agent"
+    )
+    setup_budget = sum(
+        step["timeout-minutes"] for step in steps[:maintenance_index]
+    )
+    maintenance_budget = steps[maintenance_index]["timeout-minutes"]
+    failure_evidence_budget = steps[-1]["timeout-minutes"]
+    assert maintenance_budget >= 120
+    assert loop["timeout-minutes"] >= (
+        setup_budget + maintenance_budget + failure_evidence_budget
+    )
     installer = Path("scripts/ci/install_locked_opencode.mjs").read_text()
     assert "optionalDependencies" in installer
     assert "installed.version !== expectedVersion" in installer
