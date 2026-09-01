@@ -167,15 +167,15 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
 def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
     """Schema-invalid synthesis and repair exhaust every eligible model once."""
     agents = [
-        ModelAgent("first_agent", "first-model", "mock://catalog"),
-        ModelAgent("second_agent", "second-model", "mock://catalog"),
-        ModelAgent("other_agent", "other-model", "mock://other"),
+        ModelAgent("first_agent", "first-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("second_agent", "second-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("other_agent", "other-model", "mock://other", tags=("reasoning", "writing")),
     ]
     orchestrator = TaskOrchestrator(agents)
     calls: list[str] = []
     orchestrator.conduct = lambda *_args, **_kwargs: {"trace": []}  # type: ignore[method-assign]
     orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
-    orchestrator._failover_candidates = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+    orchestrator._ranked_agents = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
 
     def invalid(agent, _endpoint, _payload):
         calls.append(agent.id)

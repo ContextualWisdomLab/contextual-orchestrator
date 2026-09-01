@@ -4689,6 +4689,7 @@ class TaskOrchestrator:
             for candidate in synthesis_candidates
             if candidate.id not in request_exclusions
         ]
+        initial_synthesis_candidates = synthesis_candidates
         if final_agent.id in request_exclusions:
             same_endpoint_candidates = [
                 candidate
@@ -4708,7 +4709,7 @@ class TaskOrchestrator:
                     transport="structured_synthesis",
                 )
             final_agent = same_endpoint_candidates[0]
-            synthesis_candidates = same_endpoint_candidates
+            initial_synthesis_candidates = same_endpoint_candidates
 
         def provider_output(agent: ModelAgent, response: Mapping[str, Any]) -> str:
             """Extract non-empty structured output from the attempted provider."""
@@ -4732,6 +4733,8 @@ class TaskOrchestrator:
             payload: dict[str, Any],
             *,
             allow_cross_candidate_fallback: bool = True,
+            candidate_pool: list[ModelAgent] | None = None,
+            require_output: bool = True,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Handle transport fallback while the outer loop owns JSON recovery."""
             nonlocal final_agent, synthesis_failure_recorded
@@ -4740,6 +4743,9 @@ class TaskOrchestrator:
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
             saw_request_too_large = False
+            eligible_candidates = (
+                candidate_pool if candidate_pool is not None else synthesis_candidates
+            )
             ordered_candidates = (
                 [preferred]
                 if not allow_cross_candidate_fallback
@@ -4747,7 +4753,7 @@ class TaskOrchestrator:
                     *([preferred] if preferred.id not in request_exclusions else []),
                     *(
                         candidate
-                        for candidate in synthesis_candidates
+                        for candidate in eligible_candidates
                         if candidate.id != preferred.id
                         and candidate.id not in request_exclusions
                     ),
@@ -4787,7 +4793,8 @@ class TaskOrchestrator:
                         if callable(send_once):
                             send = send_once
                     response = send(candidate, endpoint, candidate_payload)
-                    provider_output(candidate, response)
+                    if require_output:
+                        provider_output(candidate, response)
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
@@ -4809,6 +4816,8 @@ class TaskOrchestrator:
                         raise ProviderRequestTooLargeError(
                             "request body exceeds provider limit"
                         ) from exc
+                    if request_too_large and virtual_model:
+                        request_exclusions.add(candidate.id)
                     if not request_too_large:
                         if (
                             virtual_model
@@ -4950,10 +4959,14 @@ class TaskOrchestrator:
                 )
             return next_agent
 
+        active_synthesis_candidates = initial_synthesis_candidates
         while True:
             synthesis_failure_recorded = False
             try:
-                raw, final_agent = send_synthesis(upstream)
+                raw, final_agent = send_synthesis(
+                    upstream,
+                    candidate_pool=active_synthesis_candidates,
+                )
             except Exception as exc:
                 if (
                     not _is_request_too_large_error(exc)
@@ -4977,6 +4990,7 @@ class TaskOrchestrator:
                         ),
                     )
                 raise
+            active_synthesis_candidates = synthesis_candidates
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
                 "id": len(workflow["trace"]) + len(structured_attempt_steps),
@@ -5038,6 +5052,7 @@ class TaskOrchestrator:
                 repaired, final_agent = send_synthesis(
                     repair_upstream,
                     allow_cross_candidate_fallback=False,
+                    require_output=False,
                 )
             except ProviderUpstreamError as exc:
                 if virtual_model and _is_request_too_large_error(exc):
@@ -5084,7 +5099,34 @@ class TaskOrchestrator:
                     failure_code=exc.error_code,
                 )
                 raise
-            repaired_output = provider_output(final_agent, repaired)
+            try:
+                repaired_output = provider_output(final_agent, repaired)
+            except ProviderResponseError:
+                repair_step = {
+                    "id": len(workflow["trace"]) + len(structured_attempt_steps),
+                    "role": "repair",
+                    "agent_id": final_agent.id,
+                    "subtask": "Strict structured-output repair",
+                    "access": [synthesis_step["id"]],
+                    "latency_ms": round(
+                        (time.perf_counter() - repair_started) * 1000, 2
+                    ),
+                    "output": "",
+                    "validation_outcome": "provider_error",
+                }
+                if isinstance(repaired.get("usage"), dict):
+                    repair_step["usage"] = _canonical_provider_usage(
+                        repaired["usage"], responses=response_request
+                    )
+                structured_attempt_steps.append(repair_step)
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                persist_structured_record(
+                    "",
+                    failure_code="structured_repair_failed",
+                )
+                raise
             repair_error = _structured_output_error(
                 repaired_output, response_format
             )

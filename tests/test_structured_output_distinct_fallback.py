@@ -79,11 +79,7 @@ def test_virtual_structured_failure_recovers_on_a_distinct_endpoint_and_keeps_us
     with (
         patch.object(orchestrator, "conduct", return_value=_workflow()),
         patch.object(orchestrator, "_select_agent", return_value=first),
-        patch.object(
-            orchestrator,
-            "_failover_candidates",
-            return_value=[first, second],
-        ),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
     ):
         result = orchestrator.proxy_completion(
@@ -123,11 +119,7 @@ def test_virtual_structured_exhaustion_is_typed_non_repeating_and_secret_free() 
     with (
         patch.object(orchestrator, "conduct", return_value=_workflow()),
         patch.object(orchestrator, "_select_agent", return_value=first),
-        patch.object(
-            orchestrator,
-            "_failover_candidates",
-            return_value=[first, second],
-        ),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
         pytest.raises(ProviderResponseError) as exc_info,
     ):
@@ -236,11 +228,7 @@ def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
     with (
         patch.object(orchestrator, "conduct", return_value=_workflow()),
         patch.object(orchestrator, "_select_agent", return_value=first),
-        patch.object(
-            orchestrator,
-            "_failover_candidates",
-            return_value=[first, second],
-        ),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
     ):
         result = orchestrator.proxy_completion(
@@ -269,6 +257,118 @@ def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
         "request_too_large",
         "accepted",
     ]
+
+
+def test_initial_same_endpoint_replacement_keeps_cross_endpoint_recovery_pool() -> None:
+    """A stale initial candidate can still recover to another endpoint after repair failure."""
+    stale = ModelAgent("stale_agent", "stale-model", "mock://catalog")
+    live = ModelAgent("live_agent", "live-model", "mock://catalog")
+    other = ModelAgent("other_agent", "other-model", "mock://other")
+    orchestrator = TaskOrchestrator([stale, live, other])
+    calls: list[str] = []
+
+    def conduct(*_args, **kwargs):
+        kwargs["_excluded_agent_ids"].add(stale.id)
+        return _workflow()
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == live.id:
+            return _completion('{"input_count":6}', len(calls))
+        return _completion('{"input_count":10}', 3)
+
+    with (
+        patch.object(orchestrator, "conduct", side_effect=conduct),
+        patch.object(orchestrator, "_select_agent", return_value=stale),
+        patch.object(orchestrator, "_ranked_agents", return_value=[stale, live, other]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert calls == [live.id, live.id, other.id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+
+
+def test_request_too_large_candidate_is_retired_after_transport_failover() -> None:
+    """A synthesis-side 413 is never retried after another candidate is attempted."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    third = ModelAgent("third_agent", "third-model", "mock://third")
+    orchestrator = TaskOrchestrator([first, second, third])
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == first.id:
+            raise ProviderRequestTooLargeError(
+                "request exceeds provider limit",
+                agent_id=agent.id,
+                model=agent.model,
+                transport="structured_synthesis",
+            )
+        if agent.id == second.id:
+            return _completion('{"input_count":6}', len(calls))
+        return _completion('{"input_count":10}', 4)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second, third]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert calls == [first.id, second.id, second.id, third.id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+
+
+def test_empty_repair_response_persists_billed_usage_before_failure() -> None:
+    """A repair response with usage but no content still reaches durable failure evidence."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    orchestrator = TaskOrchestrator([first])
+
+    responses = iter([
+        _completion('{"input_count":6}', 1),
+        {"choices": [{"message": {}}], "usage": {
+            "prompt_tokens": 2,
+            "completion_tokens": 2,
+            "total_tokens": 4,
+        }},
+    ])
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first]),
+        patch.object(
+            orchestrator.client,
+            "proxy_send_once",
+            side_effect=lambda *_args, **_kwargs: next(responses),
+        ),
+        pytest.raises(
+            ProviderResponseError,
+            match="response did not contain assistant content",
+        ),
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 3
+    failed = next(iter(orchestrator._workflow_runs.values()))
+    assert failed["failure"]["code"] == "structured_repair_failed"
+    assert [step["validation_outcome"] for step in failed["trace"][-2:]] == [
+        "schema_violation",
+        "provider_error",
+    ]
+    assert failed["trace"][-1]["usage"]["completion_tokens"] == 2
 
 
 def test_failed_structured_run_stays_queryable_but_out_of_recent_completed_metrics(tmp_path) -> None:
