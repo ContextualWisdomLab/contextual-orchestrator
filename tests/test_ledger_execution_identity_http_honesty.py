@@ -40,7 +40,13 @@ def _serve():
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
-    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+    counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=counter,
+    )
     server = build_server(
         orchestrator,
         port=0,
