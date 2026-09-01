@@ -143,7 +143,10 @@ def test_streamed_responses_records_unavailable_usage_without_estimating_answer(
     assert len({row["workflow_run_id"] for row in rows}) == 2
     assert all(row["request_channel"] == "stream" for row in rows)
     assert all(row["measurement_status"] == "unavailable" for row in rows)
-    assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
+    assert all(
+        row["prompt_tokens"] is None and row["completion_tokens"] is None
+        for row in rows
+    )
 
 
 def test_conduct_preserves_responses_instructions_for_every_stage() -> None:

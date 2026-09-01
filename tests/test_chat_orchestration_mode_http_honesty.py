@@ -160,6 +160,43 @@ def test_http_chat_conduct_accepts_advertised_gateway_default_model() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_orchestrator_free_auto_stays_on_route_for_long_review_prompt() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", tags=("planning", "reasoning")),
+            ModelAgent("free_agent", "free-model", tags=("cost:free", "reasoning", "writing")),
+        ]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "review this large diff and verify the root cause. " * 80,
+                    }
+                ],
+                "orchestration_mode": "auto",
+                "include_orchestration_trace": True,
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.FREE_MODEL
+        assert body["orchestration"]["mode"] == "route"
+        assert len(body["orchestration"]["trace"]) == 1
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_invalid_mode() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)

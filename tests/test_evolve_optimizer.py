@@ -16,6 +16,13 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import evolve_orchestration, _space_size  # noqa: E402
 
 
+class _ExactCounter:
+    """Exact synthetic output counter for optimizer accounting."""
+
+    def count_text(self, text: str, model: str) -> int:
+        return len(text.encode("utf-8"))
+
+
 # Config space: worker "tier" controls (deterministically) both quality and price.
 TIERS = {
     "small_worker": {"price": 1.0, "quality": 0.5},
@@ -34,6 +41,7 @@ def _build(config: dict) -> TaskOrchestrator:
     return TaskOrchestrator(
         [ModelAgent(config["tier"], "model-x", tags=("reasoning", "writing"))],
         price_per_million={"model-x": tier["price"]},
+        token_counter=_ExactCounter(),
     )
 
 

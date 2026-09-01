@@ -1,6 +1,7 @@
 """Public package exports for the contextual orchestration runtime."""
 
 from .batch_routing import (
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     BatchResultItem,
@@ -10,6 +11,7 @@ from .batch_routing import (
     LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
     PgLlmBatchEmbeddingBackend,
+    ProviderEmbeddingBatchBackend,
     RoutingDecision,
     RoutingHints,
     RoutingPolicy,
@@ -67,7 +69,14 @@ from .reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import (
+    NativeCl100kTokenCounter,
+    NativeExactTokenCounter,
+    TokenCountUnavailable,
+    UnavailableTokenCounter,
+    build_embedding_token_counter,
+    build_token_counter,
+)
 from .response_cache import (
     RedisResponseCacheProvider,
     ResponseCacheProvider,
@@ -125,7 +134,11 @@ __all__ = [
     # config / tokens
     "InMemoryConfigStore",
     "get_config_store",
-    "HeuristicTokenCounter",
+    "NativeCl100kTokenCounter",
+    "NativeExactTokenCounter",
+    "TokenCountUnavailable",
+    "UnavailableTokenCounter",
+    "build_embedding_token_counter",
     "build_token_counter",
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",
@@ -137,6 +150,7 @@ __all__ = [
     "BatchRequest",
     "BatchJob",
     "BatchResultItem",
+    "BatchDownloadError",
     "LocalBatchBackend",
     "PgLlmBatchBackend",
     # embeddings batch
@@ -144,6 +158,7 @@ __all__ = [
     "EmbeddingBatchResultItem",
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
+    "ProviderEmbeddingBatchBackend",
     "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",

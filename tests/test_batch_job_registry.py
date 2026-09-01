@@ -11,12 +11,18 @@ their results.
 from __future__ import annotations
 
 import sys
+import threading
+import time
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Dict
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_job_registry import (
+    ClaimNotAcquired,
     DEFAULT_RETENTION_SECONDS,
     JobRegistryFactory,
     ValkeyJsonMapping,
@@ -26,7 +32,9 @@ from contextual_orchestrator.batch_routing import (
     BatchJob,
     BatchRequest,
     BatchResultItem,
+    EmbeddingBatchRequest,
     LocalBatchBackend,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.kv_config import InMemoryConfigStore
 
@@ -37,6 +45,54 @@ class FakeValkeyClient:
     def __init__(self) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
+        self.strings: Dict[str, Any] = {}
+        self.execution_extension_attempted = threading.Event()
+        self.lose_execution_extension = True
+        self.execution_acquire_failures = 0
+
+    class LockNotOwnedError(RuntimeError):
+        pass
+
+    class _Lock:
+        def __init__(self, client: "FakeValkeyClient", name: str) -> None:
+            self._client = client
+            self.name = name
+            self.local = SimpleNamespace(token=f"token-{id(self)}".encode())
+            self._lose_on_extend = (
+                "provider_embedding_job_execution" in name
+                and client.lose_execution_extension
+            )
+            self._owned = False
+
+        def acquire(self) -> bool:
+            if (
+                "provider_embedding_job_execution" in self.name
+                and self._client.execution_acquire_failures > 0
+            ):
+                self._client.execution_acquire_failures -= 1
+                return False
+            self._owned = True
+            self._client.strings[self.name] = self.local.token
+            return True
+
+        def extend(self, _seconds: float, *, replace_ttl: bool) -> bool:
+            assert replace_ttl is True
+            if self._lose_on_extend:
+                self._owned = False
+                self._client.lose_execution_extension = False
+                self._client.strings.pop(self.name, None)
+                self._client.execution_extension_attempted.set()
+                return False
+            return self._owned
+
+        def owned(self) -> bool:
+            return self._owned
+
+        def release(self) -> None:
+            if not self._owned:
+                raise self._client.LockNotOwnedError("claim no longer owned")
+            self._owned = False
+            self._client.strings.pop(self.name, None)
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
@@ -68,6 +124,53 @@ class FakeValkeyClient:
     def expire(self, key: str, seconds: int) -> bool:
         self.expirations[key] = seconds
         return True
+
+    def lock(self, name: str, **_kwargs: Any) -> "FakeValkeyClient._Lock":
+        return self._Lock(self, name)
+
+    def eval(self, _script: str, key_count: int, *values: Any) -> int:
+        keys = values[:key_count]
+        args = values[key_count:]
+        if key_count == 2:
+            if len(args) == 5:
+                lock_key, states_key = keys
+                token, job_id, queued, running, retention = args
+                if self.strings.get(lock_key) != token:
+                    return 0
+                current = self.hashes.get(states_key, {}).get(job_id)
+                if current not in {queued, running}:
+                    return 0
+                self.hset(states_key, job_id, running)
+                self.expire(states_key, int(retention))
+                return 1
+            states_key, cancellations_key = keys
+            job_id, reserved, queued, running, cancellation, cancelled, retention = args
+            current = self.hashes.get(states_key, {}).get(job_id)
+            if current not in {reserved, queued, running}:
+                return 0
+            self.hset(cancellations_key, job_id, cancellation)
+            self.hset(states_key, job_id, cancelled)
+            for key in keys:
+                self.expire(key, int(retention))
+            return 1
+        lock_key, states_key, results_key, usage_key, errors_key = keys
+        token, job_id, running, queued, terminal, results, usage, error, retention = args
+        if self.strings.get(lock_key) != token:
+            return 0
+        current = self.hashes.get(states_key, {}).get(job_id)
+        if current not in {running, queued}:
+            return 0
+        for key, value in (
+            (results_key, results),
+            (usage_key, usage),
+            (errors_key, error),
+        ):
+            if value != "":
+                self.hset(key, job_id, value)
+        self.hset(states_key, job_id, terminal)
+        for key in keys[1:]:
+            self.expire(key, int(retention))
+        return 1
 
 
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
@@ -156,6 +259,291 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
 def test_default_retention_is_a_week() -> None:
     """Documented default: abandoned jobs expire after seven days."""
     assert DEFAULT_RETENTION_SECONDS == 7 * 24 * 3600
+
+
+def test_renewal_loss_is_visible_to_the_claim_holder() -> None:
+    """A failed CAS renewal fences the worker instead of becoming background noise."""
+    client = FakeValkeyClient()
+    factory = JobRegistryFactory(client)
+    with factory.lock(
+        "provider_embedding_job_execution",
+        "job",
+        lease_seconds=0.15,
+        renew_until_epoch=time.time() + 1,
+    ) as claim:
+        assert client.execution_extension_attempted.wait(timeout=1)
+        with pytest.raises(ClaimNotAcquired, match="ownership was lost"):
+            claim.ensure_owned()
+
+
+def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
+    """A stale attempt cannot publish; the live worker reclaims and completes."""
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=2)
+
+    calls = 0
+
+    def runner(_requests):
+        nonlocal calls
+        calls += 1
+        assert client.execution_extension_attempted.wait(timeout=1)
+        return [[float(calls)]], calls
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=registry,
+        claim_lease_seconds=0.15,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert calls == 2
+    assert backend.retrieve(job)[0].embedding == [2.0]
+    assert backend.usage(job) == {"prompt_tokens": 2}
+    backend.close()
+
+
+def test_stale_provider_failure_is_fenced_before_live_recovery() -> None:
+    """A claim-losing failure cannot overwrite the succeeding attempt."""
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=2)
+    calls = 0
+
+    def runner(_requests):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert client.execution_extension_attempted.wait(timeout=1)
+            raise RuntimeError("stale provider failure")
+        return [[2.0]], 2
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner, job_registry=registry, claim_lease_seconds=0.15
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert backend.retrieve(job)[0].embedding == [2.0]
+    assert "provider_embedding_errors" not in client.hashes
+    backend.close()
+
+
+def test_terminal_transaction_rejects_a_transferred_claim_without_partial_writes() -> None:
+    """Claim transfer before EVAL leaves every terminal hash unchanged."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    states = registry.mapping("provider_embedding_states")
+    states["job"] = "running"
+    with registry.lock(
+        "provider_embedding_job_execution", "job", lease_seconds=1
+    ) as claim:
+        lock_name, _token = claim.atomic_identity()
+        client.strings[lock_name] = b"successor-token"
+        with pytest.raises(ClaimNotAcquired, match="before publication"):
+            registry.publish_provider_embedding_terminal(
+                claim,
+                "job",
+                status="completed",
+                results=[{"embedding": [1.0]}],
+                usage={"prompt_tokens": 1},
+            )
+
+    assert states["job"] == "running"
+    assert "batch_job_registry:provider_embedding_results" not in client.hashes
+    assert "batch_job_registry:provider_embedding_usage" not in client.hashes
+
+
+def test_durable_cancellation_wins_atomically_over_terminal_publication() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    release = threading.Event()
+    started = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        assert release.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=1,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+    assert started.wait(timeout=1)
+    assert backend.cancel(job, reason="caller cancelled")["status"] == "cancelled"
+    release.set()
+
+    assert backend.wait(job, timeout=1)["status"] == "cancelled"
+    assert backend.retrieve(job) == []
+    assert backend.usage(job) == {}
+    backend.close()
+
+
+def test_durable_job_past_deadline_becomes_failed_atomically() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    backend = ProviderEmbeddingBatchBackend(
+        lambda _requests: pytest.fail("expired work must not reach the provider"),
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=1,
+    )
+    job = backend.reserve(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+    backend._deadlines[job.job_id] = time.time() - 1
+    backend.start(job)
+
+    document = backend.wait(job, timeout=1)
+    assert document["status"] == "failed"
+    assert document["failure"] == {
+        "error_type": "TimeoutError",
+        "http_status": None,
+        "provider_code": "provider_embedding_deadline_exceeded",
+        "retryable": True,
+        "failed_shard_index": None,
+    }
+    assert backend.retrieve(job) == []
+    assert backend.usage(job) == {}
+    backend.close()
+
+
+def test_local_job_returning_after_deadline_fails() -> None:
+    def runner(_requests):
+        time.sleep(0.02)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(),
+        execution_timeout_seconds=0.01,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="synthetic")])
+
+    document = backend.wait(job, timeout=1)
+    assert document["status"] == "failed"
+    assert document["failure"]["provider_code"] == "provider_embedding_deadline_exceeded"
+    assert backend.retrieve(job) == []
+    backend.close()
+
+
+def test_execution_deadline_is_separate_from_result_retention(monkeypatch) -> None:
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=123)
+    monkeypatch.setattr("contextual_orchestrator.batch_routing.time.time", lambda: 1000.0)
+    backend = ProviderEmbeddingBatchBackend(
+        lambda _requests: ([], 0),
+        job_registry=registry,
+        claim_lease_seconds=1,
+        execution_timeout_seconds=5,
+    )
+
+    job = backend.submit([])
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert backend._deadlines[job.job_id] == 1005.0
+    assert client.expirations["batch_job_registry:provider_embedding_deadlines"] == 123
+    backend.close()
+
+
+def test_queued_job_gets_its_lifetime_only_after_worker_claim() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    def runner(_requests):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            assert release_first.wait(timeout=1)
+        return [[float(calls)]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        max_concurrency=1,
+        claim_lease_seconds=0.05,
+        execution_timeout_seconds=0.05,
+    )
+    first = backend.submit([EmbeddingBatchRequest(input_text="first")])
+    assert first_started.wait(timeout=1)
+    second = backend.submit([EmbeddingBatchRequest(input_text="second")])
+    assert second.job_id not in backend._deadlines
+    assert threading.Event().wait(0.1) is False
+    backend.cancel(first, reason="release queued worker")
+    release_first.set()
+
+    assert backend.wait(second, timeout=1)["status"] == "completed"
+    backend.close()
+
+
+def test_batch_lifetime_allows_one_client_timeout_per_request() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+
+    def runner(requests):
+        # Model the coordinator's worst case: each request becomes one
+        # sequential provider shard and consumes most of its client timeout.
+        for _request in requests:
+            assert threading.Event().wait(0.04) is False
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.05,
+        execution_timeout_seconds=0.1,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="one"), EmbeddingBatchRequest(input_text="two")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    backend.close()
+
+
+def test_batch_retries_initial_execution_deadline_claim() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    client.execution_acquire_failures = 1
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: ([[1.0] for _request in requests], len(requests)),
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.01,
+        execution_timeout_seconds=1,
+    )
+
+    job = backend.submit([EmbeddingBatchRequest(input_text="one")])
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    backend.close()
+
+
+def test_durable_cancellation_cannot_be_overwritten_by_running_transition() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    states = registry.mapping("provider_embedding_states")
+    states["job"] = "queued"
+    assert registry.cancel_provider_embedding("job", reason="caller cancelled")
+
+    with registry.lock(
+        "provider_embedding_job_execution", "job", lease_seconds=1
+    ) as claim:
+        with pytest.raises(ClaimNotAcquired, match="cancelled"):
+            registry.mark_provider_embedding_running(claim, "job")
+
+    assert states["job"] == "cancelled"
 
 
 if __name__ == "__main__":
