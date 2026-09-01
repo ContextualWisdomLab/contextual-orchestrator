@@ -1,5 +1,50 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-01 issue 991: isolated application services require a published runtime boundary
+
+Issue [#991](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/991) assigns Chat,
+Agent, task/tool policy, tenant authorization, immutable application selection, secrets, and
+user-visible lifecycle to this repository. Rootless container lifecycle, isolation enforcement,
+resource limits, readiness, lease attestation, and cleanup belong to the external
+`quarantine-sandbox-runtime` bounded context. This repository must not vendor its source, read a
+sibling checkout, shell out to Podman/containerd, or invent an application-service schema.
+
+The upstream foundation is Draft PR
+[`quarantine-sandbox-runtime#1`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime/pull/1).
+Reviewed source head `984d3a6ea2c267c8dd647fabf698465eb4ac0980` fixes its DDD build boundary and
+guarantees lease termination after every live post-launch assertion. Hosted job `99750285437` passed
+the real rootless-Podman isolation and cleanup lane at that exact source head. Documentation tip
+`dac7a0c3ba39af2058c462ef2eb9cf4c0a40c059` independently repeated the real lane successfully in
+job `99750695476`. Those runs prove the current Podman profile on its Linux acceptance runner; they
+do not prove that a consumable cross-process contract has been published or that protected upstream
+truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
+queued or pending.
+
+The dependency gate is therefore concrete, not a placeholder implementation task. The upstream
+crate currently exposes an embeddable Rust API but no supported authenticated process transport or
+generated Python binding. Its lease publishes `127.0.0.1`, which is usable only under a defined
+co-location/network-namespace topology. It also lacks caller-scoped lease ownership/idempotency,
+stable bounded wire errors, semantic response validation, runtime artifact/build/backend/policy
+provenance in attestation, and durable restart/orphan reclamation. Implementing this repository's
+ACL before those contracts exist would either duplicate privileged runtime behavior or fabricate an
+interface that the provider does not support.
+
+After an immutable upstream artifact is released with verified provenance and one versioned
+transport or supported binding, the smallest honest consumer slice is an explicit
+application-service lease API. It resolves an authorized `application_id` to an operator-owned image
+digest and fixed policy, sends only opaque task/session correlation, validates caller-bound lease,
+loopback/topology, expiry, runtime identity, policy and attestation evidence, persists owner-scoped
+lease state, and exposes status plus explicit termination. Unauthorized or mutable-image requests
+must fail before launch; success, cancellation, timeout, and orchestration failure must all terminate
+the lease; uncertain cleanup must remain an observable failure. Automatic LLM tool invocation waits
+for a real task/tool execution lifecycle rather than being simulated in this increment.
+
+**Status:** `WAIT_FOR_UPSTREAM_CONTRACT`. Continue fixing and verifying the upstream owner PR, but
+do not add a path dependency, fake adapter, direct container-engine call, ambient secret transport,
+or arbitrary egress here. Once the upstream release gate is real, add the local Anti-Corruption
+Layer, authorization/IDOR and no-secret-passthrough tests, lease lifecycle tests, API contract,
+threat/operations documentation, and authenticated end-to-end consumer evidence.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
