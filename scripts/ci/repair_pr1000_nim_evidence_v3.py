@@ -161,8 +161,6 @@ def patch_tests() -> None:
     )
     tests = TESTS.read_text(encoding="utf-8")
     old = '    ModelClient._send = lambda self, agent, payload: "stub live answer"\n'
-    if tests.count(old) != 2:
-        raise RuntimeError(f"live synthetic usage patch: expected two matches, found {tests.count(old)}")
     new = """    def _stub_live_send(self, agent, payload):
         del agent, payload
         self._local.usage = {
@@ -174,7 +172,20 @@ def patch_tests() -> None:
 
     ModelClient._send = _stub_live_send
 """
-    TESTS.write_text(tests.replace(old, new), encoding="utf-8")
+    old_count = tests.count(old)
+    installed_count = tests.count("self._local.usage = {")
+    if old_count == 2:
+        tests = tests.replace(old, new)
+    elif old_count == 0 and installed_count >= 2:
+        # A prior repair stage already installed explicit provider-usage evidence.
+        # Treat that state as satisfied rather than failing on harmless source drift.
+        pass
+    else:
+        raise RuntimeError(
+            "live synthetic usage patch: expected two legacy stubs or two already-"
+            f"repaired usage stubs, found legacy={old_count}, repaired={installed_count}"
+        )
+    TESTS.write_text(tests, encoding="utf-8")
 
 
 def patch_docs() -> None:
