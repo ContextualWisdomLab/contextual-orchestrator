@@ -89,8 +89,8 @@ def test_unavailable_uptime_poll_is_a_no_op() -> None:
     assert collector.window_evidence(agent.id) == (0.0, 0.0)
 
 
-def test_uptime_fetch_has_no_fixed_network_deadline() -> None:
-    """Slow OpenRouter health evidence remains eligible until transport completion."""
+def test_uptime_fetch_has_a_bounded_network_deadline() -> None:
+    """A stalled evidence endpoint cannot permanently stop the collector thread."""
     class _Response:
         def __enter__(self):
             return self
@@ -109,7 +109,7 @@ def test_uptime_fetch_has_no_fixed_network_deadline() -> None:
     ) as opened:
         assert collector._fetch_uptime("org/model-a") is None
 
-    assert opened.call_args.kwargs["timeout"] is None
+    assert opened.call_args.kwargs["timeout"] == 10.0
 
 
 def test_background_loop_accumulates_and_stop_joins() -> None:
