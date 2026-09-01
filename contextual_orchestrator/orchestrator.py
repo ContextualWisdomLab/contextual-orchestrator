@@ -3709,7 +3709,10 @@ class TaskOrchestrator:
 
         if not self._provider_readiness_refresh_lock.acquire(blocking=False):
             with self._provider_readiness_lock:
-                agent_count = sum(not agent.disabled for agent in self.candidates)
+                agent_count = sum(
+                    not agent.disabled and _is_general_chat_agent(agent)
+                    for agent in self.candidates
+                )
             return {
                 "status": "refresh_in_progress",
                 "probe": "refresh",
@@ -3749,7 +3752,7 @@ class TaskOrchestrator:
                     "status": "disabled",
                 })
                 continue
-            if not is_chat_compatible_model_id(agent.model):
+            if not _is_general_chat_agent(agent):
                 items.append({
                     "agent_id": agent.id,
                     "model": agent.model,

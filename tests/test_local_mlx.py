@@ -301,6 +301,29 @@ def test_chat_readiness_does_not_probe_embedding_members() -> None:
     probe.assert_called_once_with(orchestrator.agents[0])
 
 
+def test_chat_readiness_honors_explicit_embedding_metadata_for_generic_models() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("chat_agent", "gpt-5.2"),
+        ModelAgent(
+            "embedding_agent",
+            "text-free-model",
+            tags=("capability:embedding", "output:embedding"),
+        ),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "chat_agent", "model": "gpt-5.2"},
+    ) as probe:
+        report = orchestrator.provider_readiness_report(refresh=True)
+
+    assert report["status"] == "ready"
+    assert report["agent_count"] == 1
+    assert report["items"][1]["status"] == "not_applicable"
+    probe.assert_called_once_with(orchestrator.agents[0])
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -393,7 +416,14 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     import threading
 
     client = ModelClient()
-    orchestrator = TaskOrchestrator([ModelAgent("ready_agent", "ready-model")], client=client)
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent(
+            "embedding_agent",
+            "text-free-model",
+            tags=("capability:embedding", "output:embedding"),
+        ),
+    ], client=client)
     entered = threading.Event()
     release = threading.Event()
     counters = {"active": 0, "max_active": 0}
