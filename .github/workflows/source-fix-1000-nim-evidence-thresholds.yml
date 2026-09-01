@@ -1,4 +1,4 @@
-name: Source fix PR1000 NIM evidence thresholds
+name: Source fix PR1000 NIM decision thresholds
 
 on:
   push:
@@ -20,12 +20,16 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
-      - name: Prove threshold regression is RED before repair
+      - name: Prove decision regressions are RED before repair
         shell: bash
         run: |
           set -euo pipefail
           if uv run pytest -q tests/test_nim_benchmark_no_heuristic_tokens.py::test_fixed_sample_and_completion_floors_cannot_authorize_evidence; then
             echo '::error::NIM evidence-threshold regression was not RED before production repair'
+            exit 1
+          fi
+          if uv run pytest -q tests/test_nim_benchmark_no_heuristic_tokens.py::test_output_token_allocation_has_no_hand_selected_default; then
+            echo '::error::NIM output-token allocation regression was not RED before production repair'
             exit 1
           fi
       - name: Apply exact-text production repair
@@ -54,7 +58,7 @@ jobs:
           fi
           git config user.name 'opencode-agent[bot]'
           git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
-          git commit -m 'fix(nim): retire heuristic evidence sufficiency floors'
+          git commit -m 'fix(nim): retire heuristic benchmark thresholds'
           git fetch --no-tags origin fix/no-heuristic-batch-routing
           remote_head="$(git rev-parse FETCH_HEAD)"
           if [ "$remote_head" != "$(git rev-parse HEAD)" ] && ! git merge-base --is-ancestor "$remote_head" HEAD; then
