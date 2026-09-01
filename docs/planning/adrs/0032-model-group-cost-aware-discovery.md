@@ -7,9 +7,9 @@
 
 ## Product requirement
 
-Operators need one logical model name when several providers expose the same underlying model under unrelated identifiers. Groups are entirely operator-defined: discovery never infers equivalence from provider or model names, and no model family is built in. Model discovery remains provider-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
+Operators need one logical model name when several provider accounts expose the same underlying model. Discovery assigns rows with the same provider-declared exact model identifier to one `model_group`; operators may explicitly group differently named deployments. It never infers equivalence from provider names or fuzzy model-name similarity. Model discovery remains account-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
 
-Every configured KV credential is a separate provider-account and catalog boundary. Discovery queries every registered credential independently and retains rows by `(provider_name, credential_name, model_id)`; it never assumes that two keys for the same vendor expose the same models, entitlements, price, privacy policy, availability, or failure state. NVIDIA's primary/sub keys are one example, not a special case. Provider-family inference is absent. Only an explicit operator-defined `model_group` may assert that deployments represent one logical model and may therefore share measured routing decisions.
+Every configured KV credential is a separate provider-account and catalog boundary. Discovery queries every registered credential independently and retains rows by `(provider_name, credential_name, model_id)`; it never assumes that two keys for the same vendor expose the same models, entitlements, price, privacy policy, availability, or failure state. NVIDIA's primary/sub keys are one example, not a special case. Provider-family grouping is absent. Only exact provider-declared model identity or an explicit operator-defined `model_group` may assert that deployments represent one logical model and may therefore share measured routing decisions.
 
 ## Decision and technical contract
 
@@ -42,6 +42,23 @@ requires ZDR; it does not make the entire OpenRouter account evidence-only and
 does not exclude non-ZDR routes from ordinary requests. Missing or failed ZDR
 evidence therefore fails closed only for `zdr_only` selection, not for general
 inference.
+
+OpenRouter discovery retains the concrete free-model list returned by its model
+catalog, including exact `vendor/model:free` identifiers and any row whose
+complete structured monetary price is zero. The aggregate `openrouter/free`
+Free Models Router is not a serving candidate: contextual-orchestrator is the
+router and must select, measure, and report the concrete model group itself.
+Unknown or incomplete prices remain unknown rather than free.
+
+Model inference has no fixed wall-clock timeout. This applies to ordinary
+generation, the initial completion ping, warm-up, readiness probes, retries,
+and repair attempts; a slow model such as DeepSeek is not declared unavailable
+merely because it takes minutes or hours. Operators may cancel work, and a
+superseded request may be cancelled. DNS resolution, TCP/TLS establishment,
+health/readiness checks, provider catalogs, and ZDR-list retrieval likewise have
+no fixed wall-clock deadline. Superseded races close registered
+loser sockets only when their reviewed equivalence contract declares cancellation
+support.
 
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project
@@ -97,6 +114,14 @@ sequenceDiagram
 ```
 
 ## Data, web, and operational boundaries
+
+Provider model-list and OpenRouter ZDR/policy/credit metadata have no default
+wall-clock timeout. DNS resolution, TCP/TLS establishment, local health/readiness
+checks, and model inference have no default timeout. A slow catalog or reasoning
+model is not evidence that the route is unavailable; cancellation is an
+explicit operator or superseded-request action. Retry counts may remain finite
+after an explicit transport failure, but elapsed time alone must not discard a
+provider or model.
 
 Group membership survives restart in normalized `model_group` and `model_group_member` relations; the agent JSON payload no longer duplicates `group_name`. Startup migrates legacy payload membership transactionally without dropping agent configuration. Authenticated REST resources provide `GET/POST /api/v1/model_groups` and `GET/PATCH/DELETE /api/v1/model_groups/{group_name}`; deleting a group retains its provider agents. The existing worker-agent create/PATCH API also accepts `group_name`. Admin provides a keyboard/native-form editor backed by those same resources and shows capability coverage, posterior success probability, and EWMA latency instead of fabricated capacity/success figures. The observation ledger intentionally resets on process restart: persisting it without a measurement horizon would let stale provider incidents dominate current routing. Add a normalized, time-windowed observation table when multi-instance aggregation and an explicit retention/decay policy are specified.
 

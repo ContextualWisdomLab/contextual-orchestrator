@@ -62,6 +62,7 @@ class EndpointAttempt(Generic[T]):
     contract: EndpointEquivalenceContract
     call: Callable[[], T]
     cancellation_supported: bool = False
+    cancel: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,7 @@ def race_first_valid(
     attempts: list[EndpointAttempt[T]],
     *,
     validate: Callable[[T], bool],
-    deadline_seconds: float,
+    deadline_seconds: float | None,
     max_concurrency: int,
     on_attempt_complete: Callable[[str, T | None, BaseException | None], None] | None = None,
 ) -> RaceOutcome[T]:
@@ -94,7 +95,7 @@ def race_first_valid(
         raise ValueError("immediate_race requires concurrency capacity of at least two")
     if max_concurrency < len(attempts):
         raise ValueError("immediate_race capacity must cover every declared endpoint")
-    if deadline_seconds <= 0:
+    if deadline_seconds is not None and deadline_seconds <= 0:
         raise ValueError("deadline_seconds must be positive")
     contract = attempts[0].contract
     if any(attempt.contract != contract for attempt in attempts[1:]):
@@ -126,10 +127,39 @@ def race_first_valid(
     }
     pending = set(futures)
     last_error: BaseException | None = None
+    cancellation_outcomes: dict[Future[T], str] = {}
+
+    def cancel_loser(future: Future[T], attempt: EndpointAttempt[T]) -> str:
+        if future in cancellation_outcomes:
+            return cancellation_outcomes[future]
+        if future.done():
+            outcome = "completed"
+        elif future.cancel():
+            outcome = "queued_cancelled"
+        elif (
+            contract.cancellation_supported
+            and attempt.cancellation_supported
+            and attempt.cancel is not None
+        ):
+            try:
+                attempt.cancel()
+            except Exception:
+                outcome = "safe_drain"
+            else:
+                outcome = "cancellation_requested"
+        else:
+            outcome = "safe_drain"
+        cancellation_outcomes[future] = outcome
+        return outcome
+
     try:
         while pending:
-            remaining = deadline_seconds - (time.monotonic() - started)
-            if remaining <= 0:
+            remaining = (
+                None
+                if deadline_seconds is None
+                else deadline_seconds - (time.monotonic() - started)
+            )
+            if remaining is not None and remaining <= 0:
                 raise TimeoutError("equivalent endpoint race exceeded its deadline")
             done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
             if not done:
@@ -145,8 +175,7 @@ def race_first_valid(
                 for loser_future, (_, loser) in futures.items():
                     if loser_future is future:
                         continue
-                    cancelled = loser_future.cancel()
-                    outcome = "cancelled" if cancelled else "safe_drain"
+                    outcome = cancel_loser(loser_future, loser)
                     cancellations.append((loser.endpoint_id, outcome))
                 pool.shutdown(wait=False, cancel_futures=True)
                 return RaceOutcome(
@@ -157,5 +186,7 @@ def race_first_valid(
                     completion_ms=round((time.monotonic() - started) * 1000, 3),
                 )
     finally:
+        for future in pending:
+            cancel_loser(future, futures[future][1])
         pool.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("all equivalent endpoints failed validation") from last_error

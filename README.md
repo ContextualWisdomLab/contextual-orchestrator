@@ -160,7 +160,7 @@ One public interface:
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 - The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
-- `/api/v1/provider_readiness/latest` and `/v1/provider_readiness` report provider liveness separately from an explicit chat readiness probe. Before the first refresh they return `unprobed`; `?refresh=true` performs one bounded probe and seeds the latest cached result for later reads on both routes.
+- `/api/v1/provider_readiness/latest` and `/v1/provider_readiness` report provider liveness separately from an explicit chat readiness probe. Before the first refresh they return `unprobed`; `?refresh=true` performs one probe without a wall-clock deadline and seeds the latest cached result for later reads on both routes.
 - `/api/v1/analytics_snapshots/latest` returns source-backed local KPI definitions (trace completeness, policy-safe run rate, successful chat requests, and related event-derived counts) from in-memory runtime state, localized via the same locale bundles as the admin console.
 - `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
@@ -288,8 +288,9 @@ is read from a **KV config store**, never `os.getenv`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe that returns
   only service identity and process status; it never discloses worker topology,
   backend names, usage volume, or upstream readiness. Admins can use
-  `GET /api/v1/provider_readiness/latest?refresh=true` for one bounded,
-  non-retrying chat probe per enabled worker.
+  `GET /api/v1/provider_readiness/latest?refresh=true` for one explicitly
+  cancellable, non-retrying chat probe per enabled worker. Concurrent refreshes
+  return `refresh_in_progress` instead of blocking behind a slow provider.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,

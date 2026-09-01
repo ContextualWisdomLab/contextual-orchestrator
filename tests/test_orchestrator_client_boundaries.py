@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 from contextual_orchestrator.orchestrator import (
-    MAX_PROVIDER_PROBE_TIMEOUT,
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
@@ -23,7 +22,6 @@ from contextual_orchestrator.orchestrator import (
     _local_provider_state,
     _resolve_fast_mlsirm_components,
     _validate_batch_results,
-    _validate_provider_probe_timeout,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
@@ -40,22 +38,6 @@ def _agent(agent_id: str = "planner_agent", **overrides) -> ModelAgent:
     }
     fields.update(overrides)
     return ModelAgent(**fields)
-
-
-# -- probe timeout validation -------------------------------------------------
-
-
-@pytest.mark.parametrize("bad", [True, "5", None])
-def test_probe_timeout_rejects_non_numeric_types(bad) -> None:
-    with pytest.raises(ValueError, match="finite number"):
-        _validate_provider_probe_timeout(bad)
-
-
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.05, 31.0])
-def test_probe_timeout_rejects_out_of_range_values(bad) -> None:
-    with pytest.raises(ValueError, match="between 0.1 and"):
-        _validate_provider_probe_timeout(bad)
-    assert MAX_PROVIDER_PROBE_TIMEOUT == 30.0
 
 
 # -- optional fast-mlsirm adapter seam ----------------------------------------
@@ -282,7 +264,7 @@ def test_probe_reports_not_ready_for_empty_mock_content() -> None:
     orch = _orch(_agent())
     agent = orch.candidates[0]
     with patch.object(ModelClient, "_mock", return_value="   "):
-        report = orch.client.probe(agent, timeout=1.0)
+        report = orch.client.probe(agent)
     assert report["status"] == "not_ready"
     assert report["failure_code"] == "provider_empty_probe_response"
     assert report["error_type"] == "RuntimeError"
@@ -299,7 +281,7 @@ def test_probe_against_https_provider_skips_registry_and_reports_ready() -> None
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client, "_send", return_value="OK"
     ):
-        report = client.probe(agent, timeout=1.0)
+        report = client.probe(agent)
     assert report["status"] == "ready"
     assert report["latency_ms"] >= 0
 
@@ -340,7 +322,7 @@ def test_probe_registry_check_passes_for_registered_local_model(
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client, "_open_provider", return_value=_RegistryResponse(registry_payload)
     ), patch.object(client, "_send", return_value="OK"):
-        report = client.probe(agent, timeout=1.0)
+        report = client.probe(agent)
     assert report["status"] == "ready"
 
     missing_client = ModelClient()
@@ -349,7 +331,7 @@ def test_probe_registry_check_passes_for_registered_local_model(
         "_open_provider",
         return_value=_RegistryResponse({"data": [{"id": "other"}]}),
     ):
-        missing = missing_client.probe(agent, timeout=1.0)
+        missing = missing_client.probe(agent)
     assert missing["status"] == "not_ready"
     assert missing["failure_code"] == "provider_model_not_registered"
 

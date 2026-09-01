@@ -45,6 +45,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     free_discovered_models,
     general_free_serving_candidates,
     is_routable_discovered_model,
+    model_group_name_for,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -762,7 +763,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == "model_vendor_free_model_7959c29fc9"
 
 
 def _nim_vision_model() -> DiscoveredModel:
@@ -1234,7 +1235,30 @@ def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inferenc
     assert discovered[0].input_modalities == ("text", "image")
     assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
     assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
-    assert agent_from_discovered(discovered[0]).group_name == ""
+    assert agent_from_discovered(discovered[0]).group_name == "model_provider_example_free_681f6a3471"
+
+
+def test_model_group_name_preserves_distinct_exact_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai",
+        "vendor/model-a",
+        "OPENAI_API_KEY",
+        "https://api.openai.com/v1",
+        "Bearer",
+    )
+    second = replace(first, model_id="vendor/model_a")
+
+    assert model_group_name_for(first) != model_group_name_for(second)
+
+
+def test_model_group_name_preserves_case_sensitive_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer"
+    )
+
+    assert model_group_name_for(first) != model_group_name_for(
+        replace(first, model_id="vendor/model")
+    )
 
 
 def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
@@ -2022,7 +2046,7 @@ def test_discover_provider_models_retries_transient_failure_then_succeeds() -> N
         discovered = discover_provider_models(OPENAI_SOURCE)
 
     assert len(attempt_timeouts) == 2
-    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    assert attempt_timeouts == [None, None]
     mock_sleep.assert_called_once()
     assert [model.model_id for model in discovered] == ["gpt-test"]
 
@@ -2119,7 +2143,7 @@ def test_agent_id_for_is_two_word_snake_case() -> None:
         chat_base_url="https://openrouter.ai/api/v1",
         auth_scheme="Bearer",
     )
-    assert agent_id_for(discovered) == "openrouter_meta_llama_3_3_70b"
+    assert agent_id_for(discovered).startswith("openrouter_meta_llama_3_3_70b_")
 
 
 def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None:
@@ -2131,7 +2155,7 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
         auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     agent = agent_from_discovered(discovered, priority=3)
-    assert agent.id == "bytez_0_hero_matter_0_1_slim_7b_c"
+    assert agent.id.startswith("bytez_0_hero_matter_0_1_slim_7b_c_")
     assert agent.disabled is True
     assert agent.auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert agent.credential_key == "BYTEZ_API_KEY"
@@ -2328,22 +2352,22 @@ def test_sync_discovered_agents_adds_and_updates_idempotently() -> None:
     agent_v1 = agent_from_discovered(discovered, priority=0)
 
     result = orchestrator.sync_discovered_agents([agent_v1])
-    assert result == {"added": ["openrouter_meta_llama_3_3"], "updated": []}
-    assert {a.id for a in orchestrator.candidates} == {"seed_agent", "openrouter_meta_llama_3_3"}
+    assert result == {"added": [agent_v1.id], "updated": []}
+    assert {a.id for a in orchestrator.candidates} == {"seed_agent", agent_v1.id}
 
     agent_v2 = agent_from_discovered(discovered, priority=7)
     result = orchestrator.sync_discovered_agents([agent_v2])
-    assert result == {"added": [], "updated": ["openrouter_meta_llama_3_3"]}
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    assert result == {"added": [], "updated": [agent_v1.id]}
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.priority == 7
     # No duplicate rows were appended on the update pass.
     assert len(orchestrator.candidates) == 2
 
     orchestrator.set_model_group(
-        "shared_reasoning_model", ["openrouter_meta_llama_3_3"]
+        "shared_reasoning_model", [agent_v1.id]
     )
     orchestrator.sync_discovered_agents([agent_v1])
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.group_name == "shared_reasoning_model"
 
 
@@ -2362,4 +2386,69 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
     first.sync_discovered_agents([agent])
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
-    assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+    assert any(a.id == agent.id for a in second.candidates)
+
+
+def test_durable_legacy_discovered_agent_adopts_generated_group_and_id(tmp_path) -> None:
+    db_path = str(tmp_path / "legacy-pool.db")
+    discovered = DiscoveredModel(
+        "openrouter", "Vendor/Model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    legacy = replace(incoming, id="openrouter_vendor_model", group_name="")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    restarted = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    result = restarted.sync_discovered_agents([incoming])
+    stored = next(agent for agent in restarted.candidates if agent.id == legacy.id)
+
+    assert result == {"added": [], "updated": [legacy.id]}
+    assert stored.group_name == incoming.group_name
+    assert all(agent.id != incoming.id for agent in restarted.candidates)
+    restarted.close()
+
+
+def test_legacy_operator_agent_is_not_duplicated_or_overwritten() -> None:
+    discovered = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY",
+        "https://api.openai.com/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    operator = replace(
+        incoming,
+        id="openai_vendor_model",
+        tags=("operator-tag",),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([operator], allow_empty_agents=True)
+
+    assert orchestrator.sync_discovered_agents([incoming]) == {"added": [], "updated": []}
+    assert orchestrator.candidates == [operator]
+
+
+def test_exact_model_id_collisions_persist_as_distinct_discovered_agents(tmp_path) -> None:
+    base = DiscoveredModel(
+        "openrouter", "vendor/model-a", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    models = [
+        base,
+        replace(base, model_id="vendor/model_a"),
+        replace(base, model_id="Vendor/Model"),
+        replace(base, model_id="vendor/model"),
+    ]
+    agents = [agent_from_discovered(model) for model in models]
+    orchestrator = TaskOrchestrator(
+        [], agents_db=str(tmp_path / "collisions.db"), allow_empty_agents=True
+    )
+
+    orchestrator.sync_discovered_agents(agents)
+
+    assert len({agent.id for agent in orchestrator.candidates}) == len(models)
+    assert {agent.model for agent in orchestrator.candidates} == {
+        model.model_id for model in models
+    }
+    orchestrator.close()
