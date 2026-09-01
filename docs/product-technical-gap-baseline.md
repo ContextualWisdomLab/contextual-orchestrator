@@ -15,10 +15,9 @@ Current source head `1a10eff8defd3dfbd5f4d64804bc634c11ae060f` fixes the DDD bui
 guarantees lease cleanup after bounded connect/read/write assertions, binds every effective
 isolation-policy field into one canonical SHA-256 carried by both the Podman resource label and
 returned lease, and versions that changed lease contract as `1.1.0`. Its real-Podman job
-`99756351297` is in progress. Immediate predecessor `28c497ff01b26e21d2ff1f3c23dd23c6ec31eaba`
-passed the real isolation, readiness, cleanup, and leak-rejection lane in job `99755350740`; that
-earlier result proves the profile on its Linux acceptance runner but does not substitute for the
-current head's pending evidence. It
+`99756351297` passed the real isolation, readiness, cleanup, and leak-rejection lane at that exact
+head. The remaining hosted gates are pending. This proves the profile on its Linux acceptance
+runner but does not prove the current head is release-ready. It
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
