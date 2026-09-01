@@ -282,6 +282,25 @@ def test_provider_readiness_report_reuses_latest_refresh_until_next_probe() -> N
     probe.assert_called_once_with(orchestrator.agents[0])
 
 
+def test_chat_readiness_does_not_probe_embedding_members() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("chat_agent", "gpt-5.2"),
+        ModelAgent("embedding_agent", "baai/bge-base-en-v1.5", tags=("embedding",)),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "chat_agent", "model": "gpt-5.2"},
+    ) as probe:
+        report = orchestrator.provider_readiness_report(refresh=True)
+
+    assert report["status"] == "ready"
+    assert report["agent_count"] == 1
+    assert report["items"][1]["status"] == "not_applicable"
+    probe.assert_called_once_with(orchestrator.agents[0])
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

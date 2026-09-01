@@ -3749,6 +3749,14 @@ class TaskOrchestrator:
                     "status": "disabled",
                 })
                 continue
+            if not is_chat_compatible_model_id(agent.model):
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "not_applicable",
+                })
+                continue
             if refresh:
                 item = dict(self.client.probe(agent))
                 item["provider"] = provider
@@ -3760,7 +3768,11 @@ class TaskOrchestrator:
                     "provider": provider,
                     "status": "unprobed",
                 })
-        active = [item for item in items if item["status"] != "disabled"]
+        active = [
+            item
+            for item in items
+            if item["status"] not in {"disabled", "not_applicable"}
+        ]
         status = "unprobed" if not refresh else (
             "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
         )
