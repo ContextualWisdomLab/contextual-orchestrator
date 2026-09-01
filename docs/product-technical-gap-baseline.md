@@ -2102,9 +2102,12 @@ Buyer-visible gaps now prioritized:
    keyboard/native-form REST editor; DB membership is normalized and legacy JSON
    membership migrates without data loss. Authenticated deployed-browser runtime
    evidence remains a release/UAT gate rather than an implementation gap.
-3. Free-model tests are deterministic catalog-contract tests. Add an opt-in,
-   spend-capped live OpenRouter canary selected from current zero-price metadata;
-   never pin a transient free model identifier in production or CI.
+3. **Implemented in the current product-gap branch:** the OpenRouter free-model
+   canary is dry-run-only by default and selects a current chat row only when
+   prompt and completion prices are explicitly zero and comparable. Live mode
+   is unscheduled and requires positive request, output-token, timeout, evidence
+   retention, and output-path choices; it disables retries, pins no model id,
+   and persists neither credentials, prompts, nor responses.
 4. Multi-instance routing observations remain process-local. Add a time-windowed
    durable observation model with calibrated decay before horizontal scaling.
 5. Protected main, not a feature-stack merge, remains the release boundary; do

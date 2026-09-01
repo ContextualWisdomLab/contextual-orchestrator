@@ -10,6 +10,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Added
+
+- Add a dry-run-default OpenRouter free-model canary. Its opt-in live mode
+  requires explicit request, output-token, timeout, evidence-path, and retention
+  bounds and selects only freshly discovered, completely zero-priced chat rows.
+
 ### Fixed
 
 - OpenRouter discovery no longer marks the entire credential account

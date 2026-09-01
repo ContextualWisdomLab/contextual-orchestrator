@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 import sys
 from dataclasses import replace
 
@@ -35,6 +36,7 @@ from .orchestrator import (
     TaskOrchestrator,
     load_agents,
 )
+from .openrouter_canary import OpenRouterCanaryLimits, run_openrouter_free_canary
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
@@ -489,6 +491,37 @@ def main(argv: list[str] | None = None) -> None:
         return
     if arguments and arguments[0] == "discover-models":
         _discover_models_command(arguments[1:])
+        return
+    if arguments and arguments[0] == "openrouter-free-canary":
+        parser = argparse.ArgumentParser(
+            prog="python -m contextual_orchestrator openrouter-free-canary"
+        )
+        parser.add_argument("--live", action="store_true")
+        parser.add_argument("--max-requests", type=_positive_int)
+        parser.add_argument("--max-output-tokens", type=_positive_int)
+        parser.add_argument("--timeout-seconds", type=_positive_int)
+        parser.add_argument("--evidence-output")
+        parser.add_argument("--retention-days", type=_positive_int)
+        args = parser.parse_args(arguments[1:])
+        supplied = (
+            args.max_requests,
+            args.max_output_tokens,
+            args.timeout_seconds,
+            args.retention_days,
+        )
+        if args.live and (
+            any(value is None for value in supplied) or not args.evidence_output
+        ):
+            parser.error(
+                "--live requires positive request/output-token/timeout/retention caps and --evidence-output"
+            )
+        limits = OpenRouterCanaryLimits(*supplied) if args.live else None
+        result = run_openrouter_free_canary(
+            live=args.live,
+            limits=limits,
+            evidence_output=Path(args.evidence_output) if args.evidence_output else None,
+        )
+        print(json.dumps(result, sort_keys=True))
         return
     if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
