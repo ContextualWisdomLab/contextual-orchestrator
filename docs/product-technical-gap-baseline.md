@@ -15,7 +15,9 @@ Reviewed source head `984d3a6ea2c267c8dd647fabf698465eb4ac0980` fixes its DDD bu
 guarantees lease termination after every live post-launch assertion. Hosted job `99750285437` passed
 the real rootless-Podman isolation and cleanup lane at that exact source head. Documentation tip
 `dac7a0c3ba39af2058c462ef2eb9cf4c0a40c059` independently repeated the real lane successfully in
-job `99750695476`. Those runs prove the current Podman profile on its Linux acceptance runner; they
+job `99750695476`. Current upstream tip `53d8246b…` additionally bounds connect/read/write I/O and
+has a deterministic stalled-server regression test; its hosted gates are pending. The successful
+runs prove the current Podman profile on its Linux acceptance runner; they
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
@@ -24,10 +26,25 @@ The dependency gate is therefore concrete, not a placeholder implementation task
 crate currently exposes an embeddable Rust API but no supported authenticated process transport or
 generated Python binding. Its lease publishes `127.0.0.1`, which is usable only under a defined
 co-location/network-namespace topology. It also lacks caller-scoped lease ownership/idempotency,
-stable bounded wire errors, semantic response validation, runtime artifact/build/backend/policy
-provenance in attestation, and durable restart/orphan reclamation. Implementing this repository's
+stable bounded wire errors and semantic response validation. The lease already reports immutable
+image, backend, and policy identifiers, but its attestation lacks verified runtime artifact/build
+provenance and cryptographic binding; durable restart/orphan reclamation is also absent. Implementing this repository's
 ACL before those contracts exist would either duplicate privileged runtime behavior or fabricate an
 interface that the provider does not support.
+
+Research basis: NIST SP 800-190 requires container-specific isolation, image integrity, least
+privilege, and lifecycle monitoring rather than treating a container boundary as sufficient by
+itself. NIST SP 800-207A further rejects trust based only on network location and requires granular
+application/service identity policy enforcement. Together they support the split here: the runtime
+must produce verifiable isolation and artifact evidence, while this gateway authenticates the
+caller and authorizes each lease instead of trusting loopback reachability.
+
+References (APA 7th): Souppaya, M., Morello, J., & Scarfone, K. (2017). *Application container
+security guide* (NIST SP 800-190). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-190. Chandramouli, R., & Butcher, Z. (2023). *A zero trust
+architecture model for access control in cloud-native applications in multi-cloud environments*
+(NIST SP 800-207A). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-207A.
 
 After an immutable upstream artifact is released with verified provenance and one versioned
 transport or supported binding, the smallest honest consumer slice is an explicit
