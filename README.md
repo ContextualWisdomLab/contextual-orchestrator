@@ -270,9 +270,12 @@ is read from a **KV config store**, never `os.getenv`.
   candidates for one virtual-model request. The gateway validates the full set
   before any provider call, forces synchronous execution, and returns
   requested, excluded, attempted, and served IDs under
-  `orchestration.routing`. Omitting both keys preserves the existing request
-  and response contract. Concrete provider model names cannot be combined with
-  these controls; candidate IDs remain absent from `/v1/models`.
+  `orchestration.routing`. Omitting both keys -- or supplying only an empty
+  `exclude_candidate_ids` array with no `candidate_id` -- preserves the
+  existing request and response contract: neither constrains selection, so
+  there is no routing decision to attest to. Concrete provider model names
+  cannot be combined with these controls; candidate IDs remain absent from
+  `/v1/models`.
 
   ```json
   {

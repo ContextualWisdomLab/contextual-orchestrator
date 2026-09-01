@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import urllib.error
@@ -11,7 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.cost_router import CostRoutingCoordinator
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, WorkflowStep
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -793,3 +794,225 @@ def test_coordinator_plain_proxy_preflights_only_worker_role() -> None:
 
     assert observed == [True]
     assert result["orchestration"]["workflow_run_id"] == "run_plain_candidate"
+
+
+def test_endpoint_scoped_preflight_rejects_pin_and_exclusion_conflicts() -> None:
+    """routing.endpoint plus a candidate_id/exclude_candidate_ids naming an
+    agent configured on a *different* endpoint must fail the same 400
+    invalid_routing preflight as any other ineligible pin -- never pass
+    preflight and only then blow up as a selection RuntimeError/500."""
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("candidate_a", "model-a", base_url="https://a.example/v1"),
+            ModelAgent("candidate_b", "model-b", base_url="https://b.example/v1"),
+        ],
+        client=client,
+    )
+    token = "candidate-endpoint-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for routing in (
+            # candidate_b is not reachable on endpoint A: a pin conflict.
+            {"endpoint": "https://a.example", "candidate_id": "candidate_b"},
+            # candidate_a is the only agent reachable on endpoint A: excluding
+            # it leaves nothing selection could actually serve from A.
+            {"endpoint": "https://a.example", "exclude_candidate_ids": ["candidate_a"]},
+        ):
+            chat_status, chat_body = _post(
+                server.server_address[1],
+                token,
+                {
+                    "model": "orchestrator/auto",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "routing": routing,
+                },
+            )
+            assert chat_status == 400, chat_body
+            assert chat_body["error"]["code"] == "invalid_routing", chat_body
+
+            responses_status, responses_body = _post_responses(
+                server.server_address[1],
+                token,
+                {"model": "orchestrator/auto", "input": "hi", "routing": routing},
+            )
+            assert responses_status == 400, responses_body
+            assert (
+                responses_body["error"]["code"] == "invalid_routing"
+            ), responses_body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert client.calls == []
+
+
+def test_generated_planner_attempt_is_recorded_even_when_unused_by_steps() -> None:
+    """The generated planner call is itself a real provider call; routing
+    evidence must include that candidate even when the plan it returns never
+    reassigns it to a later role."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "model-planner"),
+            ModelAgent(
+                "worker_agent", "model-worker", provider_exclusions=("thinker",)
+            ),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ]
+    )
+
+    def plan(_agent, _messages, **_kwargs):
+        return json.dumps(
+            {
+                "steps": [
+                    {
+                        "id": 0,
+                        "role": "worker",
+                        "agent_id": "worker_agent",
+                        "subtask": "work",
+                        "access": [],
+                    },
+                    {
+                        "id": 1,
+                        "role": "synthesizer",
+                        "agent_id": "worker_agent",
+                        "subtask": "answer",
+                        "access": [0],
+                    },
+                ]
+            }
+        )
+
+    orchestrator.client.chat = plan  # type: ignore[method-assign]
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        steps = orchestrator._plan_generated("plan this")
+        evidence = orchestrator._candidate_routing_evidence({"trace": []})
+
+    # worker_agent is the only agent eligible for "thinker" once
+    # worker_agent's own provider_exclusions rule it out, so planner_agent
+    # is deterministically the planner -- and never appears in a step.
+    assert {step.agent_id for step in steps} == {"worker_agent"}
+    assert evidence["attempted_candidate_ids"] == ["planner_agent"]
+
+
+def test_served_candidate_id_matches_verifier_rejected_worker_fallback(
+    monkeypatch,
+) -> None:
+    """conduct() (template plan) can serve the worker's output -- not the
+    synthesizer's -- when a required verifier rejects the synthesized
+    result. Every step's provider call still lands in the trace, so routing
+    evidence must report whichever candidate actually produced ``answer``,
+    not whichever step happened to execute last."""
+
+    class _AgentIdClient(ModelClient):
+        def chat(self, agent, messages, effort_profile=None):
+            return f"{agent.id} output"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("thinker_agent", "model-thinker"),
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("verifier_agent", "model-verifier"),
+            ModelAgent("synth_agent", "model-synth"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=_AgentIdClient(),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_plan",
+        lambda task, *, model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL: [
+            WorkflowStep(0, "thinker", "thinker_agent", "decompose"),
+            WorkflowStep(1, "worker", "worker_agent", "work", (0,)),
+            WorkflowStep(2, "verifier", "verifier_agent", "verify", (0, 1)),
+            WorkflowStep(3, "synthesizer", "synth_agent", "synthesize", (0, 1, 2)),
+        ],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *args, **kwargs: {
+            "accepted": False,
+            "reason": "test forces rejection",
+            "verifier_output": "verifier_agent output",
+            "judge": "model",
+        },
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator.conduct([{"role": "user", "content": "task"}])
+        evidence = orchestrator._candidate_routing_evidence(result)
+
+    assert [row["agent_id"] for row in result["trace"]] == [
+        "thinker_agent",
+        "worker_agent",
+        "verifier_agent",
+        "synth_agent",
+    ]
+    assert result["answer"] == "worker_agent output"
+    assert evidence["served_candidate_id"] == "worker_agent"
+
+
+def test_served_candidate_id_matches_generated_worker_fallback(monkeypatch) -> None:
+    """Same fallback identity guarantee as the template-plan case above, but
+    for a generated plan whose final step is a synthesizer distinct from the
+    worker whose output actually gets served on rejection."""
+
+    class _AgentIdClient(ModelClient):
+        def chat(self, agent, messages, effort_profile=None):
+            return f"{agent.id} output"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("verifier_agent", "model-verifier"),
+            ModelAgent("synth_agent", "model-synth"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=_AgentIdClient(),
+    )
+    orchestrator.policy = dataclasses.replace(
+        orchestrator.policy, workflow_planning="generated"
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_plan_generated",
+        lambda task: [
+            WorkflowStep(0, "worker", "worker_agent", "work"),
+            WorkflowStep(1, "verifier", "verifier_agent", "verify", (0,)),
+            WorkflowStep(2, "synthesizer", "synth_agent", "synthesize", (0, 1)),
+        ],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *args, **kwargs: {
+            "accepted": False,
+            "reason": "test forces rejection",
+            "verifier_output": "verifier_agent output",
+            "judge": "model",
+        },
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator.conduct([{"role": "user", "content": "task"}])
+        evidence = orchestrator._candidate_routing_evidence(result)
+
+    assert result["plan_source"] == "generated"
+    assert [row["agent_id"] for row in result["trace"]] == [
+        "worker_agent",
+        "verifier_agent",
+        "synth_agent",
+    ]
+    assert result["answer"] == "worker_agent output"
+    assert evidence["served_candidate_id"] == "worker_agent"

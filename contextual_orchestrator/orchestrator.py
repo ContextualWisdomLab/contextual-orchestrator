@@ -4034,7 +4034,16 @@ class TaskOrchestrator:
         candidate_id = candidate_id.strip() if isinstance(candidate_id, str) else None
         if candidate_id in normalized:
             raise ValueError("candidate_id cannot also be excluded")
-        configured = {agent.id: agent for agent in self.candidates}
+        # Endpoint-filtered: a pin or exclusion is validated against exactly
+        # the candidates the active routing.endpoint scope (if any) would
+        # actually let selection reach, so an endpoint/candidate conflict
+        # fails this preflight instead of surfacing as a later selection
+        # RuntimeError.
+        configured = {
+            agent.id: agent
+            for agent in self.candidates
+            if _agent_matches_request_endpoint(agent)
+        }
         unknown = sorted(set(normalized) - configured.keys())
         if unknown:
             raise ValueError("exclude_candidate_ids contains an unknown agent ID")
@@ -4063,7 +4072,7 @@ class TaskOrchestrator:
                     model_name != self.FREE_MODEL
                     or self._is_general_free_agent(agent)
                 )
-                for agent in self.candidates
+                for agent in configured.values()
             )
             for role in required_roles
         ):
@@ -4110,13 +4119,32 @@ class TaskOrchestrator:
                 for value in [row.get("agent_id")]
                 if isinstance(value, str) and value
             ]
+        # conduct() can serve a non-final step's output as the answer (the
+        # verifier-required fallback to the worker's output, or the
+        # verifier's own output when a synthesizer step is not required) --
+        # the trace still records every step's provider call, so the *last*
+        # row is not reliably the one that produced ``answer``. Prefer the
+        # row(s) whose recorded output actually match the served answer;
+        # fall back to the last-row heuristic for callers (plain passthrough,
+        # cache hits) that never populate "answer"/"output" at all.
+        answer = result.get("answer")
+        answering_rows = (
+            [
+                row
+                for row in rows
+                if isinstance(row, Mapping) and row.get("output") == answer
+            ]
+            if isinstance(answer, str)
+            else []
+        )
+        served_rows = answering_rows or rows
         served = (
             None
             if tracked_attempts == []
             else next(
                 (
                     value
-                    for row in reversed(rows)
+                    for row in reversed(served_rows)
                     if isinstance(row, Mapping)
                     for value in [row.get("served_agent_id") or row.get("agent_id")]
                     if isinstance(value, str) and value
@@ -6953,6 +6981,11 @@ class TaskOrchestrator:
             {"role": "user", "content": task},
         ]
         effort_profile = self._role_effort_profile("planner")
+        # Recorded immediately before the provider call, as the triage and
+        # invocation paths do -- otherwise routing evidence can omit a
+        # candidate that actually received the request (the planner is not
+        # guaranteed to appear again among the generated plan's own steps).
+        self._record_candidate_attempt(planner.id)
         raw = (
             self.client.chat(planner, planner_messages, effort_profile=effort_profile)
             if effort_profile is not None
