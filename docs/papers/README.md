@@ -65,6 +65,26 @@ redistribution is unclear.
 Buyer next action: call `run_equal_budget_ablation` and read
 `production_default_change_allowed` before changing live defaults.
 
+## Isolated application-service boundary
+
+- Souppaya, M., Morello, J., & Scarfone, K. (2017). *Application container
+  security guide* (NIST SP 800-190). National Institute of Standards and
+  Technology. https://doi.org/10.6028/NIST.SP.800-190.
+  `nist-sp-800-190.pdf` grounds container-specific isolation, image integrity,
+  least privilege, and runtime lifecycle monitoring.
+- Chandramouli, R., & Butcher, Z. (2023). *A zero trust architecture model for
+  access control in cloud-native applications in multi-cloud environments*
+  (NIST SP 800-207A). National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-207A. `nist-sp-800-207a.pdf` grounds
+  caller/service identity policy enforcement instead of trust based on
+  loopback or other network location.
+
+Both files are byte-verified official NIST PDFs. Each publication states that
+it is not subject to copyright in the United States and requests attribution.
+SHA-256: `0ebad52c4a3aba971b3a707b056e57238d1c4ad8f212dffd461ff9f5fed1bdb6`
+and `bb1af3bab70d8589e71e9fce4a99d3e714a82dd7b2bc7a931c7458a6ab60bb52`,
+respectively.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
