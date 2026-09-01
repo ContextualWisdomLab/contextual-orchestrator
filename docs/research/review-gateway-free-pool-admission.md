@@ -84,6 +84,39 @@ The PR implementing this contract must prove at least the following cases:
 
 Hosted exact-head checks and independent review remain the merge authority.
 
+## Redistribution boundary and source summaries
+
+No third-party paper PDF is copied into this PR. The repository rule permits a
+citation, source link, redistribution explanation, and summary when a local copy
+is not appropriate. This change does not need a bundled paper to execute, and the
+PR does not assert a redistribution license for the arXiv/TMLR author manuscripts;
+the stable source records below are therefore used instead of republishing those
+files. NIST publications are linked to their authoritative DOI/publication
+records rather than duplicated so the repository keeps the controlling revision
+and provenance visible.
+
+- **FrugalGPT (Chen et al., 2024):** formulates cost/quality-aware use of LLMs and
+  evaluates cascades that can reduce serving cost while preserving or improving
+  task performance. It is relevant only after provider authorization and
+  capability admission; it does not authorize a provider credential.
+- **RouteLLM (Ong et al., 2024):** trains routers from preference data to choose
+  between candidate LLMs under a quality/cost trade-off. It supports learned,
+  evidence-evaluated routing rather than a hand-authored provider ordering.
+- **MMR-Bench (Ma et al., 2026):** evaluates multimodal routing with controlled
+  candidate sets, modality-aware inputs, compute budgets, and cost/accuracy
+  frontiers. It supports retaining explicit modality evidence before routing.
+- **NIST SP 800-53 Rev. 5 (Joint Task Force, 2020):** AC-6 establishes
+  least-privilege controls; the current-bootstrap credential set therefore must
+  not be widened by credentials retained from another execution context.
+- **NIST SP 800-207 (Rose et al., 2020):** defines zero-trust architecture around
+  resource-focused, per-session authentication/authorization without implicit
+  trust. That is the security basis for separating global discovery from the
+  narrower free-review authorization boundary.
+
+These sources support the admission invariants and the requirement for measured
+routing evidence. They do **not** justify an arbitrary model-count cap,
+hand-assigned priority, fixed tie-break, or heuristic fallback.
+
 ## References
 
 Chen, L., Zaharia, M., & Zou, J. (2024). FrugalGPT: How to use large language
