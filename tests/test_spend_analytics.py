@@ -38,16 +38,13 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert report["totals"]["output_tokens"] > 0
     assert report["totals"]["prompt_tokens"] is None
     assert report["totals"]["cost_usd"] is None
-    # The single "general_agent" runs every conduct stage (and the realtime
-    # judge) against the mock:// transport, which never populates usage --
-    # ModelClient.chat() resets self._local.usage to None and leaves it
-    # unset on the mock path (see _step_output_tokens: "reported" strictly
-    # requires a step["usage"] dict with a valid completion/output token
-    # count). Every step therefore falls back to the exact declared-model
-    # tokenizer, so this bucket is homogeneously "tokenizer" -- "mixed"
-    # requires at least one genuinely provider-reported step, which this
-    # offline fixture can never produce.
-    assert row["usage_source"] == "tokenizer"
+    # The mock transport does not report provider usage. Countable output
+    # steps therefore use the injected exact tokenizer, while workflow/judge
+    # evidence steps that have neither reported usage nor countable output stay
+    # explicitly unavailable. spend_analytics() combines those evidence kinds
+    # in one model bucket as "mixed"; it does not reserve "mixed" for a
+    # reported-plus-tokenizer combination.
+    assert row["usage_source"] == "mixed"
     assert row["cost_usd"] is None
     assert not any("estimated" in key for key in row | report["totals"])
 
