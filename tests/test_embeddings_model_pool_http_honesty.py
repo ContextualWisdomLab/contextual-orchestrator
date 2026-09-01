@@ -42,7 +42,9 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
 
 
 def _server():
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    orchestrator = build()
+    counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN), coordinator=CostRoutingCoordinator(orchestrator, embedding_token_counter=counter))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]

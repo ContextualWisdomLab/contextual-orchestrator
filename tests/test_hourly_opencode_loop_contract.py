@@ -36,6 +36,11 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "timeout-minutes" not in loop_header
     assert "timeout-minutes" not in gateway_step
     assert "timeout-minutes" not in maintenance_step
+    assert "--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow
+    assert "--auth-token=" not in workflow
+    assert "--auth-token " not in workflow
+    assert "GATEWAY_BEARER_TOKEN" not in workflow
+    assert "umask 077" in workflow
     installer = Path("scripts/ci/install_locked_opencode.mjs").read_text()
     assert "optionalDependencies" in installer
     assert "installed.version !== expectedVersion" in installer
