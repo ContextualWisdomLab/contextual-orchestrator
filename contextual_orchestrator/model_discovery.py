@@ -1405,18 +1405,10 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
     (a missing unit, e.g. ``"0 /"``, or an extra separator, e.g.
     ``"0 / sec / token"``) still read as ``"0"`` and get confidently
     classified free; an unexpected shape is itself a signal something about
-    the row is wrong, so it fails closed instead. The *unit* is deliberately
-    not required to equal ``"sec"``: a rate of exactly zero cost is zero
-    regardless of its time unit (``"0 / hour"`` is exactly as free as
-    ``"0 / sec"``), so this only validates the shape, never the unit name.
+    the row is wrong, so it fails closed instead. The unit must be ``sec`` as
+    documented by Bytez; bare numeric values and unexpected units omit or
+    contradict the provider's billing evidence and therefore remain unknown.
     """
-    if isinstance(meter_price, bool):
-        return False
-    if isinstance(meter_price, (int, float)):
-        try:
-            return Decimal(str(meter_price)) == 0
-        except (ArithmeticError, ValueError):
-            return False
     if not isinstance(meter_price, str):
         return False
     segments = meter_price.split("/")
@@ -1425,7 +1417,7 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
         # "<rate> / <unit>" shape -- trust nothing from it, zero included.
         return False
     rate, unit = (segment.strip() for segment in segments)
-    if not rate or not unit:
+    if not rate or unit.casefold() != "sec":
         return False
     try:
         return Decimal(rate) == 0
@@ -2078,18 +2070,22 @@ def _discovery_price_key(
     except (TypeError, ValueError, OverflowError):
         return unknown
     if entry is None:
-        if not (
+        if (
             _valid_price_component(model.prompt_price_per_1k)
             and _valid_price_component(model.completion_price_per_1k)
             and _currency_is_comparable(model.currency_code, price_book.default_currency)
         ):
-            return unknown
-        return (
-            0,
-            float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
-            model.provider_name,
-            model.model_id,
-        )
+            return (
+                0,
+                float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
+                model.provider_name,
+                model.model_id,
+            )
+        # An exact provider-declared zero price is comparable across billing
+        # units, but complete token pricing remains authoritative when present.
+        if model.is_free:
+            return (0, 0.0, model.provider_name, model.model_id)
+        return unknown
     if not (
         _valid_price_component(entry.prompt_price_per_1k)
         and _valid_price_component(entry.completion_price_per_1k)
@@ -2114,6 +2110,19 @@ def _discovery_price_key(
     ):
         return unknown
     return (0, cost, model.provider_name, model.model_id)
+
+
+def select_cheapest_discovered_agent(
+    discovered: list[DiscoveredModel], price_book: "PriceBook"
+) -> DiscoveredModel | None:
+    """Pick the cheapest candidate with trustworthy price evidence.
+
+    A candidate without a price row is unknown, not free. Known prices therefore
+    sort first; when every candidate is unpriced, provider and model identifiers
+    provide deterministic fallback ordering without inventing a monetary value.
+    """
+    ranked = select_top_n_cheapest_discovered_agents(discovered, price_book, 1)
+    return ranked[0] if ranked else None
 
 
 def select_top_n_cheapest_discovered_agents(

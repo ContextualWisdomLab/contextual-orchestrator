@@ -11,7 +11,7 @@ import urllib.parse
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, get_type_hints
 from unittest.mock import patch
 
 import pytest
@@ -46,6 +46,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _positive_int_metadata,
     agent_from_discovered,
     agent_id_for,
+    apply_openrouter_spend_admission,
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
@@ -54,8 +55,17 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     openrouter_paid_inference_available,
     refresh_price_book,
     _response_contains_parallel_probe_tool_calls,
+    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_openrouter_spend_admission_annotations_resolve_at_runtime() -> None:
+    """Public discovery annotations must remain usable by runtime tooling."""
+    hints = get_type_hints(apply_openrouter_spend_admission)
+
+    assert hints["discovered"] is not None
+    assert hints["return"] == list[DiscoveredModel]
 
 
 def test_positive_limit_metadata_is_bounded_without_raising() -> None:
@@ -1901,8 +1911,10 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         ("0 / sec", True),
         ("0/sec", True),
         ("0.0000 / sec", True),
-        (0, True),
-        (0.0, True),
+        # Official Bytez catalog evidence is a unit-bearing string. Bare
+        # numbers omit the documented billing unit and remain unknown.
+        (0, False),
+        (0.0, False),
         (0.0006, False),
         (None, False),
         ("", False),
@@ -1911,9 +1923,7 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         (True, False),
         (False, False),
         ("-0 / sec", True),
-        # A zero rate is exactly as free regardless of its time unit -- the
-        # documented grammar constrains shape, not which unit word appears.
-        ("0 / hour", True),
+        ("0 / hour", False),
         # Genuinely malformed shapes must fail closed (unknown, not free),
         # never trust a numeric-looking prefix pulled out of an unexpected
         # overall shape.
@@ -2541,6 +2551,60 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
     assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
+
+
+def test_bytez_zero_meter_price_ranks_as_known_free_without_token_prices() -> None:
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    paid = DiscoveredModel(
+        "openrouter", "paid", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    bytez_free = DiscoveredModel(
+        "bytez", "free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, is_free=True,
+    )
+    price_book.set_price(PriceEntry("openrouter", "paid", 0.01, 0.01))
+
+    assert select_cheapest_discovered_agent([paid, bytez_free], price_book) is bytez_free
+
+
+@pytest.mark.parametrize("configured_model", ["free", "*"])
+def test_configured_price_overrides_stale_free_discovery_flag(
+    configured_model: str,
+) -> None:
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    configured = DiscoveredModel(
+        "bytez", "free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, is_free=True,
+    )
+    cheaper = DiscoveredModel(
+        "openrouter", "cheaper", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    price_book.set_price(PriceEntry("bytez", configured_model, 1.0, 1.0))
+    price_book.set_price(PriceEntry("openrouter", "cheaper", 0.1, 0.1))
+
+    assert select_cheapest_discovered_agent([configured, cheaper], price_book) is cheaper
+
+
+def test_discovered_token_price_overrides_stale_free_flag() -> None:
+    price_book = PriceBook(InMemoryConfigStore())
+    stale_free = DiscoveredModel(
+        "bytez", "stale-free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, prompt_price_per_1k=1.0,
+        completion_price_per_1k=1.0, is_free=True,
+    )
+    cheaper = DiscoveredModel(
+        "openrouter", "cheaper", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+        prompt_price_per_1k=0.1, completion_price_per_1k=0.1,
+    )
+
+    assert select_cheapest_discovered_agent([stale_free, cheaper], price_book) is cheaper
 
 
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
