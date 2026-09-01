@@ -276,7 +276,7 @@ Contextual Orchestrator is developed around a few explicit constraints:
 
 Before changing orchestration behavior, read the product planning, applicable PRD/specification and architecture decisions. Preserve fail-closed security boundaries, keep claims tied to current code and evidence, and update tests/docs together when a public contract changes.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) if present in the checkout and the repository's `AGENTS.md` / architecture guidance for contributor-specific rules.
+Contributor-specific repository rules live in `AGENTS.md` and the architecture/planning documentation shipped with the checkout.
 
 ## License
 
