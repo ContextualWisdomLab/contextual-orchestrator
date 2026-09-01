@@ -1424,9 +1424,20 @@ class CostLedger:
             bucket["total_tokens"] += int(row.get("total_tokens", 0))
             bucket["cost_amount"] += Decimal(str(row.get("cost_amount", 0)))
         for bucket in buckets.values():
-            bucket["cost_amount"] = float(
-                bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-            )
+            if bucket["unavailable_record_count"]:
+                for field in (
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "cost_amount",
+                ):
+                    bucket[field] = None
+            else:
+                bucket["cost_amount"] = float(
+                    bucket["cost_amount"].quantize(
+                        Decimal("0.000001"), rounding=ROUND_HALF_UP
+                    )
+                )
         return buckets
 
     def report(
@@ -1438,7 +1449,12 @@ class CostLedger:
         """Return a report envelope: per-value rollup plus a grand total."""
         buckets = self.rollup(dimension, start, end)
         items = sorted(
-            buckets.values(), key=lambda item: item["cost_amount"], reverse=True
+            buckets.values(),
+            key=lambda item: (
+                item["cost_amount"] is not None,
+                item["cost_amount"] or 0,
+            ),
+            reverse=True,
         )
         grand_total = self.total(start, end)
         return {
@@ -1454,7 +1470,7 @@ class CostLedger:
         available = [row for row in rows if row.get("measurement_status") != "unavailable"]
         unavailable_count = len(rows) - len(available)
         cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in available), Decimal("0"))
-        return {
+        totals: Dict[str, Any] = {
             "record_count": len(rows),
             "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in available),
             "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in available),
@@ -1469,6 +1485,15 @@ class CostLedger:
             ),
             "unavailable_record_count": unavailable_count,
         }
+        if unavailable_count:
+            for field in (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "cost_amount",
+            ):
+                totals[field] = None
+        return totals
 
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return raw usage record rows in the optional window."""

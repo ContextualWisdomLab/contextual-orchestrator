@@ -355,6 +355,39 @@ def test_report_envelope_sorts_by_cost_desc_and_includes_grand_total() -> None:
     assert report["grand_total"]["cost_amount"] == 11.0
 
 
+@pytest.mark.parametrize("include_measured", [False, True])
+def test_unavailable_rollups_do_not_publish_partial_totals(include_measured: bool) -> None:
+    ledger = _priced_ledger()
+    if include_measured:
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1000,
+            completion_tokens=1000,
+            attribution={"team": "alpha"},
+        )
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=0,
+        completion_tokens=0,
+        attribution={"team": "alpha"},
+        measurement_status="unavailable",
+    )
+
+    report = ledger.report("team")
+    expected_count = 2 if include_measured else 1
+    for aggregate in (report["items"][0], report["grand_total"]):
+        assert aggregate["record_count"] == expected_count
+        assert aggregate["unavailable_record_count"] == 1
+        assert aggregate["measurement_status"] == "unavailable"
+        assert aggregate["prompt_tokens"] is None
+        assert aggregate["completion_tokens"] is None
+        assert aggregate["total_tokens"] is None
+        assert aggregate["cost_amount"] is None
+    assert report["items"][0]["currency_code"] == "USD"
+
+
 def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
     conn = sqlite3.connect(":memory:")
     store = SqlLedgerStore(conn, paramstyle="qmark")
