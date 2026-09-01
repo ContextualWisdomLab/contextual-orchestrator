@@ -40,13 +40,14 @@ from .orchestrator import (
     ModelClient,
     format_authorization_header,
     is_transient_error,
+    redact_text,
 )
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
-DISCOVERY_TIMEOUT_SECONDS = 15.0
 _LOGGER = logging.getLogger(__name__)
+DISCOVERY_TIMEOUT_SECONDS = 15.0
 # One bounded retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
 # (is_transient_error). A short, fixed delay and a shortened retry timeout keep
@@ -297,28 +298,54 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+    """Fetch JSON, sending any credential only to the original trusted HTTPS host.
+
+    Plain ``urllib`` follows a 3xx redirect by copying the original request's
+    headers -- ``Authorization`` included -- onto the redirected request even
+    when the redirect target is a completely different host (unlike some
+    other HTTP clients, urllib never strips sensitive headers on cross-origin
+    redirects). Every call site here passes a real provider credential in
+    ``api_key``, so a malicious or compromised provider endpoint issuing a
+    redirect to an attacker-controlled host would otherwise leak it. This
+    uses the same :class:`_TrustedDiscoveryRedirectHandler` opener as
+    :func:`_fetch_json_same_host_https` to reject any redirect that leaves
+    the original host instead of silently forwarding the header.
+
+    The body read is capped at :data:`MAX_DISCOVERY_RESPONSE_BYTES` -- an
+    unbounded ``response.read()`` would let an outage page, a misbehaving
+    proxy, or a compromised provider endpoint stream an arbitrarily large
+    body into memory before JSON parsing ever runs. This mirrors the same
+    bounded-read-then-check pattern already used by
+    :func:`_fetch_json_same_host_https` and :func:`_fetch_configured_gateway_json`.
+    """
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
         headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if not isinstance(exc.reason, ssl.SSLCertVerificationError):
             raise
         context = ssl.create_default_context(cafile=certifi.where())
-        response = urllib.request.urlopen(  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout, context=context
+        response = _open_trusted_discovery_request(
+            request, trusted_host=parsed.hostname, timeout=timeout, context=context
         )
     with response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("model discovery response exceeds maximum size")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
@@ -408,6 +435,28 @@ class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _open_trusted_discovery_request(
+    request: urllib.request.Request,
+    *,
+    trusted_host: str,
+    timeout: float,
+    context: ssl.SSLContext | None = None,
+) -> Any:
+    """Open ``request`` through an opener that rejects redirects leaving ``trusted_host``.
+
+    Shared by :func:`_fetch_json` and :func:`_fetch_json_same_host_https` so
+    both authenticated discovery paths get identical, single-implementation
+    redirect protection instead of two copies that could silently drift
+    apart. ``context`` lets a caller retry once under a certificate-fallback
+    ``SSLContext`` without losing the redirect guard.
+    """
+    handlers: list[urllib.request.BaseHandler] = [_TrustedDiscoveryRedirectHandler(trusted_host)]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
+    return opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+
+
 def _fetch_json_same_host_https(
     url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
 ) -> Any:
@@ -419,11 +468,8 @@ def _fetch_json_same_host_https(
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
-    opener = urllib.request.build_opener(
-        _TrustedDiscoveryRedirectHandler(parsed.hostname)
-    )
     try:
-        response = opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
             raise TimeoutError(str(exc.reason)) from exc
@@ -1197,10 +1243,17 @@ def discover_provider_models(
             source.provider_name,
         )
         return []
-    _LOGGER.debug(
-        "model discovery started account=%s",
-        source.provider_name,
-    )
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # Never include source.credential_name here: it is the KV key label
+        # (e.g. "OPENAI_API_KEY") and main's
+        # test_discovery_debug_log_identifies_account_without_secret forbids
+        # it from appearing in this log line at all, on top of the actual
+        # credential value never being logged.
+        _LOGGER.debug(
+            "discovery_attempt account=%s",
+            source.provider_name,
+        )
+    started = time.monotonic()
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
@@ -1235,11 +1288,14 @@ def discover_provider_models(
             time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
     if last_exc is not None:
         error_code = _provider_discovery_error_code(last_exc)
-        _LOGGER.debug(
-            "model discovery failed account=%s error_code=%s",
-            source.provider_name,
-            error_code,
-        )
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "discovery_provider_failed account=%s error_code=%s error_type=%s error_message=%s",
+                source.provider_name,
+                error_code,
+                type(last_exc).__name__,
+                redact_text(str(last_exc))[:500],
+            )
         raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
@@ -1277,7 +1333,14 @@ def discover_provider_models(
                 timeout=timeout,
                 ca_bundle=ca_bundle,
             )
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError):
+            # RuntimeError matches the primary list-request retry loop above:
+            # ModelClient._resolve_addresses / _open_provider raise RuntimeError
+            # for DNS and request-validation transport failures, and this
+            # metadata fetch sits outside that loop's except tuple -- without
+            # RuntimeError here, a raw transport failure on this call alone
+            # would escape discover_provider_models uncaught and abort the
+            # entire discovery pass instead of just this provider's metadata.
             metadata = None
         payload = _merge_configured_gateway_metadata(payload, metadata)
     if source.style == "bytez":
@@ -1285,11 +1348,13 @@ def discover_provider_models(
     else:
         discovered = _parse_openai_compatible(payload, source)
     result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
-    _LOGGER.debug(
-        "model discovery completed account=%s model_count=%d",
-        source.provider_name,
-        len(result),
-    )
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "discovery_result account=%s model_count=%d elapsed_ms=%.1f",
+            source.provider_name,
+            len(result),
+            (time.monotonic() - started) * 1000.0,
+        )
     return result
 
 
@@ -1346,6 +1411,13 @@ def discover_all_models(
         routed = apply_openrouter_spend_admission(
             routed,
             openrouter_paid_inference_available(timeout=timeout),
+        )
+    if _LOGGER.isEnabledFor(logging.INFO):
+        _LOGGER.info(
+            "discovery_complete providers=%d models=%d errors=%d",
+            len(sources),
+            len(routed),
+            len(errors),
         )
     return routed, errors
 

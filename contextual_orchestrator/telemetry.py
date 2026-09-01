@@ -134,6 +134,21 @@ def reset_session_id(token: Token[str | None]) -> None:
     _CURRENT_SESSION.reset(token)
 
 
+def session_id_hash() -> str | None:
+    """Return the ADR 0122 bounded correlation hash for the current request.
+
+    ``None`` when no session is bound. Shared by :func:`_safe_attributes`
+    (OTLP span attributes) and by `server.py`'s per-request log summary, so
+    every surface that ever needs "which request was this" uses exactly one
+    hash of exactly one algorithm -- the raw session id itself never leaves
+    this module.
+    """
+    session_id = current_session_id()
+    if not session_id:
+        return None
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+
+
 def attach_trace_context(headers: Mapping[str, str]) -> Any:
     """Attach an inbound W3C trace context and return its reset token."""
     if _otel_extract is None or _otel_attach is None:
@@ -182,11 +197,9 @@ def _safe_attributes(
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
-    session_id = current_session_id()
-    if session_id:
-        result["contextual_orchestrator.session_id_hash"] = hashlib.sha256(
-            session_id.encode("utf-8")
-        ).hexdigest()
+    hashed_session_id = session_id_hash()
+    if hashed_session_id is not None:
+        result["contextual_orchestrator.session_id_hash"] = hashed_session_id
     return result
 
 
