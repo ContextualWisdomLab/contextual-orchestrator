@@ -474,7 +474,7 @@ def test_structural_provider_response_stays_inside_explicit_pool_failover() -> N
 
     orchestrator = TaskOrchestrator(agents, client=MalformedPrimaryClient())
 
-    answer, served_id, _usage = orchestrator._invoke(
+    answer, served_id, _served_model, _usage = orchestrator._invoke(
         agents[0],
         [{"role": "user", "content": "route this"}],
         text="route this",
@@ -541,7 +541,7 @@ def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
 
     # Each invoke fails on primary then succeeds on backup; primary accrues failures.
     for _ in range(orchestrator.circuit_failure_threshold):
-        output, served, _usage = orchestrator._invoke(
+        _output, served, _served_model, _usage = orchestrator._invoke(
             primary, [{"role": "system", "content": "Role: worker"}], text="task", role="worker"
         )
         assert served == "backup_worker"

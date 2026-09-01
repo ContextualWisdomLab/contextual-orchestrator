@@ -1,0 +1,3 @@
+[workspace]
+members = ["token_counter"]
+resolver = "2"

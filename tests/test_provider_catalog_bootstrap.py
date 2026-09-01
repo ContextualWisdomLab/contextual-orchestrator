@@ -75,8 +75,13 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json,
+        # _fetch_json_same_host_https, and _fetch_configured_gateway_json all
+        # cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1 to enforce the
+        # size bound -- all three are exercised through this same fixture now
+        # that they share _open_trusted_discovery_request.
+        return self._body if amt is None else self._body[:amt]
 
 
 def test_failed_provider_uses_persisted_last_known_good_model() -> None:
@@ -163,9 +168,18 @@ def test_default_discovery_reports_models_dev_refresh_success() -> None:
                 )
             return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
 
-        with patch(
-            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-            side_effect=urlopen,
+        def open_trusted_discovery_request(request, **kwargs):
+            return urlopen(request)
+
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                side_effect=urlopen,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=open_trusted_discovery_request,
+            ),
         ):
             report = bootstrap_provider_catalog_runtime(
                 environ=_environment(),
@@ -215,10 +229,17 @@ def test_default_discovery_reports_models_dev_refresh_failure_without_fabricatin
                 raise OSError("metadata fetch failed")
             return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
 
+        def open_trusted_discovery_request(request, **kwargs):
+            return urlopen(request)
+
         with (
             patch(
                 "contextual_orchestrator.model_discovery.urllib.request.urlopen",
                 side_effect=urlopen,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=open_trusted_discovery_request,
             ),
             patch("contextual_orchestrator.model_discovery.time.sleep"),
         ):
