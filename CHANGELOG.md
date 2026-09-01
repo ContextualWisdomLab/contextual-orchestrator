@@ -12,6 +12,91 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The cost ledger no longer fabricates a $0.00 price for an unpriced
+  provider/model. `PriceBook.compute_cost()` now returns a
+  `(cost_amount, currency_code, price_known)` 3-tuple; `UsageRecord` gains a
+  `price_known: bool` field (persisted through a new `usage_price_knowledge`
+  satellite table, joined the same way `usage_measurements` already is) so a
+  measured-but-unpriced request is distinguishable from a genuinely free one.
+  `CostLedger.rollup()`/`.report()`/`.total()` add an additive
+  `cost_amount_by_status`/`record_count_by_status` breakdown
+  (measured/estimated/unavailable) alongside the existing flat `cost_amount`
+  total, so measured, estimated, and unavailable-priced spend are no longer
+  opaquely blended into one authoritative-looking number.
+- `CostLedger.rollup()`/`.report()` add the same treatment one level further:
+  an additive `cost_amount_by_price_status`/`record_count_by_price_status`
+  breakdown (`known`/`unknown`) alongside the measured/estimated/unavailable
+  one, so an unpriced request's spend is visible even after rolling many
+  records up into one bucket. `cheapest_upstream()` no longer treats an
+  unpriced candidate as free (cost `0`) when selecting the lowest-cost
+  upstream — an unknown price is excluded from the comparison entirely
+  rather than winning it by default; `None` is returned when no candidate
+  has a known price.
+- (Devin review on #956) `SqlLedgerStore._append_locked()`'s satellite
+  writes (`usage_measurements`, `usage_price_knowledge`, attribution) now
+  only run when the parent `llm_usage_records` insert is actually accepted.
+  A retried `usage_record_id` whose parent insert is correctly rejected as
+  a duplicate previously still ran these satellite inserts unconditionally
+  — for a parent row that predates one of these tables (e.g. an
+  upgrade-migrated row with no `usage_price_knowledge` child, intentionally
+  read as price-unknown) that silently backfilled its provenance from the
+  retry's current price/measurement state instead of what actually priced
+  the original spend. `append()` is now a true no-op on a rejected
+  duplicate.
+- `price_known` now propagates from the ledger into every downstream usage
+  surface: `CostRoutingCoordinator.complete()`'s sync/provider-request cost
+  dicts and their per-currency components, `record_stream_usage()`,
+  `retrieve_batch()`'s per-item results, and `embeddings_batch_document()`.
+  An unpriced request's `cost_amount` is `null` rather than a silent `0`
+  wherever it surfaces, not just in the ledger's own rollups.
+  `PriceBook.compute_cost()` treats zero token usage as the one exception:
+  zero tokens cost zero regardless of whether the provider/model's price is
+  known (zero times any finite price is still zero), so a cache hit — whose
+  synthetic `("cache", "response")` provider/model never has a price row —
+  is always `price_known=True`, `cost_amount=0.0` rather than being wrongly
+  reported as an unpriced request.
+- `retrieve_batch()`'s `item.prompt_tokens or None` treated a legitimately
+  reported zero token count the same as a missing one (Python's falsy-zero),
+  so a genuinely confirmed zero-usage batch item was silently downgraded to
+  an unmeasured estimate instead of staying a real, priced `measured` `0`.
+  `PgLlmBatchBackend.retrieve()` and `BatchResultItem` now carry an explicit
+  `usage_valid` tri-state (confirmed-typed non-negative counts vs. missing/
+  malformed usage), and `retrieve_batch()` reads that instead of relying on
+  truthiness. That same estimation fallback also passed a hardcoded
+  empty-content placeholder instead of the request actually submitted, so a
+  large prompt whose provider marked usage invalid was undercounted to
+  near-zero prompt tokens — understating batch cost. (CodeRabbit review)
+  `submit_batch()` now computes a real prompt-token estimate per
+  `custom_id` before submission and stores it as a `prompt_token_estimates`
+  field on the durable `BatchJob` record itself, rather than the raw
+  submitted messages (Devin review: a batch registry can be Valkey-backed
+  with a multi-day retention shared across processes, and a submitted
+  prompt may be ZDR-flagged or otherwise sensitive — a token count carries
+  no reconstructable prompt content). Publishing it on the existing
+  `BatchJob` write also means an accepted job still has exactly one
+  publication write, so a metadata-only estimate can never orphan an
+  already-accepted (and possibly billed) backend job behind a raised
+  exception with no job id ever returned to the caller. `retrieve_batch()`
+  reads that stored estimate instead of falling back to an empty
+  placeholder. (Devin review) A job accepted before this fix has no
+  `prompt_token_estimates` at all, and its original request never lived
+  anywhere durable that a post-fix retrieval could still read — so
+  `retrieve_batch()` now also reads a legacy, pre-fix `batch_requests`
+  registry entry (still populated only for jobs submitted before this
+  change; nothing writes new entries there anymore) whenever a custom_id
+  has no stored estimate, computes the real prompt-token count from it the
+  same way a fresh submission would have, and persists that estimate back
+  onto the job so a re-retrieval never repeats the lookup. That legacy
+  lookup initially gated on whether `job.prompt_token_estimates` was
+  non-empty at all — wrong once any one custom_id had already picked up an
+  estimate (including from an earlier partial retrieval of the same job),
+  since every other still-unestimated custom_id would then silently stop
+  being looked up for the rest of that job's lifetime. It now gates on
+  whether the current retrieval actually has an item that still needs the
+  legacy lookup, so a legacy job's estimates can be filled in correctly
+  across as many partial retrievals as it takes; a job that has never
+  needed the legacy path (everything submitted after this fix) still never
+  touches that registry.
 - `CostRoutingCoordinator._record_race_endpoint_usage()` no longer silently
   drops a completed, billable race-loser call's spend when its usage payload
   can't be parsed. It now writes a `measurement_status="unavailable"` ledger

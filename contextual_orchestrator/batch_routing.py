@@ -131,8 +131,8 @@ def cheapest_upstream(
     Cost-optimising upstream selection for load balancing: given candidate
     provider/model pairs, price each against the configurable price table for a
     representative request shape and return the cheapest. Unpriced candidates
-    cost ``0`` and are treated as free (explicit, so a missing price is visible
-    rather than silently expensive). Ties keep input order.
+    are excluded because an unknown price is not free. Ties keep input order;
+    ``None`` is returned when no candidate has a known price.
     """
     if not candidates:
         return None
@@ -141,9 +141,11 @@ def cheapest_upstream(
     for candidate in candidates:
         provider = candidate.get("provider", "")
         model = candidate.get("model", "")
-        cost, _currency = price_book.compute_cost(
+        cost, _currency, price_known = price_book.compute_cost(
             provider, model, assumed_prompt_tokens, assumed_completion_tokens
         )
+        if not price_known:
+            continue
         if best_cost is None or cost < best_cost:
             best_cost = cost
             best = candidate
@@ -190,6 +192,9 @@ class BatchJob:
     # HTTP callers bind this opaque digest to the authenticated principal;
     # library-only jobs may remain unowned for standalone use.
     owner_id: Optional[str] = None
+    # Prompt-token fallback estimates are safe metadata, stored atomically with
+    # the job handle rather than retaining submitted prompt text.
+    prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -203,6 +208,7 @@ class BatchResultItem:
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
+    usage_valid: Optional[bool] = None
 
 
 class BatchBackend(Protocol):
@@ -403,17 +409,26 @@ class PgLlmBatchBackend:
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
+            raw_prompt_tokens = usage.get("prompt_tokens")
+            raw_completion_tokens = usage.get("completion_tokens")
+            usage_valid = (
+                type(raw_prompt_tokens) is int
+                and raw_prompt_tokens >= 0
+                and type(raw_completion_tokens) is int
+                and raw_completion_tokens >= 0
+            )
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
                     answer=answer,
-                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    completion_tokens=int(usage.get("completion_tokens", 0)),
+                    prompt_tokens=raw_prompt_tokens if usage_valid else 0,
+                    completion_tokens=raw_completion_tokens if usage_valid else 0,
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
+                    usage_valid=usage_valid,
                 )
             )
         return items

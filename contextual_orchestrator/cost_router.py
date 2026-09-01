@@ -115,6 +115,7 @@ class CostRoutingCoordinator:
                 token_counter=self.token_counter, job_registry=registry
             )
         )
+        self._job_registry = registry
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
@@ -390,6 +391,7 @@ class CostRoutingCoordinator:
                     )
                 )
             currencies = {record.currency_code for record in records}
+            price_known = all(record.price_known for record in records)
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
@@ -407,24 +409,23 @@ class CostRoutingCoordinator:
             provider_response["cost"] = {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if len(currencies) == 1 and aggregate_measurement_status != "unavailable"
+                    if price_known and len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "price_known": price_known,
                 "measurement_status": aggregate_measurement_status,
             }
-            if len(currencies) > 1 and aggregate_measurement_status != "unavailable":
+            if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
                 provider_response["cost"]["currency_components"] = [
                     {
                         "currency_code": currency,
-                        "cost_amount": round(
-                            sum(
-                                record.cost_amount
-                                for record in records
-                                if record.currency_code == currency
-                            ),
-                            6,
+                        "cost_amount": (
+                            round(sum(record.cost_amount for record in records if record.currency_code == currency), 6)
+                            if all(record.price_known for record in records if record.currency_code == currency)
+                            else None
                         ),
+                        "price_known": all(record.price_known for record in records if record.currency_code == currency),
                     }
                     for currency in sorted(currencies)
                 ]
@@ -532,36 +533,33 @@ class CostRoutingCoordinator:
             "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
-        # Same honesty precedence as the provider_request path above and
-        # record_stream_usage: a billable race-loser call recorded
-        # "unavailable" must not be summed into a confident-looking total.
         statuses = {item.measurement_status for item in records}
         aggregate_measurement_status = (
             "unavailable" if "unavailable" in statuses
             else "estimated" if "estimated" in statuses
             else "measured"
         )
+        price_known = all(item.price_known for item in records)
         result["cost"] = {
             "cost_amount": (
                 round(sum(item.cost_amount for item in records), 6)
-                if len(currencies) == 1 and aggregate_measurement_status != "unavailable"
+                if price_known and len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                 else None
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            "price_known": price_known,
             "measurement_status": aggregate_measurement_status,
         }
-        if len(currencies) > 1 and aggregate_measurement_status != "unavailable":
+        if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
             result["cost"]["currency_components"] = [
                 {
                     "currency_code": currency,
-                    "cost_amount": round(
-                        sum(
-                            item.cost_amount
-                            for item in records
-                            if item.currency_code == currency
-                        ),
-                        6,
+                    "cost_amount": (
+                        round(sum(item.cost_amount for item in records if item.currency_code == currency), 6)
+                        if all(item.price_known for item in records if item.currency_code == currency)
+                        else None
                     ),
+                    "price_known": all(item.price_known for item in records if item.currency_code == currency),
                 }
                 for currency in sorted(currencies)
             ]
@@ -660,6 +658,7 @@ class CostRoutingCoordinator:
             else "measured"
         )
         currencies = {record.currency_code for record in records}
+        price_known = all(record.price_known for record in records)
         return {
             "usage_record_ids": [record.usage_record_id for record in records],
             "usage": (
@@ -674,11 +673,12 @@ class CostRoutingCoordinator:
             "cost": {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if measurement_status == "measured" and len(currencies) == 1
+                    if measurement_status == "measured" and price_known and len(currencies) == 1
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "measurement_status": measurement_status,
+                "price_known": price_known,
             },
         }
 
@@ -700,8 +700,15 @@ class CostRoutingCoordinator:
             raise BatchModelSelectionError(
                 "no eligible model-group member is available for this batch request"
             ) from exc
+        prompt_token_estimates = {
+            request.custom_id: self.token_counter.count_messages(
+                request.messages, request.model
+            )
+            for request in prepared_requests
+        }
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
+        job.prompt_token_estimates = prompt_token_estimates
         self._batch_jobs[job.job_id] = job
         return job
 
@@ -741,9 +748,25 @@ class CostRoutingCoordinator:
         """Retrieve results for a batch owned by ``owner_id`` and record usage."""
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
+        prompt_token_estimates = dict(job.prompt_token_estimates)
+        needs_legacy_lookup = any(
+            not self._batch_item_usage_valid(item)
+            and item.custom_id not in prompt_token_estimates
+            for item in items
+        )
+        request_by_custom_id = (
+            self._legacy_batch_requests(job) if needs_legacy_lookup else {}
+        )
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
+            usage_valid = self._batch_item_usage_valid(item)
+            if not usage_valid and item.custom_id not in prompt_token_estimates:
+                original_request = request_by_custom_id.get(item.custom_id)
+                if original_request is not None:
+                    prompt_token_estimates[item.custom_id] = self.token_counter.count_messages(
+                        original_request.messages, item.model
+                    )
             record = self._record_completion(
                 messages=[{"role": "user", "content": ""}],
                 answer=item.answer,
@@ -753,26 +776,76 @@ class CostRoutingCoordinator:
                 model_name=item.model,
                 provider_model=provider_model,
                 workflow_run_id=job.job_id,
-                prompt_tokens=item.prompt_tokens or None,
-                completion_tokens=item.completion_tokens or None,
+                prompt_tokens=(
+                    item.prompt_tokens
+                    if usage_valid
+                    else prompt_token_estimates.get(item.custom_id)
+                ),
+                completion_tokens=item.completion_tokens if usage_valid else None,
             )
             recorded.append(
                 {
                     "custom_id": item.custom_id,
                     "answer": item.answer,
                     "usage_record_id": record.usage_record_id,
-                    "cost_amount": record.cost_amount,
+                    "cost_amount": record.cost_amount if record.price_known else None,
                     "currency_code": record.currency_code,
+                    "price_known": record.price_known,
                     "prompt_tokens": record.prompt_tokens,
                     "completion_tokens": record.completion_tokens,
                     "measurement_status": record.measurement_status,
                 }
             )
+        if prompt_token_estimates != job.prompt_token_estimates:
+            job.prompt_token_estimates = prompt_token_estimates
+            self._batch_jobs[job.job_id] = job
         return {
             "job_id": job_id,
             "backend": job.backend,
             "result_count": len(recorded),
             "results": recorded,
+        }
+
+    @staticmethod
+    def _batch_item_usage_valid(item: BatchResultItem) -> bool:
+        """True when a batch result item's provider-reported usage is trustworthy."""
+        return (
+            item.prompt_tokens >= 0
+            and item.completion_tokens >= 0
+            and (
+                item.usage_valid is True
+                or (
+                    item.usage_valid is None
+                    and (item.prompt_tokens > 0 or item.completion_tokens > 0)
+                )
+            )
+        )
+
+    def _legacy_batch_requests(self, job: BatchJob) -> Dict[str, BatchRequest]:
+        """Read pre-upgrade batch requests for a job with an unestimated custom_id.
+
+        Callers gate this on whether the current retrieval actually needs a
+        legacy lookup (some item still lacks a stored/computed estimate), not
+        on whether ``job.prompt_token_estimates`` is merely non-empty -- a
+        job's estimates can be filled in incrementally across multiple
+        ``retrieve_batch`` calls, and gating on non-emptiness alone would stop
+        looking up any custom_id not yet covered by an earlier partial
+        retrieval. A job never seen by the legacy registry (every job
+        submitted after this fix) costs one cheap KeyError-guarded miss.
+        """
+        legacy_requests = self._job_registry.mapping(
+            "batch_requests", decode=lambda raw: BatchRequest(**raw)
+        )
+        try:
+            requests = legacy_requests[job.job_id]
+        except KeyError:
+            return {}
+        if not isinstance(requests, list):
+            return {}
+        return {
+            request.custom_id: request
+            for request in requests
+            if isinstance(request, BatchRequest)
         }
 
     def _resolve_batch_provider_model(self, item: BatchResultItem) -> tuple[str, str]:
@@ -1072,6 +1145,7 @@ class CostRoutingCoordinator:
         embeddings: List[Dict[str, Any]] = []
         token_counts: List[int] = []
         total_cost_amount = 0.0
+        price_known = True
         currency_code = "USD"
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
@@ -1096,6 +1170,7 @@ class CostRoutingCoordinator:
                 attribution=attribution,
             )
             total_cost_amount += float(record.cost_amount)
+            price_known = price_known and record.price_known
             currency_code = record.currency_code
             token_counts.append(record.prompt_tokens)
             embeddings.append(
@@ -1121,9 +1196,10 @@ class CostRoutingCoordinator:
                 "strategy": "token_budgeted_embedding_parts_weighted_average",
                 **part_limits,
             },
-            "cost_amount": round(total_cost_amount, 6),
+            "cost_amount": round(total_cost_amount, 6) if price_known else None,
             "currency_code": currency_code,
-            "cost_micro_usd": int(round(total_cost_amount * 1_000_000)),
+            "price_known": price_known,
+            "cost_micro_usd": int(round(total_cost_amount * 1_000_000)) if price_known else None,
         }
         self._embedding_documents[batch_id] = document
         return document
@@ -1170,7 +1246,14 @@ class CostRoutingCoordinator:
         start: Optional[int] = None,
         end: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Return a cost rollup report grouped by ``dimension`` over a window."""
+        """Return a cost rollup report grouped by ``dimension`` over a window.
+
+        The envelope's ``items`` and ``grand_total`` each carry a
+        ``cost_amount_by_status``/``record_count_by_status`` breakdown
+        (measured/estimated/unavailable) alongside their flat ``cost_amount``
+        total, plus known/unknown ``*_by_price_status`` fields — see
+        :meth:`CostLedger.rollup`.
+        """
         return self.ledger.report(dimension, start, end)
 
 
