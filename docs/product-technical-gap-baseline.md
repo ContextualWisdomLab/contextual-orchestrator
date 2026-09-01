@@ -2098,8 +2098,9 @@ product policy, not a reproduced paper result.
 Buyer-visible gaps now prioritized:
 
 1. **Closed on #912 / protected main (ADR 0037):** video submission returns an
-   opaque gateway id; provider-affine polling/content download, tenant isolation,
-   normalized ownership, and first-complete usage persistence are implemented.
+   opaque gateway id; provider-affine polling/content download,
+   authenticated-principal isolation, normalized ownership, and first-complete
+   usage persistence are implemented.
    Shared durability uses the existing Valkey registry; without Valkey the
    documented standalone boundary remains process-local, and provider lifecycle
    status is observed rather than inferred or persisted.
