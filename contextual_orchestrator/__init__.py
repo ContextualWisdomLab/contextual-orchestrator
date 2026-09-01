@@ -25,9 +25,9 @@ from .evidence_batch_routing import (
 )
 
 # Patch the already-loaded protocol module before downstream modules import its
-# decision surfaces.  Direct ``contextual_orchestrator.batch_routing`` imports
+# decision surfaces. Direct ``contextual_orchestrator.batch_routing`` imports
 # also observe these fail-closed replacements because Python initializes the
-# package before returning a submodule to callers.  The legacy SHA-derived
+# package before returning a submodule to callers. The legacy SHA-derived
 # implementation remains unreachable and is exposed only as a tombstone that
 # raises instead of fabricating a semantic vector.
 _batch_routing.RoutingPolicy = RoutingPolicy
@@ -57,7 +57,7 @@ from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
 
 # The legacy coordinator still contains a price/order ranking helper used by
-# historical tests and non-authoritative diagnostics.  Production embedding
+# historical tests and non-authoritative diagnostics. Production embedding
 # target resolution is replaced at class load so both package and submodule
 # imports require explicit or uniquely eligible routing evidence.
 CostRoutingCoordinator._resolve_embedding_target = resolve_embedding_target_evidence_only
@@ -77,6 +77,7 @@ from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .evidence_model_selection import (
+    get_model_group_diagnostic,
     measured_member_order_fail_closed,
     prohibited_static_rank_key,
     ranked_agents_evidence_only,
@@ -84,13 +85,16 @@ from .evidence_model_selection import (
 )
 
 # Runtime model selection must not fall through to the historical static
-# priority/cosine/id key or the hand-composed transport score.  Keep the
+# priority/cosine/id key or the hand-composed transport score. Keep the
 # compatibility source available for incremental deletion, but make every
 # package/submodule import observe the fail-closed selection boundary now.
 TaskOrchestrator._ranked_agents = ranked_agents_evidence_only
 TaskOrchestrator._requested_agent = requested_agent_evidence_only
 TaskOrchestrator._static_rank_key = prohibited_static_rank_key
 TaskOrchestrator._measured_member_order = measured_member_order_fail_closed
+# Admin group serialization remains available without pretending its canonical
+# identifier order is an inference preference.
+TaskOrchestrator.get_model_group = get_model_group_diagnostic
 
 from .release_authorization import evaluate_release_authorization
 from .reasoning_effort_profile import (
