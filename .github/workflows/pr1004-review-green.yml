@@ -21,12 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: fix/structured-output-distinct-fallback-998
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
-      - name: Apply causal repairs, verify, and self-remove
+      - name: Apply causal repairs, verify, self-remove, and commit locally
         env:
           TARGET_BRANCH: fix/structured-output-distinct-fallback-998
         shell: bash
@@ -65,9 +66,10 @@ jobs:
           transform.ADR.write_text(adr_text, encoding="utf-8")
 
           change_text = transform.CHANGELOG.read_text(encoding="utf-8")
-          unreleased = change_text.index("## [Unreleased]")
+          unreleased_heading = "## [0.2.0] - Unreleased\n"
+          unreleased = change_text.index(unreleased_heading)
           marker = "### Fixed\n\n"
-          fixed = change_text.index(marker, unreleased)
+          fixed = change_text.index(marker, unreleased + len(unreleased_heading))
           note = """### Fixed
 
           - Structured-output review follow-up now charges already-incurred synthesis
@@ -111,4 +113,16 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add -A
           git commit -m "fix(structured-output): close review recovery gaps"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Push verified repair without persisted credentials
+        env:
+          TARGET_BRANCH: fix/structured-output-distinct-fallback-998
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$GITHUB_SHA"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push origin "HEAD:${TARGET_BRANCH}"
