@@ -250,6 +250,23 @@ def test_usage_telemetry_event_is_prompt_and_answer_safe() -> None:
     assert all("answer" not in key for key in event.attributes)
 
 
+def test_unavailable_usage_telemetry_does_not_export_false_zero_metrics() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(telemetry_sink=sink)
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=0,
+        completion_tokens=0,
+        measurement_status="unavailable",
+    )
+
+    event = sink.events()[-1]
+    assert event.attributes["contextual_orchestrator.usage.measurement_status"] == "unavailable"
+    assert event.metrics == {"contextual_orchestrator.usage.records": 1.0}
+
+
 def test_non_blocking_store_records_p2028_like_failure_as_telemetry_only() -> None:
     sink = InMemoryUsageTelemetrySink()
     ledger = _priced_ledger(
@@ -311,6 +328,26 @@ def test_multi_dimensional_rollup_correctness() -> None:
 
     # grand total across everything
     assert ledger.total()["cost_amount"] == 17.0
+
+
+def test_unavailable_usage_nulls_rollup_and_total_cost() -> None:
+    ledger = _priced_ledger()
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000,
+        completion_tokens=0, attribution={"team": "alpha"},
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=0,
+        completion_tokens=0, attribution={"team": "alpha"},
+        measurement_status="unavailable",
+    )
+
+    bucket = ledger.rollup("team")["alpha"]
+    assert bucket["measurement_status"] == "unavailable"
+    assert bucket["cost_amount"] is None
+    assert ledger.total()["measurement_status"] == "unavailable"
+    assert ledger.total()["cost_amount"] is None
+    assert ledger.report("team")["grand_total"]["cost_amount"] is None
 
 
 def test_rollup_by_every_declared_dimension_is_supported() -> None:
