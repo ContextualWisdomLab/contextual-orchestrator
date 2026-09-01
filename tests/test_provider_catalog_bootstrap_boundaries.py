@@ -323,15 +323,17 @@ def test_main_prints_secret_free_report_json(
     for name in PROVIDER_CREDENTIAL_NAMES:
         monkeypatch.setenv(name, f"value-for-{name.casefold()}")
 
-    def fake_discovery(sources: Any) -> tuple[list[DiscoveredModel], list[Any]]:
+    def fake_discovery(
+        sources: Any,
+    ) -> tuple[list[DiscoveredModel], list[Any], tuple[Any, ...]]:
         by_provider = {s.provider_name: s for s in sources}
         return [
             _model(by_provider["openai"], "gpt-live"),
             _model(by_provider["openrouter"], "router-live"),
             _model(by_provider["nvidia_nim"], "nim-live"),
-        ], []
+        ], [], ()
 
-    monkeypatch.setattr(pcb, "discover_all_models", fake_discovery)
+    monkeypatch.setattr(pcb, "discover_all_models_with_metadata_evidence", fake_discovery)
     pcb.main(["--model-limit", "3"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["catalog_model_count"] == 3
@@ -348,8 +350,8 @@ def test_main_allow_partial_flag_runs_subset_inventory(
 
     monkeypatch.setattr(
         pcb,
-        "discover_all_models",
-        lambda sources: ([_model(sources[0], "gpt-live")], []),
+        "discover_all_models_with_metadata_evidence",
+        lambda sources: ([_model(sources[0], "gpt-live")], [], ()),
     )
     pcb.main(["--allow-partial-credentials"])
     payload = json.loads(capsys.readouterr().out)
