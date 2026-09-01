@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import sys
 import urllib.error
 import urllib.parse
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -34,10 +38,12 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
+    _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
     _parse_openai_compatible,
+    _positive_int_metadata,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -50,6 +56,12 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_positive_limit_metadata_is_bounded_without_raising() -> None:
+    assert _positive_int_metadata(2_147_483_648) == 2_147_483_648
+    assert _positive_int_metadata(9_223_372_036_854_775_808) is None
+    assert _positive_int_metadata("9" * 5000) is None
 
 
 def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
@@ -317,6 +329,36 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
     assert discovered[0].zdr_capable is False
 
 
+def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
+    """Conflicting duplicate rows must not preserve one limit by row order."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                max_output_tokens=2048,
+                context_window=128000,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                max_output_tokens=4096,
+                context_window=256000,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].max_output_tokens is None
+    assert discovered[0].context_window is None
+
+
 def test_same_provider_model_under_different_credentials_remains_independent() -> None:
     """Credential accounts may expose different evidence for the same model id."""
     discovered = _deduplicate_discovered_models(
@@ -352,7 +394,7 @@ def test_discovery_debug_log_identifies_account_without_secret(caplog) -> None:
     with (
         caplog.at_level("DEBUG", logger="contextual_orchestrator.model_discovery"),
         patch(
-            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
             return_value=_Response({"data": [{"id": "gpt-test"}]}),
         ),
     ):
@@ -499,6 +541,122 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
     ]
 
 
+def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
+    payload = {
+        "data": [
+            {"id": "shared-model"},
+            {
+                "id": "mismatch-model",
+                "context_window": 999_999,
+                "context_length": 888_888,
+                "max_output_tokens": 99_999,
+                "max_completion_tokens": 88_888,
+            },
+            {
+                "id": "missing-model",
+                "context_window": 999_999,
+                "max_output_tokens": 99_999,
+            },
+        ]
+    }
+    metadata = {
+        "data": [
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "mismatch-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "mismatch-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 64000,
+                    "max_completion_tokens": 2048,
+                },
+            },
+            {
+                "model_name": "missing-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {"model_name": "missing-model", "model_info": {"mode": "chat"}},
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert merged["data"][0]["context_window"] == 128000
+    assert merged["data"][0]["max_output_tokens"] == 4096
+    assert "context_window" not in merged["data"][1]
+    assert "context_length" not in merged["data"][1]
+    assert "max_output_tokens" not in merged["data"][1]
+    assert "max_completion_tokens" not in merged["data"][1]
+    assert merged["data"][1]["_context_window_conflicted"] is True
+    assert merged["data"][1]["_max_output_tokens_conflicted"] is True
+    assert "context_window" not in merged["data"][2]
+    assert "max_output_tokens" not in merged["data"][2]
+    assert "_context_window_conflicted" not in merged["data"][2]
+    assert "_max_output_tokens_conflicted" not in merged["data"][2]
+
+    discovered = _parse_openai_compatible(
+        merged,
+        ProviderModelSource(
+            provider_name="configured_gateway",
+            credential_name="LLM_GATEWAY_API_KEY",
+            list_url="https://gateway.example/v1/models",
+            chat_base_url="https://gateway.example/v1",
+            capabilities=("chat",),
+        ),
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["mismatch-model"].max_output_tokens_conflicted is True
+    assert by_id["mismatch-model"].context_window_conflicted is True
+    assert by_id["missing-model"].max_output_tokens_conflicted is False
+    assert by_id["missing-model"].context_window_conflicted is False
+
+
+def test_models_dev_merge_preserves_limit_metadata() -> None:
+    payload = {"data": [{"id": "gpt-4.1-mini"}]}
+    metadata = {
+        "openai": {
+            "models": {
+                "gpt-4.1-mini": {
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                    "limit": {"context": 1047576, "output": 32768},
+                    "cost": {"input": 0.4, "output": 1.6},
+                }
+            }
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openai")
+
+    assert merged["data"][0]["context_window"] == 1047576
+    assert merged["data"][0]["max_output_tokens"] == 32768
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
@@ -518,8 +676,13 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json,
+        # _fetch_json_same_host_https, and _fetch_configured_gateway_json all
+        # cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1 to enforce the
+        # size bound -- all three are exercised through this same fixture now
+        # that they share _open_trusted_discovery_request.
+        return self._body if amt is None else self._body[:amt]
 
 
 OPENAI_SOURCE = ProviderModelSource(
@@ -575,7 +738,7 @@ def test_openrouter_paid_inference_uses_attested_remaining_credit(
 ) -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         assert openrouter_paid_inference_available() is expected
@@ -588,6 +751,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
             {
                 "id": "meta/llama-3.3",
                 "pricing": {"prompt": "0.0000006", "completion": "0.0000012"},
+                "context_length": 131072,
+                "top_provider": {"max_completion_tokens": 8192},
                 "supported_parameters": ["response_format"],
             },
             {"id": "no-pricing-model"},
@@ -596,11 +761,11 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     }
     seen_requests = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         seen_requests.append(request)
         return _Response(payload)
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
@@ -609,6 +774,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
+    assert priced.context_window == 131072
+    assert priced.max_output_tokens == 8192
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
@@ -632,7 +799,7 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
         ]
     ]
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response({"data": rows}),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
@@ -652,6 +819,24 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(
         agent_from_discovered(replace(embedding, evidence_only=False)).tags
     )
+
+
+def test_agent_from_discovered_preserves_limit_metadata() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="gpt-5.5",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+
+    agent = agent_from_discovered(discovered)
+
+    assert agent.max_output_tokens == 4096
+    assert agent.context_window == 128000
 
 
 def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -> None:
@@ -686,7 +871,7 @@ def test_non_text_model_does_not_gain_structured_response_capability() -> None:
         ]
     }
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
@@ -717,7 +902,7 @@ def test_non_text_model_does_not_gain_chat_from_chat_like_identifier() -> None:
 def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(
             {
                 "data": [
@@ -737,7 +922,7 @@ def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
 def test_discovery_preserves_operator_declared_source_capabilities() -> None:
     register_credential("EMBEDDING_API_KEY", "registered-secret")
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response({"data": [{"id": "embedding-deployment"}]}),
     ):
         discovered = discover_provider_models(EMBEDDING_SOURCE)
@@ -755,7 +940,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
         ]
     }
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
@@ -1187,7 +1372,7 @@ def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inferenc
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             assert request.get_header("Authorization") is None
             return _Response(
@@ -1222,7 +1407,7 @@ def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inferenc
         )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
@@ -1241,13 +1426,13 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             raise urllib.error.URLError("offline")
         return _Response({"data": [{"id": "vendor/paid-free"}]})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
@@ -1286,7 +1471,7 @@ def test_nvidia_nim_joins_models_dev_cost_and_modalities_without_name_inference(
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             assert request.get_header("Authorization") is None
             return _Response(
@@ -1321,7 +1506,7 @@ def test_nvidia_nim_joins_models_dev_cost_and_modalities_without_name_inference(
         )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
@@ -1345,13 +1530,13 @@ def test_nvidia_nim_metadata_failure_keeps_availability_but_not_free() -> None:
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             raise urllib.error.URLError("offline")
         return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
@@ -1368,12 +1553,12 @@ def test_fetch_json_sends_a_stable_user_agent_on_every_request() -> None:
     """
     captured: list[object] = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         captured.append(request)
         return _Response({"data": []})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         _fetch_json("https://models.dev/api.json", timeout=5.0)
@@ -1394,7 +1579,7 @@ def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             if not request.get_header("User-agent"):
                 raise urllib.error.HTTPError(
@@ -1406,7 +1591,7 @@ def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None
         return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
@@ -1421,7 +1606,7 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
     register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
     models_dev_calls = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             models_dev_calls.append(request.full_url)
             return _Response(
@@ -1445,7 +1630,7 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
         if item.provider_name in {"opencode_zen", "nvidia_nim", "nvidia_nim_sub"}
     )
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered, errors = discover_all_models(sources)
@@ -1465,7 +1650,7 @@ def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             raise urllib.error.URLError("offline")
         return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
@@ -1476,7 +1661,7 @@ def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false
         if item.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
     )
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered, errors = discover_all_models(sources)
@@ -1496,7 +1681,7 @@ def test_discover_all_models_shared_models_dev_fetch_retries_a_transient_failure
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     attempts = {"models_dev": 0}
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             attempts["models_dev"] += 1
             if attempts["models_dev"] < 2:
@@ -1517,7 +1702,7 @@ def test_discover_all_models_shared_models_dev_fetch_retries_a_transient_failure
 
     sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep"),
     ):
         discovered, errors = discover_all_models(sources)
@@ -1532,7 +1717,7 @@ def test_discover_all_models_shared_models_dev_fetch_gives_up_after_retry_budget
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     attempts = {"models_dev": 0}
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             attempts["models_dev"] += 1
             raise urllib.error.URLError("still offline")
@@ -1540,7 +1725,7 @@ def test_discover_all_models_shared_models_dev_fetch_gives_up_after_retry_budget
 
     sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep"),
     ):
         discovered, errors = discover_all_models(sources)
@@ -1555,7 +1740,7 @@ def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> N
     register_credential("BYTEZ_API_KEY", "bytez-key")
     models_dev_calls = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             models_dev_calls.append(request.full_url)
             return _Response({})
@@ -1564,7 +1749,7 @@ def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> N
         )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         discovered, errors = discover_all_models()
@@ -1603,8 +1788,8 @@ def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
         ]
     }
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=lambda request, timeout=None: _Response(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=lambda request, **_kwargs: _Response(
             payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
         ),
     ), patch(
@@ -1639,11 +1824,11 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     }
     seen_requests = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         seen_requests.append(request)
         return _Response(payload)
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen):
         discovered = discover_provider_models(BYTEZ_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "bytez-secret"
@@ -1678,7 +1863,7 @@ def test_discover_bytez_marks_zero_meter_price_as_free() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)
@@ -1700,7 +1885,7 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)
@@ -1761,7 +1946,7 @@ def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
     )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response({"output": [{"modelId": "embedding-deployment"}]}),
     ):
         discovered = discover_provider_models(source)
@@ -1773,12 +1958,12 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     register_credential("OPENAI_API_KEY", "sk-openai")
     register_credential("OPENROUTER_API_KEY", "sk-router")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             raise urllib.error.URLError("connection refused")
         return _Response({"data": [{"id": "meta/llama-3.3"}]})
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen):
         discovered, errors = discover_all_models((OPENAI_SOURCE, OPENROUTER_SOURCE))
 
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
@@ -1800,14 +1985,14 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
     )
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "openai/shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
     with (
         patch(
-            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
             side_effect=urlopen,
         ),
         patch(
@@ -1878,6 +2063,109 @@ def test_openrouter_zdr_evidence_rejects_cross_host_redirects() -> None:
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
 
 
+def test_fetch_json_rejects_a_cross_host_redirect_and_does_not_leak_the_credential() -> None:
+    """CVE-shaped regression for CodeRabbit's PR #946 finding.
+
+    ``_fetch_json`` is the function every standard provider's authenticated
+    "list models" call goes through (openai, openrouter, nvidia_nim,
+    nvidia_nim_sub, bytez), including under the one bounded retry added for
+    a transient failure -- so a credential leak here would fire up to twice.
+    Before the fix it called bare ``urllib.request.urlopen``, whose default
+    ``HTTPRedirectHandler`` copies the ``Authorization`` header onto a
+    redirected request even when the redirect leaves the original host.
+    This proves the leak is closed: the trusted-host opener must raise
+    before a second, cross-host request is ever issued -- red against the
+    unfixed ``_fetch_json`` (it followed the redirect and returned the
+    attacker's payload instead of raising), green after.
+    """
+    seen_requests = []
+
+    class _RedirectingOpener:
+        def __init__(self, handler):
+            self._handler = handler
+
+        def open(self, request, timeout=None):
+            seen_requests.append(request)
+            return self._handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {"Location": "https://evil.example/steal"},
+                "https://evil.example/steal",
+            )
+
+    def build_opener(*handlers):
+        assert len(handlers) == 1, "no SSL-context handler expected on the first attempt"
+        return _RedirectingOpener(handlers[0])
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.build_opener",
+        side_effect=build_opener,
+    ):
+        with pytest.raises(urllib.error.HTTPError):
+            _fetch_json(
+                "https://api.example.com/v1/models",
+                api_key="sk-super-secret-provider-key",
+                timeout=1.0,
+            )
+
+    # Exactly one request was ever issued -- to the original, trusted host.
+    # redirect_request raises instead of returning a request to evil.example,
+    # so the credential is never even constructed for, let alone sent to, it.
+    assert len(seen_requests) == 1
+    assert seen_requests[0].full_url == "https://api.example.com/v1/models"
+    assert seen_requests[0].get_header("Authorization") == "Bearer sk-super-secret-provider-key"
+
+
+def test_fetch_json_still_follows_a_same_host_redirect() -> None:
+    """Negative control: a same-host redirect (different path) must still work.
+
+    The fix must not collaterally break the legitimate case a real
+    provider API can use -- e.g. ``api.example.com/v1/models`` redirecting to
+    ``api.example.com/v2/models``.
+    """
+    seen_requests = []
+
+    class _RedirectingOpener:
+        def __init__(self, handler):
+            self._handler = handler
+
+        def open(self, request, timeout=None):
+            seen_requests.append(request)
+            redirected = self._handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {"Location": "https://api.example.com/v2/models"},
+                "https://api.example.com/v2/models",
+            )
+            seen_requests.append(redirected)
+            return _Response({"data": [{"id": "same-host-model"}]})
+
+    def build_opener(*handlers):
+        return _RedirectingOpener(handlers[0])
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.build_opener",
+        side_effect=build_opener,
+    ):
+        payload = _fetch_json(
+            "https://api.example.com/v1/models",
+            api_key="sk-super-secret-provider-key",
+            timeout=1.0,
+        )
+
+    assert payload == {"data": [{"id": "same-host-model"}]}
+    assert len(seen_requests) == 2
+    assert seen_requests[0].full_url == "https://api.example.com/v1/models"
+    assert seen_requests[1].full_url == "https://api.example.com/v2/models"
+    # The redirected same-host request still legitimately carries the credential.
+    for request in seen_requests:
+        assert request.get_header("Authorization") == "Bearer sk-super-secret-provider-key"
+
+
 def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
@@ -1889,14 +2177,14 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
     )
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
     with (
         patch(
-            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
             side_effect=urlopen,
         ),
         patch(
@@ -1924,14 +2212,14 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
     )
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
     with (
         patch(
-            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
             side_effect=urlopen,
         ),
         patch(
@@ -1976,12 +2264,12 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
     register_credential("OPENAI_API_KEY", "sk-openai")
     attempts = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         attempts.append(timeout)
         raise ConnectionResetError(104, "Connection reset by peer")
 
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
     ):
         try:
@@ -2009,14 +2297,14 @@ def test_discover_provider_models_retries_transient_failure_then_succeeds() -> N
     payload = {"data": [{"id": "gpt-test", "object": "model"}]}
     attempt_timeouts = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         attempt_timeouts.append(timeout)
         if len(attempt_timeouts) == 1:
             raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
         return _Response(payload)
 
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
     ):
         discovered = discover_provider_models(OPENAI_SOURCE)
@@ -2032,12 +2320,12 @@ def test_discover_provider_models_does_not_retry_non_transient_failure() -> None
     register_credential("OPENAI_API_KEY", "sk-openai")
     attempts = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         attempts.append(timeout)
         raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
 
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
     ):
         try:
@@ -2095,14 +2383,14 @@ def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -
     payload = {"data": [{"id": "gpt-test", "object": "model"}]}
     attempt_timeouts = []
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         attempt_timeouts.append(timeout)
         if len(attempt_timeouts) == 1:
             raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
         return _Response(payload)
 
     with (
-        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         patch("contextual_orchestrator.model_discovery.time.sleep"),
     ):
         discovered = discover_provider_models(OPENAI_SOURCE, timeout=2.0)
@@ -2385,3 +2673,117 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+
+
+_MODEL_DISCOVERY_LOGGER_NAME = "contextual_orchestrator.model_discovery"
+
+
+@contextmanager
+def _captured_discovery_logs(level: int) -> Iterator[io.StringIO]:
+    """Attach an isolated StringIO handler to the model_discovery logger only."""
+    logger = logging.getLogger(_MODEL_DISCOVERY_LOGGER_NAME)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False
+    try:
+        yield buffer
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+
+
+def test_discover_provider_models_debug_logs_credential_name_not_value() -> None:
+    """Reconciled with main's stricter privacy contract (merge of #946 and the
+    independently-landed test_discovery_debug_log_identifies_account_without_secret):
+    the discovery debug logs identify the account by provider name only and
+    never include the KV credential *name* (label) either, not just never its
+    value.
+    """
+    fake_value = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    register_credential("OPENAI_API_KEY", fake_value)
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    output = buffer.getvalue()
+    assert "account=openai" in output
+    assert "OPENAI_API_KEY" not in output
+    assert fake_value not in output
+
+
+def test_discover_provider_models_debug_logs_attempt_and_result() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}, {"id": "gpt-5.5-mini"}]}),
+        ),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    output = buffer.getvalue()
+    assert "discovery_attempt account=openai" in output
+    assert "discovery_result account=openai model_count=2" in output
+
+
+def test_discover_provider_models_debug_logs_are_silent_without_debug() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.WARNING) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    assert buffer.getvalue() == ""
+
+
+def test_discover_provider_models_debug_logs_failure_error_type_and_redacts_message() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+
+    def urlopen(request, timeout=None, **_kwargs):
+        raise urllib.error.URLError(f"connection refused api_key={fake_secret}")
+
+    with (
+        patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("a transport failure must raise ProviderDiscoveryError")
+    output = buffer.getvalue()
+    assert "discovery_provider_failed account=openai" in output
+    assert "error_type=URLError" in output
+    assert "[REDACTED]" in output
+    assert fake_secret not in output
+
+
+def test_discover_all_models_logs_aggregate_summary_at_info() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.INFO) as buffer,
+    ):
+        discover_all_models((OPENAI_SOURCE,))
+    output = buffer.getvalue()
+    assert "discovery_complete providers=1" in output
+    assert "models=" in output
+    assert "errors=" in output

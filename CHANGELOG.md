@@ -91,6 +91,167 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   fallback `_orchestrated_provider_completion` already applies for its own
   role. A caller that passes its own `effort_profile` is unaffected, and so
   is every caller when no `role_effort_catalog` is configured.
+- Batch cost retrieval now preserves cache hits, completed endpoint-race loser
+  usage, and strict provider usage evidence. Remote fallbacks retain the real
+  submitted prompt, repeated result retrieval reuses deterministic ledger ids,
+  and mixed-currency results expose per-currency components.
+- Batch result retrieval no longer converts an explicit download failure into
+  a silent empty result. `PgLlmBatchBackend.retrieve()` and
+  `PgLlmBatchEmbeddingBackend.retrieve()` now raise a new
+  `BatchDownloadError` (carrying the job id and the client's reported
+  `reason`/`error`) instead of returning `[]`, which used to be
+  indistinguishable from a batch that legitimately completed with zero
+  items. `CostRoutingCoordinator.retrieve_batch()` now lets the error
+  propagate rather than reporting a fake `result_count: 0` success (a new
+  `except BatchDownloadError` handler in `server.py` maps it to `502
+  batch_download_failed`, matching how other typed batch/provider errors are
+  already routed there). `embeddings_batch_document()` catches it and returns
+  `status: "failed"` with an `error` field, and — the severe half of this bug
+  — deliberately does **not** cache that result: a bare `return []` on
+  download failure used to be treated as a legitimately completed batch and
+  cached under `status: "completed"` with a fabricated `{"embedding": []}`
+  for every input, permanently poisoning that `batch_id` since the cache
+  short-circuits all future poll/retrieve calls before ever touching the
+  backend again. A failed retrieval now stays retryable.
+- `LocalBatchBackend` (the default `batch_backend` whenever
+  `CostRoutingCoordinator` is constructed without an explicit override, i.e.
+  every standalone/self-hosted-without-pg-llm-batch deployment) no longer
+  discards the real usage its runner reports. `BatchResultItem` gained a
+  `messages` field carrying the original request through, and
+  `LocalBatchBackend.submit()` now aggregates real `prompt_tokens`/
+  `completion_tokens` from `result["trace"][i]["usage"]` (usage has no
+  top-level key on `orchestrator.complete()`'s result; it is nested per
+  workflow step) instead of leaving both at the dataclass's `0` default. The
+  minimal per-step usage trace is retained so heterogeneous conduct calls are
+  charged to their actual served provider/model rather than collapsed into one
+  `unknown` row; malformed counts fail closed to estimates without coercion.
+  `retrieve_batch()`'s heuristic-estimate fallback (triggered whenever a
+  batch item reports no usage) now estimates from the batch item's real
+  request messages instead of a hardcoded blank `""` prompt — previously
+  every such row was labeled `measurement_status="estimated"` while actually
+  being a constant ~3-token count derived from empty content regardless of
+  the real prompt's length, misrepresenting what "estimated" meant to a
+  buyer reading the ledger.
+- Fixed a stale test assumption left behind by the per-step batch usage
+  attribution above:
+  `test_batch_routing_jobs_endpoint_submits_multiple_requests` still
+  hardcoded "one ledger row per batch item," which was already false for
+  `CostRoutingCoordinator.complete()`'s documented per-trace-step
+  attribution contract (each conduct-mode step is a separate billable
+  provider call). Two 2-request submissions through
+  `/api/v1/batch_routing_jobs` with the default single-agent mock pool
+  triage to the conduct path (4 steps each), producing 8 ledger rows, not
+  2 — the assertion now derives its expectation from the retrieved results'
+  own `usage_record_ids`, matching the fix already applied to the sibling
+  assertions in `tests/test_cost_router.py`.
+- The cost ledger no longer fabricates a $0.00 price for an unpriced
+  provider/model. `PriceBook.compute_cost()` now returns a
+  `(cost_amount, currency_code, price_known)` 3-tuple; `UsageRecord` gains a
+  `price_known: bool` field (persisted through a new `usage_price_knowledge`
+  satellite table, joined the same way `usage_measurements` already is) so a
+  measured-but-unpriced request is distinguishable from a genuinely free one.
+  `CostLedger.rollup()`/`.report()`/`.total()` add an additive
+  `cost_amount_by_status`/`record_count_by_status` breakdown
+  (measured/estimated/unavailable) alongside the existing flat `cost_amount`
+  total, so measured, estimated, and unavailable-priced spend are no longer
+  opaquely blended into one authoritative-looking number.
+- `CostLedger.rollup()`/`.report()` add the same treatment one level further:
+  an additive `cost_amount_by_price_status`/`record_count_by_price_status`
+  breakdown (`known`/`unknown`) alongside the measured/estimated/unavailable
+  one, so an unpriced request's spend is visible even after rolling many
+  records up into one bucket. `cheapest_upstream()` no longer treats an
+  unpriced candidate as free (cost `0`) when selecting the lowest-cost
+  upstream — an unknown price is excluded from the comparison entirely
+  rather than winning it by default; `None` is returned when no candidate
+  has a known price.
+- (Devin review on #956) `SqlLedgerStore._append_locked()`'s satellite
+  writes (`usage_measurements`, `usage_price_knowledge`, attribution) now
+  only run when the parent `llm_usage_records` insert is actually accepted.
+  A retried `usage_record_id` whose parent insert is correctly rejected as
+  a duplicate previously still ran these satellite inserts unconditionally
+  — for a parent row that predates one of these tables (e.g. an
+  upgrade-migrated row with no `usage_price_knowledge` child, intentionally
+  read as price-unknown) that silently backfilled its provenance from the
+  retry's current price/measurement state instead of what actually priced
+  the original spend. `append()` is now a true no-op on a rejected
+  duplicate.
+- `price_known` now propagates from the ledger into every downstream usage
+  surface: `CostRoutingCoordinator.complete()`'s sync/provider-request cost
+  dicts and their per-currency components, `record_stream_usage()`,
+  `retrieve_batch()`'s per-item results, and `embeddings_batch_document()`.
+  An unpriced request's `cost_amount` is `null` rather than a silent `0`
+  wherever it surfaces, not just in the ledger's own rollups.
+  `PriceBook.compute_cost()` treats zero token usage as the one exception:
+  zero tokens cost zero regardless of whether the provider/model's price is
+  known (zero times any finite price is still zero), so a cache hit — whose
+  synthetic `("cache", "response")` provider/model never has a price row —
+  is always `price_known=True`, `cost_amount=0.0` rather than being wrongly
+  reported as an unpriced request.
+- `retrieve_batch()`'s `item.prompt_tokens or None` treated a legitimately
+  reported zero token count the same as a missing one (Python's falsy-zero),
+  so a genuinely confirmed zero-usage batch item was silently downgraded to
+  an unmeasured estimate instead of staying a real, priced `measured` `0`.
+  `PgLlmBatchBackend.retrieve()` and `BatchResultItem` now carry an explicit
+  `usage_valid` tri-state (confirmed-typed non-negative counts vs. missing/
+  malformed usage), and `retrieve_batch()` reads that instead of relying on
+  truthiness. That same estimation fallback also passed a hardcoded
+  empty-content placeholder instead of the request actually submitted, so a
+  large prompt whose provider marked usage invalid was undercounted to
+  near-zero prompt tokens — understating batch cost. (CodeRabbit review)
+  `submit_batch()` now computes a real prompt-token estimate per
+  `custom_id` before submission and stores it as a `prompt_token_estimates`
+  field on the durable `BatchJob` record itself, rather than the raw
+  submitted messages (Devin review: a batch registry can be Valkey-backed
+  with a multi-day retention shared across processes, and a submitted
+  prompt may be ZDR-flagged or otherwise sensitive — a token count carries
+  no reconstructable prompt content). Publishing it on the existing
+  `BatchJob` write also means an accepted job still has exactly one
+  publication write, so a metadata-only estimate can never orphan an
+  already-accepted (and possibly billed) backend job behind a raised
+  exception with no job id ever returned to the caller. `retrieve_batch()`
+  reads that stored estimate instead of falling back to an empty
+  placeholder. (Devin review) A job accepted before this fix has no
+  `prompt_token_estimates` at all, and its original request never lived
+  anywhere durable that a post-fix retrieval could still read — so
+  `retrieve_batch()` now also reads a legacy, pre-fix `batch_requests`
+  registry entry (still populated only for jobs submitted before this
+  change; nothing writes new entries there anymore) whenever a custom_id
+  has no stored estimate, computes the real prompt-token count from it the
+  same way a fresh submission would have, and persists that estimate back
+  onto the job so a re-retrieval never repeats the lookup. That legacy
+  lookup initially gated on whether `job.prompt_token_estimates` was
+  non-empty at all — wrong once any one custom_id had already picked up an
+  estimate (including from an earlier partial retrieval of the same job),
+  since every other still-unestimated custom_id would then silently stop
+  being looked up for the rest of that job's lifetime. It now gates on
+  whether the current retrieval actually has an item that still needs the
+  legacy lookup, so a legacy job's estimates can be filled in correctly
+  across as many partial retrievals as it takes; a job that has never
+  needed the legacy path (everything submitted after this fix) still never
+  touches that registry.
+- `CostRoutingCoordinator._record_race_endpoint_usage()` no longer silently
+  drops a completed, billable race-loser call's spend when its usage payload
+  can't be parsed. It now writes a `measurement_status="unavailable"` ledger
+  row (0 tokens) instead of returning without any row at all, mirroring
+  `record_stream_usage()`'s existing "call happened, can't measure it"
+  fallback. (Devin review on #955) Both of `complete()`'s cost-aggregation
+  paths (the `provider_request`/race-proxy path and the ordinary
+  `orchestrator.run()` sync path) previously only checked for
+  `measurement_status="estimated"` when rolling records up into one
+  response `cost` block, so a measured winner plus this new "unavailable"
+  loser row still reported the whole completion as confidently `"measured"`
+  and silently summed the loser's unknown cost as `0`. Both paths now use
+  the same unavailable-outranks-estimated-outranks-measured precedence as
+  `record_stream_usage()`, and `cost_amount` becomes `None` rather than a
+  partial sum whenever any contributing record is unavailable. Mixed-currency
+  responses also suppress their otherwise partial `currency_components`.
+- `check-fast-mlsirm --help` now shows help and exits instead of running the
+  diagnostic: the subcommand took no arguments and ignored everything after
+  its own name, so `--help` was silently swallowed and the real diagnostic
+  ran anyway. It now gets its own `argparse` parser (declaring the shared
+  `--log-level`/`--verbose`/`--debug` flags, matching every other
+  subcommand), so `--help` documents them and exits cleanly, and an
+  unrecognized trailing option is rejected instead of being ignored.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
@@ -121,6 +282,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+<<<<<<< HEAD
 - (Devin review on #958) `_orchestrated_provider_completion`'s structured/
   Responses synthesis path (the `single_agent=False` branch of
   `proxy_completion`) resolved its caller-supplied `effort_profile` override
@@ -139,9 +301,181 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   path's existing pattern and `_ranked_agents`' own documented intent that
   every role-based selection path -- "structured synthesis" included -- stay
   consistent with the effort catalog's eligibility guard.
+=======
+- (CodeRabbit review on #946) **Credential leak via cross-host redirect,
+  doubled by #923's retry.** `_fetch_json` -- the function every standard
+  provider's authenticated "list models" call goes through (openai,
+  openrouter, nvidia_nim, nvidia_nim_sub, bytez), including under #923's one
+  bounded retry -- called plain `urllib.request.urlopen`, whose default
+  `HTTPRedirectHandler` copies the `Authorization` header onto a redirected
+  request even when the redirect target is a completely different host
+  (unlike some other HTTP clients, urllib never strips sensitive headers on
+  cross-origin redirects). A malicious or compromised provider endpoint
+  issuing a 3xx redirect could have exfiltrated the credential, and the
+  retry meant up to twice per discovery attempt. `_fetch_json_same_host_https`
+  already carried the correct fix for this exact risk (`_TrustedDiscoveryRedirectHandler`,
+  raising on any redirect leaving the original host) for a different call
+  path; `_fetch_json` now goes through the same protection via a new shared
+  `_open_trusted_discovery_request` helper, so both functions get one
+  single-implementation redirect guard instead of two copies that could
+  drift apart. A legitimate same-host redirect (e.g. a real provider's
+  `/v1/models` -> `/v2/models`) still succeeds unchanged.
+- (CodeRabbit review on #946) The `configured_gateway` provider's
+  `/model/info` metadata fetch now also catches `RuntimeError` (raised by
+  `ModelClient._resolve_addresses`/`_open_provider` on a DNS or
+  request-validation transport failure), matching the primary list-request
+  retry loop's except tuple. Previously a raw `RuntimeError` from this one
+  metadata fetch escaped `discover_provider_models` uncaught and aborted the
+  entire discovery pass instead of just this provider's metadata.
+- (CodeRabbit review on #946) `server.py`'s per-request `latency_ms` no
+  longer counts a keep-alive connection's idle time between requests.
+  `request_started` used to be timestamped immediately before
+  `BaseHTTPRequestHandler.handle_one_request()`, whose first action is a
+  blocking `self.rfile.readline()` that, on a reused connection, waits on
+  the client's next request rather than doing any work. The timestamp is
+  now taken inside an overridden `parse_request()`, right after that
+  blocking read has already returned real request bytes, so `latency_ms`
+  reflects only actual request handling.
+- (CodeRabbit review on #946) `orchestrator.py`'s retry-outcome
+  classification (no retry budget at all / budget exhausted / stopped early
+  on a non-transient error) was duplicated verbatim in
+  `ModelClient._send_with_retry` and `_send_raw_with_retry` -- duplication
+  that had already caused a real regression once, when a fix landed in one
+  copy but was missed in the other (see the round-4 `provider_no_retry_budget`
+  fix above). Extracted into one shared `_log_retry_outcome` helper both
+  methods call, so the two call sites cannot diverge again.
+- (CodeRabbit review on #946) `debug_logging.response_metadata_for_log`'s
+  `usage` summary now keeps only a fixed allowlist of known counter names
+  (`prompt_tokens`, `completion_tokens`, `total_tokens`, `input_tokens`,
+  `output_tokens`; see `SAFE_USAGE_COUNTER_KEY_NAMES`), not any string key
+  with a numeric value. A provider's `usage` object is upstream-controlled
+  JSON, so a key shaped like `"customer_note=<secret>"` with a throwaway
+  numeric value would otherwise have sailed through the old numeric-only
+  filter and reached DEBUG output verbatim (CWE-532).
+- (round 6) `model_discovery.py`'s `_fetch_json` read an authenticated
+  provider's entire response body into memory before parsing it as JSON
+  (`response.read()`, no size bound) -- unlike `_fetch_json_same_host_https`
+  and `_fetch_configured_gateway_json`, which already capped their reads at
+  `MAX_DISCOVERY_RESPONSE_BYTES` (8 MiB) and failed closed on an overage.
+  A large or malicious/misbehaving provider response (an outage page dumped
+  as an unbounded body, or a compromised endpoint) could exhaust worker
+  memory before JSON parsing ever ran (CWE-400). `_fetch_json` now shares
+  the identical bounded-read-then-check pattern: it reads at most
+  `MAX_DISCOVERY_RESPONSE_BYTES + 1` bytes and raises `ValueError` if the
+  body exceeds the cap, applied consistently everywhere
+  `_open_trusted_discovery_request`'s response body is consumed in this
+  module.
+- (round 6) `_log_retry_outcome`'s zero-retry-budget classification
+  conflated two different situations under the same `provider_no_retry_budget`
+  WARNING: an agent with a genuinely zero configured retry budget, and
+  `ModelClient.proxy_send_once`'s deliberate one-shot call
+  (`allow_transient_retries=False`, used so an already-failing-over
+  passthrough request cannot itself amplify load with a nested retry loop).
+  `_send_raw_with_retry` computes `retry_limit = self._retry_limit(agent) if
+  allow_transient_retries else 0`, so the forced-to-0 one-shot case looked
+  identical to a real zero-budget agent by the time it reached
+  `_log_retry_outcome`, producing a false "no retry budget" warning even
+  when the agent's real budget was non-zero. `_log_retry_outcome` now takes
+  `allow_transient_retries` explicitly and, when a caller forced the retry
+  count to zero rather than the agent's own configuration being zero, logs a
+  distinctly named `provider_one_shot_call_failed` WARNING instead of
+  `provider_no_retry_budget`. `_send_with_retry` has no such caller-forced
+  restriction and is unaffected.
+- (round 7) `server.py`'s `_send`/`_send_text`/`_send_bytes`/`_send_sse`/
+  `_begin_sse` all set `self._last_status` to the *intended* status before
+  handing off to `_write_response`, then ignored its boolean return value.
+  `_write_response` deliberately swallows a dead peer's
+  `BrokenPipeError`/`ConnectionError`/`OSError` (so a disconnected client
+  cannot crash the handler thread), but that left `_last_status` claiming a
+  status the client never actually received, so the per-request INFO
+  summary (`_log_request_summary`) logged a false "200 delivered" for a
+  request that was really cut short mid-write. `_write_response` now resets
+  `_last_status` back to `None` -- this module's existing "response was
+  never sent" value -- whenever it catches a disconnect, fixing every
+  current and future writer uniformly at their one shared choke point
+  instead of patching each writer individually.
+- (round 7) `_log_request_summary` also silently dropped a request that
+  *did* deliver bytes but whose request line `parse_request` rejected as
+  malformed (or that stdlib's `handle_one_request` rejected outright as too
+  long): a real 400/414 was sent and captured into `_last_status` via the
+  `send_response` override, but `command`/`path` stay unset for these
+  cases (stdlib's own `parse_request` resets `self.command` to `None` "in
+  case of error on the first line" and never reaches the assignment that
+  would set `path`), so the old "nothing to report" guard -- checking only
+  method/path -- skipped logging it, indistinguishable from a keep-alive
+  connection closing with zero bytes. The guard now also logs when
+  `_last_status` was actually recorded, while still skipping the true
+  no-bytes-at-all case.
+- (round 7) Two CodeQL `py/clear-text-logging-sensitive-data` HIGH alerts on
+  `tests/test_debug_logging.py`'s redaction positive/negative-control pair
+  (lines 144 and 167) are precise, per-line `# codeql[...]` inline
+  suppressions with an explanatory comment, not a code change: both lines
+  log a hardcoded, non-functional fake secret (`# noqa: S105`'d against
+  bandit/ruff) as a deliberate test fixture -- one proving `redact_text`
+  masks it, the other (the negative control) proving the same literal
+  leaks with no redactor, which is exactly what the test exists to show.
+- (round 8) Follow-up correction to round 7's `_write_response` fix: clearing
+  `_last_status` on *every* caught disconnect was too broad. A write failure
+  can strike either before the status line/headers were ever flushed (the
+  client received nothing -- clearing is correct) or after `end_headers()`
+  already completed (a later body-write chunk, or a later `_write_sse` frame
+  on a stream `_begin_sse` already opened -- the client genuinely received
+  the real status, so clearing it would falsely report "no status" for a
+  request that was, in fact, answered). Every `_send*`/`_begin_sse` writer
+  now sets a new `self._response_headers_sent` marker immediately after its
+  own `end_headers()` call returns (reset to `False` once per request by
+  `handle_one_request`); `_write_response`'s disconnect handler now clears
+  `_last_status` only when that marker is still unset, preserving it
+  otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
+  than touching it itself, since it is only ever called after a prior
+  successful header flush.
+>>>>>>> origin/main
 
 ### Added
 
+- Verbose/debug logging (ADR 0005): a new stdlib-only `debug_logging.py`
+  module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
+  `--verbose`/`--debug` shorthand (default unchanged: `WARNING`), and new
+  instrumentation at the provider retry loop, per-agent circuit breaker, evidence-based ranking
+  (`_ranked_agents`/`_select_agent`), model discovery, and one body-free
+  per-request summary line in `server.py`. The DEBUG response-body summary
+  logs only an allowlisted metadata shape (`debug_logging.response_metadata_for_log`:
+  whether the response is error-shaped, the model name, the choice count, and
+  numeric usage counts) rather than the payload itself, so ordinary response
+  text (message content, tool-call arguments, an error message) never reaches
+  DEBUG output — `redact_text`/`redact_value`'s in-string value-pattern
+  matching and the additional key-name-aware
+  `debug_logging.redact_credential_shaped_keys` pass (catches a secret nested
+  under a credential-shaped JSON key regardless of its value's shape) are
+  applied on top of that allowlist, defense-in-depth, plus a handler-level
+  filter safety net. Raw prompt/answer text is never logged, only lengths and
+  identifiers. The INFO per-request summary strips any query string before
+  logging, is skipped entirely for a keep-alive connection's closing call
+  that parsed no new request (previously logged the prior request a second
+  time, statuslessly), and now also captures a status the framework itself
+  sends (e.g. its built-in 501 for an unsupported HTTP method), not just
+  status codes sent through this module's own response writers. A
+  `--log-level`/`--verbose`/`--debug` flag placed before a subcommand
+  (`register-credential`, `discover-models`, `check-fast-mlsirm`) no longer
+  bypasses subcommand dispatch, including an abbreviated spelling of one of
+  those flags (`--log-l`, `--ver`) — every CLI parser now sets
+  `allow_abbrev=False` so an abbreviation is rejected consistently
+  everywhere with a clear error, rather than silently accepted by one parser
+  and not another. The retry loop's `provider_exhausted` WARNING now fires
+  only when a real, non-zero retry budget was actually used up; an
+  immediate non-transient (permanent) rejection with budget left logs the
+  distinct `provider_rejected_permanent`, and any failure at all with a
+  configured retry limit of 0 (there was never a budget to exhaust) logs a
+  separate `provider_no_retry_budget` carrying the error's own
+  transient/non-transient classification explicitly — collapsing a
+  zero-budget *transient* failure into "permanent" would conflate "no retry
+  budget was configured" with "this error is non-retryable by nature", two
+  independent facts. The handler-level
+  redaction safety net now also redacts an exception's traceback
+  (`exc_info=True` / `logger.exception(...)`), not just `record.msg` — a
+  secret embedded in an exception's own message (e.g. an upstream error
+  reflecting `api_key=sk-...`) previously reached DEBUG output unredacted
+  via the traceback even when the message-level redaction worked correctly.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted
