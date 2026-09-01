@@ -160,19 +160,19 @@ def patch_tests() -> None:
         "authoritative budget test",
     )
     tests = TESTS.read_text(encoding="utf-8")
-    old = '        ModelClient._send = lambda self, agent, payload: "stub live answer"\n'
+    old = '    ModelClient._send = lambda self, agent, payload: "stub live answer"\n'
     if tests.count(old) != 2:
         raise RuntimeError(f"live synthetic usage patch: expected two matches, found {tests.count(old)}")
-    new = """        def _stub_live_send(self, agent, payload):
-            del agent, payload
-            self._local.usage = {
-                "prompt_tokens": 1,
-                "completion_tokens": 1,
-                "total_tokens": 2,
-            }
-            return "stub live answer"
+    new = """    def _stub_live_send(self, agent, payload):
+        del agent, payload
+        self._local.usage = {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        return "stub live answer"
 
-        ModelClient._send = _stub_live_send
+    ModelClient._send = _stub_live_send
 """
     TESTS.write_text(tests.replace(old, new), encoding="utf-8")
 
