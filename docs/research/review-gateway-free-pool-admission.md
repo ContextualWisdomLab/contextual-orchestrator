@@ -38,6 +38,13 @@ priority, or undocumented tie-break. Missing or ambiguous evidence does not
 create a candidate. An unrelated credential already present in the process KV
 cannot expand `R` for a new sidecar bootstrap.
 
+Every member of `G ∩ P ∩ R` remains a candidate. The review admission boundary
+does not truncate the set to a fixed count, impose a provider quota, select a
+cheapest subset, or synthesize a priority ordering. Active review agents leave
+this boundary with neutral priority. If the downstream router cannot establish a
+model choice from its own explicit evidence contract, this admission layer does
+not manufacture a fallback preference for it.
+
 `OPENAI_API_KEY` may therefore be present, registered, and globally discoverable,
 while every OpenAI-derived row contributes zero elements to `P` and consequently
 zero elements to the `orchestrator/free` review candidate set.
@@ -79,6 +86,11 @@ The PR implementing this contract must prove at least the following cases:
   to active review agent;
 - the command-line launcher can supply the same ordered credential array as the
   Python API;
+- adding more than twelve independently eligible models does not evict any
+  eligible model through a hidden/default candidate-count cap;
+- every admitted sidecar agent leaves admission with neutral priority rather
+  than a discovery-order, provider-diversity, or price-derived rank;
+- the command-line surface exposes no decision-affecting model-count cap;
 - duplicate or unknown credential-array entries fail closed; and
 - secret values are neither logged nor persisted in review evidence.
 
