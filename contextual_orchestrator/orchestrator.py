@@ -42,7 +42,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
-from .conventions import require_object_name
+from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
@@ -5343,10 +5343,7 @@ class TaskOrchestrator:
                     (
                         agent.provider_name,
                         agent.model,
-                        # Keep this byte-for-byte aligned with
-                        # model_discovery.legacy_agent_id_for without importing
-                        # that orchestrator-dependent module here.
-                        re.sub(r"[^a-z0-9]+", "_", f"{agent.provider_name}_{agent.model}".casefold()).strip("_"),
+                        legacy_discovered_agent_id(agent.provider_name, agent.model),
                     )
                 )
                 if index is None:
