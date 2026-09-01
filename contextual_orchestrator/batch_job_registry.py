@@ -121,6 +121,31 @@ def _encode(value: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _resolve_legacy_identifier(
+    specific_value: str | None,
+    compatibility_keywords: dict[str, Any],
+    *,
+    specific_name: str,
+    legacy_name: str,
+) -> str:
+    """Resolve one semantic identifier while accepting its bounded legacy keyword."""
+    has_legacy_value = legacy_name in compatibility_keywords
+    if specific_value is not None and has_legacy_value:
+        raise TypeError(f"{specific_name} and legacy {legacy_name} cannot both be provided")
+    if specific_value is not None:
+        return specific_value
+    if has_legacy_value:
+        return str(compatibility_keywords.pop(legacy_name))
+    raise TypeError(f"missing required argument: '{specific_name}'")
+
+
+def _reject_unknown_compatibility_keywords(compatibility_keywords: dict[str, Any]) -> None:
+    """Reject kwargs outside the explicitly supported compatibility aliases."""
+    if compatibility_keywords:
+        unexpected_keyword = next(iter(compatibility_keywords))
+        raise TypeError(f"unexpected keyword argument: '{unexpected_keyword}'")
+
+
 class ValkeyJsonMapping(MutableMapping):
     """One named registry stored as JSON documents in a Valkey hash.
 
@@ -133,11 +158,19 @@ class ValkeyJsonMapping(MutableMapping):
     def __init__(
         self,
         client: Any,
-        registry_name: str,
+        registry_name: str | None = None,
         *,
         decode: Optional[Callable[[Any], Any]] = None,
         retention_seconds: int = DEFAULT_RETENTION_SECONDS,
+        **compatibility_keywords: Any,
     ) -> None:
+        registry_name = _resolve_legacy_identifier(
+            registry_name,
+            compatibility_keywords,
+            specific_name="registry_name",
+            legacy_name="name",
+        )
+        _reject_unknown_compatibility_keywords(compatibility_keywords)
         self._client = client
         self._key = f"batch_job_registry:{registry_name}"
         self._decode = decode
@@ -201,13 +234,27 @@ class JobRegistryFactory:
 
     def lock(
         self,
-        registry_name: str,
-        claim_key: str,
+        registry_name: str | None = None,
+        claim_key: str | None = None,
         *,
         lease_seconds: float | None = None,
         renew_until_epoch: float | None = None,
+        **compatibility_keywords: Any,
     ):
         """Return an atomic shard claim with bounded lease and acquisition wait."""
+        registry_name = _resolve_legacy_identifier(
+            registry_name,
+            compatibility_keywords,
+            specific_name="registry_name",
+            legacy_name="name",
+        )
+        claim_key = _resolve_legacy_identifier(
+            claim_key,
+            compatibility_keywords,
+            specific_name="claim_key",
+            legacy_name="key",
+        )
+        _reject_unknown_compatibility_keywords(compatibility_keywords)
         lock_name = f"batch_job_registry:{registry_name}:claim:{claim_key}"
         if self._client is not None:
             if lease_seconds is None or lease_seconds <= 0:
@@ -407,11 +454,19 @@ class JobRegistryFactory:
 
     def mapping(
         self,
-        registry_name: str,
+        registry_name: str | None = None,
         *,
         decode: Optional[Callable[[Any], Any]] = None,
+        **compatibility_keywords: Any,
     ) -> MutableMapping:
         """Return the named registry — a dict unless Valkey is configured."""
+        registry_name = _resolve_legacy_identifier(
+            registry_name,
+            compatibility_keywords,
+            specific_name="registry_name",
+            legacy_name="name",
+        )
+        _reject_unknown_compatibility_keywords(compatibility_keywords)
         if self._client is None:
             return {}
         return ValkeyJsonMapping(
