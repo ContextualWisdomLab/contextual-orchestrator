@@ -20,6 +20,75 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The HTTP embedding endpoints (`/v1/embeddings`, `/v1/batch/embeddings`)
+  now correctly wire the coordinator's cheapest-price selection into an
+  *omitted* `model` (the common case), not only an explicitly-named model or
+  model-group alias. Previously the request validator resolved an omitted
+  `model` to one concrete, price-blind, highest-ranked model before
+  candidate collection ever ran, so cost-based selection only ever had one
+  candidate to "choose" from. Candidate discovery for an omitted model now
+  runs against `TaskOrchestrator.AUTO_MODEL` (the full unspecified-candidate
+  pool) instead, while the validated/reported model identity for an
+  *explicit* request is unchanged (Devin Review, PR #965).
+- The same embedding candidate ordering now reconciles cost preference with
+  the orchestrator's own measured health evidence
+  (`ModelGroupRouter`/`_group_router`, fed by `observe_success`/
+  `observe_failure`): `CostRoutingCoordinator._cost_ordered_capability_candidates`
+  price-orders only members whose Beta-Bernoulli success posterior mean is
+  still at or above the neutral baseline, keeps a repeatedly-failing
+  cheapest member out of the price-preferred slot (it is retried only after
+  the healthy candidates, not first on every request forever), and re-admits
+  it automatically once new successes bring its posterior mean back to
+  baseline. Applied consistently to both endpoints (Devin Review, PR #965).
+- `/v1/embeddings`'s response `model` field, for an omitted-model request,
+  now reports the completed document's actually-served model instead of the
+  pre-failover, price-blind model the (now-bypassed-for-selection) validator
+  resolved — a cheaper or failed-over candidate can legitimately differ from
+  that guess. `/v1/batch/embeddings` already reported the correctly-served
+  model (its response is the raw batch document, whose `model` field is
+  derived from the actually-submitted request, not from this pre-failover
+  guess) and needed no change. Explicit-model requests are unaffected on
+  both endpoints. The cost ledger's own `model_name` attribution dimension
+  was already protected against this staleness independently: `CostLedger
+  .record_usage` deliberately strips and overwrites any caller-supplied
+  `attribution["model_name"]` with the real served `model` argument
+  ("execution identity always wins" — buyer-bill honesty), so ledger/spend
+  rollups were never affected by this bug (Devin Review follow-up, PR #965).
+- `CostRoutingCoordinator._cheapest_capability_candidate` now performs
+  price-aware selection: resolving an unspecified embedding batch member
+  out of several capability-matched candidates (e.g. operator-managed
+  model-group members) now picks the cheapest one by the configured price
+  table instead of an arbitrary first/ranked pick. It plays a role similar
+  to `cheapest_upstream` (`batch_routing.py`) but does not call it — see
+  below for how the two diverged. `cheapest_upstream` itself remains a
+  headline-documented, `__all__`-exported utility with no production caller
+  anywhere in the router.
+- `CostRoutingCoordinator._cheapest_capability_candidate` no longer treats an
+  unpriced or invalid `PriceBook` entry as a free (zero-cost) winner, no
+  longer compares prices across mismatched currencies at face value against
+  `PriceBook.default_currency`, and prices embedding candidates with
+  `assumed_completion_tokens=0` (embeddings never consume completion
+  tokens). Candidates with no comparable known-currency price keep the
+  orchestrator's existing ranked order instead of being silently selected.
+- `_cheapest_capability_candidate`'s currency-comparability check now reuses
+  `model_discovery._currency_is_comparable`'s normalization (non-empty,
+  trimmed, case-insensitive) instead of an exact string match, so a
+  lowercase or whitespace-padded same-currency code (e.g. `"usd"` vs
+  `"USD"`) is recognized as comparable rather than losing to a costlier
+  candidate. `_resolve_embedding_target` now runs this cheapest-comparable-
+  member selection for ordinary (non-ZDR) unspecified embedding requests
+  too, not just the ZDR path.
+- (Devin review on #965) `_cheapest_capability_candidate` no longer compares
+  candidate prices via ledger-rounded (6-decimal-place)
+  `PriceBook.compute_cost` output. Two genuinely different low per-1K prices
+  (e.g. `0.00000049` and `0.00000001`) can both round to the same `0.0`
+  ledger cost for the assumed request size, which collapsed a real price
+  difference into a tie and let the ranked-first (possibly costlier)
+  candidate win. Ranking now compares each candidate's raw, unrounded
+  `PriceEntry.prompt_price_per_1k` directly (embedding requests carry zero
+  completion tokens, so completion price stays out of the comparison).
+  `cheapest_upstream` itself, currency filtering, the unpriced-exclusion
+  behavior, and ranked-order tie-breaking on a true price tie are unchanged.
 - Removed the redundant `threading.local`-backed `commercial_*_report`
   caching decorator (`_commercial_report_cached`), which an import-time
   class-dict-scanning loop applied to every `commercial_*_report` method

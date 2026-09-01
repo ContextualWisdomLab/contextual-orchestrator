@@ -136,6 +136,15 @@ def cheapest_upstream(
     representative request shape and return the cheapest. Unpriced candidates
     are excluded because an unknown price is not free. Ties keep input order;
     ``None`` is returned when no candidate has a known price.
+
+    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator`'s
+    ``_cheapest_capability_candidate`` helper plays a similar upstream
+    cost-based selection role — resolving one embedding member out of
+    several capability-matched candidates — looking up each candidate's
+    price directly via :meth:`~contextual_orchestrator.cost_ledger.PriceBook.get_price`
+    and comparing raw, unrounded prompt prices. This function remains a
+    standalone, table-driven upstream selector used elsewhere for load
+    balancing.
     """
     if not candidates:
         return None

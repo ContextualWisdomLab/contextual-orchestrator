@@ -39,8 +39,9 @@ from .batch_routing import (
     RoutingPolicy,
 )
 from .batch_job_registry import JobRegistryFactory, build_job_registry
-from .cost_ledger import CostLedger, PriceBook
+from .cost_ledger import CostLedger, PriceBook, PriceEntry
 from .kv_config import InMemoryConfigStore
+from .model_discovery import _currency_is_comparable
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 
@@ -170,6 +171,89 @@ class CostRoutingCoordinator:
         """Derive the ledger provider/model identity for one served agent."""
         provider = agent.provider_name or _provider_from_base_url(agent.base_url)
         return provider or "unknown", agent.model or fallback_model
+
+    def _cheapest_capability_candidate(self, candidates: List[Any]) -> Any:
+        """Pick the lowest-priced member of a capability candidate list.
+
+        Plays the same cost-optimising role as
+        :func:`~contextual_orchestrator.batch_routing.cheapest_upstream` — the
+        module's general upstream selector — for a real routing decision:
+        among several capability-matched members (e.g. operator-managed
+        model-group members) that could all serve one request, prefer the
+        cheapest by the configured price table rather than an arbitrary first
+        pick.
+
+        Only candidates with a *known* price in the price book's own
+        ``default_currency`` are comparable: a missing/invalid price entry
+        stays unknown rather than becoming a false zero-cost winner, and an
+        entry priced in a different currency is left out of the comparison
+        rather than compared to a same-currency price by face value (this
+        repo has no exchange-rate conversion source). Currency comparability
+        uses :func:`~contextual_orchestrator.model_discovery._currency_is_comparable`
+        — the same non-empty/trimmed/case-insensitive normalization the
+        discovery price book applies — so a lowercase or whitespace-padded
+        same-currency code (e.g. ``"usd"`` or ``" USD "`` against ``"USD"``)
+        is still recognized as comparable rather than silently excluded.
+
+        Ranking compares each comparable candidate's raw, unrounded
+        :attr:`~contextual_orchestrator.cost_ledger.PriceEntry.prompt_price_per_1k`
+        directly rather than delegating to ``cheapest_upstream``'s
+        :meth:`~contextual_orchestrator.cost_ledger.PriceBook.compute_cost`,
+        which quantizes to six decimal places for ledger reporting: two
+        genuinely different low per-1K embedding prices (e.g. ``0.00000049``
+        and ``0.00000001``) can both round to the same ``0.0`` ledger cost for
+        an assumed request size, which would collapse a real price
+        difference into a tie and let the more expensive candidate win by
+        rank order alone. Comparing the raw prompt price is equivalent to
+        comparing the full-precision cost for embeddings, which is why
+        ``completion_price_per_1k`` is not part of the comparison at all
+        (embedding requests never consume completion tokens). ``cheapest_upstream``
+        itself is untouched — its rounded cost remains correct for its own
+        ledger-reporting callers. Candidates with no comparable price —
+        including an all-unpriced or all-mismatched-currency pool — keep the
+        original (ranked) order, so behavior is unchanged whenever the price
+        table has nothing to optimise; a true tie in raw price also keeps the
+        first-ranked candidate, matching ``cheapest_upstream``'s own
+        input-order tie-breaking.
+        """
+        comparable: list[tuple[Any, PriceEntry]] = []
+        for candidate in candidates:
+            provider, model = self._agent_provider_model(candidate, candidate.model)
+            entry = self.price_book.get_price(provider, model)
+            if entry is None or not _currency_is_comparable(
+                entry.currency_code, self.price_book.default_currency
+            ):
+                continue
+            comparable.append((candidate, entry))
+        if not comparable:
+            return candidates[0]
+        best_candidate, best_entry = comparable[0]
+        for candidate, entry in comparable[1:]:
+            if entry.prompt_price_per_1k < best_entry.prompt_price_per_1k:
+                best_candidate, best_entry = candidate, entry
+        return best_candidate
+
+    def _cost_ordered_capability_candidates(self, candidates: List[Any]) -> List[Any]:
+        """Price-order healthy candidates while retaining measured failover order."""
+        healthy = [
+            candidate
+            for candidate in candidates
+            if self.orchestrator._group_router.member_report(candidate.id)[
+                "success_posterior_mean"
+            ]
+            >= 0.5
+        ]
+        if not healthy:
+            return candidates
+        ordered: List[Any] = []
+        remaining = list(healthy)
+        # ponytail: pools are small; replace with a shared price key if they become large.
+        while remaining:
+            cheapest = self._cheapest_capability_candidate(remaining)
+            ordered.append(cheapest)
+            remaining = [candidate for candidate in remaining if candidate.id != cheapest.id]
+        healthy_ids = {candidate.id for candidate in healthy}
+        return ordered + [candidate for candidate in candidates if candidate.id not in healthy_ids]
 
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
@@ -1062,18 +1146,33 @@ class CostRoutingCoordinator:
     def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
     ) -> tuple[str, Optional[str]]:
-        """Resolve one embedding member without losing a caller's member choice."""
-        if agent_id is None and not zdr_only:
+        """Resolve one embedding member without losing a caller's member choice.
+
+        An explicit caller-supplied ``agent_id`` always wins, and an explicit
+        caller-supplied ``model`` outside the configured pool always passes
+        through unresolved (no ``_capability_agents`` lookup, so it cannot
+        raise on an upstream model this repo has no matching agent for) —
+        both regardless of ``zdr_only``. The only case that now runs
+        cheapest-comparable-member selection is an *unspecified* model
+        (the ``contextual-orchestrator``/``AUTO_MODEL`` placeholder) with no
+        explicit ``agent_id``: previously this short-circuited to plain
+        passthrough for ordinary (non-ZDR) requests, so cost-aware routing
+        only ever reached ZDR embedding batches. ZDR requests already ran
+        this selection unconditionally (an explicit ZDR model still needs
+        pool-membership + privacy-tag validation), so that behavior is
+        unchanged here.
+        """
+        unspecified_model = model in {
+            "contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")
+        }
+        if agent_id is None and not zdr_only and not unspecified_model:
             return model, None
-        selection_model = (
-            None
-            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
-            else model
-        )
+        selection_model = None if unspecified_model else model
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
-            return candidates[0].model, candidates[0].id
+            chosen = self._cheapest_capability_candidate(candidates)
+            return chosen.model, chosen.id
         for candidate in candidates:
             if candidate.id == agent_id:
                 return candidate.model, candidate.id

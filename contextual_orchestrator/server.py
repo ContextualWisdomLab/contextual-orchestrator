@@ -7099,13 +7099,20 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    model_was_omitted = "model" not in body
                     model_name = _validate_embeddings_model(body, orchestrator)
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    embedding_agents = orchestrator._capability_agents(
+                        "embedding",
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7206,7 +7213,16 @@ def build_server(
                     self._send(
                         _openai_embeddings_response(
                             document,
-                            model=model_name,
+                            # Devin follow-up: an omitted model can resolve to a
+                            # different (cheaper or failed-over) member than the
+                            # pre-failover, price-blind ``model_name`` validation
+                            # picked, so report the completed document's own
+                            # served model instead — it already carries the
+                            # actually-used agent's model (see
+                            # ``embeddings_batch_document``). An explicit model
+                            # (a concrete pool model or a group alias) still
+                            # reports exactly what the client asked for.
+                            model=document.get("model") if model_was_omitted else model_name,
                             encoding_format=encoding_format,
                         )
                     )
@@ -7214,11 +7230,18 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
+                    model_was_omitted = "model" not in body
                     model_name = _validate_embeddings_model(body, orchestrator)
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    embedding_agents = orchestrator._capability_agents(
+                        "embedding",
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
