@@ -73,7 +73,7 @@ Buyer next action: call `run_equal_budget_ablation` and read
   `nist-sp-800-190.pdf` grounds container-specific isolation, image integrity,
   least privilege, and runtime lifecycle monitoring.
 - Chandramouli, R., & Butcher, Z. (2023). *A zero trust architecture model for
-  access control in cloud-native applications in multi-cloud environments*
+  access control in cloud-native applications in multi-location environments*
   (NIST SP 800-207A). National Institute of Standards and Technology.
   https://doi.org/10.6028/NIST.SP.800-207A. `nist-sp-800-207a.pdf` grounds
   caller/service identity policy enforcement instead of trust based on
