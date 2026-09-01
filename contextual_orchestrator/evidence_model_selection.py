@@ -12,7 +12,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from .model_group import canonical_group_name
+from .model_group import (
+    BETA_PRIOR_FAILURE_COUNT,
+    BETA_PRIOR_SUCCESS_COUNT,
+    RATE_OBSERVATION_WINDOW_SECONDS,
+    UNOBSERVED_MEMBER_SCORE,
+    ModelGroupRouter,
+    canonical_group_name,
+)
 
 
 def ranked_agents_evidence_only(
@@ -213,3 +220,85 @@ def get_model_group_diagnostic(self: Any, group_name: str) -> dict[str, Any]:
             for agent_id in display_ids
         ],
     }
+
+
+def model_group_member_score_prohibited(self: Any, member_id: str) -> float:
+    """Reject the retired posterior/latency quotient as routing authority."""
+    del self, member_id
+    raise RuntimeError(
+        "composite routing score is prohibited without a validated routing estimand"
+    )
+
+
+def model_group_ranked_member_ids_fail_closed(
+    self: Any,
+    member_ids: list[str] | tuple[str, ...],
+) -> list[str]:
+    """Return a singleton identity or require a validated routing model."""
+    del self
+    identities = list(member_ids)
+    if len(identities) <= 1:
+        return identities
+    raise RuntimeError(
+        "multiple model-group members require an explicit or validated routing model"
+    )
+
+
+def model_group_score_locked_prohibited(self: Any, member_id: str) -> float:
+    """Prevent private callers from reviving the retired composite score."""
+    del self, member_id
+    raise RuntimeError(
+        "composite routing score is prohibited without a validated routing estimand"
+    )
+
+
+def model_group_report_locked_diagnostic(
+    self: Any,
+    member_id: str,
+) -> dict[str, float | int | None]:
+    """Return separate observed quantities without synthesizing a route score."""
+    state = self._members.get(member_id)
+    if state is None:
+        return {
+            "success_posterior_mean": UNOBSERVED_MEMBER_SCORE,
+            "ewma_latency_seconds": None,
+            "ewma_tokens_per_second": None,
+            "max_observed_rpm": 0,
+            "max_observed_tpm": 0,
+            "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
+            "success_count": 0,
+            "failure_count": 0,
+            "score": None,
+        }
+    alpha = float(state["alpha"])
+    beta = float(state["beta"])
+    ewma = state["ewma"]
+    ewma_tps = state["ewma_tps"]
+    return {
+        "success_posterior_mean": round(alpha / (alpha + beta), 6),
+        "ewma_latency_seconds": None if ewma is None else round(float(ewma), 6),
+        "ewma_tokens_per_second": (
+            None if ewma_tps is None else round(float(ewma_tps), 6)
+        ),
+        "max_observed_rpm": self._max_observed_rpm.get(member_id, 0),
+        "max_observed_tpm": self._max_observed_tpm.get(member_id, 0),
+        "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
+        "success_count": int(
+            alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
+        ),
+        "failure_count": int(
+            beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
+        ),
+        "score": None,
+    }
+
+
+# Model-group transport observations remain useful diagnostics, but the legacy
+# P(success)/EWMA-latency quotient and input-order tie resolution are not a
+# validated model-selection estimand. Patch every public/private scoring seam
+# when this evidence boundary is imported so direct submodule consumers cannot
+# bypass the TaskOrchestrator-level fail-closed selection contract.
+ModelGroupRouter.member_score = model_group_member_score_prohibited
+ModelGroupRouter.ranked_member_ids = model_group_ranked_member_ids_fail_closed
+ModelGroupRouter._score_locked = model_group_score_locked_prohibited
+ModelGroupRouter._report_locked = model_group_report_locked_diagnostic
