@@ -9,7 +9,8 @@ short-lived runner has a durable production credential store.
 Credential registration and ``orchestrator/free`` candidate admission are
 separate contracts. A deployment may register every configured provider,
 including OpenAI, while the free review pool admits only the provider-account
-sources explicitly authorized for that pool.
+sources explicitly authorized for that pool and explicitly supplied for the
+current sidecar bootstrap.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from .model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
+    general_free_serving_candidates,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -33,7 +35,6 @@ from .orchestrator import ModelClient, TaskOrchestrator
 from .provider_bootstrap import (
     PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
     PROVIDER_CREDENTIAL_NAMES,
-    is_chat_serving_candidate,
 )
 from .server import SecurityConfig, serve
 
@@ -102,14 +103,12 @@ def register_review_credentials(
 def _free_review_candidates(
     discovered: Sequence[DiscoveredModel],
 ) -> list[DiscoveredModel]:
-    """Apply the explicit provider-source and zero-cost free-pool contract."""
+    """Apply source policy after the shared blind-free serving eligibility rule."""
     admitted_credentials = frozenset(REVIEW_FREE_POOL_CREDENTIAL_NAMES)
     return [
         model
-        for model in discovered
+        for model in general_free_serving_candidates(list(discovered))
         if model.credential_name in admitted_credentials
-        and model.is_free
-        and is_chat_serving_candidate(model)
     ]
 
 
@@ -119,15 +118,17 @@ def build_review_orchestrator(
     max_agents: int = DEFAULT_REVIEW_AGENT_LIMIT,
     credential_names: Sequence[str] | None = None,
 ) -> TaskOrchestrator:
-    """Build the free review orchestrator from globally discovered providers.
+    """Build the free review orchestrator from current bootstrap credentials.
 
     A missing requested provider key is allowed so bootstrap can use an
     available subset. All requested credentials, including ``OPENAI_API_KEY``,
     may be registered and globally discovered. Candidate admission is a
-    separate source-boundary check: only models sourced from
-    ``REVIEW_FREE_POOL_CREDENTIAL_NAMES`` with explicit zero-cost evidence may
-    enter the review pool. Therefore a previously stored OpenAI credential also
-    cannot bypass the free-pool boundary.
+    separate boundary: candidates must satisfy the shared general-free serving
+    contract, be sourced from ``REVIEW_FREE_POOL_CREDENTIAL_NAMES``, and belong
+    to a provider credential actually registered by this bootstrap call.
+    Therefore a previously stored OpenAI credential cannot enter the free pool,
+    and an unrelated previously stored free-provider credential cannot escape
+    the caller-declared bootstrap scope.
     """
     if type(max_agents) is not int or max_agents < 1:
         raise ValueError("max_agents must be a positive integer")
@@ -136,7 +137,8 @@ def build_review_orchestrator(
     registered = register_review_credentials(
         source_environment, credential_names=requested_names
     )
-    if not any(name in registered for name in requested_names):
+    registered_provider_names = frozenset(registered) & frozenset(requested_names)
+    if not registered_provider_names:
         raise NotConfigured("review gateway requires at least one provider credential")
 
     discovered, errors = discover_all_models()
@@ -145,7 +147,11 @@ def build_review_orchestrator(
         detail = f"; failed providers: {providers}" if providers else ""
         raise NotConfigured(f"review gateway discovered no provider models{detail}")
 
-    free_discovered = _free_review_candidates(discovered)
+    free_discovered = [
+        model
+        for model in _free_review_candidates(discovered)
+        if model.credential_name in registered_provider_names
+    ]
     if not free_discovered:
         raise NotConfigured(
             "review gateway discovered no eligible zero-cost general chat models"
@@ -158,15 +164,17 @@ def build_review_orchestrator(
     if not selected:
         raise NotConfigured("review gateway selected no provider models")
 
-    agents = [
-        replace(
-            agent_from_discovered(model, priority=index),
-            disabled=False,
-            tags=("review", "cost:free"),
-            priority=-index,
+    agents = []
+    for index, model in enumerate(selected):
+        discovered_agent = agent_from_discovered(model, priority=index)
+        agents.append(
+            replace(
+                discovered_agent,
+                disabled=False,
+                tags=(*discovered_agent.tags, "review", "cost:free"),
+                priority=-index,
+            )
         )
-        for index, model in enumerate(selected)
-    ]
     return TaskOrchestrator(
         agents,
         client=ModelClient(max_output_tokens=32768),
@@ -179,6 +187,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--max-agents", type=int, default=DEFAULT_REVIEW_AGENT_LIMIT)
+    parser.add_argument(
+        "--credential-name",
+        dest="credential_names",
+        action="append",
+        choices=PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
+        help=(
+            "Provider credential name to bootstrap; repeat to supply an ordered "
+            "credential array. Defaults to the repository provider inventory."
+        ),
+    )
     parser.add_argument(
         "--auth-token",
         default="",
@@ -194,11 +212,20 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_agents < 1:
         parser.error("--max-agents must be a positive integer")
-    register_review_credentials(os.environ)
+    try:
+        register_review_credentials(
+            os.environ,
+            credential_names=args.credential_names,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     auth_token = args.auth_token or get_credential(args.auth_token_key)
     if not auth_token:
         raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
-    orchestrator = build_review_orchestrator(max_agents=args.max_agents)
+    orchestrator = build_review_orchestrator(
+        max_agents=args.max_agents,
+        credential_names=args.credential_names,
+    )
     serve(
         orchestrator,
         host=args.host,
