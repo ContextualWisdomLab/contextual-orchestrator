@@ -6464,8 +6464,11 @@ class TaskOrchestrator:
         if not ranked:
             raise RuntimeError(f"no enabled agent available for capability={capability}")
         healthy = [agent for agent in ranked if not self._circuit_open(agent.id)]
-        # A half-open probe remains possible when every capable endpoint is open.
-        return healthy or ranked
+        if not healthy:
+            raise RuntimeError(
+                f"all enabled agents temporarily unavailable for capability={capability}"
+            )
+        return healthy
 
     def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
         """Select a measured member supporting a capability, optionally within one group."""
@@ -7047,13 +7050,14 @@ class TaskOrchestrator:
         self, agent: ModelAgent, endpoint_path: str, exc: BaseException
     ) -> None:
         """Quarantine one failing embedding endpoint and retain secret-free evidence."""
-        self._group_router.observe_failure(agent.id)
-        self._record_failure(agent.id)
         provider_status = getattr(exc, "provider_status", None)
         if provider_status is None and isinstance(exc, urllib.error.HTTPError):
             provider_status = exc.code
         if isinstance(provider_status, bool) or not isinstance(provider_status, int):
             provider_status = None
+        if provider_status != 413:
+            self._group_router.observe_failure(agent.id)
+            self._record_failure(agent.id)
         self.record_analytics_event(
             "embedding_endpoint_failed",
             {

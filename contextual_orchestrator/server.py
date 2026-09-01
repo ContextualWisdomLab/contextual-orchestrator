@@ -7029,12 +7029,11 @@ def build_server(
                                 embedding_agent, "/v1/embeddings", exc
                             )
                             continue
-                        if document.get("status") == "completed":
-                            orchestrator._group_router.observe_success(
-                                embedding_agent.id,
-                                time.perf_counter() - attempt_started_at,
-                            )
-                            orchestrator._record_success(embedding_agent.id)
+                        orchestrator._group_router.observe_success(
+                            embedding_agent.id,
+                            time.perf_counter() - attempt_started_at,
+                        )
+                        orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(
@@ -7113,12 +7112,11 @@ def build_server(
                                 embedding_agent, "/v1/batch/embeddings", exc
                             )
                             continue
-                        if document.get("status") == "completed":
-                            orchestrator._group_router.observe_success(
-                                embedding_agent.id,
-                                time.perf_counter() - attempt_started_at,
-                            )
-                            orchestrator._record_success(embedding_agent.id)
+                        orchestrator._group_router.observe_success(
+                            embedding_agent.id,
+                            time.perf_counter() - attempt_started_at,
+                        )
+                        orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(

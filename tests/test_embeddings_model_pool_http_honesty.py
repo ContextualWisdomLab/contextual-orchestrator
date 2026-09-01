@@ -119,10 +119,33 @@ def test_embedding_capability_skips_circuit_open_endpoint_until_half_open_probe(
     for _ in range(orchestrator.circuit_failure_threshold):
         orchestrator._record_failure(second.id)
 
-    assert {agent.id for agent in orchestrator._capability_agents("embedding")} == {
-        first.id,
-        second.id,
-    }
+    try:
+        orchestrator._capability_agents("embedding")
+    except RuntimeError as exc:
+        assert str(exc) == "all enabled agents temporarily unavailable for capability=embedding"
+    else:
+        raise AssertionError("open embedding circuits must remain quarantined until cooldown")
+
+
+def test_embedding_request_too_large_does_not_quarantine_endpoint() -> None:
+    """A caller-specific 413 remains observable without penalizing endpoint health."""
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+
+    for _ in range(orchestrator.circuit_failure_threshold + 1):
+        orchestrator._record_embedding_failure(
+            agent,
+            "/v1/embeddings",
+            urllib.error.HTTPError("https://provider.invalid", 413, "too large", {}, None),
+        )
+
+    assert orchestrator._circuit_open(agent.id) is False
+    failures = [
+        event
+        for event in orchestrator._analytics_events
+        if event["event_name"] == "embedding_endpoint_failed"
+    ]
+    assert all(event["event_detail"]["provider_status"] == 413 for event in failures)
 
 
 def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
@@ -182,6 +205,38 @@ def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() 
         assert len(failures) == orchestrator.circuit_failure_threshold
         assert all(event["event_detail"]["provider_status"] == 400 for event in failures)
         assert all("provider.invalid" not in json.dumps(event) for event in failures)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_batch_embedding_submission_success_clears_prior_endpoint_failures() -> None:
+    """An accepted asynchronous job proves the endpoint is responsive."""
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator._record_failure(agent.id)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.complete_embeddings_batch = lambda *_args, **_kwargs: {
+        "status": "validating",
+        "batch_id": "batch_accepted",
+        "backend": "remote",
+    }
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/v1/batch/embeddings",
+            {"model": "embed-v1", "input": "invoice search chunk"},
+        )
+        assert status == 202, body
+        assert agent.id not in orchestrator._circuit
     finally:
         server.shutdown()
         thread.join(timeout=5)
