@@ -165,7 +165,7 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
 
 
 def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
-    """Schema-invalid synthesis and repair exhaust each same-endpoint model once."""
+    """Schema-invalid synthesis and repair exhaust every eligible model once."""
     agents = [
         ModelAgent("first_agent", "first-model", "mock://catalog"),
         ModelAgent("second_agent", "second-model", "mock://catalog"),
@@ -219,8 +219,17 @@ def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> No
         )
         assert status == 502, body
         assert body["error"]["code"] == "invalid_structured_output"
-        assert calls == ["first_agent", "first_agent", "second_agent", "second_agent"]
-        assert "other_agent" not in calls
+        assert calls == [
+            "first_agent",
+            "first_agent",
+            "second_agent",
+            "second_agent",
+            "other_agent",
+            "other_agent",
+        ]
+        assert body["error"]["detail"]["failure_kind"] == (
+            "structured_output_exhausted"
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)

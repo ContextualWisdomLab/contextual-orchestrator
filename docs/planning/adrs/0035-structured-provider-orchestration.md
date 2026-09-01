@@ -23,8 +23,8 @@ success_criteria:
     target: "every workflow call is recorded under one workflow_run_id, using provider counts when valid and the existing token counter otherwise"
     source: "tests/test_cost_router.py"
   - metric: "strict schema enforcement"
-    target: "JSON Schema output validates locally; one governed repair is traced and a second violation fails closed"
-    source: "tests/test_model_judge.py"
+    target: "JSON Schema output validates locally; one governed repair per candidate is traced and virtual selectors advance through distinct eligible candidates before typed exhaustion"
+    source: "tests/test_structured_output_distinct_fallback.py"
   - metric: "provider health continuity"
     target: "synthesis transport and repeated schema failures update the existing circuit ledger before a later independent request is routed"
     source: "tests/test_model_judge.py"
@@ -65,14 +65,19 @@ an existing provider contract into a false claim of incompatibility.
 For `json_schema`, provider acceptance of `response_format` is not proof that
 the returned content conforms. The gateway selects the schema's declared JSON
 Schema dialect, parses the final content, and validates the instance locally.
-One invalid synthesis receives one same-provider repair call with the original
-schema; both synthesis and repair remain distinct workflow trace and cost-ledger
-steps. A second violation fails closed as `invalid_structured_output`. There is
-no cross-provider replay, schema weakening, item dropping, or untraced repair.
-Provider transport and repeated schema failures update the existing circuit
-ledger; success clears it. This does not replay the same request across
-providers, but prevents later independent requests from repeatedly selecting a
-known failing synthesizer once the governed circuit threshold opens.
+One invalid synthesis receives one same-candidate repair call with the original
+schema. Both synthesis and repair remain distinct workflow trace and cost-ledger
+steps even when they fail validation. An explicitly requested concrete model
+then fails closed without changing identity. A virtual selector excludes that
+candidate and may regenerate through the next distinct eligible candidate,
+including another provider endpoint, while retaining the request's endpoint
+scope, free/ZDR rules, capability gates, file replicas, candidate controls,
+shared spend budget, and trace. Every candidate receives at most one synthesis
+and one repair. Exhaustion is typed as `structured_output_exhausted` beneath the
+stable public `invalid_structured_output` response code. There is no schema
+weakening, item dropping, raw-output diagnostic, untraced repair, or recursive
+retry multiplication. Provider transport and repeated schema failures update
+the existing circuit ledger; success clears it.
 
 ## Consequences
 
@@ -81,7 +86,8 @@ known failing synthesizer once the governed circuit threshold opens.
 - Responses remain native at the final provider boundary, with explicit local
   transport translation where already supported.
 - Structured requests consume additional test-time compute.
-- A schema-violating synthesis may consume one additional, auditable repair call.
+- A schema-violating virtual request may consume one synthesis and one
+  auditable repair call per distinct eligible candidate before exhaustion.
 - Tool execution cannot gain multi-agent verification until an OpenAI-compatible
   stateful tool-loop contract is implemented.
 
