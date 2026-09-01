@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,8 +22,11 @@ from contextual_orchestrator import (  # noqa: E402
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
+    BatchResultItem,
+    LocalBatchBackend,
     PgLlmBatchBackend,
 )
 from contextual_orchestrator.cost_router import BatchModelSelectionError  # noqa: E402
@@ -194,6 +198,37 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["workflow_run_id"] == "run_race"
 
 
+def test_race_loser_with_unparseable_usage_is_recorded_as_unavailable() -> None:
+    """A billable race-loser call with malformed usage still gets a ledger row."""
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": {"team": "alpha"},
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_race_unmeasurable",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+    records = coordinator.ledger.records()
+    assert len(records) == 1
+    record = records[0]
+    assert record["measurement_status"] == "unavailable"
+    assert record["prompt_tokens"] == 0
+    assert record["completion_tokens"] == 0
+    assert record["provider_name"] == "mock"
+    assert record["model_name"] == "mock-a"
+    assert record["workflow_run_id"] == "run_race_unmeasurable"
+
+
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
     """Race-loser spend uses the same provider identity as winner accounting."""
     agent = ModelAgent(
@@ -273,6 +308,45 @@ def test_race_loser_cost_does_not_inflate_openai_completion_usage() -> None:
     }
     assert len(coordinator.ledger.records()) == 2
     assert result["cost"]["cost_amount"] == 0.022
+
+
+def test_sync_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): the plain orchestrator.run() sync path's own cost
+    aggregation needs the same unavailable-outranks-estimated precedence as
+    the provider_request path -- a measured winner plus an unavailable race
+    loser must not report a confident "measured" total or sum a real cost
+    over an unknown one.
+    """
+    coordinator = _coordinator()
+
+    def run(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "workflow_run_id": "run_race_unavailable",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    result = coordinator.complete([{"role": "user", "content": "race"}], mode="route")
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    assert "currency_components" not in result["cost"]
+    assert {record["measurement_status"] for record in coordinator.ledger.records()} == {
+        "measured",
+        "unavailable",
+    }
 
 
 def test_ready_race_usage_without_workflow_id_is_not_discarded() -> None:
@@ -407,6 +481,106 @@ def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
     assert len(result["usage_record_ids"]) == 2
 
 
+def test_structured_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): a measured winner plus an unavailable race loser
+    must not roll up into a confident "measured" total -- the aggregate cost
+    status and amount need the same honesty precedence record_stream_usage
+    already applies, not just the raw per-record ledger label.
+    """
+    coordinator = _coordinator()
+
+    def proxy_completion(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "model": "mock-a",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            "orchestration": {"workflow_run_id": "run_unavailable_loser"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_unavailable_loser",
+        "mode": "route",
+        "answer": "winner",
+        "trace": None,
+    }
+    result = coordinator.complete(
+        [{"role": "user", "content": "race unavailable"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "race unavailable"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    assert "currency_components" not in result["cost"]
+    records = coordinator.ledger.records()
+    assert {record["measurement_status"] for record in records} == {"measured", "unavailable"}
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_unavailable_mixed_currency_cost_suppresses_partial_components(
+    structured: bool,
+) -> None:
+    """Unknown loser spend must not expose complete-looking currency subtotals."""
+    agents = [
+        ModelAgent("winner_agent", "winner-model", provider_name="winner_provider"),
+        ModelAgent("loser_agent", "loser-model", provider_name="loser_provider"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("winner_provider", "winner-model", 1, 1, "USD"))
+    price_book.set_price(PriceEntry("loser_provider", "loser-model", 1, 1, "EUR"))
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    def workflow():
+        return {
+            "workflow_run_id": "run_mixed_unavailable",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [{
+                "agent_id": "winner_agent",
+                "output": "winner",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            }],
+        }
+
+    def emit_loser():
+        orchestrator._race_usage_sink(
+            "loser_agent", ("duplicate", "loser_agent", None)
+        )
+
+    if structured:
+        def proxy_completion(*_args, **_kwargs):
+            emit_loser()
+            return {"orchestration": {"workflow_run_id": "run_mixed_unavailable"}}
+        orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+        orchestrator.get_workflow_run = lambda _run_id: workflow()  # type: ignore[method-assign]
+        result = coordinator.complete(
+            [{"role": "user", "content": "mixed"}],
+            provider_request={"model": "winner-model", "messages": []},
+        )
+    else:
+        def run(*_args, **_kwargs):
+            emit_loser()
+            return workflow()
+        orchestrator.run = run  # type: ignore[method-assign]
+        result = coordinator.complete([{"role": "user", "content": "mixed"}])
+
+    assert result["cost"] == {
+        "cost_amount": None,
+        "currency_code": "MIXED",
+        "price_known": True,
+        "measurement_status": "unavailable",
+    }
+
+
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     """Mixed usage bills each measured call plus one fallback prompt estimate."""
     coordinator = _coordinator()
@@ -527,8 +701,8 @@ def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> Non
     assert result["cost"]["cost_amount"] is None
     assert result["cost"]["currency_code"] == "MIXED"
     assert result["cost"]["currency_components"] == [
-        {"currency_code": "EUR", "cost_amount": 2.0},
-        {"currency_code": "USD", "cost_amount": 1.0},
+        {"currency_code": "EUR", "cost_amount": 2.0, "price_known": True},
+        {"currency_code": "USD", "cost_amount": 1.0, "price_known": True},
     ]
     assert "approved exchange-rate source" in result["cost"]["customer_action"]
 
@@ -562,8 +736,9 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
 
 def test_batch_completion_records_on_retrieve() -> None:
     coordinator = _coordinator()
+    prompt = "bulk job please"
     submitted = coordinator.complete(
-        [{"role": "user", "content": "bulk job please"}],
+        [{"role": "user", "content": prompt}],
         hints={"latency_tolerant": True},
         attribution={"team": "beta", "company": "acme"},
     )
@@ -574,9 +749,362 @@ def test_batch_completion_records_on_retrieve() -> None:
     retrieved = coordinator.retrieve_batch(submitted["job_id"])
     assert retrieved["result_count"] == 1
     records = coordinator.ledger.records()
-    assert len(records) == 1
-    assert records[0]["request_channel"] == "batch"
-    assert records[0]["team_name"] == "beta"
+    assert records
+    assert all(record["request_channel"] == "batch" for record in records)
+    assert all(record["team_name"] == "beta" for record in records)
+
+    # The mock runner behind LocalBatchBackend reports no real per-step usage,
+    # so this legitimately falls back to an estimate -- but it must be an
+    # honest estimate of the *real* prompt threaded through
+    # BatchResultItem.messages, not the old hardcoded blank placeholder
+    # (which always computed exactly ``count_messages([{"content": ""}])``
+    # tokens regardless of how long the actual prompt was).
+    result = retrieved["results"][0]
+    blank_prompt_tokens = coordinator.token_counter.count_messages(
+        [{"role": "user", "content": ""}]
+    )
+    real_prompt_tokens = coordinator.token_counter.count_messages(
+        [{"role": "user", "content": prompt}]
+    )
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] == real_prompt_tokens
+    assert result["prompt_tokens"] != blank_prompt_tokens
+    assert result["completion_tokens"] > 0
+
+
+def test_local_batch_records_each_served_provider_at_its_own_price() -> None:
+    agents = [
+        ModelAgent(id="worker_a", model="model-a", base_url="mock://a", provider_name="alpha"),
+        ModelAgent(id="worker_b", model="model-b", base_url="mock://b", provider_name="beta"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("alpha", "model-a", 1.0, 2.0))
+    price_book.set_price(PriceEntry("beta", "model-b", 3.0, 4.0))
+    backend = LocalBatchBackend(
+        lambda *_: {
+            "answer": "done",
+            "mode": "conduct",
+            "trace": [
+                {"agent_id": "worker_a", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                {"agent_id": "worker_b", "usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+            ],
+        }
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, batch_backend=backend
+    )
+
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "meter both"}], hints={"channel": "batch"}
+    )
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+    rows = coordinator.ledger.records()
+
+    assert [(row["provider_name"], row["model_name"]) for row in rows] == [
+        ("alpha", "model-a"),
+        ("beta", "model-b"),
+    ]
+    assert result["usage_record_ids"] == [row["usage_record_id"] for row in rows]
+    assert result["prompt_tokens"] == 17
+    assert result["completion_tokens"] == 8
+    assert result["cost_amount"] == 0.053
+    assert result["measurement_status"] == "measured"
+
+
+def test_local_batch_malformed_usage_falls_back_without_coercion() -> None:
+    coordinator = _coordinator()
+    coordinator.batch_backend = LocalBatchBackend(
+        lambda *_: {
+            "answer": "done",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "fallback",
+                    "usage": {"prompt_tokens": None, "completion_tokens": 3},
+                },
+                {
+                    "agent_id": "mock_worker",
+                    "output": "again",
+                    "usage": {"prompt_tokens": "7", "completion_tokens": "3"},
+                },
+            ],
+        }
+    )
+
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "do not coerce"}], hints={"channel": "batch"}
+    )
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+
+    assert result["measurement_status"] == "estimated"
+    assert all(
+        row["measurement_status"] == "estimated"
+        for row in coordinator.ledger.records()
+    )
+
+
+def test_custom_batch_backend_preserves_one_sided_zero_usage() -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-zero", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [BatchResultItem("request-zero", "answer", 0, 5)]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    job = coordinator.complete([{"role": "user", "content": "zero prompt"}],
+                               hints={"channel": "batch"})
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+    assert result["measurement_status"] == "measured"
+    assert (result["prompt_tokens"], result["completion_tokens"]) == (0, 5)
+
+
+def test_custom_batch_backend_rejects_negative_reported_usage() -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-negative", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [BatchResultItem(
+                "request-negative", "answer", -1, 5, usage_valid=True,
+                messages=[{"role": "user", "content": "real prompt"}],
+            )]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    job = coordinator.complete(
+        [{"role": "user", "content": "real prompt"}], hints={"channel": "batch"}
+    )
+
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] >= 0
+    assert result["completion_tokens"] >= 0
+
+
+def test_multi_item_batch_settlement_queries_ledger_once(monkeypatch) -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-multi", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [
+                BatchResultItem("request-one", "one", 1, 1),
+                BatchResultItem("request-two", "two", 2, 2),
+            ]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    calls = 0
+    records = coordinator.ledger.records
+
+    def counted_records(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return records(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator.ledger, "records", counted_records)
+    job = coordinator.submit_batch([
+        BatchRequest("request-one", [{"role": "user", "content": "one"}]),
+        BatchRequest("request-two", [{"role": "user", "content": "two"}]),
+    ])
+
+    document = coordinator.retrieve_batch(job.job_id)
+
+    assert document["result_count"] == 2
+    assert document["usage_persistence_status"] == "settled"
+    assert calls == 1
+
+
+def test_batch_retrieval_does_not_wait_forever_for_ledger_storage(monkeypatch) -> None:
+    release = threading.Event()
+
+    class _BlockedStore:
+        def __init__(self):
+            self.rows = []
+        def append(self, record):
+            release.wait(timeout=2)
+            self.rows.append(record.as_dict())
+        def query(self, start=None, end=None):
+            return list(self.rows)
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    ledger = CostLedger(
+        price_book,
+        store=NonBlockingLedgerStore(_BlockedStore()),
+    )
+    coordinator = _coordinator(ledger=ledger)
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router._BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    job = coordinator.complete(
+        [{"role": "user", "content": "blocked ledger"}], hints={"channel": "batch"}
+    )
+    try:
+        document = coordinator.retrieve_batch(job["job_id"])
+    finally:
+        release.set()
+
+    assert document["usage_persistence_status"] == "pending"
+    assert document["result_count"] == 1
+    assert document["results"][0]["measurement_status"] == "estimated"
+    assert ledger.flush(timeout=1.0)
+    settled = coordinator.retrieve_batch(job["job_id"])
+    assert settled["usage_persistence_status"] == "settled"
+    assert settled["results"] == document["results"]
+
+
+def test_batch_settlement_ignores_unrelated_global_flush_work(monkeypatch) -> None:
+    release = threading.Event()
+    unrelated_started = threading.Event()
+
+    class _Store:
+        def __init__(self):
+            self.rows = []
+        def append(self, record):
+            self.rows.append(record.as_dict())
+            if record.usage_record_id == "usage_unrelated":
+                unrelated_started.set()
+                release.wait(timeout=2)
+        def query(self, start=None, end=None):
+            return list(self.rows)
+        def existing_usage_record_ids(self, usage_record_ids):
+            return {row["usage_record_id"] for row in self.rows
+                    if row["usage_record_id"] in usage_record_ids}
+
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()),
+                        store=NonBlockingLedgerStore(_Store()))
+    coordinator = _coordinator(ledger=ledger)
+    wait_for_ids = ledger.wait_for_usage_record_ids
+    def wait_with_unrelated_work(usage_record_ids, *, timeout=None):
+        ledger.record_usage(provider="mock", model="mock", prompt_tokens=1,
+                            completion_tokens=1, usage_record_id="usage_unrelated")
+        assert unrelated_started.wait(timeout=1)
+        return wait_for_ids(usage_record_ids, timeout=timeout)
+    monkeypatch.setattr(ledger, "wait_for_usage_record_ids", wait_with_unrelated_work)
+    job = coordinator.complete([{"role": "user", "content": "batch settlement"}],
+                               hints={"channel": "batch"})
+    try:
+        document = coordinator.retrieve_batch(job["job_id"])
+    finally:
+        release.set()
+    assert document["usage_persistence_status"] == "settled"
+
+
+def test_rejected_async_batch_write_remains_pending_and_idempotent(monkeypatch) -> None:
+    class _RejectingStore:
+        def append(self, record):
+            return False
+        def query(self, start=None, end=None):
+            return []
+        def existing_usage_record_ids(self, usage_record_ids):
+            return set()
+
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()),
+                        store=NonBlockingLedgerStore(_RejectingStore()))
+    coordinator = _coordinator(ledger=ledger)
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router._BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS", 0.01
+    )
+    job = coordinator.complete([{"role": "user", "content": "rejected write"}],
+                               hints={"channel": "batch"})
+    first = coordinator.retrieve_batch(job["job_id"])
+    second = coordinator.retrieve_batch(job["job_id"])
+    assert first["usage_persistence_status"] == "pending"
+    assert second["usage_persistence_status"] == "pending"
+    assert second["results"][0]["usage_record_ids"] == first["results"][0]["usage_record_ids"]
+    assert ledger.records() == []
+
+
+def test_local_batch_cache_hit_does_not_rebill_provider() -> None:
+    coordinator = _coordinator()
+    coordinator.batch_backend = LocalBatchBackend(lambda *_: {
+        "answer": "cached", "cache_status": "hit",
+        "trace": [{"agent_id": "mock_worker", "usage": {
+            "prompt_tokens": 20, "completion_tokens": 10}}],
+    })
+    job = coordinator.complete([{"role": "user", "content": "cached"}],
+                               hints={"channel": "batch"})
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+    assert (result["prompt_tokens"], result["completion_tokens"], result["cost_amount"]) == (0, 0, 0)
+    assert [(row["provider_name"], row["request_channel"])
+            for row in coordinator.ledger.records()] == [("cache", "cache")]
+
+
+def test_local_batch_records_race_loser_once_across_retrievals() -> None:
+    coordinator = _coordinator()
+    def raced_complete(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker", ("loser", "mock_worker", {
+                "prompt_tokens": 2, "completion_tokens": 3}))
+        return {"answer": "winner", "trace": [{"agent_id": "mock_worker", "usage": {
+            "prompt_tokens": 5, "completion_tokens": 7}}]}
+    coordinator.orchestrator.complete = raced_complete
+    job = coordinator.complete([{"role": "user", "content": "race"}],
+                               hints={"channel": "batch"})
+    first = coordinator.retrieve_batch(job["job_id"])
+    assert first == coordinator.retrieve_batch(job["job_id"])
+    assert (first["results"][0]["prompt_tokens"],
+            first["results"][0]["completion_tokens"]) == (7, 10)
+    assert len(coordinator.ledger.records()) == 2
+
+
+def test_pg_batch_malformed_usage_estimates_real_prompt() -> None:
+    captured = {}
+    class _Assembler:
+        def assemble(self, lines):
+            captured["lines"] = lines
+            return "memory://captured"
+    class _Client:
+        async def upload_jsonl(self, *_args):
+            return {"id": "file-1"}
+        async def create_batch_job(self, *_args, **_kwargs):
+            return {"id": "batch-malformed", "status": "completed"}
+        async def download_results(self, *_args):
+            return {"success": True, "responses": [{
+                "custom_id": captured["lines"][0]["custom_id"],
+                "response": {"body": {
+                    "choices": [{"message": {"content": "answer"}}],
+                    "usage": {"prompt_tokens": "9", "completion_tokens": None},
+                }},
+            }]}
+    coordinator = _coordinator()
+    coordinator.batch_backend = PgLlmBatchBackend(_Client(), payload_assembler=_Assembler())
+    messages = [{"role": "user", "content": "the real remote prompt"}]
+    job = coordinator.complete(messages, hints={"channel": "batch"})
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] == coordinator.token_counter.count_messages(
+        messages, "contextual-orchestrator")
+
+
+def test_batch_mixed_currency_and_retrieval_idempotency() -> None:
+    agents = [
+        ModelAgent("worker_alpha", "model-a", "mock://a", provider_name="alpha"),
+        ModelAgent("worker_beta", "model-b", "mock://b", provider_name="beta"),
+    ]
+    config = InMemoryConfigStore()
+    prices = PriceBook(config)
+    prices.set_price(PriceEntry("alpha", "model-a", 1, 1, currency_code="USD"))
+    prices.set_price(PriceEntry("beta", "model-b", 1, 1, currency_code="EUR"))
+    coordinator = CostRoutingCoordinator(TaskOrchestrator(agents), config,
+        price_book=prices, batch_backend=LocalBatchBackend(lambda *_: {
+            "answer": "done", "trace": [
+                {"agent_id": "worker_alpha", "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+                {"agent_id": "worker_beta", "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
+            ]}))
+    job = coordinator.complete([{"role": "user", "content": "mixed"}],
+                               hints={"channel": "batch"})
+    first = coordinator.retrieve_batch(job["job_id"])
+    prices.set_price(PriceEntry("alpha", "model-a", 99, 99, currency_code="USD"))
+    prices.set_price(PriceEntry("beta", "model-b", 99, 99, currency_code="EUR"))
+    assert first == coordinator.retrieve_batch(job["job_id"])
+    assert [part["currency_code"] for part in
+            first["results"][0]["currency_components"]] == ["EUR", "USD"]
+    assert len(coordinator.ledger.records()) == 2
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
@@ -601,10 +1129,12 @@ def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     )
     job = coordinator.complete([{"role": "user", "content": "batch one"}],
                                hints={"channel": "batch"}, attribution={"company": "acme"})
-    coordinator.retrieve_batch(job["job_id"])
+    batch = coordinator.retrieve_batch(job["job_id"])
 
     report = coordinator.cost_report("company")
-    assert report["grand_total"]["record_count"] == len(sync["usage_record_ids"]) + 1
+    assert report["grand_total"]["record_count"] == (
+        len(sync["usage_record_ids"]) + len(batch["results"][0]["usage_record_ids"])
+    )
     assert report["items"][0]["dimension_value"] == "acme"
 
 
@@ -664,6 +1194,47 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
     # cost from pg-provided usage: 5/1k*1 + 5/1k*2 = 0.005 + 0.010 = 0.015
     assert row["cost_amount"] == 0.015
     assert row["request_channel"] == "batch"
+
+
+def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_success() -> None:
+    """An explicit download failure must never be reported as a zero-result success.
+
+    Regression for the bug where ``PgLlmBatchBackend.retrieve()`` mapped
+    ``success: False`` to ``[]``, which ``retrieve_batch()`` then returned as
+    an ordinary ``result_count: 0`` success -- indistinguishable from a batch
+    that legitimately completed with nothing to report.
+    """
+
+    class _FailingClient:
+        async def upload_jsonl(self, file_path, endpoint_alias, purpose="batch"):
+            return {"id": "file-1"}
+
+        async def create_batch_job(self, input_file_id, endpoint_alias, endpoint="/v1/chat/completions", metadata=None):
+            return {"id": "batch-failed", "status": "validating"}
+
+        async def get_batch_status(self, batch_id, endpoint_alias):
+            return {"status": "completed", "is_complete": True}
+
+        async def download_results(self, batch_id, endpoint_alias):
+            return {"success": False, "reason": "Batch not complete"}
+
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
+                         tags=("reasoning",), priority=1)]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("mock", "*", 1.0, 2.0))
+    backend = PgLlmBatchBackend(_FailingClient())
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book, batch_backend=backend)
+
+    submitted = coordinator.complete([{"role": "user", "content": "route to pg-llm-batch"}],
+                                     hints={"channel": "batch"}, attribution={"provider": "mock"})
+    with pytest.raises(BatchDownloadError) as excinfo:
+        coordinator.retrieve_batch(submitted["job_id"])
+    assert excinfo.value.job_id == submitted["job_id"]
+    assert excinfo.value.reason == "Batch not complete"
+    # No usage was recorded for the failed retrieval.
+    assert coordinator.ledger.records() == []
 
 
 def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() -> None:
@@ -1074,10 +1645,10 @@ def test_cheapest_capability_candidate_breaks_ledger_rounding_ties_on_raw_price(
     )
     # Confirm both really do collapse to the same rounded ledger cost, so
     # this test would have failed against the pre-fix rounded comparison.
-    expensive_cost, _ = price_book.compute_cost(
+    expensive_cost, *_ = price_book.compute_cost(
         "tiny-expensive-provider", "tiny-expensive-embedding", 1000, 0
     )
-    cheap_cost, _ = price_book.compute_cost(
+    cheap_cost, *_ = price_book.compute_cost(
         "tiny-cheap-provider", "tiny-cheap-embedding", 1000, 0
     )
     assert expensive_cost == cheap_cost == 0.0

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
 from dataclasses import replace
@@ -12,6 +11,7 @@ from dataclasses import replace
 from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
+from .debug_logging import configure_logging, parse_log_level_name
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
@@ -34,15 +34,144 @@ from .orchestrator import (
     ModelClient,
     TaskOrchestrator,
     load_agents,
+    redact_text,
 )
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
+from .reasoning_effort_profile import default_role_effort_catalog
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+def _log_level(value: str) -> str:
+    """Parse a case-insensitive stdlib logging level name for an argparse option."""
+    try:
+        return parse_log_level_name(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _add_log_level_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare `--log-level`/`--verbose`/`--debug` on one parser for `--help`.
+
+    Actual resolution happens once in :func:`_configure_logging_from_cli`,
+    which runs before subcommand dispatch and already consumed these values
+    from raw ``argv`` via its own pre-scan parser; declaring them here again
+    is only so ``--help`` documents them on every subcommand and so this
+    parser's own `parse_args` does not reject them as unrecognized.
+    """
+    parser.add_argument(
+        "--log-level",
+        type=_log_level,
+        default=None,
+        metavar="{DEBUG,INFO,WARNING,ERROR,CRITICAL}",
+        help="Set the effective log level explicitly (case-insensitive; overrides "
+        "--verbose/--debug; default: WARNING).",
+    )
+    parser.add_argument(
+        "--verbose",
+        "--debug",
+        action="store_true",
+        dest="verbose",
+        help="Shorthand for --log-level DEBUG, unless --log-level is also given explicitly.",
+    )
+
+
+def _configure_logging_from_cli(arguments: list[str]) -> None:
+    """Resolve the effective log level and configure stdlib logging, once.
+
+    Runs before subcommand dispatch so ``register-credential``,
+    ``discover-models``, ``check-fast-mlsirm``, one-shot completion, and
+    ``--serve`` are all configured uniformly from one call site, using a
+    lightweight ``parse_known_args`` pre-scan that does not need to know any
+    subcommand's full argument set. Standard stdlib argparse
+    option-terminator semantics apply here for free: a literal ``--``
+    anywhere in ``arguments`` stops this pre-scan from recognizing anything
+    after it as ``--log-level``/``--verbose``/``--debug``, since
+    ``parse_known_args`` itself already treats everything past a bare
+    ``--`` as positional (verified directly; this is not special-cased here
+    -- it falls out of using stdlib ``argparse`` as intended).
+
+    Precedence: explicit ``--log-level`` > ``--verbose``/``--debug`` >
+    default ``WARNING``.
+
+    Raises:
+        SystemExit: With status 2 and an argparse-style message on stderr, if
+            an explicit ``--log-level`` names an unrecognized level. The level
+            is never silently ignored.
+    """
+    # allow_abbrev=False: an abbreviated flag (e.g. "--log-l" for
+    # "--log-level") would otherwise be silently accepted by this pre-scan's
+    # own parse_known_args, while _subcommand_token_index -- a plain string
+    # comparison, not argparse -- would not recognize that same abbreviation
+    # and misroute a leading "--log-l DEBUG discover-models" into one-shot
+    # completion. Disabling abbreviations here (and on every subcommand's own
+    # parser below) makes an abbreviated flag consistently rejected with a
+    # clear argparse error everywhere, rather than silently divergent
+    # between this pre-scan and the locator.
+    pre_scan = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    _add_log_level_arguments(pre_scan)
+    known, _unrecognized = pre_scan.parse_known_args(arguments)
+    if known.log_level is not None:
+        effective_level = known.log_level
+    elif known.verbose:
+        effective_level = "DEBUG"
+    else:
+        effective_level = "WARNING"
+    configure_logging(effective_level, redactor=redact_text)
+
+
+#: Global logging flags recognized by `_subcommand_token_index` while
+#: scanning past them -- must stay in sync with what `_add_log_level_arguments`
+#: declares (`--verbose`/`--debug` take no value; `--log-level` takes one,
+#: either as a separate token or via `--log-level=...`).
+_LOG_LEVEL_BOOLEAN_FLAGS = ("--verbose", "--debug")
+_LOG_LEVEL_VALUE_FLAG = "--log-level"
+
+
+def _subcommand_token_index(arguments: list[str]) -> int | None:
+    """Find the index of the subcommand token, skipping leading logging flags.
+
+    `main` dispatches `register-credential`, `discover-models`, and
+    `check-fast-mlsirm` by checking a single argument token against each
+    subcommand name. Without this scan, a global logging flag placed before
+    the subcommand (e.g. ``--verbose discover-models``) would occupy that
+    checked position instead, so the subcommand name would fall through
+    unrecognized into the default one-shot completion parser and be treated
+    as a prompt string. Recognized flags are only skipped for the purpose of
+    *locating* the subcommand token here -- callers must still pass the
+    complete, unmodified argument list on to whichever parser handles the
+    dispatch, so each subcommand's own parser (and the pre-scan in
+    :func:`_configure_logging_from_cli`) still sees every flag.
+
+    Args:
+        arguments: The full CLI argument list (excluding the program name).
+
+    Returns:
+        The index of the first token that is not a recognized global logging
+        flag or its value, or ``None`` if every token is one of those (there
+        is no subcommand token to find).
+    """
+    index = 0
+    length = len(arguments)
+    while index < length:
+        token = arguments[index]
+        if token in _LOG_LEVEL_BOOLEAN_FLAGS:
+            index += 1
+            continue
+        if token == _LOG_LEVEL_VALUE_FLAG:
+            index += 1
+            if index < length:
+                index += 1  # skip the level name token, e.g. "DEBUG"
+            continue
+        if token.startswith(_LOG_LEVEL_VALUE_FLAG + "="):
+            index += 1
+            continue
+        return index
+    return None
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -68,6 +197,71 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("positive integer required")
     return parsed
+
+
+def _require_eligible_role_effort_agents(
+    orchestrator: TaskOrchestrator,
+    parser: argparse.ArgumentParser,
+    agents_source: str,
+) -> None:
+    """Fail fast when an opted-in role-effort catalog cannot be honored.
+
+    ``default_role_effort_catalog()`` fails closed
+    (``unsupported_provider_fallback="abstain"``) for every role by design
+    (ADR 0021): native ``reasoning_effort`` is sent only to a provider that
+    proves support, and an unproven provider must not silently receive it
+    either. Ordinary real-provider agent configs (e.g.
+    ``examples/agents.openai.json``) and every auto-discovered agent never
+    set ``reasoning_effort_supported``, so without this check
+    ``--role-effort-catalog default`` would construct successfully and then
+    raise ``EffortProfileError`` on every subsequent request. Reject at
+    startup instead, with an actionable fix, rather than after the pool is
+    already live for ``--serve`` or a CLI prompt.
+
+    Proving support somewhere in the pool is not sufficient on its own:
+    role-based selection (``TaskOrchestrator._ranked_agents`` /
+    ``_select_agent``) only ever offers one *general-chat* agent (see
+    ``_is_general_chat_agent``) that is not excluded from that specific role
+    via ``provider_exclusions`` for a given role. A pool whose only proving
+    agent is non-chat (e.g. an embedding-only model with
+    ``reasoning_effort_supported: true``), or is excluded from every active
+    fail-closed role, would pass a pool-wide "any agent anywhere proves
+    support" check and still fail every request for that role at request
+    time -- either ``EffortProfileError`` (no proving candidate was ever
+    offered) or ``RuntimeError("no eligible agent available for
+    role=...")`` (the only proving candidate was role-excluded). So this
+    delegates to the orchestrator's shared pool-invariant check, which applies
+    the same general-chat, ``provider_exclusions``, and native-support rules
+    both here and on later runtime pool mutations. A pool that passes this
+    guard has at least one eligible, proving agent for each active fail-closed
+    role. The invariant deliberately does NOT reapply ``_zdr_agent_allowed``: that gate
+    depends on per-request privacy-policy state
+    (``request_policy(zdr_only=...)``), not a static pool property, so it
+    cannot be evaluated once at startup without assuming every future
+    request's privacy scope.
+    """
+    catalog = orchestrator.role_effort_catalog
+    if catalog is None:
+        return
+    unsupported_roles = orchestrator._unsupported_role_effort_roles()
+    if not unsupported_roles:
+        return
+    orchestrator.close()
+    parser.error(
+        "--role-effort-catalog default requires, for every fail-closed role "
+        f"({', '.join(unsupported_roles)}), at least one enabled general-chat "
+        f"agent in --agents {agents_source!r} that both proves native "
+        "reasoning-effort support and is not excluded from that role via "
+        "provider_exclusions: set \"reasoning_effort_supported\": true on a "
+        "chat-capable agent (not an embedding/rerank/transcription-only "
+        "model) that is not listed in that role's provider_exclusions, or "
+        "point --agents at a mock:// pool (e.g. examples/agents.mock.json) "
+        "for evaluation. Every role in the default catalog fails closed "
+        "(unsupported_provider_fallback='abstain') without that proof, so "
+        "every request for an unsupported role would otherwise raise "
+        "EffortProfileError or find no eligible agent. See ADR 0021 "
+        "(docs/planning/adrs/0021-reasoning-effort-profiles.md)."
+    )
 
 
 def _non_negative_int(value: str) -> int:
@@ -166,8 +360,22 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
     return status, available
 
 
-def _check_fast_mlsirm_command() -> None:
-    """Validate the same-interpreter fast-mlsirm integration boundary."""
+def _check_fast_mlsirm_command(argv: list[str]) -> None:
+    """Validate the same-interpreter fast-mlsirm integration boundary.
+
+    Takes its own parser (matching every other subcommand) so ``--help``
+    documents the shared logging flags and exits before running the
+    diagnostic, and an unrecognized trailing option is rejected instead of
+    being silently ignored.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator check-fast-mlsirm",
+        description="Validate the same-interpreter fast-mlsirm integration boundary.",
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.parse_args(argv)
+
     status, available = _fast_mlsirm_runtime_status()
     print(json.dumps(status, ensure_ascii=False, sort_keys=True))
     if not available:
@@ -185,8 +393,10 @@ def _register_credential_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator register-credential",
         description="Store a provider credential into the KV registry at bootstrap.",
+        allow_abbrev=False,
     )
     parser.add_argument("--name", required=True, help="Credential name, e.g. OPENAI_API_KEY.")
+    _add_log_level_arguments(parser)
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--value-stdin",
@@ -267,11 +477,7 @@ def _discover_models_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
         description="Discover models from every provider with a KV-registered credential.",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit secret-free provider discovery diagnostics to stderr.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--agents-db",
@@ -305,9 +511,8 @@ def _discover_models_command(argv: list[str]) -> None:
         default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
+    _add_log_level_arguments(parser)
     args = parser.parse_args(argv)
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -378,6 +583,8 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "max_output_tokens": model.max_output_tokens,
+                "context_window": model.context_window,
                 "data_privacy": {
                     "zero_data_retention": (
                         "supported" if model.supports_zero_data_retention is True else
@@ -427,7 +634,27 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
         elif "discovered" not in existing.tags:
             continue
-        elif not routable:
+        else:
+            max_output_tokens = (
+                None
+                if model.max_output_tokens_conflicted
+                else model.max_output_tokens or existing.max_output_tokens
+            )
+            context_window = (
+                None
+                if model.context_window_conflicted
+                else model.context_window or existing.context_window
+            )
+            limits_changed = (
+                existing.max_output_tokens != max_output_tokens
+                or existing.context_window != context_window
+            )
+            existing = replace(
+                existing,
+                max_output_tokens=max_output_tokens,
+                context_window=context_window,
+            )
+        if existing is not None and not routable:
             tags = (*existing.tags, "spend:blocked")
             if existing.disabled and "spend:blocked" not in existing.tags:
                 tags = (*tags, "spend:blocked:preserve-disabled")
@@ -438,7 +665,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )
-        elif "spend:blocked" in existing.tags:
+        elif existing is not None and "spend:blocked" in existing.tags:
             agents.append(
                 replace(
                     existing,
@@ -450,6 +677,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     ),
                 )
             )
+        elif existing is not None and limits_changed:
+            agents.append(existing)
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents
@@ -484,28 +713,37 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] == "register-credential":
-        _register_credential_command(arguments[1:])
+    _configure_logging_from_cli(arguments)
+    subcommand_index = _subcommand_token_index(arguments)
+    subcommand = arguments[subcommand_index] if subcommand_index is not None else None
+    # Leading logging flags are skipped only to *find* the subcommand token --
+    # they stay in the list handed to that subcommand's own parser (see
+    # _subcommand_token_index's docstring).
+    arguments_after_subcommand = (
+        arguments[:subcommand_index] + arguments[subcommand_index + 1 :]
+        if subcommand_index is not None
+        else arguments
+    )
+    if subcommand == "register-credential":
+        _register_credential_command(arguments_after_subcommand)
         return
-    if arguments and arguments[0] == "discover-models":
-        _discover_models_command(arguments[1:])
+    if subcommand == "discover-models":
+        _discover_models_command(arguments_after_subcommand)
         return
-    if arguments and arguments[0] == "check-fast-mlsirm":
-        _check_fast_mlsirm_command()
+    if subcommand == "check-fast-mlsirm":
+        _check_fast_mlsirm_command(arguments_after_subcommand)
         return
 
-    parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
+    parser = argparse.ArgumentParser(
+        description="Route or conduct chat requests across model agents.",
+        allow_abbrev=False,
+    )
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
-    )
     parser.add_argument(
         "--release-authority-json",
         default=None,
@@ -594,9 +832,27 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    parser.add_argument(
+        "--role-effort-catalog",
+        choices=["default"],
+        default=None,
+        help=(
+            "Opt in to the issue #568 per-role reasoning-effort catalog (ADR 0021). "
+            "'default' loads default_role_effort_catalog(), applying each workflow "
+            "role's temperature/top_p/seed/max_output_tokens and (only where a provider "
+            "proves support) native reasoning_effort, and attaching a replayable "
+            "reasoning_effort_snapshot to complete/run/stream_route/batch_route "
+            "results. Omit to keep today's payload unchanged -- this does not "
+            "change route/conduct selection defaults, which stay locked until "
+            "production_default_change_allowed is true. Every role in 'default' "
+            "fails closed for a provider that has not proven support, so at "
+            "least one --agents entry needs \"reasoning_effort_supported\": "
+            "true (or a mock:// base_url) -- startup refuses the flag "
+            "otherwise."
+        ),
+    )
+    _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -614,9 +870,19 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        role_effort_catalog=(
+            default_role_effort_catalog() if args.role_effort_catalog == "default" else None
+        ),
     )
     if args.auto_discover_model_agents:
-        _auto_discover_runtime_agents(orchestrator)
+        try:
+            _auto_discover_runtime_agents(orchestrator)
+        except ValueError as exc:
+            orchestrator.close()
+            parser.error(str(exc))
+
+    if args.role_effort_catalog is not None:
+        _require_eligible_role_effort_agents(orchestrator, parser, args.agents)
 
     if args.no_realtime_judge:
         orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
