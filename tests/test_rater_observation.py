@@ -250,6 +250,13 @@ def test_deep_json_is_rejected_as_a_domain_error() -> None:
     assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
 
 
+def test_json_depth_scan_ignores_container_characters_inside_strings() -> None:
+    payload = _invocation()
+    payload["invocation_ref"] = "[" * 256
+
+    assert RaterInvocation.from_json(json.dumps(payload)).invocation_ref == "[" * 256
+
+
 def test_huge_json_integer_is_rejected_as_a_domain_error() -> None:
     raw = '{"value":' + "9" * 10_000 + "}"
     assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"

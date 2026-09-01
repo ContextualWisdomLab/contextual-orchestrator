@@ -26,6 +26,7 @@ MAX_RATER_REFERENCE_LENGTH = 256
 MAX_RATER_OBSERVATIONS = 128
 MAX_RATER_EVIDENCE_REFERENCES = 64
 MAX_RATER_REVIEW_SIGNALS = 32
+MAX_RATER_JSON_DEPTH = 64
 
 _PROHIBITED_DECISION_FIELDS = frozenset(
     {
@@ -90,6 +91,31 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             )
         result[key] = value
     return result
+
+
+def _json_depth_is_bounded(value: str) -> bool:
+    """Reject excessive container nesting without counting JSON string contents."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_RATER_JSON_DEPTH:
+                return False
+        elif character in "]}":
+            depth -= 1
+    return True
 
 
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
@@ -373,6 +399,10 @@ class RaterInvocation:
         if type(value) is not str:
             raise RaterObservationError(
                 "invalid_json", "invocation JSON must be a string"
+            )
+        if not _json_depth_is_bounded(value):
+            raise RaterObservationError(
+                "invalid_json", "invocation JSON exceeds the nesting limit"
             )
         try:
             payload = json.loads(value, object_pairs_hook=_unique_object)
