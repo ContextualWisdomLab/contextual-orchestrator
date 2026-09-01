@@ -41,6 +41,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   every refresh replaces (not merges) the persisted eligible set and drops
   any previously-served retired model, even in that all-denylisted edge
   case.
+- Investigated whether `review_gateway.build_review_orchestrator()`'s
+  candidate-pool builder should apply the same `chat_capability.
+  requires_non_text_input` exclusion `general_free_serving_candidates`
+  already applies for the `ContextualWisdomLab/.github#1198` incident
+  (NVIDIA NIM's `meta/llama-3.2-90b-vision-instruct` rejecting a blind
+  tool-calling request three times live). `requires_non_text_input()`
+  returns true whenever *any* declared modality besides `"text"` is
+  present — including a model that declares `text` alongside `image`, not
+  only a model that requires non-text input exclusively. Wiring that same
+  exclusion into `build_review_orchestrator()` would therefore have
+  dropped the `.github#1198` incident model itself from the review pool
+  purely for declaring optional image support, the opposite of what
+  fixing that incident needs. Reverted the source change; added
+  `test_build_review_orchestrator_accepts_text_capable_multimodal_model`
+  to lock in that a `text`+`image` multimodal row stays eligible for
+  review (which only ever sends text requests).
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
