@@ -34,6 +34,7 @@ def _discovered(
     is_free: bool = True,
     evidence_only: bool = False,
     capabilities: tuple[str, ...] = ("chat",),
+    input_modalities: tuple[str, ...] = ("text",),
     output_modalities: tuple[str, ...] = ("text",),
 ) -> DiscoveredModel:
     """Build one explicitly evidenced discovered candidate for the tests."""
@@ -48,6 +49,7 @@ def _discovered(
         is_free=is_free,
         evidence_only=evidence_only,
         capabilities=capabilities,
+        input_modalities=input_modalities,
         output_modalities=output_modalities,
     )
 
@@ -75,6 +77,8 @@ def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sou
     }
     assert all(not agent.disabled for agent in orchestrator.agents)
     assert all("cost:free" in agent.tags for agent in orchestrator.agents)
+    assert all("input:text" in agent.tags for agent in orchestrator.agents)
+    assert all("output:text" in agent.tags for agent in orchestrator.agents)
     assert all(
         get_credential(name) == environment[name]
         for name in review_gateway.REVIEW_CREDENTIAL_NAMES
@@ -136,6 +140,24 @@ def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch
     )
 
     assert [agent.model for agent in orchestrator.agents] == ["review-model"]
+
+
+def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypatch):
+    """Blind review selection must reuse the general-free modality boundary."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            "vision-review-model",
+            "OPENROUTER_API_KEY",
+            input_modalities=("text", "image"),
+        )
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    with pytest.raises(NotConfigured, match="eligible zero-cost"):
+        review_gateway.build_review_orchestrator(
+            {"OPENROUTER_API_KEY": "router-secret"}
+        )
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():
@@ -213,6 +235,36 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert security.auth_token == "local-review-token"
     assert security.allow_public_bind is False
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
+
+
+def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
+    """CLI deployments can explicitly constrain the bootstrap provider array."""
+    discovered = [
+        _discovered("bytez", "bytez-review", "BYTEZ_API_KEY"),
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    captured: dict[str, object] = {}
+
+    def fake_serve(orchestrator, **kwargs):
+        """Capture the CLI-selected serving pool without binding a port."""
+        captured["orchestrator"] = orchestrator
+        captured.update(kwargs)
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
+    monkeypatch.setenv("BYTEZ_API_KEY", "bytez-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--credential-name", "BYTEZ_API_KEY"],
+    )
+
+    review_gateway.main()
+
+    orchestrator = captured["orchestrator"]
+    assert [agent.credential_key for agent in orchestrator.agents] == ["BYTEZ_API_KEY"]
 
 
 def test_main_requires_authentication(monkeypatch):
