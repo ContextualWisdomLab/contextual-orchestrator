@@ -2018,6 +2018,10 @@ class ModelClient:
             "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
             "gen_ai.request.model": agent.model,
             "contextual_orchestrator.agent_id": agent.id,
+            "contextual_orchestrator.model_group": agent.group_name or agent.model,
+            "contextual_orchestrator.fallback_outcome": (
+                "not_attempted" if operation_kind == "capability_probe" else "not_observed"
+            ),
             "server.address": parsed_provider.hostname or "",
             "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
         }
