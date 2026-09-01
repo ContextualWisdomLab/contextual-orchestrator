@@ -11,13 +11,13 @@ sibling checkout, shell out to Podman/containerd, or invent an application-servi
 
 The upstream foundation is Draft PR
 [`quarantine-sandbox-runtime#1`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime/pull/1).
-Current source head `1a10eff8defd3dfbd5f4d64804bc634c11ae060f` fixes the DDD build boundary,
+Current source head `e4222208f0d1a6d28f570c45dc7385fd75b16a4b` fixes the DDD build boundary,
 guarantees lease cleanup after bounded connect/read/write assertions, binds every effective
 isolation-policy field into one canonical SHA-256 carried by both the Podman resource label and
-returned lease, and versions that changed lease contract as `1.1.0`. Its real-Podman job
-`99756351297` passed the real isolation, readiness, cleanup, and leak-rejection lane at that exact
-head. The remaining hosted gates are pending. This proves the profile on its Linux acceptance
-runner but does not prove the current head is release-ready. It
+returned lease, versions that changed lease contract as `1.1.0`, and locks its canonical framing
+with a golden vector plus schema regression test. Real-Podman job `99758127137` passed isolation,
+readiness, cleanup, and leak rejection at that exact head. The remaining hosted gates are pending.
+This proves the profile on its Linux acceptance runner but not current-head release readiness. It
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
