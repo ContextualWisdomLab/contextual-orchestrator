@@ -1,0 +1,60 @@
+name: Source fix PR1000 NIM cost dominance
+
+on:
+  push:
+    branches: [fix/no-heuristic-batch-routing]
+    paths: [.github/source-fix-1000-nim-cost-dominance.trigger]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/no-heuristic-batch-routing
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Replace weighted NIM cost selector
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          starting_head="$GITHUB_SHA"
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.sha')"
+          test "$live_head" = "$starting_head"
+          python -m pip install --disable-pip-version-check -e '.[dev]'
+          python3 <<'PY'
+          from pathlib import Path
+
+          source_path = Path('contextual_orchestrator/nim_benchmark.py')
+          source = source_path.read_text(encoding='utf-8')
+          start = source.index('def _combined_rate(')
+          end = source.index('\ndef planned_evaluation_requests(', start)
+          replacement = '''def _price_vector(\n    pricing_scenario: dict[str, Any], model_id: str\n) -> tuple[float, float] | None:\n    """Return the explicit (input, output) USD/1M price vector, or ``None``."""\n    rate = pricing_scenario["usd_per_million_tokens"].get(model_id)\n    if rate is None:\n        return None\n    return float(rate["input"]), float(rate["output"])\n\n\ndef cheapest_priced_agent(\n    agents: list[ModelAgent], pricing_scenario: dict[str, Any] | None\n) -> ModelAgent | None:\n    """Return the uniquely component-wise cheapest priced worker, if identified.\n\n    No prompt/completion mixture is assumed. A candidate is selected only when\n    its published input and output prices are no greater than every other\n    priced candidate and at least one dimension is strictly lower for every\n    competitor. Equal or crossing price vectors are unresolved rather than\n    converted into a hand-weighted scalar or identifier tie-break.\n    """\n    if pricing_scenario is None:\n        return None\n    priced = [\n        (vector, agent)\n        for agent in agents\n        for vector in [_price_vector(pricing_scenario, agent.model)]\n        if vector is not None\n    ]\n    if not priced:\n        return None\n    winners = []\n    for vector, agent in priced:\n        if all(\n            vector[0] <= other[0]\n            and vector[1] <= other[1]\n            and (vector[0] < other[0] or vector[1] < other[1] or other_agent is agent)\n            for other, other_agent in priced\n        ):\n            winners.append(agent)\n    return winners[0] if len(winners) == 1 else None\n\n'''
+          source_path.write_text(source[:start] + replacement + source[end + 1:], encoding='utf-8')
+
+          test_path = Path('tests/test_nim_benchmark.py')
+          tests = test_path.read_text(encoding='utf-8')
+          old = '''    # Deterministic tiebreak: equal combined rate resolves by model id.\n    assert nb.cheapest_priced_agent(agents, scenario).model == "vendor/model-b"\n'''
+          new = '''    # Equal price vectors are unresolved; model identity is not routing evidence.\n    assert nb.cheapest_priced_agent(agents, scenario) is None\n\n    dominant = {\n        "scenario_version": "1",\n        "scenario_status": "reviewed",\n        "usd_per_million_tokens": {\n            "vendor/model-b": {"input": 0.05, "output": 0.10},\n            "vendor/model-c": {"input": 0.10, "output": 0.20},\n        },\n    }\n    assert nb.cheapest_priced_agent(agents, dominant).model == "vendor/model-b"\n\n    crossing = {\n        "scenario_version": "1",\n        "scenario_status": "reviewed",\n        "usd_per_million_tokens": {\n            "vendor/model-b": {"input": 0.01, "output": 0.50},\n            "vendor/model-c": {"input": 0.50, "output": 0.01},\n        },\n    }\n    assert nb.cheapest_priced_agent(agents, crossing) is None\n'''
+          if old not in tests:
+              raise SystemExit('expected cheapest-worker regression block not found')
+          test_path.write_text(tests.replace(old, new, 1), encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_nim_benchmark.py -k 'cheapest_priced_agent or evaluate_policies_all_arms_with_pricing or evaluate_policies_skip_reasons_without_pricing'
+          git diff --check
+          latest_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.sha')"
+          test "$latest_head" = "$starting_head"
+          rm -f .github/workflows/source-fix-1000-nim-cost-dominance.yml .github/source-fix-1000-nim-cost-dominance.trigger
+          git add -A
+          git diff --cached --check
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git commit -m 'fix(benchmark): remove weighted cheapest-worker heuristic'
+          git push origin HEAD:fix/no-heuristic-batch-routing
