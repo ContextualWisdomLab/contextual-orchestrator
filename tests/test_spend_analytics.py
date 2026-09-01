@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from unittest.mock import patch
 import urllib.request
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
@@ -29,8 +30,16 @@ def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
 
 
 def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
-    orchestrator = _orchestrator()
-    orchestrator.run([{"role": "user", "content": "account for this"}])
+    # This test owns the raw-output tokenizer fallback contract, not the
+    # optional fast-mlsirm judge integration. Resolve that optional capability
+    # deterministically as unavailable so installing an extra package cannot
+    # change the evidence-source assertion from tokenizer to reported/mixed.
+    with patch(
+        "contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components",
+        return_value=None,
+    ):
+        orchestrator = _orchestrator()
+        orchestrator.run([{"role": "user", "content": "account for this"}])
     report = orchestrator.spend_analytics()
     row = report["by_model"][0]
 
@@ -38,13 +47,7 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert report["totals"]["output_tokens"] > 0
     assert report["totals"]["prompt_tokens"] is None
     assert report["totals"]["cost_usd"] is None
-    # The mock transport does not report provider usage. Countable output
-    # steps therefore use the injected exact tokenizer, while workflow/judge
-    # evidence steps that have neither reported usage nor countable output stay
-    # explicitly unavailable. spend_analytics() combines those evidence kinds
-    # in one model bucket as "mixed"; it does not reserve "mixed" for a
-    # reported-plus-tokenizer combination.
-    assert row["usage_source"] == "mixed"
+    assert row["usage_source"] == "tokenizer"
     assert row["cost_usd"] is None
     assert not any("estimated" in key for key in row | report["totals"])
 
