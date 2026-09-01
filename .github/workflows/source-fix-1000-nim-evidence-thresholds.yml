@@ -7,11 +7,10 @@ on:
     paths:
       - .github/source-fix-1000-nim-evidence-thresholds.trigger
 
-permissions:
-  contents: write
-
 jobs:
   repair:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -39,7 +38,7 @@ jobs:
             tests/test_nim_benchmark_no_heuristic_tokens.py \
             tests/test_nim_benchmark_release_acceptance.py::test_smoke_manifest_cannot_authorize_production_routing
           git diff --check
-      - name: Remove one-shot repair artifacts and push
+      - name: Remove one-shot repair artifacts, reconcile concurrent head, and push
         shell: bash
         run: |
           set -euo pipefail
@@ -56,4 +55,13 @@ jobs:
           git config user.name 'opencode-agent[bot]'
           git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
           git commit -m 'fix(nim): retire heuristic evidence sufficiency floors'
+          git fetch --no-tags origin fix/no-heuristic-batch-routing
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$remote_head" != "$(git rev-parse HEAD)" ] && ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            git merge --no-edit "$remote_head"
+            uv run pytest -q \
+              tests/test_nim_benchmark_no_heuristic_tokens.py \
+              tests/test_nim_benchmark_release_acceptance.py::test_smoke_manifest_cannot_authorize_production_routing
+            git diff --check
+          fi
           git push origin HEAD:fix/no-heuristic-batch-routing
