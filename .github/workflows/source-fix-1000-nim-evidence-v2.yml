@@ -3,14 +3,23 @@ name: Source fix PR1000 NIM evidence v2
 on:
   push:
     branches: [fix/no-heuristic-batch-routing]
-    paths: [.github/source-fix-1000-nim-evidence-v2.trigger]
+    paths: [.github/source-fix-1000-nim-evidence-v2.trigger, .github/workflows/source-fix-1000-nim-evidence-v2.yml]
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+    paths: [.github/source-fix-1000-nim-evidence-v2.trigger, .github/workflows/source-fix-1000-nim-evidence-v2.yml]
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: source-fix-pr1000-nim-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   repair:
+    if: github.event_name == 'push' || github.event.pull_request.number == 1000
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -31,14 +40,13 @@ jobs:
         run: |
           set -euo pipefail
           branch_name='fix/no-heuristic-batch-routing'
-          starting_head="$GITHUB_SHA"
+          starting_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
           echo "starting_head=$starting_head" >>"$GITHUB_OUTPUT"
-          live_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
           pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.state')"
           pr_head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1000" --jq '.head.ref')"
-          test "$live_ref" = "$starting_head"
           test "$pr_state" = open
           test "$pr_head_ref" = "$branch_name"
+          git checkout --detach "$starting_head"
 
           log_file="$RUNNER_TEMP/pr1000-nim-source-fix.log"
           set +e
@@ -90,6 +98,20 @@ jobs:
           git commit -m 'fix(benchmark): require reported token evidence'
 
       - name: Push repaired exact head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STARTING_HEAD: ${{ steps.patch.outputs.starting_head }}
+        run: |
+          set -euo pipefail
+          branch_name='fix/no-heuristic-batch-routing'
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          test "$remote_head" = "$STARTING_HEAD"
+          gh auth setup-git
+          git push origin HEAD:"$branch_name"
+
+      - name: Publish pull-request repair commit
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           STARTING_HEAD: ${{ steps.patch.outputs.starting_head }}
