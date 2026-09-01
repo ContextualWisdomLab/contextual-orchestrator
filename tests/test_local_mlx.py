@@ -259,11 +259,171 @@ def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> No
     probe.assert_called_once_with(orchestrator.agents[0])
 
 
+def test_provider_readiness_report_reuses_latest_refresh_until_next_probe() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("disabled_agent", "disabled-model", disabled=True),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "ready_agent", "model": "ready-model"},
+    ) as probe:
+        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=2.0)
+        cached = orchestrator.provider_readiness_report()
+
+    assert cached == refreshed
+    assert cached is not refreshed
+    cached["items"][0]["status"] = "tampered"
+    cached["items"][1]["status"] = "tampered"
+    assert orchestrator.provider_readiness_report()["items"][0]["status"] == "ready"
+    assert orchestrator.provider_readiness_report()["items"][1]["status"] == "disabled"
+    probe.assert_called_once_with(orchestrator.agents[0])
+
+
+def test_chat_readiness_does_not_probe_embedding_members() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("chat_agent", "gpt-5.2"),
+        ModelAgent("embedding_agent", "baai/bge-base-en-v1.5", tags=("embedding",)),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "chat_agent", "model": "gpt-5.2"},
+    ) as probe:
+        report = orchestrator.provider_readiness_report(refresh=True)
+
+    assert report["status"] == "ready"
+    assert report["agent_count"] == 1
+    assert report["items"][1]["status"] == "not_applicable"
+    probe.assert_called_once_with(orchestrator.agents[0])
+
+
+def test_chat_readiness_honors_explicit_embedding_metadata_for_generic_models() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("chat_agent", "gpt-5.2"),
+        ModelAgent(
+            "embedding_agent",
+            "text-free-model",
+            tags=("capability:embedding", "output:embedding"),
+        ),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "chat_agent", "model": "gpt-5.2"},
+    ) as probe:
+        report = orchestrator.provider_readiness_report(refresh=True)
+
+    assert report["status"] == "ready"
+    assert report["agent_count"] == 1
+    assert report["items"][1]["status"] == "not_applicable"
+    probe.assert_called_once_with(orchestrator.agents[0])
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda orchestrator: orchestrator.patch_agent("default", "ready_agent", {"priority": 2}),
+        lambda orchestrator: orchestrator.patch_agent("default", "ready_agent", {"status": "disabled"}),
+        lambda orchestrator: orchestrator.patch_agent("default", "disabled_agent", {"status": "enabled"}),
+        lambda orchestrator: orchestrator.set_model_group("updated_group", ["ready_agent", "backup_agent"]),
+        lambda orchestrator: orchestrator.delete_model_group("shared_group"),
+        lambda orchestrator: orchestrator.add_agent(
+            "default", {"id": "added_agent", "model": "added-model"}
+        ),
+        lambda orchestrator: orchestrator.sync_discovered_agents([
+            ModelAgent("discovered_agent", "discovered-model", disabled=True)
+        ]),
+        lambda orchestrator: orchestrator.remove_agent("default", "backup_agent"),
+    ],
+)
+def test_provider_readiness_cache_is_invalidated_by_pool_mutations(mutate) -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model", group_name="shared_group"),
+        ModelAgent("backup_agent", "backup-model", group_name="shared_group"),
+        ModelAgent("disabled_agent", "disabled-model", disabled=True),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        side_effect=lambda agent, **_kwargs: {
+            "status": "ready", "agent_id": agent.id, "model": agent.model,
+        },
+    ):
+        assert orchestrator.provider_readiness_report(refresh=True)["status"] == "ready"
+        mutate(orchestrator)
+
+    report = orchestrator.provider_readiness_report()
+    assert report["status"] == "unprobed"
+    assert report["checked_at"] is None
+
+
+def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> None:
+    import threading
+
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("backup_agent", "backup-model"),
+    ], client=client)
+    entered = threading.Event()
+    release = threading.Event()
+    mutation_done = threading.Event()
+    refreshed = []
+    probed: list[str] = []
+
+    def probe(agent, **_kwargs):
+        probed.append(agent.id)
+        entered.set()
+        release.wait(timeout=2)
+        return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    def mutate_pool():
+        orchestrator.add_agent(
+            "default", {"id": "added_agent", "model": "added-model"}
+        )
+        mutation_done.set()
+
+    def refresh_pool():
+        refreshed.append(orchestrator.provider_readiness_report(refresh=True))
+
+    with patch.object(client, "probe", side_effect=probe):
+        refresh = threading.Thread(target=refresh_pool)
+        mutation = threading.Thread(target=mutate_pool)
+        refresh.start()
+        assert entered.wait(timeout=2)
+        mutation.start()
+        assert mutation_done.wait(timeout=1)
+        release.set()
+        refresh.join(timeout=2)
+        mutation.join(timeout=2)
+
+    report = orchestrator.provider_readiness_report()
+    assert refreshed == [report]
+    assert report["status"] == "unprobed"
+    assert {item["agent_id"] for item in report["items"]} == {
+        "ready_agent", "backup_agent", "added_agent"
+    }
+    assert probed == ["ready_agent", "backup_agent"]
+
+
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     import threading
 
     client = ModelClient()
-    orchestrator = TaskOrchestrator([ModelAgent("ready_agent", "ready-model")], client=client)
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent(
+            "embedding_agent",
+            "text-free-model",
+            tags=("capability:embedding", "output:embedding"),
+        ),
+    ], client=client)
     entered = threading.Event()
     release = threading.Event()
     counters = {"active": 0, "max_active": 0}

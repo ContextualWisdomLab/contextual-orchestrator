@@ -40,6 +40,7 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/healthz",
         "/v1/models",
         "/v1/models/{model_id}",
+        "/v1/provider_readiness",
         "/v1/chat/completions",
         "/v1/completions",
         "/v1/embeddings",
@@ -51,6 +52,9 @@ def test_openapi_documents_compatibility_front_door() -> None:
     }
     assert expected_paths <= OPENAPI_SPEC["paths"].keys()
     assert "security" not in OPENAPI_SPEC["paths"]["/healthz"]["get"]
+    assert OPENAPI_SPEC["paths"]["/v1/provider_readiness"]["get"]["security"] == [
+        {"inference_bearer_auth": []}
+    ]
     assert OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["security"] == [
         {"inference_bearer_auth": []}
     ]

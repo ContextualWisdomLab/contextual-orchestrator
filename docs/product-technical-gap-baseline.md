@@ -1,5 +1,44 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-01 issue 926 / PR 977 exact-head repair: inference readiness now uses the same chat-eligibility contract as routing
+
+PR [#977](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/977) head
+`e1047f32660cceae286479680e288d4b4a9bb4f7` still had two exact-head drift bugs in
+`TaskOrchestrator.provider_readiness_report()`. The refresh path's
+`refresh_in_progress.agent_count` used `not agent.disabled`, while the steady-state report and
+the actual probe path were supposed to describe only chat-ready workers. Separately,
+`_provider_readiness_report_for()` excluded non-chat models with the weaker
+`is_chat_compatible_model_id(agent.model)` heuristic instead of the persisted-capability-aware
+`_is_general_chat_agent(agent)` gate used by chat routing and selection. A generic model id with
+explicit embedding-only metadata therefore remained eligible for chat readiness, so the inference
+readiness endpoint could probe an embedding worker and misreport the chat pool as degraded or
+unavailable depending on probe timing.
+
+Fixed on this run in `contextual_orchestrator/orchestrator.py` by reusing
+`_is_general_chat_agent(agent)` in both places, so explicit `capability:*` / `output:*` metadata
+stays authoritative for readiness just as it already is for chat routing. Focused regression
+coverage in `tests/test_local_mlx.py` now proves both failure modes: a generic
+`text-free-model` row tagged `capability:embedding` / `output:embedding` is reported as
+`not_applicable` and never probed, and overlapping refresh requests report the same chat-only
+`agent_count` even when a non-chat agent is present in the pool.
+
+Validation completed on the exact working tree:
+
+- `uv run pytest tests/test_local_mlx.py -q` → `69 passed in 2.08s`
+- `uv run pytest tests/test_healthz.py -q` → `3 passed in 2.19s`
+- End-to-end `k6` against the real `/v1/provider_readiness` server path (local `uv run` serve
+  fallback because this machine's Docker daemon was unavailable, so Compose-backed delivery
+  remained externally blocked): 12 refresh requests plus 121 cached reads over 5 seconds at 16
+  max VUs; `134/134` HTTP requests succeeded, `0%` error rate, cached-read latency
+  `p95=0.938 ms`, refresh latency `p95=2.11 ms`, overall request latency `p95=1.07 ms`.
+
+The first `k6` attempt failed for a non-product reason: the local dev server was started with the
+default `60` requests-per-minute bucket, so the load test saturated the documented dev limiter and
+returned `429 rate_limit_exceeded`. Re-running with `--rate-limit-requests 100000` isolated the
+endpoint itself, which stayed responsive with no measured readiness bottleneck. Compose-path
+evidence still needs a future rerun on a host with a live Docker daemon; that delivery-path gap was
+not misreported as complete here.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential

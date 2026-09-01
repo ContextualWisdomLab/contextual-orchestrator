@@ -3611,6 +3611,9 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
+        self._provider_readiness_refresh_lock = threading.Lock()
+        self._provider_readiness_generation = 0
+        self._latest_provider_readiness_report: dict[str, Any] | None = None
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3697,43 +3700,82 @@ class TaskOrchestrator:
         del timeout  # compatibility-only; readiness has no wall-clock deadline
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
-        items: list[dict[str, Any]] = []
-        acquired = not refresh or self._provider_readiness_lock.acquire(blocking=False)
-        if not acquired:
+        if not refresh:
+            with self._provider_readiness_lock:
+                if self._latest_provider_readiness_report is not None:
+                    return json.loads(json.dumps(self._latest_provider_readiness_report))
+                candidates = list(self.candidates)
+            return self._provider_readiness_report_for(candidates, False)
+
+        if not self._provider_readiness_refresh_lock.acquire(blocking=False):
+            with self._provider_readiness_lock:
+                agent_count = sum(
+                    not agent.disabled and _is_general_chat_agent(agent)
+                    for agent in self.candidates
+                )
             return {
                 "status": "refresh_in_progress",
                 "probe": "refresh",
                 "checked_at": None,
-                "agent_count": len(self.agents),
+                "agent_count": agent_count,
                 "ready_agent_count": 0,
                 "items": [],
             }
         try:
-            for agent in self.candidates:
-                provider = agent.provider_name or self._infer_provider_name(agent.base_url)
-                if agent.disabled:
-                    items.append({
-                        "agent_id": agent.id,
-                        "model": agent.model,
-                        "provider": provider,
-                        "status": "disabled",
-                    })
-                    continue
-                if refresh:
-                    item = dict(self.client.probe(agent))
-                    item["provider"] = provider
-                    items.append(redact_value(item))
-                else:
-                    items.append({
-                        "agent_id": agent.id,
-                        "model": agent.model,
-                        "provider": provider,
-                        "status": "unprobed",
-                    })
+            with self._provider_readiness_lock:
+                candidates = list(self.candidates)
+                generation = self._provider_readiness_generation
+            report = self._provider_readiness_report_for(candidates, True)
+            with self._provider_readiness_lock:
+                if generation == self._provider_readiness_generation:
+                    self._latest_provider_readiness_report = json.loads(json.dumps(report))
+                    return report
+                current_candidates = list(self.candidates)
+            return self._provider_readiness_report_for(current_candidates, False)
         finally:
+            self._provider_readiness_refresh_lock.release()
+
+    def _provider_readiness_report_for(
+        self,
+        candidates: list[ModelAgent],
+        refresh: bool,
+    ) -> dict[str, Any]:
+        """Build one readiness report from an immutable candidate snapshot."""
+        items: list[dict[str, Any]] = []
+        for agent in candidates:
+            provider = agent.provider_name or self._infer_provider_name(agent.base_url)
+            if agent.disabled:
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "disabled",
+                })
+                continue
+            if not _is_general_chat_agent(agent):
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "not_applicable",
+                })
+                continue
             if refresh:
-                self._provider_readiness_lock.release()
-        active = [item for item in items if item["status"] != "disabled"]
+                item = dict(self.client.probe(agent))
+                item["provider"] = provider
+                items.append(redact_value(item))
+            else:
+                items.append({
+                    "agent_id": agent.id,
+                    "model": agent.model,
+                    "provider": provider,
+                    "status": "unprobed",
+                })
+        active = [
+            item
+            for item in items
+            if item["status"] not in {"disabled", "not_applicable"}
+        ]
         status = "unprobed" if not refresh else (
             "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
         )
@@ -3745,6 +3787,14 @@ class TaskOrchestrator:
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "items": items,
         }
+
+    def _set_candidates(self, candidates: list[ModelAgent]) -> None:
+        """Replace the configured pool and discard readiness for the old pool."""
+        with self._provider_readiness_lock:
+            self.candidates = candidates
+            self.agents = [agent for agent in candidates if not agent.disabled]
+            self._provider_readiness_generation += 1
+            self._latest_provider_readiness_report = None
 
     def _reload_state(self) -> None:
         for observation in self._store.load("psychometric_observation"):
@@ -5183,8 +5233,7 @@ class TaskOrchestrator:
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
-        self.candidates = updated_candidates
-        self.agents = updated_agents
+        self._set_candidates(updated_candidates)
         self._rebuild_budget_meter()
         if patched.group_name != current.group_name:
             self._routers_reset_members({worker_agent_id})
@@ -5272,8 +5321,7 @@ class TaskOrchestrator:
             else agent
             for agent in self.candidates
         ]
-        self.candidates = updated
-        self.agents = [agent for agent in updated if not agent.disabled]
+        self._set_candidates(updated)
         changed = {
             before.id
             for before, after in zip(previous_candidates, updated)
@@ -5300,8 +5348,10 @@ class TaskOrchestrator:
         self._routers_reset_members(member_ids)
         for agent_id in member_ids:
             self._routers_register_member(agent_id)
-        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
-        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._set_candidates([
+            replace(agent, group_name="") if agent.id in member_ids else agent
+            for agent in self.candidates
+        ])
         if self._pool_store is not None:
             for agent in self.candidates:
                 if agent.id in member_ids:
@@ -5325,8 +5375,7 @@ class TaskOrchestrator:
                 raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
-        self.candidates = [*self.candidates, agent]
-        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._set_candidates([*self.candidates, agent])
         self._rebuild_budget_meter()
         self._routers_register_member(agent.id)
         if self._pool_store is not None:
@@ -5398,8 +5447,7 @@ class TaskOrchestrator:
             if self._pool_store is not None:
                 self._pool_store.save(agent)
             synchronized_agents.append(agent)
-        self.candidates = updated_candidates
-        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._set_candidates(updated_candidates)
         self._rebuild_budget_meter()
         for agent in synchronized_agents:
             self._routers_register_member(agent.id)
@@ -5420,8 +5468,9 @@ class TaskOrchestrator:
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
-        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._set_candidates([
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ])
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
         if self._pool_store is not None:
@@ -7179,7 +7228,7 @@ class TaskOrchestrator:
                 for agent in self._ranked_agents(task, "verifier", free_only=free_only)
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
             )
-            # The judge is one bounded provider call.  Do not pass the
+            # The judge is one provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
             judge_adapter = _FastMLSIJudgeAdapter(
