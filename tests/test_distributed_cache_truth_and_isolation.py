@@ -15,7 +15,11 @@ from contextual_orchestrator import (
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import (
+    ModelClient,
+    _REQUEST_ZDR_ONLY,
+    _request_endpoint_partition,
+)
 from contextual_orchestrator.response_cache import build_response_cache_key
 
 
@@ -128,7 +132,14 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
 
 
 def test_orchestrator_free_auto_rejects_legacy_conduct_cache_entries() -> None:
-    """A pre-change FREE_MODEL auto cache entry must not outlive the route contract."""
+    """A pre-change FREE_MODEL auto cache entry must not outlive the route contract.
+
+    The hand-built legacy key below intentionally matches every current
+    ``_cache_key`` input (including the unrelated endpoint-partition fold)
+    except ``resolved_mode``, so a cache miss here isolates and proves the
+    ``resolved_mode`` differentiation this test targets rather than an
+    incidental partition mismatch.
+    """
     client = _CountingModelClient()
     orchestrator = TaskOrchestrator(
         [
@@ -156,9 +167,9 @@ def test_orchestrator_free_auto_rejects_legacy_conduct_cache_entries() -> None:
             "presence_penalty": getattr(orchestrator.client, "default_presence_penalty", None),
             "frequency_penalty": getattr(orchestrator.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(orchestrator.client, "max_output_tokens", None),
-            "zdr_only": None,
+            "zdr_only": _REQUEST_ZDR_ONLY.get(),
         },
-        partition=None,
+        partition=_request_endpoint_partition(),
     )
     assert isinstance(orchestrator._cache_provider, _MemoryCache)
     orchestrator._cache_provider.put(
