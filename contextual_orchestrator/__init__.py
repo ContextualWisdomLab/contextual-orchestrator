@@ -1,5 +1,6 @@
 """Public package exports for the contextual orchestration runtime."""
 
+from . import batch_routing as _batch_routing
 from .batch_routing import (
     BatchDownloadError,
     BatchJob,
@@ -8,17 +9,31 @@ from .batch_routing import (
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
     LocalBatchBackend,
-    LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
     PgLlmBatchEmbeddingBackend,
     ProviderEmbeddingBatchBackend,
     RoutingDecision,
     RoutingHints,
-    RoutingPolicy,
     build_embeddings_jsonl_body,
-    cheapest_upstream,
-    heuristic_embedding,
 )
+from .evidence_batch_routing import (
+    LocalEmbeddingBatchBackend,
+    RoutingPolicy,
+    cheapest_upstream,
+    prohibited_heuristic_embedding,
+)
+
+# Patch the already-loaded protocol module before downstream modules import its
+# decision surfaces.  Direct ``contextual_orchestrator.batch_routing`` imports
+# also observe these fail-closed replacements because Python initializes the
+# package before returning a submodule to callers.  The legacy SHA-derived
+# implementation remains unreachable and is exposed only as a tombstone that
+# raises instead of fabricating a semantic vector.
+_batch_routing.RoutingPolicy = RoutingPolicy
+_batch_routing.cheapest_upstream = cheapest_upstream
+_batch_routing.LocalEmbeddingBatchBackend = LocalEmbeddingBatchBackend
+_batch_routing.heuristic_embedding = prohibited_heuristic_embedding
+
 from .cost_ledger import (
     ATTRIBUTION_DIMENSIONS,
     AttributionDimensions,
@@ -152,7 +167,6 @@ __all__ = [
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
     "ProviderEmbeddingBatchBackend",
-    "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
