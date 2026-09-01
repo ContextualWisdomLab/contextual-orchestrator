@@ -78,6 +78,22 @@ def test_openapi_documents_compatibility_front_door() -> None:
     ):
         with pytest.raises(ValidationError):
             validate(instance=invalid, schema=routing_schema)
+    chat_response = OPENAPI_SPEC["components"]["schemas"]["ChatCompletionResponse"]
+    assert chat_response["properties"]["usage"]["$ref"].endswith("AuthoritativeUsage")
+    assert chat_response["properties"]["usage_measurement_status"]["enum"] == [
+        "measured",
+        "unavailable",
+    ]
+    measured, unavailable = chat_response["oneOf"]
+    assert measured["properties"]["usage_measurement_status"] == {"const": "measured"}
+    assert measured["properties"]["usage"]["required"] == [
+        "prompt_tokens",
+        "completion_tokens",
+    ]
+    assert unavailable["properties"]["usage_measurement_status"] == {
+        "const": "unavailable"
+    }
+    assert unavailable["properties"]["usage"] == {"type": "null"}
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
@@ -85,6 +101,22 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}"
     ]["patch"]["requestBody"]["content"]["application/json"]["schema"]
     assert patch_schema["properties"]["stream_usage_supported"]["type"] == "boolean"
+    assert patch_schema["properties"]["max_output_tokens"]["anyOf"] == [
+        {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9_223_372_036_854_775_807,
+        },
+        {"type": "null"},
+    ]
+    assert patch_schema["properties"]["context_window"]["anyOf"] == [
+        {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9_223_372_036_854_775_807,
+        },
+        {"type": "null"},
+    ]
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )

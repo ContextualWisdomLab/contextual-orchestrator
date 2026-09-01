@@ -51,7 +51,14 @@ class _CandidateClient(ModelClient):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "candidate b"},
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '{"answer": "candidate b"}'
+                            if isinstance(payload.get("response_format"), dict)
+                            else "candidate b"
+                        ),
+                    },
                     "finish_reason": "stop",
                 }
             ],

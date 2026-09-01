@@ -94,7 +94,7 @@ jobs:
         run: |
           gateway_token=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
           echo "::add-mask::$gateway_token"
-          echo "GATEWAY_BEARER_TOKEN=$gateway_token" >> "$GITHUB_ENV"
+          echo "CONTEXTUAL_ORCHESTRATOR_TOKEN=$gateway_token" >> "$GITHUB_ENV"
 
       - name: Start the contextual-orchestrator gateway with auto-discovery
         run: |
@@ -103,11 +103,11 @@ jobs:
             --serve \
             --agents examples/agents.mock.json \
             --auto-discover-model-agents \
-            --auth-token "$GATEWAY_BEARER_TOKEN" \
+            --auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN \
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
           for _attempt in $(seq 1 30); do
-            if curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
+            if curl -fsS -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
               http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "gateway ready"
               exit 0
@@ -119,6 +119,7 @@ jobs:
       - name: Point OpenCode at the local gateway
         run: |
           set -euo pipefail
+          umask 077
           mkdir -p ~/.config/opencode
           cat > ~/.config/opencode/opencode.json <<JSON
           {
@@ -130,7 +131,7 @@ jobs:
                 "name": "Contextual Orchestrator Gateway",
                 "options": {
                   "baseURL": "http://127.0.0.1:8000/v1",
-                  "apiKey": "${GATEWAY_BEARER_TOKEN}"
+                  "apiKey": "${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
                   "orchestrator/auto": { "name": "measured automatic orchestration" }
