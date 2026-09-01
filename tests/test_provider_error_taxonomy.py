@@ -77,6 +77,24 @@ def test_safe_message_prefers_nested_provider_error_fields() -> None:
     assert detail == "validation failed"
 
 
+def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> None:
+    """Schema field names are useful; field values and request bodies remain private."""
+    actionable = "'messages' must contain the word 'json' to use json_object"
+    assert safe_provider_message(
+        _body_http_error(400, {"error": {"message": actionable}})
+    ) == actionable
+    for diagnostic in (
+        "messages=[{'role':'user','content':'customer secret'}]",
+        '"messages": [{"role":"user","content":"customer secret"}]',
+        "'content': 'customer secret'",
+        "prompt=customer secret",
+        "input: customer secret",
+    ):
+        assert safe_provider_message(
+            _body_http_error(400, {"error": {"message": diagnostic}})
+        ) is None
+
+
 def test_safe_message_hides_unparseable_bodies_and_urls() -> None:
     """Non-JSON bodies return None so URLs/reasons never leak through fallback text."""
     assert safe_provider_message(_http_error(500, b"upstream-secret http://10.0.0.9/internal")) is None

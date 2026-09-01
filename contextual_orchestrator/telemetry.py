@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
+import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -39,6 +41,16 @@ _CONFIGURED = False
 # Match the OpenTelemetry SDK's default span-attribute budget so a single
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
+_SAFE_SCHEMA_DIAGNOSTIC = re.compile(
+    r"['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
+    r"(?: in some form,)? to use "
+    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
+    r"(?:\.|$)",
+    re.IGNORECASE,
+)
+_SAFE_SCHEMA_ERROR_SUMMARY = (
+    "messages must mention json when response_format is json_object"
+)
 _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
         "gen_ai.operation.name",
@@ -51,7 +63,11 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "gen_ai.usage.total_tokens",
         "contextual_orchestrator.agent_id",
         "contextual_orchestrator.error_code",
+        "contextual_orchestrator.error_summary",
+        "contextual_orchestrator.fallback_outcome",
         "contextual_orchestrator.latency_ms",
+        "contextual_orchestrator.model_group",
+        "contextual_orchestrator.operation_kind",
         "contextual_orchestrator.provider_status_code",
         "contextual_orchestrator.session_id_hash",
         "server.address",
@@ -179,6 +195,13 @@ def _safe_attributes(
         if isinstance(value, (list, tuple)):
             continue
         if isinstance(value, str):
+            if key == "server.address":
+                try:
+                    ipaddress.ip_address(value)
+                except ValueError:
+                    pass
+                else:
+                    continue
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
@@ -306,21 +329,44 @@ def traced(
         try:
             yield span
         except Exception as exc:
-            from .provider_errors import classify_provider_failure
+            from .provider_errors import classify_provider_failure, safe_provider_message
 
             classified = classify_provider_failure(exc, agent_id="", model="")
             failure_code = classified.error_code
             provider_status = classified.provider_status
+            # Arbitrary provider prose can echo caller content even when it has
+            # no assignment-shaped marker. Recognize one exact schema contract,
+            # export our fixed wording, and reduce everything else to its stable
+            # package-owned code.
+            provider_summary = safe_provider_message(exc)
+            error_summary = (
+                _SAFE_SCHEMA_ERROR_SUMMARY
+                if provider_summary is not None
+                and _SAFE_SCHEMA_DIAGNOSTIC.search(provider_summary)
+                else failure_code
+            )
+            model_group = safe.get("contextual_orchestrator.model_group", "ungrouped")
+            fallback_outcome = safe.get(
+                "contextual_orchestrator.fallback_outcome", "not_observed"
+            )
             if Status is not None and StatusCode is not None:
                 span.set_attribute("error.type", failure_code)
+                span.set_attribute(
+                    "contextual_orchestrator.error_summary", error_summary
+                )
                 if provider_status is not None:
                     span.set_attribute(
                         "contextual_orchestrator.provider_status_code", provider_status
                     )
                 span.set_status(Status(StatusCode.ERROR))
             _LOGGER.warning(
-                "telemetry.operation_failed operation=%s error_type=%s",
+                "telemetry.operation_failed operation=%s error_type=%s "
+                "provider_status=%s error_summary=%r model_group=%s fallback_outcome=%s",
                 name,
                 failure_code,
+                provider_status,
+                error_summary,
+                model_group,
+                fallback_outcome,
             )
             raise

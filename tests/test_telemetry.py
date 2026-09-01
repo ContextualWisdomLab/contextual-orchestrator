@@ -59,6 +59,8 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
         assert telemetry_module._normalize_session_id(value) is None
     assert session_id_from_metadata(None) is None
     assert telemetry_module._safe_attributes({"server.port": object()}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "10.0.0.9"}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "fd00::9"}) == {}
 
     token = set_session_id("session-safe")
     try:
@@ -438,6 +440,7 @@ def test_readiness_probe_uses_separate_operation_telemetry(monkeypatch):
         base_url="https://provider.example/v1",
         credential_key="",
         provider_name="openai",
+        group_name="model-family-x",
     )
     monkeypatch.setattr(orchestrator_module, "traced", capture)
     monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
@@ -448,6 +451,8 @@ def test_readiness_probe_uses_separate_operation_telemetry(monkeypatch):
     assert client.probe_structured_chat(agent, {"messages": []}) == {"ok": True}
     assert captured[0][0] == "capability_probe.chat model-x"
     assert captured[0][1]["contextual_orchestrator.operation_kind"] == "capability_probe"
+    assert captured[0][1]["contextual_orchestrator.model_group"] == "model_family_x"
+    assert captured[0][1]["contextual_orchestrator.fallback_outcome"] == "not_attempted"
 
 
 def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(monkeypatch, caplog):
@@ -481,7 +486,11 @@ def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(mon
     span.record_exception.assert_not_called()
     # Failures record the CLASSIFIED cause family (network timeout here), not
     # the Python exception class, and never the exception text.
-    span.set_attribute.assert_called_once_with("error.type", "provider_connection_error")
+    span.set_attribute.assert_any_call("error.type", "provider_connection_error")
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "provider_connection_error",
+    )
     assert "provider-response-secret" not in caplog.text
     assert "session-secret" not in caplog.text
 
@@ -504,6 +513,129 @@ def test_traced_records_upstream_status_for_http_failures(monkeypatch):
     span.set_attribute.assert_any_call(
         "contextual_orchestrator.provider_status_code", 429
     )
+
+
+def test_traced_logs_actionable_bounded_failure_evidence(monkeypatch, caplog):
+    """Operators get a safe cause, model group, status, and fallback outcome."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    message = (
+        "'messages' must contain the word 'json' in some form, to use "
+        "'response_format' of type 'json_object'.No fallback model group found; "
+        "customer-private-text"
+    )
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced(
+            "capability_probe.chat gpt-4.1",
+            {
+                "contextual_orchestrator.model_group": "gpt-4.1",
+                "contextual_orchestrator.fallback_outcome": "not_attempted",
+            },
+        ):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call("error.type", "invalid_request_error")
+    span.set_attribute.assert_any_call("contextual_orchestrator.provider_status_code", 400)
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "messages must mention json when response_format is json_object",
+    )
+    assert "provider_status=400" in caplog.text
+    assert "model_group=gpt-4.1" in caplog.text
+    assert "fallback_outcome=not_attempted" in caplog.text
+    assert "messages must mention json when response_format is json_object" in caplog.text
+    assert "No fallback model group" not in caplog.text
+    assert "customer-private-text" not in caplog.text
+    assert "private.example" not in caplog.text
+
+
+def test_traced_recognizes_litellm_prefixed_json_object_diagnostic(
+    monkeypatch, caplog
+):
+    """A gateway prefix cannot hide Azure's actionable JSON-object contract."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    message = (
+        "AzureException BadRequestError - 'messages' must contain the word 'json' "
+        "in some form, to use 'response_format' of type 'json_object'."
+        "No fallback model group found; customer-private-text"
+    )
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced(
+            "capability_probe.chat gpt-4.1",
+            {"contextual_orchestrator.model_group": "gpt-4.1"},
+        ):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "messages must mention json when response_format is json_object",
+    )
+    assert "provider_status=400" in caplog.text
+    assert "model_group=gpt-4.1" in caplog.text
+    assert "AzureException" not in caplog.text
+    assert "No fallback model group" not in caplog.text
+    assert "customer-private-text" not in caplog.text
+    assert "private.example" not in caplog.text
+
+
+def test_traced_does_not_export_natural_language_provider_echo(monkeypatch, caplog):
+    """Unstructured provider prose is never evidence that request text is absent."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    echoed = "The supplied phrase customer-private-text is not valid JSON"
+    body = io.BytesIO(json.dumps({"error": {"message": echoed}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced("capability_probe.chat model-x"):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary", "invalid_request_error"
+    )
+    assert echoed not in caplog.text
+    assert "customer-private-text" not in caplog.text
+
+
+def test_traced_does_not_export_classified_provider_prose(monkeypatch, caplog):
+    """A previously classified provider error cannot bypass the summary allowlist."""
+    from contextual_orchestrator.provider_errors import ProviderUpstreamError
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    echoed = "The supplied phrase customer-private-text is invalid"
+    error = ProviderUpstreamError(
+        agent_id="provider_agent",
+        model="model-x",
+        error_code="invalid_request_error",
+        message=echoed,
+        client_status=400,
+        provider_status=400,
+    )
+
+    with pytest.raises(ProviderUpstreamError):
+        with traced("chat model-x"):
+            raise error
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary", "invalid_request_error"
+    )
+    assert echoed not in caplog.text
+    assert "customer-private-text" not in caplog.text
 
 
 def test_annotate_and_usage_helpers_filter_to_allowed_genai_attributes():
