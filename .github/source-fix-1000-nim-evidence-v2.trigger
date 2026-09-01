@@ -1,2 +1,2 @@
 repair NIM benchmark token and price evidence
-attempt=v7-already-repaired-stub-aware
+attempt=v8-explicit-dry-run-provider-usage
