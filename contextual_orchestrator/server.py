@@ -4904,6 +4904,18 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     return model
 
 
+def _available_embedding_agents(orchestrator: Any, model_name: str) -> list[Any]:
+    """Map temporary embedding quarantine to the public availability contract."""
+    try:
+        return orchestrator._capability_agents("embedding", model_name)
+    except RuntimeError as exc:
+        raise RequestError(
+            503,
+            "embeddings_unavailable",
+            "all enabled embedding-capable model group members are temporarily unavailable",
+        ) from exc
+
+
 def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
     """OpenAI ``encoding_format`` — omit/null/empty, ``float``, or ``base64``.
 
@@ -6959,7 +6971,7 @@ def build_server(
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    embedding_agents = _available_embedding_agents(orchestrator, model_name)
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7029,11 +7041,12 @@ def build_server(
                                 embedding_agent, "/v1/embeddings", exc
                             )
                             continue
-                        orchestrator._group_router.observe_success(
-                            embedding_agent.id,
-                            time.perf_counter() - attempt_started_at,
-                        )
-                        orchestrator._record_success(embedding_agent.id)
+                        if document.get("status") == "completed" and document.get("embeddings") is not None:
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                            orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(
@@ -7074,7 +7087,7 @@ def build_server(
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    embedding_agents = _available_embedding_agents(orchestrator, model_name)
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.

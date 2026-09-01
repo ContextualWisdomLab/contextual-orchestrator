@@ -148,6 +148,33 @@ def test_embedding_request_too_large_does_not_quarantine_endpoint() -> None:
     assert all(event["event_detail"]["provider_status"] == 413 for event in failures)
 
 
+def test_explicit_embedding_model_returns_503_while_all_circuits_are_open() -> None:
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(agent.id)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=CostRoutingCoordinator(orchestrator),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path in ("/v1/embeddings", "/v1/batch/embeddings"):
+            status, body = _post(
+                server.server_address[1],
+                path,
+                {"model": agent.model, "input": "invoice search chunk"},
+            )
+            assert status == 503, body
+            assert body["error"]["code"] == "embeddings_unavailable"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
     """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics."""
     first = ModelAgent(
