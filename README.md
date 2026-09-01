@@ -32,7 +32,7 @@ Contextual Orchestrator makes those decisions explicit behind one model-like int
 
 ### Run the full local stack
 
-The canonical deployment path for local evaluation is `compose.yaml`. It starts PostgreSQL, uses separate admin and inference tokens from Compose secrets, and binds the gateway to loopback.
+The canonical deployment path for local evaluation is `compose.yaml`. It starts PostgreSQL, bootstraps separate admin and inference tokens into the Postgres-backed encrypted credential registry, loads the shipped mock worker pool, and binds the gateway to loopback.
 
 ```bash
 umask 077
@@ -50,28 +50,39 @@ docker compose up --build --wait
 curl http://127.0.0.1:8000/healthz
 ```
 
-Provider credentials are registered separately through the credential registry; they do not belong in `compose.yaml` or the gateway process environment.
+The clean-checkout Compose stack is immediately usable with the shipped mock workers. Call the public control-plane model first:
 
 ```bash
-echo "$OPENAI_API_KEY" | \
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H "Authorization: Bearer $INFERENCE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "contextual-orchestrator",
+    "messages": [
+      {"role": "user", "content": "Research and verify this"}
+    ]
+  }' | jq .
+```
+
+To add a real provider, keep its key out of `compose.yaml` and the long-running gateway environment. Register it through a one-shot Compose container so the command uses the same Postgres KV backend, service network, DSN, and encryption passphrase as the gateway:
+
+```bash
+printf '%s' "$OPENAI_API_KEY" | \
+  docker compose run --rm -T gateway \
   python -m contextual_orchestrator register-credential \
   --name OPENAI_API_KEY \
   --value-stdin
 ```
 
-Then call the OpenAI-compatible Responses surface. `orchestrator/auto` selects from configured model groups; `orchestrator/free` is the fail-closed zero-cost pool when qualifying free candidates are available.
+Registration alone does not activate a provider model. Discover candidates into the persisted agent registry, review them, and explicitly enable the candidates or model-group members you want to route. `orchestrator/auto` and `orchestrator/free` are governed virtual pools; the latter fails closed unless an enabled candidate has explicit comparable zero prompt and completion prices.
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/responses \
-  -H "Authorization: Bearer $INFERENCE_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "orchestrator/free",
-    "input": "Research and verify this",
-    "reasoning": {"summary": "auto"},
-    "stream": true
-  }'
+docker compose run --rm gateway \
+  python -m contextual_orchestrator discover-models \
+  --agents-db /var/lib/contextual-orchestrator/agents.db
 ```
+
+See [`docs/kv-credentials.md`](docs/kv-credentials.md) for provider credential names, discovery, persistence, activation, and cost-aware selection details before using those virtual pools.
 
 ### Try the orchestration engine with mock workers
 
@@ -238,9 +249,11 @@ For the current workflow security checks, see the [Security workflow](https://gi
 
 The Python package is `contextual-orchestrator` version `0.2.0` in the current source tree and requires Python 3.10 or newer. Optional dependency groups cover API serving, database integration, queues, fuzzing and tests.
 
-For source development, install the checkout using your preferred Python environment tooling, then run the module entry point:
+Source development uses the repository's pinned, hash-locked two-step installation. Do not replace it with an unconstrained editable install:
 
 ```bash
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 python -m contextual_orchestrator --help
 ```
 
@@ -248,6 +261,46 @@ python -m contextual_orchestrator --help
 
 ```bash
 python -m contextual_orchestrator check-fast-mlsirm
+```
+
+## Check
+
+Run the complete suite with the same hash-locked toolchain as CI:
+
+```bash
+make test
+```
+
+The canonical directly runnable smoke checks remain in this README. Install with the pinned two-step procedure above, then run:
+
+```bash
+python tests/test_self_check.py
+python tests/test_paper_contracts.py
+python -m pytest -q tests/test_reasoning_effort_profile.py
+python tests/test_admin_contract.py
+python tests/test_conventions.py
+python tests/test_api_contract.py
+python tests/test_nim_benchmark.py
+python tests/test_security_hardening.py
+python tests/test_chat_model_capability_isolation.py
+python tests/test_chat_transport_role_separation.py
+python tests/test_chat_capability_unknown_identifiers.py
+python tests/test_chat_passthrough_capability_isolation.py
+python tests/test_discovery_bootstrap_selection.py
+python tests/test_chat_capability.py
+python tests/test_review_gateway.py
+python tests/test_provider_bootstrap.py
+python tests/test_provider_bootstrap_secret_normalization.py
+python tests/test_provider_catalog_bootstrap.py
+python tests/test_provider_catalog_credential_promotion.py
+python tests/test_provider_catalog_store.py
+python tests/test_tool_execution_fallback.py
+```
+
+For the full pytest collection, including the ordinary repository tests while excluding the Atheris coverage-guided fuzz directory through `conftest.py`:
+
+```bash
+python -m pytest tests -q
 ```
 
 ## Documentation map
