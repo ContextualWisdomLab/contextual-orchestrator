@@ -26,7 +26,7 @@ design was not actually serving as a useful signal.
 
 **Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
 `PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
-(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+(`https://api.bytez.com/models/v2/list/models?task=chat`), prefix-free `Authorization: <token>` header, and
 response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
 every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
 is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
