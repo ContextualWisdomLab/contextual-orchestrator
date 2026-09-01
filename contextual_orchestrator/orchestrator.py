@@ -4354,17 +4354,24 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
+        route_decision = self.would_route(messages, mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
-            result = self._dispatch(messages, mode, model_name)
+            result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "bypass" if bypass_cache else "disabled"
             return result
         try:
-            key = self._cache_key(messages, mode, model_name, cache_partition)
+            key = self._cache_key(
+                messages,
+                mode,
+                model_name,
+                cache_partition,
+                resolved_mode="route" if route_decision else "conduct",
+            )
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
-            result = self._dispatch(messages, mode, model_name)
+            result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "miss"
             return result
         try:
@@ -4380,7 +4387,7 @@ class TaskOrchestrator:
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
             return result
-        result = self._dispatch(messages, mode, model_name)
+        result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
         try:
             cache.put(key, result)
         except Exception:  # noqa: BLE001 - optional cache must fail open
@@ -4393,8 +4400,12 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str,
         model_name: str = GATEWAY_DEFAULT_MODEL,
+        *,
+        route_decision: bool | None = None,
     ) -> dict[str, Any]:
-        if self.would_route(messages, mode, model_name):
+        if route_decision is None:
+            route_decision = self.would_route(messages, mode, model_name)
+        if route_decision:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
@@ -4517,6 +4528,8 @@ class TaskOrchestrator:
         mode: str,
         model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
+        *,
+        resolved_mode: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
         parameters = snapshot() if callable(snapshot) else {
@@ -4527,6 +4540,8 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        if resolved_mode is not None:
+            parameters["resolved_mode"] = resolved_mode
         return build_response_cache_key(
             messages,
             mode,
