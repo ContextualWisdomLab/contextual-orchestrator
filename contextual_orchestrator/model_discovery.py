@@ -1479,10 +1479,9 @@ def _is_retired_nvidia_nim_model(discovered: DiscoveredModel) -> bool:
 
     Not a routing-identity/provider-family abstraction: this operates on the
     raw pre-``ModelAgent`` :class:`DiscoveredModel` eligibility gate only,
-    before any grouping or dedup runs. It never influences which agents share
-    a ``model_group`` (see ``model_group_name_for``, keyed on ``model_id``
-    alone, deliberately provider-neutral) or which candidate a routing
-    decision selects among agents that already passed eligibility.
+    before any grouping or dedup runs. It never influences which agents are
+    grouped together for routing, or which candidate a routing decision
+    selects among agents that already passed eligibility.
     """
     return (
         discovered.provider_name in _NVIDIA_NIM_PROVIDER_NAMES
