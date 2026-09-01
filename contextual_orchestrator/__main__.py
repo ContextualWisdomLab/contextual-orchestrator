@@ -517,6 +517,8 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "max_output_tokens": model.max_output_tokens,
+                "context_window": model.context_window,
                 "data_privacy": {
                     "zero_data_retention": (
                         "supported" if model.supports_zero_data_retention is True else
@@ -566,7 +568,27 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
         elif "discovered" not in existing.tags:
             continue
-        elif not routable:
+        else:
+            max_output_tokens = (
+                None
+                if model.max_output_tokens_conflicted
+                else model.max_output_tokens or existing.max_output_tokens
+            )
+            context_window = (
+                None
+                if model.context_window_conflicted
+                else model.context_window or existing.context_window
+            )
+            limits_changed = (
+                existing.max_output_tokens != max_output_tokens
+                or existing.context_window != context_window
+            )
+            existing = replace(
+                existing,
+                max_output_tokens=max_output_tokens,
+                context_window=context_window,
+            )
+        if existing is not None and not routable:
             tags = (*existing.tags, "spend:blocked")
             if existing.disabled and "spend:blocked" not in existing.tags:
                 tags = (*tags, "spend:blocked:preserve-disabled")
@@ -577,7 +599,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )
-        elif "spend:blocked" in existing.tags:
+        elif existing is not None and "spend:blocked" in existing.tags:
             agents.append(
                 replace(
                     existing,
@@ -589,6 +611,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     ),
                 )
             )
+        elif existing is not None and limits_changed:
+            agents.append(existing)
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents

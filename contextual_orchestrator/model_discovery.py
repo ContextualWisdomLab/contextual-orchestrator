@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -274,6 +274,10 @@ class DiscoveredModel:
     capabilities: tuple[str, ...] = ()
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
+    max_output_tokens: int | None = None
+    context_window: int | None = None
+    max_output_tokens_conflicted: bool = False
+    context_window_conflicted: bool = False
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -295,6 +299,29 @@ class ProviderDiscoveryError(RuntimeError):
         self.provider_name = provider_name
         self.error_code = error_code
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
+
+
+def _positive_int_metadata(value: object) -> int | None:
+    """Return one exact positive integer metadata field or ``None`` when unknown."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= 9_223_372_036_854_775_807 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        integer = int(value)
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.isdigit():
+            return None
+        try:
+            integer = int(stripped)
+        except ValueError:
+            return None
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
+    return None
 
 
 def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
@@ -549,6 +576,8 @@ def _deduplicate_discovered_models(
         chosen = min((previous, model), key=_source_tiebreaker)
         unique[identity] = replace(
             chosen,
+            max_output_tokens=None,
+            context_window=None,
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
             unit_prices=(),
@@ -671,6 +700,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                 if _valid_price_component(value):
                     pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
+        limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
         enriched.append(
             {
                 **row,
@@ -679,6 +709,8 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                     "input_modalities": modalities.get("input"),
                     "output_modalities": modalities.get("output"),
                 },
+                "max_output_tokens": _positive_int_metadata(limits.get("output")),
+                "context_window": _positive_int_metadata(limits.get("context")),
                 "is_free": _models_dev_cost_is_free(cost),
             }
         )
@@ -722,6 +754,10 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("pricing", None)
         row.pop("architecture", None)
         row.pop("unit_pricing", None)
+        row.pop("max_output_tokens", None)
+        row.pop("context_window", None)
+        row.pop("context_length", None)
+        row.pop("max_completion_tokens", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
@@ -735,6 +771,8 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
+        completion_limits: list[int | None] = []
+        context_windows: list[int | None] = []
         privacy_values = {
             key: []
             for key in (
@@ -792,6 +830,22 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
             )
+            completion_limits.append(
+                _positive_int_metadata(
+                    info.get("max_output_tokens", params.get("max_output_tokens"))
+                )
+                or _positive_int_metadata(
+                    info.get("max_completion_tokens", params.get("max_completion_tokens"))
+                )
+            )
+            context_windows.append(
+                _positive_int_metadata(
+                    info.get("context_window", params.get("context_window"))
+                )
+                or _positive_int_metadata(
+                    info.get("context_length", params.get("context_length"))
+                )
+            )
             if _valid_price_component(prompt) and _valid_price_component(completion):
                 prices.add((prompt, completion))
             else:
@@ -823,6 +877,18 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "input_modalities": list(deployment_inputs[0]),
                 "output_modalities": list(deployment_outputs[0]),
             }
+        if completion_limits and all(value is not None for value in completion_limits):
+            unique_completion_limits = {value for value in completion_limits if value is not None}
+            if len(unique_completion_limits) == 1:
+                row["max_output_tokens"] = unique_completion_limits.pop()
+            else:
+                row["_max_output_tokens_conflicted"] = True
+        if context_windows and all(value is not None for value in context_windows):
+            unique_context_windows = {value for value in context_windows if value is not None}
+            if len(unique_context_windows) == 1:
+                row["context_window"] = unique_context_windows.pop()
+            else:
+                row["_context_window_conflicted"] = True
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
@@ -987,10 +1053,29 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if isinstance(row.get("supported_parameters"), list)
             else []
         )
+        top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
         outputs = tuple(value for value in raw_outputs if isinstance(value, str)) if isinstance(raw_outputs, list) else ()
+        raw_output_limits = [
+            value
+            for container, key in (
+                (row, "max_output_tokens"),
+                (top_provider, "max_completion_tokens"),
+            )
+            if key in container
+            for value in (container[key],)
+        ]
+        raw_context_limits = [
+            row[key]
+            for key in ("context_window", "context_length")
+            if key in row
+        ]
+        output_limits = [_positive_int_metadata(value) for value in raw_output_limits]
+        context_limits = [_positive_int_metadata(value) for value in raw_context_limits]
+        max_output_tokens = next((value for value in output_limits if value is not None), None)
+        context_window = next((value for value in context_limits if value is not None), None)
         if (
             not outputs
             and not any(capability != "chat" for capability in source.capabilities)
@@ -1050,6 +1135,16 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 capabilities=capabilities,
                 input_modalities=inputs,
                 output_modalities=outputs,
+                max_output_tokens=max_output_tokens,
+                context_window=context_window,
+                max_output_tokens_conflicted=(
+                    row.get("_max_output_tokens_conflicted") is True
+                    or any(value is None for value in output_limits)
+                ),
+                context_window_conflicted=(
+                    row.get("_context_window_conflicted") is True
+                    or any(value is None for value in context_limits)
+                ),
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
@@ -1556,6 +1651,8 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         ),
         priority=priority,
         disabled=True,
+        max_output_tokens=discovered.max_output_tokens,
+        context_window=discovered.context_window,
     )
 
 
