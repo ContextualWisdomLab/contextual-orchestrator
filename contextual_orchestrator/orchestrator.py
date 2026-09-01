@@ -7213,8 +7213,19 @@ class TaskOrchestrator:
             # otherwise let a fast-moving pool change mis-attribute this exact
             # call's spend to the wrong (or no longer existing) model.
             verification["judge_model"] = judge_adapter.served_model or judge.model
-            if result.usage:
-                verification["judge_usage"] = result.usage
+            # A verdict (accepted/rejected + rationale) only exists once the
+            # provider call itself returned, so this branch always represents
+            # a completed call -- but result.usage can still be falsy when
+            # the response carried no valid usage dict. Recording an
+            # explicit zero-token usage (the same normalization fast-mlsirm's
+            # own _usage(trace) applies) keeps this call visible to budget/
+            # spend accounting as a real, reported zero-cost step instead of
+            # silently vanishing (see _judge_adapter_accounting_fields).
+            verification["judge_usage"] = result.usage or {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage
@@ -7300,8 +7311,19 @@ class TaskOrchestrator:
             fields["judge_agent_id"] = judge_adapter.served_agent_id
         if judge_adapter.served_model is not None:
             fields["judge_model"] = judge_adapter.served_model
-        if judge_adapter.served_usage:
-            fields["judge_usage"] = judge_adapter.served_usage
+        if judge_adapter.served_agent_id is not None:
+            # The provider call completed (served_agent_id is only ever set
+            # once the response returns), but its usage dict may be missing
+            # or invalid. Recording an explicit zero-token usage — the same
+            # normalization fast-mlsirm's own `_usage(trace)` applies —
+            # keeps this call visible to budget/spend accounting as a real,
+            # reported (not estimated) zero-cost step, instead of the call
+            # silently vanishing from analytics entirely.
+            fields["judge_usage"] = judge_adapter.served_usage or {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
         return fields
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:

@@ -127,6 +127,37 @@ def test_structured_model_judge_accepts() -> None:
     assert result["answer"] == "step-output(4)"
 
 
+def test_completed_judge_call_with_no_reported_usage_still_records_zero_usage() -> None:
+    """A completed judge call must never vanish from spend accounting.
+
+    ``_ScriptedClient`` (used by ``_orch``) has no ``take_usage``, so
+    ``_invoke`` returns ``usage=None`` even though a real provider call
+    happened. Before this fix, ``_judge_adapter_accounting_fields`` only
+    included ``judge_usage`` when ``served_usage`` was truthy, so this
+    genuinely-completed call was entirely invisible to
+    ``_run_budget_output_by_model``/spend analytics — not even counted as
+    an estimated-usage step, just silently dropped. It must instead record
+    an explicit zero-token usage, the same normalization fast-mlsirm's own
+    ``_usage(trace)`` applies to a missing/invalid usage dict.
+    """
+    orchestrator, _ = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.conduct(MESSAGES)
+    verification = result["verification"]
+    assert verification["accepted"] is True
+    assert verification["judge_agent_id"] == "general_agent"
+    assert verification["judge_model"] == "model-x"
+    assert verification["judge_usage"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
 def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:

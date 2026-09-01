@@ -293,6 +293,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `proxy_send` returns a response with real `usage` but no assistant
   content; asserts the raised `ProviderResponseError` still leaves
   `served_agent_id`/`served_model`/`served_usage` populated on the adapter.
+  (CodeRabbit review on #961) All of the accounting-preservation fixes
+  above still had one gap: every site that builds `judge_usage` (the
+  ACCEPT-path verdict, and `_judge_adapter_accounting_fields`'s two
+  fail-closed branches) only included it when the provider response's own
+  `usage` was a truthy dict — a completed call whose response carried no
+  valid usage (missing, `None`, or the wrong type; the same case
+  fast-mlsirm's own `_usage(trace)` zero-fills rather than drops) still
+  vanished from `judge_usage` entirely, making that real, incurred call
+  invisible to `_run_budget_output_by_model`/`spend_analytics` — not even
+  counted as estimated, just silently absent. This directly contradicts
+  the "missing/invalid judge usage stays absent" framing two paragraphs
+  above; that description is now superseded. All three sites now record
+  an explicit `{"prompt_tokens": 0, "completion_tokens": 0,
+  "total_tokens": 0}` whenever a call is known to have completed (real
+  usage still passes through unchanged when present), matching
+  fast-mlsirm's own normalization and keeping the call visible as a real,
+  reported zero-cost step. New regression test
+  `test_completed_judge_call_with_no_reported_usage_still_records_zero_usage`
+  drives the existing scripted-client ACCEPT path (which never supplies a
+  usage dict) and asserts `judge_usage` is now the explicit zero-token
+  dict instead of missing.
 
 ### Added
 
