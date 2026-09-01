@@ -7,7 +7,6 @@ import json
 import socket
 import sys
 import threading
-import time
 import urllib.request
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -413,34 +412,6 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
         "ready_agent_count": 0,
         "items": [],
     }]
-
-
-def test_stalled_provider_readiness_probe_times_out_and_releases_refresh_slot() -> None:
-    client = ModelClient()
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("ready_agent", "ready-model")], client=client
-    )
-    entered = threading.Event()
-    release = threading.Event()
-
-    def stalled_probe(agent):
-        entered.set()
-        release.wait(timeout=2)
-        return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    with patch.object(client, "probe", side_effect=stalled_probe):
-        started = time.monotonic()
-        timed_out = orchestrator.provider_readiness_report(refresh=True, timeout=0.1)
-        elapsed = time.monotonic() - started
-        assert entered.is_set()
-        assert elapsed < 1.0
-        assert timed_out["status"] == "not_ready"
-        assert timed_out["items"][0]["failure_code"] == "provider_probe_timeout"
-
-        release.set()
-        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=0.1)
-
-    assert refreshed["status"] == "ready"
 
 
 def test_local_provider_serializes_model_switches_and_bounds_explicit_waiters() -> None:

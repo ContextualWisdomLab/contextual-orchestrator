@@ -97,7 +97,6 @@ _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
-DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
@@ -113,7 +112,6 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "URLError",
     "ValueError",
 })
-MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 
 
 class _ProviderCancellation:
@@ -189,18 +187,6 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     """Keep provider diagnostics package-owned instead of echoing exception classes."""
     name = type(exc).__name__
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
-
-
-def _validate_provider_probe_timeout(timeout: float) -> float:
-    """Validate the finite, bounded timeout used by explicit readiness probes."""
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("provider probe timeout must be a finite number")
-    value = float(timeout)
-    if not math.isfinite(value) or not 0.1 <= value <= MAX_PROVIDER_PROBE_TIMEOUT:
-        raise ValueError(
-            f"provider probe timeout must be between 0.1 and {MAX_PROVIDER_PROBE_TIMEOUT:g} seconds"
-        )
-    return value
 
 
 class BudgetExceededError(RuntimeError):
@@ -3644,10 +3630,10 @@ class TaskOrchestrator:
         self,
         *,
         refresh: bool = False,
-        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Report provider liveness separately from an explicit chat readiness probe."""
-        probe_timeout = _validate_provider_probe_timeout(timeout)
+        del timeout  # compatibility-only; readiness has no wall-clock deadline
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
         if not refresh:
@@ -3672,9 +3658,7 @@ class TaskOrchestrator:
             with self._provider_readiness_lock:
                 candidates = list(self.candidates)
                 generation = self._provider_readiness_generation
-            report = self._provider_readiness_report_for(
-                candidates, True, timeout=probe_timeout
-            )
+            report = self._provider_readiness_report_for(candidates, True)
             with self._provider_readiness_lock:
                 if generation == self._provider_readiness_generation:
                     self._latest_provider_readiness_report = json.loads(json.dumps(report))
@@ -3688,8 +3672,6 @@ class TaskOrchestrator:
         self,
         candidates: list[ModelAgent],
         refresh: bool,
-        *,
-        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
     ) -> dict[str, Any]:
         """Build one readiness report from an immutable candidate snapshot."""
         items: list[dict[str, Any]] = []
@@ -3704,7 +3686,7 @@ class TaskOrchestrator:
                 })
                 continue
             if refresh:
-                item = self._provider_readiness_probe_with_deadline(agent, timeout)
+                item = dict(self.client.probe(agent))
                 item["provider"] = provider
                 items.append(redact_value(item))
             else:
@@ -3725,46 +3707,6 @@ class TaskOrchestrator:
             "agent_count": len(active),
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "items": items,
-        }
-
-    def _provider_readiness_probe_with_deadline(
-        self, agent: ModelAgent, timeout: float
-    ) -> dict[str, Any]:
-        """Cancel one stalled provider probe and return bounded public evidence."""
-        result: list[dict[str, Any]] = []
-        finished = threading.Event()
-        call, cancel = self.client.cancellable_call(lambda: self.client.probe(agent))
-
-        def run() -> None:
-            try:
-                result.append(dict(call()))
-            except Exception as exc:
-                result.append(
-                    {
-                        "agent_id": agent.id,
-                        "model": agent.model,
-                        "status": "not_ready",
-                        "error_type": _safe_provider_probe_error_type(exc),
-                        "failure_code": "provider_probe_failed",
-                    }
-                )
-            finally:
-                finished.set()
-
-        worker = threading.Thread(
-            target=run, daemon=True, name=f"provider-readiness-{agent.id}"
-        )
-        worker.start()
-        if finished.wait(timeout):
-            return result[0]
-        cancel()
-        finished.wait(min(timeout, 1.0))
-        return {
-            "agent_id": agent.id,
-            "model": agent.model,
-            "status": "not_ready",
-            "error_type": "TimeoutError",
-            "failure_code": "provider_probe_timeout",
         }
 
     def _set_candidates(self, candidates: list[ModelAgent]) -> None:
