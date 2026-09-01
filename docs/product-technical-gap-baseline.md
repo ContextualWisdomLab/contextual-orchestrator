@@ -1,5 +1,25 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
+
+Observation time: 2026-09-01 Asia/Seoul.
+
+### Summary of Completed PR Merges
+- **PR #970 (`fix/provider-embedding-current-main`) Merged into `main`**:
+  - Reconciled authoritative token accounting across `cost_router.py`, `cost_ledger.py`, and `token_counting.py` in accordance with ADR 0005 and ADR 0006.
+  - Rust-backed exact token counter extension integrated for declared tokenizers (`count_cl100k`, `count_o200k`, `pack_cl100k`) with closed-fail behavior (`UnavailableTokenCounter`) for unsupported/unreconstructible structures.
+  - Masked unmeasured usage rows to `None` with `measurement_status = "unavailable"`, ensuring zero-token schema sentinels are never exposed as measured or free usage.
+  - Successfully verified complete 3,142-test project test suite (100% passing across unit, HTTP honesty, and boundary suites).
+
+### Prior Merged PR Queue Recap
+- Merged PRs: [#938](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/938), [#936](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/936), [#935](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/935), [#934](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/934), [#937](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/937), [#946](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/946), [#952](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/952), [#955](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/955), [#956](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/956), [#957](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/957), [#958](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/958), [#959](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/959), [#960](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/960), [#961](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/961), [#962](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/962), [#963](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/963), [#964](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/964), [#965](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/965), [#966](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/966), [#967](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/967), [#968](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/968), [#970](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/970).
+
+### Next Queue Targets
+- **PR #971**: `fix(embedding-router): route plain unspecified embedding batches to cheapest member`
+- **PR #972**: `fix(gateway): respect client custom_id in batch chat responses`
+- **PR #973**: `feat(catalog): provider latency routing telemetry and scoring`
+- **Remaining Open PRs**: [#976](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/976), [#977](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/977), [#978](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/978), [#980](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/980), [#981](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/981), [#982](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/982), [#983](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/983), [#984](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/984), [#985](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/985), [#986](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/986), [#992](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/992), [#993](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/993).
+
 ## 2026-08-31 live continuation: PR queue recheck, worktree reconciliation, issue #940 deferral, and issue #927 closure
 
 Observation time: 2026-08-31 Asia/Seoul. GitHub authentication was
