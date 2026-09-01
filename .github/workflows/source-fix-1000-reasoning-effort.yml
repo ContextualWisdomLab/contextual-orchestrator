@@ -14,11 +14,14 @@ jobs:
   repair:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           fetch-depth: 0
           ref: fix/no-heuristic-batch-routing
-      - uses: astral-sh/setup-uv@v6
+          persist-credentials: true
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
       - name: Prove regression is RED before repair
         shell: bash
         run: |
@@ -27,7 +30,7 @@ jobs:
             echo '::error::reasoning-effort regression was not RED before production repair'
             exit 1
           fi
-      - name: Apply exact-text production repair
+      - name: Apply exact-source production repair
         run: uv run python -m scripts.ci.repair_pr1000_reasoning_effort
       - name: Verify focused repaired contract
         shell: bash
@@ -41,8 +44,18 @@ jobs:
             tests/test_tool_loop_role_effort_catalog_http.py \
             tests/test_generated_workflow.py \
             tests/test_passthrough_provider_failover.py
+          uv run ruff check \
+            contextual_orchestrator/reasoning_effort_profile.py \
+            contextual_orchestrator/__main__.py \
+            tests/test_no_heuristic_reasoning_effort_contract.py \
+            tests/test_reasoning_effort_profile.py \
+            tests/test_cli_role_effort_catalog.py \
+            tests/test_mixed_pool_role_effort_selection.py \
+            tests/test_tool_loop_role_effort_catalog_http.py \
+            tests/test_generated_workflow.py \
+            tests/test_passthrough_provider_failover.py
           git diff --check
-      - name: Remove one-shot repair artifacts and push
+      - name: Remove one-shot repair artifacts, reconcile concurrent head, and push
         shell: bash
         run: |
           set -euo pipefail
@@ -59,4 +72,18 @@ jobs:
           git config user.name 'opencode-agent[bot]'
           git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
           git commit -m 'fix(reasoning): retire synthetic effort heuristics'
+          git fetch --no-tags origin fix/no-heuristic-batch-routing
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$remote_head" != "$(git rev-parse HEAD)" ] && ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            git merge --no-edit "$remote_head"
+            uv run pytest -q \
+              tests/test_no_heuristic_reasoning_effort_contract.py \
+              tests/test_reasoning_effort_profile.py \
+              tests/test_cli_role_effort_catalog.py \
+              tests/test_mixed_pool_role_effort_selection.py \
+              tests/test_tool_loop_role_effort_catalog_http.py \
+              tests/test_generated_workflow.py \
+              tests/test_passthrough_provider_failover.py
+            git diff --check
+          fi
           git push origin HEAD:fix/no-heuristic-batch-routing
