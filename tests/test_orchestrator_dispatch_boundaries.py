@@ -315,10 +315,12 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
 
         class judge_cls:
             def __init__(self, adapter, mode, accept_threshold):
-                del adapter, mode, accept_threshold
+                self.adapter = adapter
+                del mode, accept_threshold
 
             def judge(self, task, answer, criteria):
                 del task, answer, criteria
+                self.adapter.complete([{"role": "user", "content": "judge"}])
 
                 class _Result:
                     accepted = True

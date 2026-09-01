@@ -7206,15 +7206,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
-            # Captured directly from the agent object the provider call actually
-            # succeeded against (threaded through _invoke's return value), not
-            # re-resolved from self.candidates after the fact -- self.candidates
-            # is a plain mutable list a concurrent admin request can reassign
-            # between the call completing and any later lookup, which would
-            # otherwise let a fast-moving pool change mis-attribute this exact
-            # call's spend to the wrong (or no longer existing) model.
-            verification["judge_model"] = judge_adapter.served_model or judge.model
+            verification.update(self._judge_adapter_accounting_fields(judge_adapter))
             # result.usage can be falsy when the response carried no valid
             # usage dict. Devin review on #961: recording a fabricated
             # zero-token usage here (an earlier revision of this fix) let a
@@ -7225,18 +7217,8 @@ class TaskOrchestrator:
             # _run_budget_output_by_model/spend_analytics now derive an
             # honest estimated-token fallback from judge_output_text
             # (below) instead of trusting a fabricated "reported" dict.
-            if result.usage:
+            if result.usage and "judge_agent_id" in verification:
                 verification["judge_usage"] = result.usage
-            # The judge's own generated text (its rationale), not
-            # verifier_output (the worker answer it was judging) -- Devin
-            # review on #961, on the unmeasured-usage fallback fix below:
-            # estimating "judge output tokens" from what the judge
-            # evaluated rather than what it itself generated systematically
-            # mis-sizes the estimate whenever the two lengths differ. Kept
-            # as its own field (not reused from "reason") because the
-            # IRT-failure branches below overwrite "reason" with a static
-            # message but must still carry this text forward.
-            verification["judge_output_text"] = result.rationale
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage

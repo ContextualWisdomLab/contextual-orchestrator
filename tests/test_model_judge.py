@@ -163,7 +163,9 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     assert verification["judge_agent_id"] == "general_agent"
     assert verification["judge_model"] == "model-x"
     assert "judge_usage" not in verification
-    assert verification["judge_output_text"] == "The report supports the answer."
+    assert verification["judge_output_text"] == (
+        '{"decision":"ACCEPT","reason":"The report supports the answer."}'
+    )
     assert verification["verifier_output"] != verification["judge_output_text"]
 
     isolated_record = {"trace": [], "verification": verification}

@@ -154,7 +154,8 @@ class _ScriptedFastJudge:
     """Deterministic fast-mlsirm stand-in: rejects any answer matching a marker."""
 
     def __init__(self, adapter, *, mode: str, accept_threshold: float) -> None:
-        del adapter, mode, accept_threshold
+        self.adapter = adapter
+        del mode, accept_threshold
 
     def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
         del task, criteria
@@ -311,12 +312,7 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
         [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
         client=client,
         price_per_million={"model-x": 10.0},
-        # 30 comfortably covers the real total below (21) with headroom;
-        # were worker spend double-counted (the bug this test guards
-        # against) the running total would exceed even this before both
-        # items finished, so the len(records) == 2 assertion below still
-        # catches a regression.
-        budget_max_output_tokens=30,
+        budget_max_output_tokens=10,
     )
 
     with patch.object(
@@ -327,16 +323,9 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
         records = orchestrator.batch_route(["task one", "task three"])
 
     assert len(records) == 2
-    # 7 real worker tokens (6 + 1) plus an honest estimated-token fallback
-    # for each of the two judge calls: this file's local _ScriptedFastJudge
-    # never calls the adapter (usage=None, no served_output either), so
-    # both prompts accept with rationale="scripted accept" (both answers
-    # avoid the reject marker) -- estimate_tokens("scripted accept") == 4,
-    # twice (Devin review on #961: a completed-but-unmeasured judge call
-    # must still count toward the budget meter, not silently contribute 0,
-    # and must be estimated from the judge's own generated text, not the
-    # worker answer it judged).
-    assert orchestrator.budget_status()["spent_output_tokens"] == 15
+    # This lightweight judge double does not call its adapter, so only the
+    # two real worker calls contribute spend (6 + 1 tokens).
+    assert orchestrator.budget_status()["spent_output_tokens"] == 7
 
 
 def test_batch_route_blocks_first_judge_call_when_aggregate_batch_spend_exceeds_cap() -> None:
@@ -467,6 +456,7 @@ def test_batch_route_survives_restart_after_budget_exceeded(tmp_path) -> None:
 def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
     class _UsageJudge(_ScriptedFastJudge):
         def judge(self, **kwargs):
+            self.adapter.complete([{"role": "user", "content": "judge"}])
             result = super().judge(**kwargs)
             result.usage = {"completion_tokens": 2}
             return result
@@ -497,6 +487,7 @@ def test_batch_route_judge_usage_survives_agent_pool_model_change() -> None:
 
     class _UsageJudge(_ScriptedFastJudge):
         def judge(self, **kwargs):
+            self.adapter.complete([{"role": "user", "content": "judge"}])
             result = super().judge(**kwargs)
             result.usage = {"completion_tokens": 2}
             return result

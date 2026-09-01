@@ -330,24 +330,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   "ACCEPT" verdict (or vice versa) would be mis-sized in either direction.
   `_FastMLSIJudgeAdapter` now also records `served_output` (the judge's
   raw completion text) at the same point it already captures
-  `served_agent_id`/`served_model`/`served_usage`; the ACCEPT-path verdict
-  builder separately records `verification["judge_output_text"] =
-  result.rationale` (kept as its own field rather than reusing `"reason"`,
-  since the IRT-projection-failure branches overwrite `"reason"` with a
-  static message but must still carry this text forward through
-  `accounting_fields`). Both budget/spend consumers now estimate from
+  `served_agent_id`/`served_model`/`served_usage`, and the shared accounting
+  helper persists it as `judge_output_text`. Both budget/spend consumers estimate from
   `judge_output_text` instead of `verifier_output`.
   `tests/test_batch_optimizer.py::test_batch_route_budget_counts_only_the_current_uncommitted_worker`
   updated twice in the course of this: its local scripted judge never
-  calls the adapter at all (bypassing `served_output`) and returns a
-  static `"scripted accept"` rationale directly, so the expected budget
-  total is 7 real worker tokens + 2×4 estimated judge tokens = 15 (its
-  original cap of 10 no longer leaves headroom for two full judge
-  estimates, raised to 30). New regression test
+  calls the adapter at all, so the expected budget remains the 7 real
+  worker tokens; no nonexistent judge call or cost is fabricated. New regression test
   `test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget`
   drives the existing scripted-client ACCEPT path (which never supplies a
   usage dict), asserts `judge_usage` stays absent, `judge_output_text`
-  holds the judge's own rationale, and the budget contribution matches an
+  holds the exact judge completion, and the budget contribution matches an
   estimate from that text specifically — deliberately different in length
   from `verifier_output` so the two can't pass by coincidence.
 
