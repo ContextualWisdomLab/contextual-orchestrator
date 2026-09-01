@@ -74,13 +74,17 @@ printf '%s' "$OPENAI_API_KEY" | \
   --value-stdin
 ```
 
-Registration alone does not activate a provider model. Discover candidates into the persisted agent registry, review them, and explicitly enable the candidates or model-group members you want to route. `orchestrator/auto` and `orchestrator/free` are governed virtual pools; the latter fails closed unless an enabled candidate has explicit comparable zero prompt and completion prices.
+Registration alone does not activate a provider model. Discover candidates into the persisted agent registry, then recreate the gateway so it reloads that registry before you review or enable discovered candidates:
 
 ```bash
 docker compose run --rm gateway \
   python -m contextual_orchestrator discover-models \
   --agents-db /var/lib/contextual-orchestrator/agents.db
+
+docker compose restart gateway
 ```
+
+Discovered candidates remain governed rather than silently becoming routing truth. Explicitly review and enable the candidates or model-group members you want to route. `orchestrator/auto` and `orchestrator/free` are governed virtual pools; the latter fails closed unless an enabled candidate has explicit comparable zero prompt and completion prices.
 
 See [`docs/kv-credentials.md`](docs/kv-credentials.md) for provider credential names, discovery, persistence, activation, and cost-aware selection details before using those virtual pools.
 
@@ -249,13 +253,15 @@ For the current workflow security checks, see the [Security workflow](https://gi
 
 The Python package is `contextual-orchestrator` version `0.2.0` in the current source tree and requires Python 3.10 or newer. Optional dependency groups cover API serving, database integration, queues, fuzzing and tests.
 
-Source development uses the repository's pinned, hash-locked two-step installation. Do not replace it with an unconstrained editable install:
+For a source/runtime checkout, use the repository's pinned two-step runtime installation:
 
 ```bash
 python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python -m contextual_orchestrator --help
 ```
+
+That runtime lock is not the contributor test-toolchain lock. Repository tests are run through the checked-in `uv.lock` so pytest, Hypothesis, API/DB/queue extras, and the dev group are resolved reproducibly.
 
 `fast-mlsirm` is used for model-based conduct verification on supported Python versions. Live judge workflows fail closed when that dependency or its contextual contract is unavailable. Verify the exact interpreter used for the run with:
 
@@ -265,42 +271,33 @@ python -m contextual_orchestrator check-fast-mlsirm
 
 ## Check
 
-Run the complete suite with the same hash-locked toolchain as CI:
+Run the canonical complete suite:
 
 ```bash
 make test
 ```
 
-The canonical directly runnable smoke checks remain in this README. Install with the pinned two-step procedure above, then run:
+`make test` delegates to the repository's locked contributor environment:
 
 ```bash
-python tests/test_self_check.py
-python tests/test_paper_contracts.py
-python -m pytest -q tests/test_reasoning_effort_profile.py
-python tests/test_admin_contract.py
-python tests/test_conventions.py
-python tests/test_api_contract.py
-python tests/test_nim_benchmark.py
-python tests/test_security_hardening.py
-python tests/test_chat_model_capability_isolation.py
-python tests/test_chat_transport_role_separation.py
-python tests/test_chat_capability_unknown_identifiers.py
-python tests/test_chat_passthrough_capability_isolation.py
-python tests/test_discovery_bootstrap_selection.py
-python tests/test_chat_capability.py
-python tests/test_review_gateway.py
-python tests/test_provider_bootstrap.py
-python tests/test_provider_bootstrap_secret_normalization.py
-python tests/test_provider_catalog_bootstrap.py
-python tests/test_provider_catalog_credential_promotion.py
-python tests/test_provider_catalog_store.py
-python tests/test_tool_execution_fallback.py
+uv run --locked --extra api --extra db --extra queue --group dev \
+  python -m pytest -q
 ```
 
-For the full pytest collection, including the ordinary repository tests while excluding the Atheris coverage-guided fuzz directory through `conftest.py`:
+For focused verification, use the same locked environment and invoke test modules through pytest rather than assuming a test file has a standalone `__main__` runner:
 
 ```bash
-python -m pytest tests -q
+uv run --locked --extra api --extra db --extra queue --group dev \
+  python -m pytest -q \
+  tests/test_self_check.py \
+  tests/test_paper_contracts.py \
+  tests/test_reasoning_effort_profile.py \
+  tests/test_admin_contract.py \
+  tests/test_conventions.py \
+  tests/test_api_contract.py \
+  tests/test_security_hardening.py \
+  tests/test_chat_capability.py \
+  tests/test_review_gateway.py
 ```
 
 ## Documentation map
