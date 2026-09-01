@@ -22,8 +22,9 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "node scripts/ci/install_locked_opencode.mjs" in workflow
     assert "python -m pip install --require-hashes -r requirements.lock" in workflow
-    assert "for _ in $(seq 1 30); do" in workflow
-    assert "gateway did not become healthy within 60 seconds" in workflow
+    assert "timeout-minutes: 10" in workflow
+    assert "Reserve at least 45 of the job's 55 minutes" in workflow
+    assert "while :; do" in workflow
     assert "gateway_pid=$!" in workflow
     assert 'kill -0 "$gateway_pid"' in workflow
     assert "gateway exited before becoming healthy" in workflow
