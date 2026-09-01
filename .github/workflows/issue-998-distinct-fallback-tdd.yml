@@ -66,7 +66,7 @@ jobs:
           # only the three exact pre-existing Responses-stream failures from
           # discriminator run 33515722779 were deselected. This retry changes
           # only the verifier bootstrap, so re-run the focused production
-          # surface here and let the normal PR CI regenerate full exact-head
+          # surface here and let normal PR CI regenerate full exact-head
           # evidence after publication.
           python -m pip install --disable-pip-version-check --require-hashes \
             -r requirements-opencode-review-ci.txt
@@ -77,7 +77,8 @@ jobs:
           git diff --check
 
           grep -Fq 'class StructuredOutputExhaustedError' contextual_orchestrator/orchestrator.py
-          grep -Fq 'every eligible structured-output candidate violated response_format' contextual_orchestrator/orchestrator.py
+          grep -Fq 'every eligible structured-output candidate violated ' contextual_orchestrator/orchestrator.py
+          grep -Fq '"response_format",' contextual_orchestrator/orchestrator.py
           if grep -Fq 'every eligible model on the selected endpoint violated response_format' contextual_orchestrator/orchestrator.py; then
             echo "::error::The obsolete same-endpoint structured-output exhaustion path remains."
             exit 1
