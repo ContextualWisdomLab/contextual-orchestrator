@@ -283,3 +283,31 @@ def test_main_rejects_invalid_agent_limit_without_traceback(monkeypatch, capsys)
         review_gateway.main()
     assert exc_info.value.code == 2
     assert "--max-agents must be a positive integer" in capsys.readouterr().err
+
+
+def test_build_review_orchestrator_admits_every_evidence_eligible_candidate(monkeypatch):
+    """Review admission cannot evict eligible models through an arbitrary pool cap."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            f"review-model-{index:02d}",
+            "OPENROUTER_API_KEY",
+        )
+        for index in range(13)
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert {agent.model for agent in orchestrator.agents} == {
+        model.model_id for model in discovered
+    }
+    assert len(orchestrator.agents) == len(discovered)
+    assert {agent.priority for agent in orchestrator.agents} == {0}
+
+
+def test_review_gateway_cli_has_no_decision_affecting_model_cap():
+    """The trusted sidecar exposes no hand-tuned candidate-count admission control."""
+    assert "--max-agents" not in review_gateway._build_parser().format_help()
