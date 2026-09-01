@@ -5163,14 +5163,7 @@ class TaskOrchestrator:
         mode: str,
         model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
-        text = self._latest_user_text(messages)
-        if mode == "route" or (
-            mode == "auto"
-            and (
-                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
-                or not self._needs_workflow(text)
-            )
-        ):
+        if self.would_route(messages, mode, model_name):
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
@@ -5185,7 +5178,7 @@ class TaskOrchestrator:
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
                 or not self._needs_workflow(text)
             )
         )
