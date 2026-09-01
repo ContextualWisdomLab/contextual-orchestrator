@@ -307,7 +307,11 @@ class CostRoutingCoordinator:
             race_token = self._race_usage_context.set(race_context)
             try:
                 with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
-                    routing_controls, model_name=model_name
+                    routing_controls,
+                    model_name=model_name,
+                    required_roles=("worker",)
+                    if mode == "route"
+                    else ("thinker", "worker", "verifier", "synthesizer"),
                 ):
                     provider_response = self.orchestrator.proxy_completion(
                         provider_request,
@@ -441,9 +445,9 @@ class CostRoutingCoordinator:
             with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
                 routing_controls,
                 model_name=model_name,
-                required_roles=("thinker", "worker", "verifier", "synthesizer")
-                if mode == "conduct"
-                else (),
+                required_roles=("worker",)
+                if mode == "route"
+                else ("thinker", "worker", "verifier", "synthesizer"),
             ):
                 result = self.orchestrator.run(messages, **run_kwargs)
                 routing_evidence = self.orchestrator._candidate_routing_evidence(result)

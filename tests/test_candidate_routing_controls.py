@@ -713,3 +713,31 @@ def test_response_routing_evidence_is_not_persisted_in_workflow_history() -> Non
     assert "candidate_routing" not in orchestrator.get_workflow_run(
         "run_candidate_evidence"
     )
+
+
+def test_coordinator_auto_preflights_conduct_roles_before_triage() -> None:
+    """Direct coordinator callers get the same provider-free auto preflight
+    as HTTP callers: auto may select conduct, so a pin must satisfy every
+    conduct role before model-backed triage is allowed to run.
+    """
+    client = _ConductTriageClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                provider_exclusions=("verifier",),
+            )
+        ],
+        client=client,
+    )
+
+    with pytest.raises(ValueError, match="eligible agent"):
+        CostRoutingCoordinator(orchestrator).complete(
+            [{"role": "user", "content": "conduct this"}],
+            mode="auto",
+            model_name="orchestrator/auto",
+            hints={"candidate_id": "worker_only"},
+        )
+
+    assert client.calls == []
