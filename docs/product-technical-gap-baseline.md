@@ -11,12 +11,14 @@ sibling checkout, shell out to Podman/containerd, or invent an application-servi
 
 The upstream foundation is Draft PR
 [`quarantine-sandbox-runtime#1`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime/pull/1).
-Current source head `28c497ff01b26e21d2ff1f3c23dd23c6ec31eaba` fixes the DDD build boundary,
-guarantees lease cleanup after bounded connect/read/write assertions, and binds every effective
+Current source head `1a10eff8defd3dfbd5f4d64804bc634c11ae060f` fixes the DDD build boundary,
+guarantees lease cleanup after bounded connect/read/write assertions, binds every effective
 isolation-policy field into one canonical SHA-256 carried by both the Podman resource label and
-returned lease. Hosted job `99755350740` passed the real rootless-Podman isolation, readiness,
-cleanup, and leak-rejection lane at that exact head; the remaining hosted gates are pending. This
-proves the current Podman profile on its Linux acceptance runner; it
+returned lease, and versions that changed lease contract as `1.1.0`. Its real-Podman job
+`99756351297` is in progress. Immediate predecessor `28c497ff01b26e21d2ff1f3c23dd23c6ec31eaba`
+passed the real isolation, readiness, cleanup, and leak-rejection lane in job `99755350740`; that
+earlier result proves the profile on its Linux acceptance runner but does not substitute for the
+current head's pending evidence. It
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
@@ -32,7 +34,7 @@ reclamation is also absent. Implementing this repository's
 ACL before those contracts exist would either duplicate privileged runtime behavior or fabricate an
 interface that the provider does not support.
 
-Research basis: NIST SP 800-190 requires container-specific isolation, image integrity, least
+Research basis: NIST SP 800-190 recommends container-specific isolation, image integrity, least
 privilege, and lifecycle monitoring rather than treating a container boundary as sufficient by
 itself. NIST SP 800-207A further rejects trust based only on network location and requires granular
 application/service identity policy enforcement. Together they support the split here: the runtime
@@ -42,12 +44,14 @@ caller and authorizes each lease instead of trusting loopback reachability.
 References (APA 7th): Souppaya, M., Morello, J., & Scarfone, K. (2017). *Application container
 security guide* (NIST SP 800-190). National Institute of Standards and Technology.
 https://doi.org/10.6028/NIST.SP.800-190. Chandramouli, R., & Butcher, Z. (2023). *A zero trust
-architecture model for access control in cloud-native applications in multi-cloud environments*
+architecture model for access control in cloud-native applications in multi-location environments*
 (NIST SP 800-207A). National Institute of Standards and Technology.
 https://doi.org/10.6028/NIST.SP.800-207A.
 
-After an immutable upstream artifact is released with verified provenance and one versioned
-transport or supported binding, the smallest honest consumer slice is an explicit
+After an immutable upstream artifact is released with verified provenance, caller-scoped
+idempotency keys and defined duplicate-request responses, durable crash/restart container and
+network reclamation with no-leak evidence, and one versioned transport or supported binding with
+runtime peer authentication and message integrity, the smallest honest consumer slice is an explicit
 application-service lease API. It resolves an authorized `application_id` to an operator-owned image
 digest and fixed policy, sends only opaque task/session correlation, validates caller-bound lease,
 loopback/topology, expiry, runtime identity, policy and attestation evidence, persists owner-scoped
