@@ -186,6 +186,12 @@ def probe_discovered_model_tool_call_capability(
     This is real runtime evidence, not a model-name heuristic. It is deliberately
     separate from :func:`discover_all_models` so callers decide when the extra
     latency and token cost are justified.
+
+    The response body (success or 400 error) is capped at
+    :data:`MAX_DISCOVERY_RESPONSE_BYTES`, the same bounded-read-then-check
+    pattern used elsewhere in this module, so an oversized or misbehaving
+    provider response cannot exhaust memory; an oversized body is treated as
+    ambiguous evidence (``None``) rather than raising.
     """
     api_key = get_credential(discovered.credential_name)
     if not api_key:
@@ -251,11 +257,17 @@ def probe_discovered_model_tool_call_capability(
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with client._open_provider(request, destination, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+            return None
+        body = raw.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
             return None
-        body = exc.read().decode("utf-8", errors="replace")
+        raw = exc.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+            return None
+        body = raw.decode("utf-8", errors="replace")
         try:
             error_payload = json.loads(body)
         except json.JSONDecodeError:

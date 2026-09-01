@@ -89,6 +89,51 @@ def test_auto_discovery_disables_active_model_after_capability_downgrade(monkeyp
     assert orchestrator.candidates[0].disabled is True
 
 
+def test_auto_discovery_preserves_operator_tool_call_override_when_evidence_goes_stale(
+    monkeypatch,
+) -> None:
+    """An operator's pre-existing tool_call tag outlives discovery evidence that
+    later arrives and then withdraws again -- it must never be treated as
+    discovery-owned just because a discovery marker for a *different* tool-call
+    polarity is present."""
+    existing = ModelAgent(
+        "openai_chat_capable_model",
+        "chat-capable-model",
+        base_url="https://api.openai.com/v1",
+        provider_name="openai",
+        tags=("discovered", "chat", "tool_call:single"),
+    )
+    orchestrator = TaskOrchestrator([existing])
+
+    multi_evidence = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_parallel_tool_calls=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([multi_evidence], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+    after_multi_evidence = orchestrator.candidates[0]
+    assert "tool_call:single" in after_multi_evidence.tags
+    assert "tool_call:multi" in after_multi_evidence.tags
+
+    unknown_evidence = replace(multi_evidence, supports_parallel_tool_calls=None)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([unknown_evidence], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+    after_unknown_evidence = orchestrator.candidates[0]
+    assert "tool_call:single" in after_unknown_evidence.tags
+    assert "tool_call:multi" not in after_unknown_evidence.tags
+
+
 def test_embedding_only_discovery_keeps_chat_fallbacks(monkeypatch) -> None:
     embedding = DiscoveredModel(
         provider_name="configured_gateway",

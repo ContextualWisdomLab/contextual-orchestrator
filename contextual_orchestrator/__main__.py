@@ -703,22 +703,31 @@ def _refresh_discovered_tool_call_tags(
     tags: tuple[str, ...],
     model: DiscoveredModel,
 ) -> tuple[str, ...]:
-    """Replace stale tool-call evidence with the current discovery result."""
-    hidden_tags = {
-        DISCOVERY_TOOL_CALL_SINGLE_TAG,
-        DISCOVERY_TOOL_CALL_MULTI_TAG,
+    """Replace stale tool-call evidence with the current discovery result.
+
+    Only the specific visible tag paired with a discovery marker currently
+    present is discovery-owned. A prior discovery pass always writes its
+    visible tag and hidden marker together (see
+    :func:`~contextual_orchestrator.model_discovery.discovery_tool_call_tags`),
+    so a marker for one polarity (e.g. ``discovery:tool_call:multi``) never
+    implies ownership of the *other* visible tag. This preserves an
+    operator-authored ``tool_call:single``/``tool_call:multi`` override that
+    predates any discovery evidence: it is never removed just because
+    discovery later supplies -- and then withdraws -- unrelated evidence.
+    """
+    discovery_owned_visible_tag = {
+        DISCOVERY_TOOL_CALL_SINGLE_TAG: "tool_call:single",
+        DISCOVERY_TOOL_CALL_MULTI_TAG: "tool_call:multi",
     }
-    has_discovery_provenance = bool(hidden_tags.intersection(tags))
-    refreshed = []
-    for tag in tags:
-        if tag in hidden_tags:
-            continue
-        if (
-            has_discovery_provenance
-            and tag in {"tool_call:single", "tool_call:multi"}
-        ):
-            continue
-        refreshed.append(tag)
+    hidden_tags = set(discovery_owned_visible_tag)
+    owned_visible_tags = {
+        discovery_owned_visible_tag[tag] for tag in tags if tag in hidden_tags
+    }
+    refreshed = [
+        tag
+        for tag in tags
+        if tag not in hidden_tags and tag not in owned_visible_tags
+    ]
     return tuple(dict.fromkeys(refreshed)) + discovery_tool_call_tags(model)
 
 

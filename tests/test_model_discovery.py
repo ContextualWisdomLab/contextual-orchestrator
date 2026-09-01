@@ -31,6 +31,7 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
+    MAX_DISCOVERY_RESPONSE_BYTES,
     ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
@@ -2915,6 +2916,41 @@ def test_probe_discovered_model_tool_call_capability_success_returns_true() -> N
     assert payload["parallel_tool_calls"] is True
     assert payload["max_tokens"] == 32
     assert len(payload["tools"]) == 2
+
+
+def test_probe_discovered_model_tool_call_capability_rejects_oversized_response() -> None:
+    """A provider cannot exhaust memory by streaming an unbounded probe body."""
+    discovered = _single_tool_discovered_model()
+    oversized = urllib.request.addinfourl(
+        BytesIO(b"x" * (MAX_DISCOVERY_RESPONSE_BYTES + 1)),
+        {"content-type": "application/json"},
+        "",
+    )
+    oversized.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=oversized
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_discovered_model_tool_call_capability_rejects_oversized_400_body() -> None:
+    """An oversized 400 error body is also treated as ambiguous, not evidence."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url,
+        400,
+        "Bad Request",
+        {},
+        BytesIO(b"only supports single tool-calls " + b"x" * (MAX_DISCOVERY_RESPONSE_BYTES + 1)),
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
 
 
 @pytest.mark.parametrize(
