@@ -147,8 +147,8 @@ def register_provider_credentials_atomically(
 
     backend = get_backend()
     if isinstance(backend, InMemoryCredentialBackend):
-        with backend._lock:  # noqa: SLF001 - package-internal atomic batch operation
-            backend._store.update(normalized)  # noqa: SLF001
+        with backend._credential_lock:  # noqa: SLF001 - package-internal atomic batch operation
+            backend._credential_store.update(normalized)  # noqa: SLF001
     elif isinstance(backend, PostgresCredentialBackend):
         with backend._connect() as connection:  # noqa: SLF001 - package transaction
             backend._ensure_schema(connection)  # noqa: SLF001
