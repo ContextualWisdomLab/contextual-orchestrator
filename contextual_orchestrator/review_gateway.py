@@ -21,15 +21,11 @@ from dataclasses import replace
 from typing import Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
-from .cost_ledger import PriceBook
-from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
     general_free_serving_candidates,
-    refresh_price_book,
-    select_bootstrap_discovered_agents,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
 from .provider_bootstrap import (
@@ -52,7 +48,6 @@ This is a pool-admission policy, not the bootstrap credential inventory.
 credential source is OpenAI is never admitted to this free review pool.
 """
 
-DEFAULT_REVIEW_AGENT_LIMIT = 12
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
 
@@ -115,7 +110,6 @@ def _free_review_candidates(
 def build_review_orchestrator(
     environment: Mapping[str, str] | None = None,
     *,
-    max_agents: int = DEFAULT_REVIEW_AGENT_LIMIT,
     credential_names: Sequence[str] | None = None,
 ) -> TaskOrchestrator:
     """Build the free review orchestrator from current bootstrap credentials.
@@ -129,9 +123,13 @@ def build_review_orchestrator(
     Therefore a previously stored OpenAI credential cannot enter the free pool,
     and an unrelated previously stored free-provider credential cannot escape
     the caller-declared bootstrap scope.
+
+    Every candidate satisfying those evidence-backed admission predicates is
+    retained. This boundary does not impose a candidate-count cap, provider
+    quota, price-derived ordering, hand-assigned priority, or fallback ranking.
+    Any subsequent model choice remains the routing layer's responsibility and
+    must be supported by its own executable evidence contract.
     """
-    if type(max_agents) is not int or max_agents < 1:
-        raise ValueError("max_agents must be a positive integer")
     requested_names = _validated_credential_names(credential_names)
     source_environment = os.environ if environment is None else environment
     registered = register_review_credentials(
@@ -156,23 +154,16 @@ def build_review_orchestrator(
         raise NotConfigured(
             "review gateway discovered no eligible zero-cost general chat models"
         )
-    price_book = PriceBook(InMemoryConfigStore())
-    refresh_price_book(free_discovered, price_book)
-    selected = select_bootstrap_discovered_agents(
-        free_discovered, price_book, max_agents
-    )
-    if not selected:
-        raise NotConfigured("review gateway selected no provider models")
 
     agents = []
-    for index, model in enumerate(selected):
-        discovered_agent = agent_from_discovered(model, priority=index)
+    for model in free_discovered:
+        discovered_agent = agent_from_discovered(model, priority=0)
         agents.append(
             replace(
                 discovered_agent,
                 disabled=False,
                 tags=(*discovered_agent.tags, "review", "cost:free"),
-                priority=-index,
+                priority=0,
             )
         )
     return TaskOrchestrator(
@@ -186,7 +177,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the contextual review gateway sidecar.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
-    parser.add_argument("--max-agents", type=int, default=DEFAULT_REVIEW_AGENT_LIMIT)
     parser.add_argument(
         "--credential-name",
         dest="credential_names",
@@ -210,8 +200,6 @@ def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
     parser = _build_parser()
     args = parser.parse_args()
-    if args.max_agents < 1:
-        parser.error("--max-agents must be a positive integer")
     try:
         register_review_credentials(
             os.environ,
@@ -223,7 +211,6 @@ def main() -> None:
     if not auth_token:
         raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
     orchestrator = build_review_orchestrator(
-        max_agents=args.max_agents,
         credential_names=args.credential_names,
     )
     serve(
