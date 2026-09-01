@@ -1,0 +1,115 @@
+name: One-shot usage provenance repair
+
+on:
+  push:
+    branches:
+      - fix/orchestrated-responses-stream-and-spend-analytics-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+
+      - name: Apply causal source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one anchor, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              """    served_usage: dict[str, Any] | None = None\n    served_output: str | None = None\n""",
+              """    served_usage: dict[str, Any] | None = None\n    served_usage_source: str | None = None\n    served_output: str | None = None\n""",
+              "adapter provenance field",
+          )
+
+          replace_once(
+              """    @property\n    def client(self) -> ModelClient:\n        \"\"\"Expose the existing gateway client capability to fast-mlsirm.\"\"\"\n        return self.orchestrator.client\n\n    def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:\n""",
+              """    @property\n    def client(self) -> ModelClient:\n        \"\"\"Expose the existing gateway client capability to fast-mlsirm.\"\"\"\n        return self.orchestrator.client\n\n    @staticmethod\n    def _usage_source_for_agent(agent: ModelAgent, usage: Any) -> str | None:\n        \"\"\"Classify transport-boundary usage without guessing from token counts.\"\"\"\n        if not isinstance(usage, dict):\n            return None\n        return (\n            \"synthetic_mock\"\n            if agent.base_url.startswith(\"mock://\")\n            else \"provider_reported\"\n        )\n\n    def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:\n""",
+              "usage source helper",
+          )
+
+          replace_once(
+              """        return self._completion_payload(\n            output, served_id, served_model, usage, self.mode if mode is None else mode\n        )\n\n    def complete_structured(\n""",
+              """        self.served_usage_source = self._usage_source_for_agent(\n            self.orchestrator._agent(served_id), usage\n        )\n        return self._completion_payload(\n            output, served_id, served_model, usage, self.mode if mode is None else mode\n        )\n\n    def complete_structured(\n""",
+              "plain completion provenance",
+          )
+
+          replace_once(
+              """        self.served_agent_id = agent.id\n        self.served_model = agent.model\n        self.served_usage = (\n            response.get(\"usage\") if isinstance(response.get(\"usage\"), dict) else None\n        )\n        output = ModelClient._response_content(agent, response)\n""",
+              """        self.served_agent_id = agent.id\n        self.served_model = agent.model\n        response_usage = response.get(\"usage\")\n        self.served_usage = (\n            dict(response_usage) if isinstance(response_usage, dict) else None\n        )\n        self.served_usage_source = self._usage_source_for_agent(\n            agent, self.served_usage\n        )\n        output = ModelClient._response_content(agent, response)\n""",
+              "structured completion snapshot",
+          )
+
+          replace_once(
+              """        self.served_agent_id = served_id\n        self.served_model = served_model\n        self.served_usage = usage\n        self.served_output = output\n        trace = [\n""",
+              """        self.served_agent_id = served_id\n        self.served_model = served_model\n        usage_snapshot = dict(usage) if isinstance(usage, dict) else None\n        self.served_usage = usage_snapshot\n        self.served_output = output\n        trace = [\n""",
+              "completion usage snapshot",
+          )
+
+          replace_once(
+              """        if usage is not None:\n            trace[0][\"usage\"] = usage\n""",
+              """        if usage_snapshot is not None:\n            trace[0][\"usage\"] = dict(usage_snapshot)\n""",
+              "trace usage snapshot",
+          )
+
+          old_usage_helper = '''    @staticmethod\n    def _usage_has_positive_evidence(usage: Any) -> bool:\n        \"\"\"Return whether a usage mapping reports at least one positive token count.\n\n        fast-mlsirm aggregates a missing trace usage into a non-empty\n        zero-token mapping (every count present but 0), which is truthy as a\n        dict yet carries no real measurement. Both judge-accounting call\n        sites must reject that shape identically, or one site's fabricated\n        \"reported\" zero-token usage silently disagrees with the other's\n        honest \"unmeasured\" verdict for the exact same underlying call.\n        \"\"\"\n        return isinstance(usage, Mapping) and any(\n            type(usage.get(key)) is int and usage[key] > 0\n            for key in (\"prompt_tokens\", \"completion_tokens\", \"total_tokens\")\n        )\n\n'''
+          new_usage_helper = '''    @staticmethod\n    def _usage_has_positive_evidence(usage: Any) -> bool:\n        \"\"\"Return whether a usage mapping reports at least one positive token count.\n\n        This remains the compatibility rule for aggregate usage whose origin\n        is unknown. A provider-boundary zero measurement is handled separately\n        by ``_usage_is_reported_token_mapping`` plus explicit provenance.\n        \"\"\"\n        return isinstance(usage, Mapping) and any(\n            type(usage.get(key)) is int and usage[key] > 0\n            for key in (\"prompt_tokens\", \"completion_tokens\", \"total_tokens\")\n        )\n\n    @staticmethod\n    def _usage_is_reported_token_mapping(usage: Any) -> bool:\n        \"\"\"Validate the canonical non-negative token fields of reported usage.\"\"\"\n        return isinstance(usage, Mapping) and all(\n            type(usage.get(key)) is int and usage[key] >= 0\n            for key in (\"prompt_tokens\", \"completion_tokens\", \"total_tokens\")\n        )\n\n'''
+          replace_once(old_usage_helper, new_usage_helper, "usage evidence helpers")
+
+          accounting_anchor = "    def _judge_adapter_accounting_fields(\n"
+          accounting_pos = text.index(accounting_anchor)
+          start = text.index(
+              "        if TaskOrchestrator._usage_has_positive_evidence(judge_adapter.served_usage):",
+              accounting_pos,
+          )
+          end = text.index("        if judge_adapter.served_output is not None:", start)
+          text = text[:start] + '''        if TaskOrchestrator._usage_has_positive_evidence(\n            judge_adapter.served_usage\n        ) or (\n            judge_adapter.served_usage_source == \"provider_reported\"\n            and TaskOrchestrator._usage_is_reported_token_mapping(\n                judge_adapter.served_usage\n            )\n        ):\n            # Positive aggregate usage remains backward-compatible. Exact\n            # provider-boundary zero usage is accepted only with explicit\n            # provenance; synthetic mock/fast-mlsirm zero remains unmeasured.\n            fields[\"judge_usage\"] = dict(judge_adapter.served_usage)\n''' + text[end:]
+
+          judge_pos = text.index("    def _model_judge_verification(\n")
+          start = text.index(
+              "            # The adapter's provider-boundary capture is authoritative for",
+              judge_pos,
+          )
+          end = text.index(
+              '            verification["judge_orchestration_mode"] = result.orchestration_mode',
+              start,
+          )
+          text = text[:start] + '''            # Prefer the adapter's transport-boundary snapshot, including an\n            # authoritative all-zero provider report. Only fall back to a\n            # positive fast-mlsirm aggregate when no boundary usage survived.\n            if (\n                \"judge_usage\" not in verification\n                and self._usage_has_positive_evidence(result.usage)\n            ):\n                verification[\"judge_usage\"] = dict(result.usage)\n''' + text[end:]
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python -m py_compile contextual_orchestrator/orchestrator.py
+          grep -n "served_usage_source" contextual_orchestrator/orchestrator.py
+          grep -n "response_usage = response.get" contextual_orchestrator/orchestrator.py
+
+      - name: Commit repair and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/_temp_usage_provenance_repair.yml
+          git add contextual_orchestrator/orchestrator.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(judge): preserve provider usage provenance"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
