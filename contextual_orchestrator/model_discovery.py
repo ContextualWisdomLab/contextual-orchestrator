@@ -40,13 +40,14 @@ from .orchestrator import (
     ModelClient,
     format_authorization_header,
     is_transient_error,
+    redact_text,
 )
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
-DISCOVERY_TIMEOUT_SECONDS = 15.0
 _LOGGER = logging.getLogger(__name__)
+DISCOVERY_TIMEOUT_SECONDS = 15.0
 # One bounded retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
 # (is_transient_error). A short, fixed delay and a shortened retry timeout keep
@@ -62,6 +63,213 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
+DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
+
+
+def discovery_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
+    """Return public capability evidence with its discovery-ownership marker."""
+    if model.supports_parallel_tool_calls is True:
+        return ("tool_call:multi", DISCOVERY_TOOL_CALL_MULTI_TAG)
+    if model.supports_parallel_tool_calls is False:
+        return ("tool_call:single", DISCOVERY_TOOL_CALL_SINGLE_TAG)
+    return ()
+
+
+def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None:
+    """Return the strongest tool-call parallelism signal in a parameter list.
+
+    Provider ``supported_parameters`` entries (e.g. from OpenRouter or a
+    LiteLLM-model-info proxy) name request fields the model accepts. A literal
+    ``"parallel_tool_calls"`` parameter is direct evidence the model can receive
+    multiple tool-call requests at once. A ``"tools"`` parameter alone tells us
+    only that some form of tool calling is accepted, not whether multiple calls
+    may be requested simultaneously; without an explicit ``parallel_tool_calls``
+    signal we stay honest and report ``None`` rather than guessing ``False``.
+    """
+    if not isinstance(supported_parameters, list):
+        return None
+    params = {
+        value.strip().casefold()
+        for value in supported_parameters
+        if isinstance(value, str) and value.strip()
+    }
+    if "parallel_tool_calls" in params:
+        return True
+    return None
+
+
+def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
+    """Return ``False`` when a provider's 400 clearly rejects multi-tool calls.
+
+    The only negative signal this function trusts is a provider error whose
+    message explicitly says the model accepts only one tool call at a time, or
+    that ``parallel_tool_calls`` is not supported. Ambiguous 400s (malformed
+    payload, auth, rate limits, etc.) return ``None`` so the pool stays open
+    rather than excluding a model on a misunderstood error.
+    """
+    if isinstance(error_payload, dict):
+        error = error_payload.get("error", {})
+        if not isinstance(error, dict):
+            error = error_payload
+        message = str(error.get("message", ""))
+        if not message and isinstance(error_payload.get("message"), str):
+            message = error_payload["message"]
+    elif isinstance(error_payload, str):
+        message = error_payload
+    else:
+        return None
+    text = message.casefold()
+    single_tool_limit_patterns = (
+        r"\bonly supports?\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?(?:\s+at\s+(?:once|a\s+time))?\b",
+        r"\b(?:single|one)\s+tool(?:-?calls?)?\s+at\s+(?:once|a\s+time)\b",
+        r"\b(?:accepts?|allows?)\s+only\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?\b",
+        r"\bmax(?:imum)?\s+of\s+one\s+tool(?:-?calls?)?\b",
+    )
+    if (
+        any(re.search(pattern, text) for pattern in single_tool_limit_patterns)
+        or (
+            "parallel_tool_calls" in text
+            and any(phrase in text for phrase in ("not supported", "unsupported"))
+        )
+    ):
+        return False
+    return None
+
+
+def _response_contains_parallel_probe_tool_calls(payload: Any) -> bool:
+    """Return whether a probe response clearly contains both requested tool calls."""
+    if not isinstance(payload, dict):
+        return False
+    seen: set[str] = set()
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict) or tool_call.get("type") != "function":
+                    continue
+                function = tool_call.get("function")
+                name = function.get("name") if isinstance(function, dict) else None
+                if name in {"probe_a", "probe_b"}:
+                    seen.add(name)
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            name = item.get("name")
+            if name in {"probe_a", "probe_b"}:
+                seen.add(name)
+    return seen == {"probe_a", "probe_b"}
+
+
+def probe_discovered_model_tool_call_capability(
+    discovered: DiscoveredModel,
+    *,
+    timeout: float = 30.0,
+) -> bool | None:
+    """Probe whether a discovered model accepts multi-tool-call requests.
+
+    Sends a minimal ``/chat/completions`` request with ``parallel_tool_calls: true``
+    and two tool definitions, using the provider credential registered in the KV.
+    A successful response counts as positive evidence only when the body
+    demonstrably contains tool calls to both probe functions. A 400 whose error
+    text clearly says the model only supports a single tool call means it does
+    not (``False``). Any network, auth, malformed, or ambiguous response
+    returns ``None`` so the pool stays open rather than excluding a model on a
+    flaky probe.
+
+    This is real runtime evidence, not a model-name heuristic. It is deliberately
+    separate from :func:`discover_all_models` so callers decide when the extra
+    latency and token cost are justified.
+    """
+    api_key = get_credential(discovered.credential_name)
+    if not api_key:
+        return None
+    parsed = urlsplit(discovered.chat_base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    url = discovered.chat_base_url.rstrip("/") + "/chat/completions"
+    client = ModelClient(
+        timeout=max(1, math.ceil(timeout)),
+        allowed_provider_hosts={parsed.hostname},
+    )
+    agent = ModelAgent(
+        "tool_call_capability_probe",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        credential_key=discovered.credential_name,
+        auth_scheme=discovered.auth_scheme,
+    )
+    try:
+        destination = client._validate_provider(agent)
+    except (NotConfigured, RuntimeError, ValueError):
+        return None
+    payload = {
+        "model": discovered.model_id,
+        "messages": [{"role": "user", "content": "Call both functions."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_a",
+                    "description": "Probe function A",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_b",
+                    "description": "Probe function B",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+        "parallel_tool_calls": True,
+        "max_tokens": 32,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    headers = {
+        "content-type": "application/json",
+        "user-agent": _HTTP_USER_AGENT,
+        "authorization": format_authorization_header(discovered.auth_scheme, api_key),
+    }
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with client._open_provider(request, destination, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            return None
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(body)
+        except json.JSONDecodeError:
+            error_payload = {"message": body}
+        return _tool_call_parallelism_from_error(error_payload)
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    try:
+        response_payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return True if _response_contains_parallel_probe_tool_calls(response_payload) else None
+
+
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Small bounded retry budget for the one shared, unauthenticated, third-party
 # Models.dev fetch that every ``models_dev_provider_id``-joined source's
@@ -273,6 +481,10 @@ class DiscoveredModel:
     capabilities: tuple[str, ...] = ()
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
+    max_output_tokens: int | None = None
+    context_window: int | None = None
+    max_output_tokens_conflicted: bool = False
+    context_window_conflicted: bool = False
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -296,29 +508,78 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
+def _positive_int_metadata(value: object) -> int | None:
+    """Return one exact positive integer metadata field or ``None`` when unknown."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= 9_223_372_036_854_775_807 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        integer = int(value)
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.isdigit():
+            return None
+        try:
+            integer = int(stripped)
+        except ValueError:
+            return None
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
+    return None
+
+
 def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+    """Fetch JSON, sending any credential only to the original trusted HTTPS host.
+
+    Plain ``urllib`` follows a 3xx redirect by copying the original request's
+    headers -- ``Authorization`` included -- onto the redirected request even
+    when the redirect target is a completely different host (unlike some
+    other HTTP clients, urllib never strips sensitive headers on cross-origin
+    redirects). Every call site here passes a real provider credential in
+    ``api_key``, so a malicious or compromised provider endpoint issuing a
+    redirect to an attacker-controlled host would otherwise leak it. This
+    uses the same :class:`_TrustedDiscoveryRedirectHandler` opener as
+    :func:`_fetch_json_same_host_https` to reject any redirect that leaves
+    the original host instead of silently forwarding the header.
+
+    The body read is capped at :data:`MAX_DISCOVERY_RESPONSE_BYTES` -- an
+    unbounded ``response.read()`` would let an outage page, a misbehaving
+    proxy, or a compromised provider endpoint stream an arbitrarily large
+    body into memory before JSON parsing ever runs. This mirrors the same
+    bounded-read-then-check pattern already used by
+    :func:`_fetch_json_same_host_https` and :func:`_fetch_configured_gateway_json`.
+    """
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
         headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if not isinstance(exc.reason, ssl.SSLCertVerificationError):
             raise
         context = ssl.create_default_context(cafile=certifi.where())
-        response = urllib.request.urlopen(  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout, context=context
+        response = _open_trusted_discovery_request(
+            request, trusted_host=parsed.hostname, timeout=timeout, context=context
         )
     with response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("model discovery response exceeds maximum size")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
@@ -408,6 +669,28 @@ class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _open_trusted_discovery_request(
+    request: urllib.request.Request,
+    *,
+    trusted_host: str,
+    timeout: float,
+    context: ssl.SSLContext | None = None,
+) -> Any:
+    """Open ``request`` through an opener that rejects redirects leaving ``trusted_host``.
+
+    Shared by :func:`_fetch_json` and :func:`_fetch_json_same_host_https` so
+    both authenticated discovery paths get identical, single-implementation
+    redirect protection instead of two copies that could silently drift
+    apart. ``context`` lets a caller retry once under a certificate-fallback
+    ``SSLContext`` without losing the redirect guard.
+    """
+    handlers: list[urllib.request.BaseHandler] = [_TrustedDiscoveryRedirectHandler(trusted_host)]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
+    return opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+
+
 def _fetch_json_same_host_https(
     url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
 ) -> Any:
@@ -419,11 +702,8 @@ def _fetch_json_same_host_https(
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
-    opener = urllib.request.build_opener(
-        _TrustedDiscoveryRedirectHandler(parsed.hostname)
-    )
     try:
-        response = opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
             raise TimeoutError(str(exc.reason)) from exc
@@ -503,6 +783,8 @@ def _deduplicate_discovered_models(
         chosen = min((previous, model), key=_source_tiebreaker)
         unique[identity] = replace(
             chosen,
+            max_output_tokens=None,
+            context_window=None,
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
             unit_prices=(),
@@ -625,6 +907,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                 if _valid_price_component(value):
                     pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
+        limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
         enriched.append(
             {
                 **row,
@@ -633,6 +916,8 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                     "input_modalities": modalities.get("input"),
                     "output_modalities": modalities.get("output"),
                 },
+                "max_output_tokens": _positive_int_metadata(limits.get("output")),
+                "context_window": _positive_int_metadata(limits.get("context")),
                 "is_free": _models_dev_cost_is_free(cost),
             }
         )
@@ -676,6 +961,10 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("pricing", None)
         row.pop("architecture", None)
         row.pop("unit_pricing", None)
+        row.pop("max_output_tokens", None)
+        row.pop("context_window", None)
+        row.pop("context_length", None)
+        row.pop("max_completion_tokens", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
@@ -689,6 +978,8 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
+        completion_limits: list[int | None] = []
+        context_windows: list[int | None] = []
         privacy_values = {
             key: []
             for key in (
@@ -746,6 +1037,22 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
             )
+            completion_limits.append(
+                _positive_int_metadata(
+                    info.get("max_output_tokens", params.get("max_output_tokens"))
+                )
+                or _positive_int_metadata(
+                    info.get("max_completion_tokens", params.get("max_completion_tokens"))
+                )
+            )
+            context_windows.append(
+                _positive_int_metadata(
+                    info.get("context_window", params.get("context_window"))
+                )
+                or _positive_int_metadata(
+                    info.get("context_length", params.get("context_length"))
+                )
+            )
             if _valid_price_component(prompt) and _valid_price_component(completion):
                 prices.add((prompt, completion))
             else:
@@ -777,6 +1084,18 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "input_modalities": list(deployment_inputs[0]),
                 "output_modalities": list(deployment_outputs[0]),
             }
+        if completion_limits and all(value is not None for value in completion_limits):
+            unique_completion_limits = {value for value in completion_limits if value is not None}
+            if len(unique_completion_limits) == 1:
+                row["max_output_tokens"] = unique_completion_limits.pop()
+            else:
+                row["_max_output_tokens_conflicted"] = True
+        if context_windows and all(value is not None for value in context_windows):
+            unique_context_windows = {value for value in context_windows if value is not None}
+            if len(unique_context_windows) == 1:
+                row["context_window"] = unique_context_windows.pop()
+            else:
+                row["_context_window_conflicted"] = True
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
@@ -941,10 +1260,29 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if isinstance(row.get("supported_parameters"), list)
             else []
         )
+        top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
         outputs = tuple(value for value in raw_outputs if isinstance(value, str)) if isinstance(raw_outputs, list) else ()
+        raw_output_limits = [
+            value
+            for container, key in (
+                (row, "max_output_tokens"),
+                (top_provider, "max_completion_tokens"),
+            )
+            if key in container
+            for value in (container[key],)
+        ]
+        raw_context_limits = [
+            row[key]
+            for key in ("context_window", "context_length")
+            if key in row
+        ]
+        output_limits = [_positive_int_metadata(value) for value in raw_output_limits]
+        context_limits = [_positive_int_metadata(value) for value in raw_context_limits]
+        max_output_tokens = next((value for value in output_limits if value is not None), None)
+        context_window = next((value for value in context_limits if value is not None), None)
         if (
             not outputs
             and not any(capability != "chat" for capability in source.capabilities)
@@ -1004,6 +1342,16 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 capabilities=capabilities,
                 input_modalities=inputs,
                 output_modalities=outputs,
+                max_output_tokens=max_output_tokens,
+                context_window=context_window,
+                max_output_tokens_conflicted=(
+                    row.get("_max_output_tokens_conflicted") is True
+                    or any(value is None for value in output_limits)
+                ),
+                context_window_conflicted=(
+                    row.get("_context_window_conflicted") is True
+                    or any(value is None for value in context_limits)
+                ),
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
@@ -1057,18 +1405,10 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
     (a missing unit, e.g. ``"0 /"``, or an extra separator, e.g.
     ``"0 / sec / token"``) still read as ``"0"`` and get confidently
     classified free; an unexpected shape is itself a signal something about
-    the row is wrong, so it fails closed instead. The *unit* is deliberately
-    not required to equal ``"sec"``: a rate of exactly zero cost is zero
-    regardless of its time unit (``"0 / hour"`` is exactly as free as
-    ``"0 / sec"``), so this only validates the shape, never the unit name.
+    the row is wrong, so it fails closed instead. The unit must be ``sec`` as
+    documented by Bytez; bare numeric values and unexpected units omit or
+    contradict the provider's billing evidence and therefore remain unknown.
     """
-    if isinstance(meter_price, bool):
-        return False
-    if isinstance(meter_price, (int, float)):
-        try:
-            return Decimal(str(meter_price)) == 0
-        except (ArithmeticError, ValueError):
-            return False
     if not isinstance(meter_price, str):
         return False
     segments = meter_price.split("/")
@@ -1077,7 +1417,7 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
         # "<rate> / <unit>" shape -- trust nothing from it, zero included.
         return False
     rate, unit = (segment.strip() for segment in segments)
-    if not rate or not unit:
+    if not rate or unit.casefold() != "sec":
         return False
     try:
         return Decimal(rate) == 0
@@ -1197,10 +1537,17 @@ def discover_provider_models(
             source.provider_name,
         )
         return []
-    _LOGGER.debug(
-        "model discovery started account=%s",
-        source.provider_name,
-    )
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # Never include source.credential_name here: it is the KV key label
+        # (e.g. "OPENAI_API_KEY") and main's
+        # test_discovery_debug_log_identifies_account_without_secret forbids
+        # it from appearing in this log line at all, on top of the actual
+        # credential value never being logged.
+        _LOGGER.debug(
+            "discovery_attempt account=%s",
+            source.provider_name,
+        )
+    started = time.monotonic()
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
@@ -1235,11 +1582,14 @@ def discover_provider_models(
             time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
     if last_exc is not None:
         error_code = _provider_discovery_error_code(last_exc)
-        _LOGGER.debug(
-            "model discovery failed account=%s error_code=%s",
-            source.provider_name,
-            error_code,
-        )
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "discovery_provider_failed account=%s error_code=%s error_type=%s error_message=%s",
+                source.provider_name,
+                error_code,
+                type(last_exc).__name__,
+                redact_text(str(last_exc))[:500],
+            )
         raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
@@ -1277,7 +1627,14 @@ def discover_provider_models(
                 timeout=timeout,
                 ca_bundle=ca_bundle,
             )
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError):
+            # RuntimeError matches the primary list-request retry loop above:
+            # ModelClient._resolve_addresses / _open_provider raise RuntimeError
+            # for DNS and request-validation transport failures, and this
+            # metadata fetch sits outside that loop's except tuple -- without
+            # RuntimeError here, a raw transport failure on this call alone
+            # would escape discover_provider_models uncaught and abort the
+            # entire discovery pass instead of just this provider's metadata.
             metadata = None
         payload = _merge_configured_gateway_metadata(payload, metadata)
     if source.style == "bytez":
@@ -1285,11 +1642,13 @@ def discover_provider_models(
     else:
         discovered = _parse_openai_compatible(payload, source)
     result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
-    _LOGGER.debug(
-        "model discovery completed account=%s model_count=%d",
-        source.provider_name,
-        len(result),
-    )
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "discovery_result account=%s model_count=%d elapsed_ms=%.1f",
+            source.provider_name,
+            len(result),
+            (time.monotonic() - started) * 1000.0,
+        )
     return result
 
 
@@ -1346,6 +1705,13 @@ def discover_all_models(
         routed = apply_openrouter_spend_admission(
             routed,
             openrouter_paid_inference_available(timeout=timeout),
+        )
+    if _LOGGER.isEnabledFor(logging.INFO):
+        _LOGGER.info(
+            "discovery_complete providers=%d models=%d errors=%d",
+            len(sources),
+            len(routed),
+            len(errors),
         )
     return routed, errors
 
@@ -1484,6 +1850,8 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         ),
         priority=priority,
         disabled=True,
+        max_output_tokens=discovered.max_output_tokens,
+        context_window=discovered.context_window,
     )
 
 
@@ -1702,18 +2070,22 @@ def _discovery_price_key(
     except (TypeError, ValueError, OverflowError):
         return unknown
     if entry is None:
-        if not (
+        if (
             _valid_price_component(model.prompt_price_per_1k)
             and _valid_price_component(model.completion_price_per_1k)
             and _currency_is_comparable(model.currency_code, price_book.default_currency)
         ):
-            return unknown
-        return (
-            0,
-            float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
-            model.provider_name,
-            model.model_id,
-        )
+            return (
+                0,
+                float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
+                model.provider_name,
+                model.model_id,
+            )
+        # An exact provider-declared zero price is comparable across billing
+        # units, but complete token pricing remains authoritative when present.
+        if model.is_free:
+            return (0, 0.0, model.provider_name, model.model_id)
+        return unknown
     if not (
         _valid_price_component(entry.prompt_price_per_1k)
         and _valid_price_component(entry.completion_price_per_1k)
@@ -1724,7 +2096,7 @@ def _discovery_price_key(
     ):
         return unknown
     try:
-        cost, currency = price_book.compute_cost(
+        cost, currency, _price_known = price_book.compute_cost(
             model.provider_name,
             model.model_id,
             1000,
@@ -1749,14 +2121,8 @@ def select_cheapest_discovered_agent(
     sort first; when every candidate is unpriced, provider and model identifiers
     provide deterministic fallback ordering without inventing a monetary value.
     """
-    eligible = [
-        model
-        for model in _deduplicate_discovered_models(discovered)
-        if is_routable_discovered_model(model)
-    ]
-    if not eligible:
-        return None
-    return min(eligible, key=lambda model: _discovery_price_key(model, price_book))
+    ranked = select_top_n_cheapest_discovered_agents(discovered, price_book, 1)
+    return ranked[0] if ranked else None
 
 
 def select_top_n_cheapest_discovered_agents(
@@ -1785,26 +2151,23 @@ def select_bootstrap_discovered_agents(
 ) -> list[DiscoveredModel]:
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
-    Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independently discovered provider account.
-    Remaining capacity is filled in the same deterministic cost order. No vendor
-    or endpoint name is used to infer a shared family or collapse credential state.
-    Duplicate serving identities never consume capacity twice.
+    Candidates retain the known-price-first ordering of
+    :func:`select_top_n_cheapest_discovered_agents` (queried here with no
+    effective cap so it returns the full ranked, deduplicated, routable
+    field), but the first pass takes at most one model from each
+    independently discovered provider account. Remaining capacity is filled
+    in the same deterministic cost order. No vendor or endpoint name is used
+    to infer a shared family or collapse credential state. Duplicate serving
+    identities never consume capacity twice.
     """
     if limit <= 0:
         return []
-    eligible = [
-        model
-        for model in _deduplicate_discovered_models(discovered)
-        if is_routable_discovered_model(model)
-    ]
-    if not eligible:
+    ranked = select_top_n_cheapest_discovered_agents(
+        discovered, price_book, len(discovered)
+    )
+    if not ranked:
         return []
 
-    ranked = sorted(
-        eligible,
-        key=lambda model: _discovery_price_key(model, price_book),
-    )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
     providers: set[str] = set()
