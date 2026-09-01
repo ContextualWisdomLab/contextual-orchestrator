@@ -111,6 +111,17 @@ def patch_source() -> None:
 """,
         "synthetic chat usage",
     )
+    replace_once(
+        SOURCE,
+        '        eval_base_url = "mock://nim-dry-run"\n',
+        """        # Keep dry-run fully in-process while exercising the same provider-usage
+        # extraction contract as live evaluation. A mock:// agent bypasses the injected
+        # benchmark transport inside _BudgetedModelClient and therefore cannot supply
+        # authoritative usage evidence.
+        eval_base_url = endpoint
+""",
+        "dry-run provider usage transport",
+    )
 
 
 def patch_tests() -> None:
@@ -158,6 +169,91 @@ def patch_tests() -> None:
         tight.take_usage()
 """,
         "authoritative budget test",
+    )
+    replace_once(
+        TESTS,
+        """    agents = _mock_agents("dryrun/chat-basic", "dryrun/chat-vision")
+    scenario = nb.load_pricing_scenario(PRICING_SCENARIO_PATH)
+    budget = nb.RequestBudget(200)
+    evaluation = nb.evaluate_policies(
+        agents,
+        _mini_manifest(3),
+        scenario,
+        nb._BudgetedModelClient(budget),
+        budget,
+        nb._deterministic_timer(),
+    )
+""",
+        """    agents = _mock_agents("dryrun/chat-basic", "dryrun/chat-vision")
+    for agent in agents:
+        agent.base_url = nb.NIM_DEFAULT_ENDPOINT
+    scenario = nb.load_pricing_scenario(PRICING_SCENARIO_PATH)
+    budget = nb.RequestBudget(200)
+    evaluation = nb.evaluate_policies(
+        agents,
+        _mini_manifest(3),
+        scenario,
+        nb._BudgetedModelClient(
+            budget, transport=nb.build_dry_run_transport()
+        ),
+        budget,
+        nb._deterministic_timer(),
+    )
+""",
+        "priced policy evaluation provider usage",
+    )
+    replace_once(
+        TESTS,
+        """def test_evaluate_policies_skip_reasons_without_pricing() -> None:
+    agents = _mock_agents("vendor/model-a")
+    budget = nb.RequestBudget(200)
+    evaluation = nb.evaluate_policies(
+        agents, _mini_manifest(), None, ModelClient(), budget
+    )
+    assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
+    unpriced_scenario = {
+        "scenario_version": "1",
+        "scenario_status": "reviewed",
+        "usd_per_million_tokens": {"vendor/other": {"input": 1.0, "output": 1.0}},
+    }
+    evaluation = nb.evaluate_policies(
+        agents,
+        _mini_manifest(),
+        unpriced_scenario,
+        ModelClient(),
+        nb.RequestBudget(200),
+    )
+    assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
+""",
+        """def test_evaluate_policies_skip_reasons_without_pricing() -> None:
+    class ReportedUsageClient(ModelClient):
+        def chat(self, *args, **kwargs):  # type: ignore[override]
+            return "answer"
+
+        def take_usage(self):  # type: ignore[override]
+            return {"prompt_tokens": 1, "completion_tokens": 1}
+
+    agents = _mock_agents("vendor/model-a")
+    budget = nb.RequestBudget(200)
+    evaluation = nb.evaluate_policies(
+        agents, _mini_manifest(), None, ReportedUsageClient(), budget
+    )
+    assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
+    unpriced_scenario = {
+        "scenario_version": "1",
+        "scenario_status": "reviewed",
+        "usd_per_million_tokens": {"vendor/other": {"input": 1.0, "output": 1.0}},
+    }
+    evaluation = nb.evaluate_policies(
+        agents,
+        _mini_manifest(),
+        unpriced_scenario,
+        ReportedUsageClient(),
+        nb.RequestBudget(200),
+    )
+    assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
+""",
+        "pricing skip reason provider usage",
     )
     tests = TESTS.read_text(encoding="utf-8")
     old = '    ModelClient._send = lambda self, agent, payload: "stub live answer"\n'
