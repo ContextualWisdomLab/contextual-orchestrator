@@ -69,7 +69,7 @@ def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sou
         for name in review_gateway.REVIEW_CREDENTIAL_NAMES
     }
 
-    orchestrator = review_gateway.build_review_orchestrator(environment, max_agents=12)
+    orchestrator = review_gateway.build_review_orchestrator(environment)
 
     assert {agent.credential_key for agent in orchestrator.agents} == {
         "OPENROUTER_API_KEY",
@@ -79,6 +79,7 @@ def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sou
     assert all("cost:free" in agent.tags for agent in orchestrator.agents)
     assert all("input:text" in agent.tags for agent in orchestrator.agents)
     assert all("output:text" in agent.tags for agent in orchestrator.agents)
+    assert {agent.priority for agent in orchestrator.agents} == {0}
     assert all(
         get_credential(name) == environment[name]
         for name in review_gateway.REVIEW_CREDENTIAL_NAMES
@@ -136,7 +137,7 @@ def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
     orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENROUTER_API_KEY": "router-secret"}, max_agents=12
+        {"OPENROUTER_API_KEY": "router-secret"}
     )
 
     assert [agent.model for agent in orchestrator.agents] == ["review-model"]
@@ -174,36 +175,10 @@ def test_build_review_orchestrator_does_not_count_auth_as_provider_credential():
         )
 
 
-def test_build_review_orchestrator_rejects_invalid_agent_limit():
-    """The sidecar refuses an invalid routing-pool bound before using credentials."""
-    with pytest.raises(ValueError, match="max_agents"):
-        review_gateway.build_review_orchestrator({}, max_agents=0)
-
-
 def test_build_review_orchestrator_fails_closed_without_discovered_models(monkeypatch):
     """A configured key without a usable model list cannot start the sidecar."""
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: ([], []))
     with pytest.raises(NotConfigured, match="no provider models"):
-        review_gateway.build_review_orchestrator(
-            {"OPENROUTER_API_KEY": "router-secret"}
-        )
-
-
-def test_build_review_orchestrator_fails_closed_when_selection_is_empty(monkeypatch):
-    """A discovery result must still produce at least one selected candidate."""
-    monkeypatch.setattr(
-        review_gateway,
-        "discover_all_models",
-        lambda: (
-            [_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")],
-            [],
-        ),
-    )
-    monkeypatch.setattr(
-        review_gateway, "select_bootstrap_discovered_agents", lambda *args: []
-    )
-
-    with pytest.raises(NotConfigured, match="selected no provider models"):
         review_gateway.build_review_orchestrator(
             {"OPENROUTER_API_KEY": "router-secret"}
         )
@@ -274,15 +249,6 @@ def test_main_requires_authentication(monkeypatch):
 
     with pytest.raises(SystemExit, match="CONTEXTUAL_ORCHESTRATOR_TOKEN"):
         review_gateway.main()
-
-
-def test_main_rejects_invalid_agent_limit_without_traceback(monkeypatch, capsys):
-    """Argparse reports an invalid routing-pool bound as a CLI usage error."""
-    monkeypatch.setattr(sys, "argv", ["review_gateway", "--max-agents", "0"])
-    with pytest.raises(SystemExit) as exc_info:
-        review_gateway.main()
-    assert exc_info.value.code == 2
-    assert "--max-agents must be a positive integer" in capsys.readouterr().err
 
 
 def test_build_review_orchestrator_admits_every_evidence_eligible_candidate(monkeypatch):
