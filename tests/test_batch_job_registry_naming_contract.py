@@ -1,6 +1,6 @@
 """Naming contracts for the durable batch-job registry public seams."""
 
-from inspect import signature
+from inspect import Parameter, signature
 
 import pytest
 
@@ -23,6 +23,21 @@ def test_registry_seams_use_bounded_context_names_for_public_parameters() -> Non
 
     assert "registry_name" in factory_mapping_parameters
     assert "name" not in factory_mapping_parameters
+
+
+def test_registry_seams_advertise_semantic_identifiers_as_required_non_null_parameters() -> None:
+    """Keep signature-driven callers from treating durable identifiers as optional."""
+    inspected_parameters = (
+        (signature(ValkeyJsonMapping.__init__).parameters, ("registry_name",)),
+        (signature(JobRegistryFactory.lock).parameters, ("registry_name", "claim_key")),
+        (signature(JobRegistryFactory.mapping).parameters, ("registry_name",)),
+    )
+
+    for public_parameters, identifier_names in inspected_parameters:
+        for identifier_name in identifier_names:
+            semantic_parameter = public_parameters[identifier_name]
+            assert semantic_parameter.default is Parameter.empty
+            assert semantic_parameter.annotation is str
 
 
 def test_registry_seams_accept_legacy_keyword_identifiers_at_compatibility_boundary() -> None:
