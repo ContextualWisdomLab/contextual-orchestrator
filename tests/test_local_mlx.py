@@ -348,11 +348,75 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
 
     report = orchestrator.provider_readiness_report()
     assert refreshed == [report]
-    assert report["status"] == "unprobed"
+    assert report["status"] == "ready"
+    assert report["probe"] == "refresh"
     assert {item["agent_id"] for item in report["items"]} == {
         "ready_agent", "backup_agent", "added_agent"
     }
-    assert probed == ["ready_agent", "backup_agent"]
+    assert probed == ["ready_agent", "backup_agent", "added_agent"]
+
+
+def test_provider_readiness_refresh_returns_current_snapshot_after_repeated_mutations() -> None:
+    import threading
+
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("backup_agent", "backup-model"),
+    ], client=client)
+    entered = threading.Event()
+    release = threading.Event()
+    second_pass = threading.Event()
+    second_release = threading.Event()
+    refreshed = []
+    probed: list[str] = []
+    calls_by_agent: dict[str, int] = {}
+
+    def probe(agent, **_kwargs):
+        calls_by_agent[agent.id] = calls_by_agent.get(agent.id, 0) + 1
+        probed.append(agent.id)
+        if agent.id == "ready_agent":
+            entered.set()
+            release.wait(timeout=2)
+        if agent.id == "added_agent":
+            second_pass.set()
+            second_release.wait(timeout=2)
+        return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    def refresh_pool():
+        refreshed.append(orchestrator.provider_readiness_report(refresh=True))
+
+    with patch.object(client, "probe", side_effect=probe):
+        refresh = threading.Thread(target=refresh_pool)
+        refresh.start()
+        assert entered.wait(timeout=2)
+        orchestrator.add_agent(
+            "default", {"id": "added_agent", "model": "added-model"}
+        )
+        release.set()
+        assert second_pass.wait(timeout=2)
+        orchestrator.add_agent(
+            "default", {"id": "later_agent", "model": "later-model"}
+        )
+        second_release.set()
+        refresh.join(timeout=2)
+
+    report = refreshed[0]
+    assert report["status"] == "unprobed"
+    assert report["probe"] == "none"
+    assert {item["agent_id"] for item in report["items"]} == {
+        "ready_agent", "backup_agent", "added_agent", "later_agent"
+    }
+    statuses = {item["agent_id"]: item["status"] for item in report["items"]}
+    assert statuses["ready_agent"] == "ready"
+    assert statuses["backup_agent"] == "ready"
+    assert statuses["added_agent"] == "ready"
+    assert statuses["later_agent"] == "unprobed"
+    assert calls_by_agent == {
+        "ready_agent": 1,
+        "backup_agent": 1,
+        "added_agent": 1,
+    }
 
 
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:

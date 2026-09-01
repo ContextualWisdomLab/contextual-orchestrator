@@ -3499,17 +3499,27 @@ class TaskOrchestrator:
             return self._provider_readiness_report_for(candidates, False, probe_timeout)
 
         with self._provider_readiness_refresh_lock:
-            with self._provider_readiness_lock:
-                candidates = list(self.candidates)
-                generation = self._provider_readiness_generation
-            report = self._provider_readiness_report_for(candidates, True, probe_timeout)
-            with self._provider_readiness_lock:
-                if generation == self._provider_readiness_generation:
-                    self._latest_provider_readiness_report = json.loads(json.dumps(report))
-                    return report
-                current_candidates = list(self.candidates)
+            probed: dict[str, tuple[ModelAgent, dict[str, Any]]] = {}
+            for _attempt in range(2):
+                with self._provider_readiness_lock:
+                    candidates = list(self.candidates)
+                    generation = self._provider_readiness_generation
+                report = self._provider_readiness_report_for(
+                    candidates,
+                    True,
+                    probe_timeout,
+                    probed=probed,
+                )
+                with self._provider_readiness_lock:
+                    if generation == self._provider_readiness_generation:
+                        self._latest_provider_readiness_report = json.loads(json.dumps(report))
+                        return report
+                    current_candidates = list(self.candidates)
         return self._provider_readiness_report_for(
-            current_candidates, False, probe_timeout
+            current_candidates,
+            False,
+            probe_timeout,
+            probed=probed,
         )
 
     def _provider_readiness_report_for(
@@ -3517,9 +3527,12 @@ class TaskOrchestrator:
         candidates: list[ModelAgent],
         refresh: bool,
         probe_timeout: float,
+        *,
+        probed: dict[str, tuple[ModelAgent, dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         """Build one readiness report from an immutable candidate snapshot."""
         items: list[dict[str, Any]] = []
+        probe_cache = probed if probed is not None else {}
         for agent in candidates:
             provider = agent.provider_name or self._infer_provider_name(agent.base_url)
             if agent.disabled:
@@ -3531,25 +3544,44 @@ class TaskOrchestrator:
                 })
                 continue
             if refresh:
-                item = dict(self.client.probe(agent, timeout=probe_timeout))
+                cached = probe_cache.get(agent.id)
+                if cached is not None and cached[0] == agent:
+                    item = dict(cached[1])
+                else:
+                    item = dict(self.client.probe(agent, timeout=probe_timeout))
+                    probe_cache[agent.id] = (agent, dict(item))
                 item["provider"] = provider
                 items.append(redact_value(item))
             else:
-                items.append({
-                    "agent_id": agent.id,
-                    "model": agent.model,
-                    "provider": provider,
-                    "status": "unprobed",
-                })
+                cached = probe_cache.get(agent.id)
+                if cached is not None and cached[0] == agent:
+                    item = dict(cached[1])
+                    item["provider"] = provider
+                    items.append(redact_value(item))
+                else:
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "unprobed",
+                    })
         active = [item for item in items if item["status"] != "disabled"]
-        status = "unprobed" if not refresh else (
-            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
-        )
+        active_statuses = {item["status"] for item in active}
+        if refresh:
+            status = "ready" if active and active_statuses == {"ready"} else "not_ready"
+        elif not active:
+            status = "unprobed"
+        elif "unprobed" in active_statuses:
+            status = "unprobed"
+        elif active_statuses == {"ready"}:
+            status = "ready"
+        else:
+            status = "not_ready"
         return {
             "status": status,
-            "probe": "refresh" if refresh else "none",
+            "probe": "refresh" if refresh else ("cached" if "unprobed" not in active_statuses else "none"),
             "timeout_seconds": probe_timeout,
-            "checked_at": int(time.time()) if refresh else None,
+            "checked_at": int(time.time()) if refresh or "unprobed" not in active_statuses else None,
             "agent_count": len(active),
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "items": items,
