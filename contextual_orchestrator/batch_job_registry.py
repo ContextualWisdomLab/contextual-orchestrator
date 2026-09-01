@@ -133,13 +133,13 @@ class ValkeyJsonMapping(MutableMapping):
     def __init__(
         self,
         client: Any,
-        name: str,
+        registry_name: str,
         *,
         decode: Optional[Callable[[Any], Any]] = None,
         retention_seconds: int = DEFAULT_RETENTION_SECONDS,
     ) -> None:
         self._client = client
-        self._key = f"batch_job_registry:{name}"
+        self._key = f"batch_job_registry:{registry_name}"
         self._decode = decode
         self._retention_seconds = retention_seconds
 
@@ -201,14 +201,14 @@ class JobRegistryFactory:
 
     def lock(
         self,
-        name: str,
-        key: str,
+        registry_name: str,
+        claim_key: str,
         *,
         lease_seconds: float | None = None,
         renew_until_epoch: float | None = None,
     ):
         """Return an atomic shard claim with bounded lease and acquisition wait."""
-        lock_name = f"batch_job_registry:{name}:claim:{key}"
+        lock_name = f"batch_job_registry:{registry_name}:claim:{claim_key}"
         if self._client is not None:
             if lease_seconds is None or lease_seconds <= 0:
                 raise ValueError("durable claim lease_seconds must be positive")
@@ -405,12 +405,20 @@ class JobRegistryFactory:
         """Return the configured terminal-result retention contract."""
         return self._retention_seconds
 
-    def mapping(self, name: str, *, decode: Optional[Callable[[Any], Any]] = None) -> MutableMapping:
-        """Return the registry called ``name`` — a dict unless Valkey is configured."""
+    def mapping(
+        self,
+        registry_name: str,
+        *,
+        decode: Optional[Callable[[Any], Any]] = None,
+    ) -> MutableMapping:
+        """Return the named registry — a dict unless Valkey is configured."""
         if self._client is None:
             return {}
         return ValkeyJsonMapping(
-            self._client, name, decode=decode, retention_seconds=self._retention_seconds
+            self._client,
+            registry_name,
+            decode=decode,
+            retention_seconds=self._retention_seconds,
         )
 
 
