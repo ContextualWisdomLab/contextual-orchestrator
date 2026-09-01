@@ -15,9 +15,10 @@ Reviewed source head `984d3a6ea2c267c8dd647fabf698465eb4ac0980` fixes its DDD bu
 guarantees lease termination after every live post-launch assertion. Hosted job `99750285437` passed
 the real rootless-Podman isolation and cleanup lane at that exact source head. Documentation tip
 `dac7a0c3ba39af2058c462ef2eb9cf4c0a40c059` independently repeated the real lane successfully in
-job `99750695476`. Current upstream tip `53d8246b…` additionally bounds connect/read/write I/O and
-has a deterministic stalled-server regression test; its hosted gates are pending. The successful
-runs prove the current Podman profile on its Linux acceptance runner; they
+job `99750695476`. Source head `53d8246b…` additionally bounds connect/read/write I/O and has a
+deterministic stalled-server regression test; current documentation-only tip `4b0bb12e…` records
+the same evidence in the changelog, and its hosted gates are pending. The successful runs prove the
+current Podman profile on its Linux acceptance runner; they
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
