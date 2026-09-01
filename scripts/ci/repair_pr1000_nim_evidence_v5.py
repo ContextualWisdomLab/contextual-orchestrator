@@ -75,6 +75,17 @@ def patch_fail_closed_benchmark_contract_tests() -> None:
 ''',
         "dry-run Pareto fail-closed assertion",
     )
+    _replace_once(
+        TESTS,
+        '        assert first["evaluation"]["paired_comparisons"]\n',
+        '''        assert first["evaluation"]["paired_comparisons"] == []
+        assert all(
+            cell["run_outcome"] == "failure"
+            for cell in first["evaluation"]["evaluation_cells"]
+        )
+''',
+        "dry-run paired-comparison fail-closed assertion",
+    )
 
 
 def emit_dry_run_diagnostic() -> None:
