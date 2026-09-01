@@ -117,5 +117,9 @@ def test_fixed_sample_and_completion_floors_cannot_authorize_evidence() -> None:
 
 def test_output_token_allocation_has_no_hand_selected_default() -> None:
     """A historical dry-run margin must not silently allocate test-time compute."""
-    parameter = inspect.signature(nb.run_benchmark).parameters["max_output_tokens"]
-    assert parameter.default is None
+    run_parameter = inspect.signature(nb.run_benchmark).parameters["max_output_tokens"]
+    policy_parameter = inspect.signature(nb.evaluate_policies).parameters[
+        "total_token_budget"
+    ]
+    assert run_parameter.default is None
+    assert policy_parameter.default is None
