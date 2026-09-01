@@ -53,6 +53,9 @@ from .cefr_language_observation import (
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .registry_signature_contract import (
+    install_registry_signature_contract as _install_registry_signature_contract,
+)
 from .release_authorization import evaluate_release_authorization
 from .reasoning_effort_profile import (
     EffortProfileError,
@@ -170,9 +173,5 @@ __all__ = [
 
 # The durable registry keeps legacy name=/key= kwargs at a bounded adapter
 # while publishing truthful required semantic parameters to introspection.
-from .registry_signature_contract import (
-    install_registry_signature_contract as _install_registry_signature_contract,
-)
-
 _install_registry_signature_contract()
 del _install_registry_signature_contract
