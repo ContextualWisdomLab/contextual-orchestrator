@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
+import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -39,6 +41,15 @@ _CONFIGURED = False
 # Match the OpenTelemetry SDK's default span-attribute budget so a single
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
+_SAFE_SCHEMA_DIAGNOSTIC = re.compile(
+    r"messages (?:must contain the word ['\"]?json['\"]?(?: in some form,)? to use "
+    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
+    r"(?:\.|$)|must mention json when response_format is json_object)",
+    re.IGNORECASE,
+)
+_SAFE_SCHEMA_ERROR_SUMMARY = (
+    "messages must mention json when response_format is json_object"
+)
 _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
         "gen_ai.operation.name",
@@ -51,7 +62,11 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "gen_ai.usage.total_tokens",
         "contextual_orchestrator.agent_id",
         "contextual_orchestrator.error_code",
+        "contextual_orchestrator.error_summary",
+        "contextual_orchestrator.fallback_outcome",
         "contextual_orchestrator.latency_ms",
+        "contextual_orchestrator.model_group",
+        "contextual_orchestrator.operation_kind",
         "contextual_orchestrator.provider_status_code",
         "contextual_orchestrator.session_id_hash",
         "server.address",
@@ -134,6 +149,21 @@ def reset_session_id(token: Token[str | None]) -> None:
     _CURRENT_SESSION.reset(token)
 
 
+def session_id_hash() -> str | None:
+    """Return the ADR 0122 bounded correlation hash for the current request.
+
+    ``None`` when no session is bound. Shared by :func:`_safe_attributes`
+    (OTLP span attributes) and by `server.py`'s per-request log summary, so
+    every surface that ever needs "which request was this" uses exactly one
+    hash of exactly one algorithm -- the raw session id itself never leaves
+    this module.
+    """
+    session_id = current_session_id()
+    if not session_id:
+        return None
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+
+
 def attach_trace_context(headers: Mapping[str, str]) -> Any:
     """Attach an inbound W3C trace context and return its reset token."""
     if _otel_extract is None or _otel_attach is None:
@@ -179,14 +209,19 @@ def _safe_attributes(
         if isinstance(value, (list, tuple)):
             continue
         if isinstance(value, str):
+            if key == "server.address":
+                try:
+                    ipaddress.ip_address(value)
+                except ValueError:
+                    pass
+                else:
+                    continue
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
-    session_id = current_session_id()
-    if session_id:
-        result["contextual_orchestrator.session_id_hash"] = hashlib.sha256(
-            session_id.encode("utf-8")
-        ).hexdigest()
+    hashed_session_id = session_id_hash()
+    if hashed_session_id is not None:
+        result["contextual_orchestrator.session_id_hash"] = hashed_session_id
     return result
 
 
@@ -306,21 +341,44 @@ def traced(
         try:
             yield span
         except Exception as exc:
-            from .provider_errors import classify_provider_failure
+            from .provider_errors import classify_provider_failure, safe_provider_message
 
             classified = classify_provider_failure(exc, agent_id="", model="")
             failure_code = classified.error_code
             provider_status = classified.provider_status
+            # Arbitrary provider prose can echo caller content even when it has
+            # no assignment-shaped marker. Recognize one exact schema contract,
+            # export our fixed wording, and reduce everything else to its stable
+            # package-owned code.
+            provider_summary = safe_provider_message(exc)
+            error_summary = (
+                _SAFE_SCHEMA_ERROR_SUMMARY
+                if provider_summary is not None
+                and _SAFE_SCHEMA_DIAGNOSTIC.search(provider_summary)
+                else failure_code
+            )
+            model_group = safe.get("contextual_orchestrator.model_group", "ungrouped")
+            fallback_outcome = safe.get(
+                "contextual_orchestrator.fallback_outcome", "not_observed"
+            )
             if Status is not None and StatusCode is not None:
                 span.set_attribute("error.type", failure_code)
+                span.set_attribute(
+                    "contextual_orchestrator.error_summary", error_summary
+                )
                 if provider_status is not None:
                     span.set_attribute(
                         "contextual_orchestrator.provider_status_code", provider_status
                     )
                 span.set_status(Status(StatusCode.ERROR))
             _LOGGER.warning(
-                "telemetry.operation_failed operation=%s error_type=%s",
+                "telemetry.operation_failed operation=%s error_type=%s "
+                "provider_status=%s error_summary=%r model_group=%s fallback_outcome=%s",
                 name,
                 failure_code,
+                provider_status,
+                error_summary,
+                model_group,
+                fallback_outcome,
             )
             raise

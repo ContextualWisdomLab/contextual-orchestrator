@@ -211,12 +211,14 @@ def _known_cost_sort_key(
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
     prompt_price, completion_price = prices
     if (
-        prompt_price is None
-        or completion_price is None
-        or not _currency_is_comparable(model.currency_code, "USD")
+        prompt_price is not None
+        and completion_price is not None
+        and _currency_is_comparable(model.currency_code, "USD")
     ):
-        return (1, float("inf"), model.provider_name, model.model_id)
-    return (0, prompt_price + completion_price, model.provider_name, model.model_id)
+        return (0, prompt_price + completion_price, model.provider_name, model.model_id)
+    if model.is_free:
+        return (0, 0.0, model.provider_name, model.model_id)
+    return (1, float("inf"), model.provider_name, model.model_id)
 
 
 def select_provider_diverse_models(

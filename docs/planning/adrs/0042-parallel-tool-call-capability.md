@@ -1,5 +1,5 @@
 ---
-id: "0039"
+id: "0042"
 title: "Model discovery must record parallel tool-call capability"
 status: accepted
 proposed_date: "2026-08-31"

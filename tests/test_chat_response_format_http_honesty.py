@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "chat_response_format_http_honesty_token"  # noqa: S105
@@ -78,6 +79,353 @@ def test_http_chat_accepts_response_format_json_object() -> None:
             },
         )
         assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_structured_synthesis_classifies_upstream_404() -> None:
+    """Final synthesis provider rejection is typed and never a raw 500."""
+    orchestrator = build()
+
+    def reject_synthesis(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://provider.synthetic.invalid/v1/chat/completions",
+            404,
+            "not found",
+            {},
+            None,
+        )
+
+    orchestrator.client.proxy_send = reject_synthesis
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "json object mode"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404, body
+        assert body["error"]["code"] == "model_not_found"
+        assert body["error"]["detail"]["transport"] == "structured_synthesis"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() -> None:
+    """Virtual routing retries a missing catalog model without crossing endpoints."""
+    agents = [
+        ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("other_agent", "other-model", "mock://other", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    original_select_agent = orchestrator._select_agent
+    orchestrator._select_agent = lambda task, role, **kwargs: (
+        agents[0] if role == "synthesizer" else original_select_agent(task, role, **kwargs)
+    )
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        if agent.id == "stale_agent":
+            raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+        return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    orchestrator.client.proxy_send_once = send
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+                "session_id": "synthetic-session",
+            },
+        )
+        assert status == 200, body
+        assert calls == ["stale_agent", "live_agent"]
+        assert "other_agent" not in calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
+    """Schema-invalid synthesis and repair exhaust each same-endpoint model once."""
+    agents = [
+        ModelAgent("first_agent", "first-model", "mock://catalog"),
+        ModelAgent("second_agent", "second-model", "mock://catalog"),
+        ModelAgent("other_agent", "other-model", "mock://other"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: list[str] = []
+    orchestrator.conduct = lambda *_args, **_kwargs: {"trace": []}  # type: ignore[method-assign]
+    orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+
+    def invalid(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"milestones":[{"extra":true}]}'}}]}
+
+    orchestrator.client.proxy_send_once = invalid
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic structured request"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "milestone_list",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "milestones": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {"label": {"type": "string"}},
+                                        "required": ["label"],
+                                        "additionalProperties": False,
+                                    },
+                                }
+                            },
+                            "required": ["milestones"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "session_id": "synthetic-session",
+            },
+        )
+        assert status == 502, body
+        assert body["error"]["code"] == "invalid_structured_output"
+        assert calls == ["first_agent", "first_agent", "second_agent", "second_agent"]
+        assert "other_agent" not in calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model() -> None:
+    """A model missing in evidence work is excluded from every later role and synthesis."""
+    agents = [
+        ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    original_ranked = orchestrator._ranked_agents
+
+    def stale_first(*args, **kwargs):
+        ranked = original_ranked(*args, **kwargs)
+        return sorted(ranked, key=lambda candidate: candidate.id != "stale_agent")
+
+    orchestrator._ranked_agents = stale_first
+    chat_calls: list[str] = []
+    synthesis_calls: list[str] = []
+
+    def chat(agent, _messages, **_kwargs):
+        chat_calls.append(agent.id)
+        if agent.id == "stale_agent":
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="model_not_found",
+                message="synthetic missing model",
+                client_status=404,
+                provider_status=404,
+                retryable=False,
+            )
+        return '{"status":"evidence"}'
+
+    def synthesize(agent, _endpoint, _payload):
+        synthesis_calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    orchestrator.client.chat = chat
+    orchestrator.client.proxy_send_once = synthesize
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 200, body
+        assert chat_calls.count("stale_agent") == 1
+        assert synthesis_calls == ["live_agent"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
+    """A fully stale virtual pool terminates typed after one attempt per model."""
+    agents = [
+        ModelAgent("stale_a", "stale-a", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("stale_b", "stale-b", "mock://catalog", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: list[str] = []
+
+    def missing(agent, _messages, **_kwargs):
+        calls.append(agent.id)
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="model_not_found",
+            message="synthetic missing model",
+            client_status=404,
+            provider_status=404,
+            retryable=False,
+        )
+
+    orchestrator.client.chat = missing
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404, body
+        assert body["error"]["code"] == "model_not_found"
+        assert sorted(calls) == ["stale_a", "stale_b"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_explicit_structured_model_preserves_model_not_found() -> None:
+    """An explicit model pin never switches models after a provider 404."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
+    ])
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+
+    orchestrator.client.proxy_send = send
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "stale-model",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404
+        assert body["error"]["code"] == "model_not_found"
+        assert calls
+        assert set(calls) == {"stale_agent"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_explicit_structured_model_preserves_authentication_error() -> None:
+    """An explicit model pin returns its own 401 and never changes endpoints."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("auth_failing", "pinned-model", "mock://pinned", tags=("reasoning", "writing")),
+        ModelAgent("other_endpoint", "other-model", "mock://other", tags=("reasoning", "writing")),
+    ])
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        raise urllib.error.HTTPError("https://synthetic.invalid", 401, "unauthorized", {}, None)
+
+    orchestrator.client.proxy_send = send
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "pinned-model",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 401
+        assert body["error"]["code"] == "authentication_error"
+        assert calls and set(calls) == {"auth_failing"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
+    """Same-endpoint model replacement does not double-count its final 404."""
+    agents = [
+        ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    original_select_agent = orchestrator._select_agent
+    orchestrator._select_agent = lambda task, role, **kwargs: (
+        agents[0] if role == "synthesizer" else original_select_agent(task, role, **kwargs)
+    )
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+
+    orchestrator.client.proxy_send_once = send
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404, body
+        assert calls == ["stale_agent", "live_agent"]
+        assert orchestrator._circuit["stale_agent"]["failures"] == 1
+        assert orchestrator._circuit["live_agent"]["failures"] == 1
     finally:
         server.shutdown()
         thread.join(timeout=5)

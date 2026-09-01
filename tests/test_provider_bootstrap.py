@@ -143,6 +143,19 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
     ]
 
 
+def test_diverse_selection_prefers_provider_declared_free_over_unknown() -> None:
+    """Exact free evidence wins a same-provider slot without token-price fiction."""
+    unknown = _model("bytez", "BYTEZ_API_KEY", "a-unknown", None)
+    free = replace(
+        _model("bytez", "BYTEZ_API_KEY", "z-free", None),
+        is_free=True,
+    )
+
+    assert provider_bootstrap.select_provider_diverse_models(
+        [unknown, free], limit=1
+    ) == [free]
+
+
 def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     """A missing prompt or completion price cannot become an invented zero."""
     partial = replace(

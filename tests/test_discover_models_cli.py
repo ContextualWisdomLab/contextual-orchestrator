@@ -32,8 +32,13 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json_same_host_https
+        # (the always-invoked OpenRouter ZDR fetch inside discover_all_models)
+        # and _fetch_json both cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1
+        # -- both share this fixture via the same _open_trusted_discovery_request
+        # seam.
+        return self._body if amt is None else self._body[:amt]
 
 
 def test_free_only_help_rejects_name_inference() -> None:
@@ -161,7 +166,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     register_credential("OPENAI_API_KEY", "sk-live")
     stdout = StringIO()
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             return _Response({"data": [{"id": "gpt-5.5"}]})
         return _Response({"data": []})
@@ -170,7 +175,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         with (
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         ):
             main()
     finally:
@@ -181,6 +186,8 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         {
             "provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5",
             "is_free": False,
+            "max_output_tokens": None,
+            "context_window": None,
             "data_privacy": {
                 "zero_data_retention": "unknown",
                 "no_training": "unknown",
@@ -213,6 +220,8 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
                             "mode": "chat",
                             "input_cost_per_token": 0.000005,
                             "output_cost_per_token": 0.00003,
+                            "context_length": 256000,
+                            "max_completion_tokens": 8192,
                         },
                     },
                     {
@@ -269,6 +278,8 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
         "community/free-chat",
         "text-embedding-3-large",
     ]
+    assert report["models"][0]["context_window"] == 256000
+    assert report["models"][0]["max_output_tokens"] == 8192
 
 
 def test_configured_gateway_requires_explicit_host_allowlist() -> None:
@@ -308,7 +319,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
     db_path = str(tmp_path / "pool.db")
     stdout = StringIO()
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             return _Response({"data": [{"id": "gpt-5.5"}]})
         return _Response({"data": []})
@@ -317,7 +328,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
         with (
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--agents-db", db_path]),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         ):
             main()
     finally:
@@ -400,7 +411,7 @@ def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> No
             closed.append(True)
             super().close()
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             return _Response({"data": [{"id": "gpt-5.5"}]})
         return _Response({"data": []})
@@ -410,7 +421,7 @@ def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> No
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--agents-db", db_path]),
             patch.object(sys, "stdout", stdout),
             patch.object(cli, "TaskOrchestrator", TrackingOrchestrator),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         ):
             main()
     finally:
@@ -448,7 +459,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
     db_path = str(tmp_path / "pool.db")
     stdout = StringIO()
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         host = urllib.parse.urlsplit(request.full_url).hostname
         if host == "api.openai.com":
             return _Response({"data": [{"id": "pricey-model", "pricing": {"prompt": "0.00005", "completion": "0.0001"}}]})
@@ -464,7 +475,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
                 ["contextual-orchestrator", "discover-models", "--agents-db", db_path, "--enable-cheapest", "1"],
             ),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         ):
             main()
     finally:
@@ -490,7 +501,7 @@ def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> N
     db_path = str(tmp_path / "pool.db")
     stdout = StringIO()
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         host = urllib.parse.urlsplit(request.full_url).hostname
         payloads = {
             "api.openai.com": {"data": [{"id": "openai-model", "pricing": {"prompt": "0.001", "completion": "0.001"}}]},
@@ -507,7 +518,7 @@ def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> N
                 ["contextual-orchestrator", "discover-models", "--agents-db", db_path, "--enable-cheapest", "3"],
             ),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch("contextual_orchestrator.model_discovery._open_trusted_discovery_request", side_effect=urlopen),
         ):
             main()
     finally:
