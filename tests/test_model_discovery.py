@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 from dataclasses import replace
 from pathlib import Path
+from typing import get_type_hints
 from unittest.mock import patch
 
 import pytest
@@ -40,6 +41,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _parse_openai_compatible,
     agent_from_discovered,
     agent_id_for,
+    apply_openrouter_spend_admission,
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
@@ -50,6 +52,14 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_openrouter_spend_admission_annotations_resolve_at_runtime() -> None:
+    """Public discovery annotations must remain usable by runtime tooling."""
+    hints = get_type_hints(apply_openrouter_spend_admission)
+
+    assert hints["discovered"] is not None
+    assert hints["return"] == list[DiscoveredModel]
 
 
 def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
