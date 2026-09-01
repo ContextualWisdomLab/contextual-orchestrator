@@ -1,9 +1,10 @@
 ---
 id: "0036"
 title: "Embed a React and Storybook admin interface"
-status: proposed
-date: 2026-08-27
-corrected_date: 2026-08-31
+status: superseded
+proposed_date: 2026-08-27
+accepted_date: 2026-08-27
+superseded_date: 2026-08-31
 deciders:
   - "repository maintainer"
 related:
@@ -13,14 +14,14 @@ related:
 
 # ADR 0036: Embedded React and Storybook Admin
 
-Date: 2026-08-27 (status corrected 2026-08-31 — see Implementation Status)
+Date: 2026-08-27 (superseded 2026-08-31 — see Implementation Status)
 
 ## Status
 
-Proposed. This ADR was originally recorded as "Accepted" on 2026-08-27, the
-same PR (#893) that added the `admin_ui/` directory. It is downgraded to
-Proposed because the substantive parts of the Decision below — items 3 and
-4, the actual UI development and backend wiring — have not been carried out
+Superseded. This ADR was accepted on 2026-08-27 in the same PR (#893) that
+added the `admin_ui/` directory. It was superseded on 2026-08-31 because the
+substantive parts of the Decision below — items 3 and 4, the actual UI
+development and backend wiring — have not been carried out
 (item 2, Corepack package management, has been; see
 [Implementation Status](#implementation-status)) — and because it
 was never reconciled with [ADR 0033](0033-admin-console-ui-tooling-boundary.md),
@@ -28,9 +29,11 @@ an earlier, independently reasoned ADR (accepted 2026-08-23) that
 deliberately keeps the admin console as inline stdlib HTML in `admin.py` and
 defers a React/Storybook toolchain until one of three concrete triggers is
 met. None of those triggers has been met. ADR 0033 remains the operative
-decision for what is actually served today; this ADR records a proposed
-future direction that conflicts with it and has not been adopted in
-practice.
+decision for what is actually served today; this ADR records a superseded
+future direction that conflicts with it and was not adopted in
+practice. Recording the lifecycle as accepted and then superseded preserves
+the decision history; incomplete implementation alone would not make an
+accepted ADR merely proposed.
 
 ## Implementation Status
 
@@ -83,9 +86,9 @@ also been executed: `package.json` declares `"packageManager":
 `admin_ui` workspace entry. Items 3 and 4 have not been executed beyond the
 initial scaffold; see [Implementation Status](#implementation-status).
 
-## Path to Acceptance
+## Path to Reconsideration
 
-Re-promoting this ADR to Accepted requires either:
+Reconsidering this superseded decision requires either:
 
 - Satisfying one of the explicit revisit triggers in
   [ADR 0033](0033-admin-console-ui-tooling-boundary.md) (a second reusable
