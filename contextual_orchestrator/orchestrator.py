@@ -5722,9 +5722,10 @@ class TaskOrchestrator:
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
         caller_instructions = "\n\n".join(
-            message["content"]
+            instruction
             for message in messages
-            if message.get("role") == "system" and isinstance(message.get("content"), str)
+            if message.get("role") == "system"
+            if (instruction := _coerce_message_content_text(message.get("content")))
         )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
