@@ -37,46 +37,40 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
           python - <<'PY'
-          import os
           from pathlib import Path
 
           from scripts.ci import pr1004_review_transform as transform
 
           transform.transform_orchestrator()
 
-          # RCA: the prior exact-head writer correctly kept the repair prompt on
-          # the candidate that produced the invalid synthesis, but a repair-side
-          # 413 with no remaining eligible candidate fell through the generic
-          # structured-output exhaustion helper. Preserve the transport taxonomy:
-          # retire the 413 candidate, start a fresh synthesis only when another
-          # already-eligible candidate remains, and otherwise re-raise the 413.
           source_text = transform.SOURCE.read_text(encoding="utf-8")
+          old_413 = (
+              "                    structured_attempt_steps.append(repair_step)\n"
+              "                    next_agent = next_structured_candidate(final_agent)\n"
+              "                    enforce_structured_budget()\n"
+              "                    final_agent = next_agent\n"
+          )
+          new_413 = (
+              "                    structured_attempt_steps.append(repair_step)\n"
+              "                    request_exclusions.add(final_agent.id)\n"
+              "                    next_agent = next(\n"
+              "                        (\n"
+              "                            candidate\n"
+              "                            for candidate in synthesis_candidates\n"
+              "                            if candidate.id not in request_exclusions\n"
+              "                        ),\n"
+              "                        None,\n"
+              "                    )\n"
+              "                    if next_agent is None:\n"
+              "                        persist_structured_record(\n"
+              "                            \"\", failure_code=exc.error_code\n"
+              "                        )\n"
+              "                        raise\n"
+              "                    enforce_structured_budget()\n"
+              "                    final_agent = next_agent\n"
+          )
           source_text = transform.replace_once(
-              source_text,
-              """                    structured_attempt_steps.append(repair_step)
-                    next_agent = next_structured_candidate(final_agent)
-                    enforce_structured_budget()
-                    final_agent = next_agent
-""",
-              """                    structured_attempt_steps.append(repair_step)
-                    request_exclusions.add(final_agent.id)
-                    next_agent = next(
-                        (
-                            candidate
-                            for candidate in synthesis_candidates
-                            if candidate.id not in request_exclusions
-                        ),
-                        None,
-                    )
-                    if next_agent is None:
-                        persist_structured_record(
-                            "", failure_code=exc.error_code
-                        )
-                        raise
-                    enforce_structured_budget()
-                    final_agent = next_agent
-""",
-              "repair 413 terminal taxonomy",
+              source_text, old_413, new_413, "repair 413 terminal taxonomy"
           )
           transform.SOURCE.write_text(source_text, encoding="utf-8")
 
@@ -84,29 +78,27 @@ jobs:
           adr_text = transform.replace_once(
               adr_text,
               "## References\n",
-              """## Research artifact reuse and redistribution
-
-          This correctness repair does not introduce a new routing objective; it
-          restores ADR 0035's already-accepted bounded candidate-recovery semantics.
-          A repair-only request-size rejection retires that virtual candidate and
-          starts a fresh synthesis only on another already-eligible candidate; when
-          none remains, the request-size error remains the terminal classification
-          rather than being rewritten as structured-output exhaustion. Previously
-          excluded candidates are never retried.
-
-          The relevant routing literature is already committed in this repository as
-          redistributable artifacts: [`RouteLLM`](../../papers/routellm-routing-2406.18665.pdf)
-          and [`Hybrid LLM`](../../papers/hybrid-llm-query-routing-2404.14618.pdf).
-          Their cost/quality-aware routing evidence supports selecting among eligible
-          model candidates; it does not authorize bypassing caller endpoint, privacy,
-          or budget constraints. Conductor and TRINITY remain cite-link-summary
-          references in `docs/papers/README.md` because this repository has not
-          independently established a redistribution grant for those newer preprints;
-          duplicating their PDFs in this PR would therefore weaken, not strengthen,
-          the repository's copyright rule.
-
-          ## References
-          """,
+              (
+                  "## Research artifact reuse and redistribution\n\n"
+                  "This correctness repair does not introduce a new routing objective; it\n"
+                  "restores ADR 0035's already-accepted bounded candidate-recovery semantics.\n"
+                  "A repair-only request-size rejection retires that virtual candidate and\n"
+                  "starts a fresh synthesis only on another already-eligible candidate; when\n"
+                  "none remains, the request-size error remains the terminal classification\n"
+                  "rather than being rewritten as structured-output exhaustion. Previously\n"
+                  "excluded candidates are never retried.\n\n"
+                  "The relevant routing literature is already committed in this repository as\n"
+                  "redistributable artifacts: [`RouteLLM`](../../papers/routellm-routing-2406.18665.pdf)\n"
+                  "and [`Hybrid LLM`](../../papers/hybrid-llm-query-routing-2404.14618.pdf).\n"
+                  "Their cost/quality-aware routing evidence supports selecting among eligible\n"
+                  "model candidates; it does not authorize bypassing caller endpoint, privacy,\n"
+                  "or budget constraints. Conductor and TRINITY remain cite-link-summary\n"
+                  "references in `docs/papers/README.md` because this repository has not\n"
+                  "independently established a redistribution grant for those newer preprints;\n"
+                  "duplicating their PDFs in this PR would therefore weaken, not strengthen,\n"
+                  "the repository's copyright rule.\n\n"
+                  "## References\n"
+              ),
               "ADR research artifact section",
           )
           transform.ADR.write_text(adr_text, encoding="utf-8")
@@ -116,35 +108,46 @@ jobs:
           unreleased = change_text.index(unreleased_heading)
           marker = "### Fixed\n\n"
           fixed = change_text.index(marker, unreleased + len(unreleased_heading))
-          note = """### Fixed
-
-          - Structured-output review follow-up now charges already-incurred synthesis
-            and repair usage before propagating a budget stop, keeps failed workflow
-            evidence queryable without counting it as a normal recent/completed KPI,
-            and binds a repair to the candidate whose synthesis failed. A repair-only
-            413 retires that candidate and starts a fresh synthesis on the next
-            already-eligible candidate instead of forwarding the repair prompt across
-            providers. If no eligible candidate remains, the original request-too-large
-            classification is preserved instead of being rewritten as structured-output
-            exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
-            (Devin Review, PR #1004).
-          """
+          note = (
+              "### Fixed\n\n"
+              "- Structured-output review follow-up now charges already-incurred synthesis\n"
+              "  and repair usage before propagating a budget stop, keeps failed workflow\n"
+              "  evidence queryable without counting it as a normal recent/completed KPI,\n"
+              "  and binds a repair to the candidate whose synthesis failed. A repair-only\n"
+              "  413 retires that candidate and starts a fresh synthesis on the next\n"
+              "  already-eligible candidate instead of forwarding the repair prompt across\n"
+              "  providers. If no eligible candidate remains, the original request-too-large\n"
+              "  classification is preserved instead of being rewritten as structured-output\n"
+              "  exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged\n"
+              "  (Devin Review, PR #1004).\n"
+          )
           change_text = change_text[:fixed] + note + change_text[fixed + len(marker):]
           transform.CHANGELOG.write_text(change_text, encoding="utf-8")
 
           baseline = Path("docs/product-technical-gap-baseline.md")
           baseline_text = baseline.read_text(encoding="utf-8")
           heading = "# Contextual Orchestrator: Product & Technical Gap Baseline\n"
-          rca = f"""
-
-          ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
-
-          - **Affected exact head:** the predecessor exact head `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.
-          - **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, which incorrectly raised `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
-          - **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
-          - **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
-          - **Verification contract:** this self-removing writer (`{os.environ.get('GITHUB_RUN_ID', 'unknown')}` on `{os.environ.get('GITHUB_SHA', 'unknown')}`) commits only after the focused structured-output/routing suite, the broad suite, compile checks, and `git diff --check` all pass. Remaining blockers after publication are the ordinary required exact-head GitHub Checks/reviews; pending evidence is not treated as passing.
-          """
+          rca = (
+              "\n## 2026-09-02 PR #1004 exact-head structured repair 413 RCA\n\n"
+              "- **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` "
+              "failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` "
+              "in the focused suite.\n"
+              "- **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` "
+              "established a stale candidate already excluded by a 404, a live candidate producing "
+              "invalid structured output, and a repair-only 413. The generated handler retired the "
+              "live candidate and called the generic structured-exhaustion helper, incorrectly raising "
+              "`StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.\n"
+              "- **Classification:** deterministic code-generation/repair-path defect in this repository, "
+              "not a provider/network transient, fixture race, missing permission, or expected fail-closed "
+              "governance result.\n"
+              "- **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that "
+              "candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. "
+              "If none remains, persist the request-size failure and re-raise the original typed 413. Never "
+              "retry a request-excluded predecessor.\n"
+              "- **Verification:** this writer commits only after the focused routing suite, broad suite, "
+              "compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still "
+              "must complete; pending evidence is not treated as passing.\n"
+          )
           baseline_text = transform.replace_once(
               baseline_text, heading, heading + rca, "product gap baseline heading"
           )
