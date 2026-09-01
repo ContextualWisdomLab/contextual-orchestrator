@@ -107,7 +107,7 @@ jobs:
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
           gateway_pid=$!
-          while :; do
+          for _ in $(seq 1 30); do
             if curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
               http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "gateway ready"
@@ -121,6 +121,9 @@ jobs:
             fi
             sleep 2
           done
+          echo "::error::gateway did not become healthy within 60 seconds"
+          tail -50 /tmp/gateway.log
+          exit 1
 
       - name: Point OpenCode at the local gateway
         run: |
