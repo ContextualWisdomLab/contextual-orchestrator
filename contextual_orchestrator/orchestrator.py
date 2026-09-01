@@ -8168,14 +8168,14 @@ class TaskOrchestrator:
             # The adapter's provider-boundary capture is authoritative for
             # usage. fast-mlsirm aggregates a missing trace usage into a
             # non-empty zero-token mapping, which must not turn an unmeasured
-            # call into provider-reported zero spend here.
-            result_usage_has_positive_evidence = isinstance(result.usage, Mapping) and any(
-                type(result.usage.get(key)) is int and result.usage[key] > 0
-                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            )
-            if result.usage and (
-                judge_adapter.served_usage is not None or result_usage_has_positive_evidence
-            ):
+            # call into provider-reported zero spend here -- neither
+            # `result.usage` nor `judge_adapter.served_usage` proves a real
+            # measurement on its own unless at least one carries a positive
+            # token count (a plain `is not None`/truthy check on either
+            # accepts that same fabricated zero-token mapping).
+            if self._usage_has_positive_evidence(
+                result.usage
+            ) or self._usage_has_positive_evidence(judge_adapter.served_usage):
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
@@ -8244,6 +8244,22 @@ class TaskOrchestrator:
             }
 
     @staticmethod
+    def _usage_has_positive_evidence(usage: Any) -> bool:
+        """Return whether a usage mapping reports at least one positive token count.
+
+        fast-mlsirm aggregates a missing trace usage into a non-empty
+        zero-token mapping (every count present but 0), which is truthy as a
+        dict yet carries no real measurement. Both judge-accounting call
+        sites must reject that shape identically, or one site's fabricated
+        "reported" zero-token usage silently disagrees with the other's
+        honest "unmeasured" verdict for the exact same underlying call.
+        """
+        return isinstance(usage, Mapping) and any(
+            type(usage.get(key)) is int and usage[key] > 0
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+
+    @staticmethod
     def _judge_adapter_accounting_fields(
         judge_adapter: "_FastMLSIJudgeAdapter | None",
     ) -> dict[str, Any]:
@@ -8267,14 +8283,16 @@ class TaskOrchestrator:
             fields["judge_agent_id"] = judge_adapter.served_agent_id
         if judge_adapter.served_model is not None:
             fields["judge_model"] = judge_adapter.served_model
-        if judge_adapter.served_usage:
-            # A falsy served_usage (missing/invalid response usage) is left
-            # genuinely absent rather than fabricated as reported-zero
-            # (Devin review on #961, on this same fix): judge_agent_id/
-            # judge_model above already keep a completed-but-unmeasured call
-            # attributable, and downstream budget/spend consumers derive an
-            # honest estimated fallback from the judge's own served_output
-            # text instead of trusting a fabricated "reported" usage dict.
+        if TaskOrchestrator._usage_has_positive_evidence(judge_adapter.served_usage):
+            # A missing/invalid/all-zero served_usage is left genuinely
+            # absent rather than fabricated as reported-zero (Devin review
+            # on #961, on this same fix, and a later review finding the
+            # plain-truthy check here still let a non-empty-but-all-zero
+            # fast-mlsirm mapping through): judge_agent_id/judge_model above
+            # already keep a completed-but-unmeasured call attributable, and
+            # downstream budget/spend consumers derive an honest estimated
+            # fallback from the judge's own served_output text instead of
+            # trusting a fabricated "reported" usage dict.
             fields["judge_usage"] = judge_adapter.served_usage
         if judge_adapter.served_output is not None:
             # The judge's own generated text, not the verifier_output text

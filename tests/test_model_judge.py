@@ -209,6 +209,65 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     assert budget_contribution["model-x"] > 0
 
 
+def test_judge_adapter_zero_aggregate_served_usage_is_not_treated_as_reported() -> None:
+    """A non-empty-but-all-zero ``served_usage`` must stay genuinely absent.
+
+    Devin review on `contextual-orchestrator#1002`: unlike `result.usage`
+    (fast-mlsirm's own aggregate, already guarded), `_FastMLSIJudgeAdapter`'s
+    `served_usage` comes straight from `ModelClient`'s provider-boundary
+    capture -- for the `mock://` transport that is exactly
+    `{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}`
+    (`ModelClient._mock_response`'s chat.completion branch), a non-empty
+    dict that is truthy in Python even though every count is 0. The plain
+    `if judge_adapter.served_usage:` check this function used to run
+    treated that as genuine reported-zero evidence, disagreeing with the
+    sibling `result.usage` guard a few lines above for the identical
+    fabricated shape. `_judge_adapter_accounting_fields` must reject it
+    exactly like `result.usage` already does.
+    """
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator=None,  # type: ignore[arg-type]
+        text="task",
+        judge="model",
+        served_agent_id="general_agent",
+        served_model="model-x",
+        served_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        served_output="judge rationale text",
+    )
+
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+
+    assert fields["judge_agent_id"] == "general_agent"
+    assert fields["judge_model"] == "model-x"
+    assert "judge_usage" not in fields
+    assert fields["judge_output_text"] == "judge rationale text"
+
+
+def test_judge_adapter_positive_served_usage_is_still_reported() -> None:
+    """A genuine positive token count in ``served_usage`` must still count.
+
+    The zero-aggregate guard above must not overcorrect into dropping real
+    provider-reported usage.
+    """
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator=None,  # type: ignore[arg-type]
+        text="task",
+        judge="model",
+        served_agent_id="general_agent",
+        served_model="model-x",
+        served_usage={"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        served_output="judge rationale text",
+    )
+
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+
+    assert fields["judge_usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 34,
+        "total_tokens": 46,
+    }
+
+
 def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:
