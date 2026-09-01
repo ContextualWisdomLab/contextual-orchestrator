@@ -926,11 +926,18 @@ def main(argv: list[str] | None = None) -> None:
         _openrouter_free_canary_command(arguments_after_subcommand)
         return
 
+    if subcommand == "nim-benchmark":
+        # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
+        # all-modality capability probes, and the cost-quality policy benchmark.
+        from .nim_benchmark import run_benchmark_cli
+
+        sys.exit(run_benchmark_cli(arguments_after_subcommand))
+
     parser = argparse.ArgumentParser(
         description="Route or conduct chat requests across model agents.",
         epilog=(
             "Commands: register-credential, discover-models, "
-            "openrouter-free-canary, check-fast-mlsirm"
+            "openrouter-free-canary, check-fast-mlsirm, nim-benchmark"
         ),
         allow_abbrev=False,
     )

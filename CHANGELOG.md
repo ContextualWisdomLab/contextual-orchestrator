@@ -376,6 +376,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `--log-level`/`--verbose`/`--debug` flags, matching every other
   subcommand), so `--help` documents them and exits cleanly, and an
   unrecognized trailing option is rejected instead of being ignored.
+- NVIDIA NIM benchmark cells now reconcile reported prompt and completion
+  usage independently, preventing negative completion counts after failures.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
@@ -967,12 +969,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Add an optional provider-neutral NVIDIA NIM benchmark harness that dynamically discovers the live `/v1/models` catalog, probes every discovered model under bounded concurrency and a hard request cap, records machine-readable capability outcomes, and compares direct, route-once, bounded-conduct, and explicit pricing-scenario policies over a locked task manifest.
+- Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
+- Add a validated deterministic one-frame H.264 MP4 probe fixture, complete preflight reservation for every discovered model-capability cell plus the full evaluation envelope, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
+- Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
 - Streamed `/v1/responses` workflow runs now request provider usage only from
   agents explicitly marked `stream_usage_supported`, preserve provider-declared
   SSE usage, record per-step `stream` cost-ledger rows, and expose cost status
   plus usage-record identities. Missing provider usage is explicitly
   unavailable; the gateway does not estimate billing tokens from the final
   answer, and nested gateway upstreams remain compatible (ADR 0040).
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
@@ -1191,6 +1200,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Strix B105 false positives eliminated at the source: KV credential-name
   constants renamed `*_CREDENTIAL_NAME`; readiness label keys renamed
   `readiness_ok/warning/failure`. (#833)
+- Expose a stable complete-run request planning view and align API, CLI, manual-workflow, and deterministic test caps with the locked thirty-task evidence floor, preserving fail-before-probe behavior.
+- Fail closed after catalog discovery but before capability egress when the complete all-model probe and equal-budget evaluation plan cannot fit the configured hard request cap; the monthly 2,000-request ceiling covers the representative 127-model, thirty-task, seven-worker plan requiring 1,924 requests, including route-once's full equal-call envelope and direct-cell judge calls, and still rejects larger plans before partial probing.
+- Align the monthly NIM live schedule with the reviewed access-cost evidence window while preserving fail-closed behavior after its validity horizon.
+- Scale the equal NIM policy-cell token budget with the five-call envelope so the conduct arm can carry its prompts while every policy retains the same total allowance.
+- Treat provider HTTP 401 and 403 responses during capability probes as authentication rejection, and keep live evaluation on the same DNS-pinned benchmark transport used by discovery and probes.
+- Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
+- Record the reviewed current NVIDIA NIM General FAQ as expiring evidence for free Developer Program hosted-endpoint prototyping access, while keeping NVIDIA AI Enterprise production licensing and every hypothetical model rate explicitly separate.
+- Require live hypothetical pricing scenarios to carry reviewed source, reviewer, review date, validity horizon, rate basis, uncertainty, and explicit rates; reject unreviewed, incomplete, future-dated, or expired price evidence before provider egress.
+- Give direct, route-once, conduct, and reviewed cheapest-worker cells one equal total prompt-plus-completion token budget and one common five-call envelope, with configured-versus-observed evidence in every cell.
+- Keep the optional NIM adapter lazy: importing the runtime package no longer imports the benchmark or mutates benchmark globals.
+- Record immutable source-artifact digests and exact Git tree identity in the integration evidence so buyers and reviewers can reproduce the accepted benchmark source independently of transient workflow state.
+
+- NIM benchmark provider responses are bounded to 8 MiB, and live HTTPS
+  requests use validation-time public-address pinning with original-host TLS,
+  no proxy lookup, and no redirect following.
+- Live pricing evidence is rejected unless its source, reviewer, dates, rate
+  basis, uncertainty, and explicit rates are complete and current.
+- Direct, route-once, conduct, and reviewed cheapest-worker cells share one
+  total token budget and five-call envelope, with configured and observed
+  values recorded separately.
+- Complete catalog probing and the full evaluation reserve are planned before
+  capability egress; the benchmark fails closed when the configured cap is too
+  small, and the scheduled workflow uses a reviewed 2,000-request ceiling.
+- The NIM access-cost evidence, hypothetical pricing provenance, and source
+  artifact digests remain explicit and independently reproducible.
 
 ### Security
 
@@ -1201,6 +1235,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
 - Worker-agent pool boundaries are enforced beside object lookup so a
   different-pool id can no longer read or mutate another pool's agent.
+
+- Provider hosts resolving to any non-globally-routable address are rejected,
+  including RFC 6598 shared space; benchmark artifacts refuse secret leakage.
 
 ### References
 

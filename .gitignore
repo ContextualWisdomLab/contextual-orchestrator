@@ -18,3 +18,6 @@ tempcred.txt
 # background-agent isolated worktree scratch state (nested git checkouts)
 .claude/worktrees/
 .worktrees/
+
+# local benchmark artifacts (uploaded by CI, not committed)
+benchmark_artifacts/

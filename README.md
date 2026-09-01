@@ -298,8 +298,34 @@ is read from a **KV config store**, never `os.getenv`.
   `pg_tiktoken` counting, and the production batch backend without adding a
   repository split here.
 
-Grounding papers (LLM cost, routing, load balancing) live in
+Grounding papers (LLM cost, routing, load balancing, evaluation) live in
 [docs/papers](docs/papers/README.md) with citations.
+
+### NIM cost-quality benchmark (optional harness)
+
+Evidence-grade benchmark of the routing policies against a **dynamically
+discovered** NVIDIA NIM catalog. It probes chat, completions, Responses,
+embeddings, image/video/audio understanding, transcription, and speech; compares
+direct, route-once, and bounded-conduct cells under one equal total-token and
+call budget; records paired uncertainty and Pareto frontiers; and keeps reviewed
+actual endpoint-access evidence separate from optional hypothetical paid rates.
+The bundled manifest is smoke-sized and reports `evidence_review_required` only
+after its paired cells complete; `routing_recommendation` remains null and no
+benchmark artifact automatically changes production routing.
+
+The adapter is lazy and optional: ordinary `import contextual_orchestrator` does
+not import or mutate it. Deterministic `--dry-run` receives no network access or
+NVIDIA secret. Live execution resolves `NVIDIA_NIM_API_KEY` from the credential
+registry, pins HTTPS connections to validation-time public addresses, rejects
+redirects and proxy routing, and fails closed on missing/expired evidence. See
+[docs/nim_benchmark.md](docs/nim_benchmark.md) and the
+[engineering decision record](docs/doctoring/nim-benchmark-evidence-grade.md).
+
+```bash
+python -m contextual_orchestrator nim-benchmark --dry-run \
+  --pricing-scenario examples/nim_pricing_scenario.json \
+  --output-dir benchmark_artifacts
+```
 
 ## Design Artifacts
 
@@ -365,6 +391,7 @@ python -m pytest -q tests/test_reasoning_effort_profile.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_nim_benchmark.py
 python tests/test_security_hardening.py
 python tests/test_chat_model_capability_isolation.py
 python tests/test_chat_transport_role_separation.py
