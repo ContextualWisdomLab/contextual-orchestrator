@@ -8,9 +8,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: usage-provenance-repair-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   repair:
+    if: github.actor != 'github-actions[bot]'
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - name: Checkout writer branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
