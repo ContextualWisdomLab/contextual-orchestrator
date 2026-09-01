@@ -1,114 +1,135 @@
-# ADR 0034: Anti-heuristic routing with measured evidence ledgers
+# ADR 0034: Anti-heuristic routing with identified evidence
 
-- Status: Proposed; stacked on ADR 0032 (PR #834)
+- Status: Proposed; partially implemented; superseding clarification 2026-09-01
 - Date: 2026-08-25
-- Figma file ID: `vsZMd8WAv42HDRgcZuNcWk` (no new visual pattern; Admin routing-evidence table gains a token-throughput column)
+- Figma file ID: `vsZMd8WAv42HDRgcZuNcWk` (no new visual pattern)
 - Doctoring record: [`docs/doctoring/measured-routing-evidence.md`](../../doctoring/measured-routing-evidence.md)
 
 ## Product requirement
 
-Buyers of an LLM gateway ask one question first: "why did this request go to
-that model?" Any answer that cites a hand-maintained keyword table is not
-auditable, silently rots as vocabulary drifts, and cannot be defended in an
-enterprise review. Routing therefore must be explainable only through three
-evidence classes: operator declarations (priority, capability tags,
-exclusions), semantic similarity computed from operator-declared metadata,
-and measured transport behavior observed on this deployment.
+Buyers of an LLM gateway need a defensible answer to "why did this request go
+to that model?" A hand-maintained keyword table, arbitrary priority, manually
+chosen similarity rule, invented score, fixed threshold, or undocumented
+fallback cannot answer that question. A routing decision therefore requires an
+identified source of authority: an exact caller/operator constraint, an
+explicit statistical or psychometric estimand with valid observations, an
+authoritative protocol/safety constraint, or a trained/evaluated routing model
+whose provenance is executable and reviewable.
+
+## 2026-09-01 superseding clarification
+
+The earlier version of this ADR described
+`(-role_fit, -priority, has_affinity, -cosine_affinity, agent.id)` as an
+"evidence-only" static ordering and combined a Beta-Bernoulli stability value
+with EWMA latency into expected successful responses per second. Those formulas
+were deterministic, but determinism is not scientific identification. The ADR
+did not establish that operator priority, metadata cosine, agent identifier,
+or that composite transport score estimated the routing outcome required by the
+product. They therefore cannot be used as substantive routing authority under
+the no-heuristics contract.
+
+Dense-retrieval cosine similarity is a valid retrieval operation for a retrieval
+estimand; it does not by itself validate transferring model-quality estimates
+from one prompt to another or selecting an LLM. Likewise, a posterior or EWMA
+is mathematically defined, but a hand-composed function of those quantities is
+not automatically a validated model-selection objective.
+
+The live repository still contains historical static-ranking and measured-order
+code outside the exact-context psychometric repair. Until those paths are
+removed or replaced with independently evaluated routing models, they are a
+known production gap rather than accepted evidence.
 
 ## Decision
 
-All task-keyword heuristics are removed from the routing path.
-`DOMAIN_HINTS` and `COMPLEX_HINTS` tables are deleted from the orchestrator;
-the conduct-hint threshold policy field is retired from route selection.
+1. **Eligibility is not ranking.** Exact capability compatibility, explicit
+   provider exclusion, privacy/ZDR requirements, credential-source admission,
+   and explicit caller pins may partition the candidate set. They must not be
+   converted into an undocumented preference ordering.
+2. **Exact caller selection is authoritative.** An explicit eligible model,
+   agent, or channel selection may be honored because it is caller intent, not
+   an inferred score. Ambiguous or ineligible requests fail closed.
+3. **Psychometric quality evidence is exact-context only until a validated
+   generalization model exists.** `PsychometricRoutingEvidence` may use the
+   fast-mlsirm MLSRM fit and its predicted probability for the exact canonical
+   prompt interaction that generated the fitted item. An unseen prompt receives
+   no nearest-neighbor/cosine transfer. Equal fitted probabilities are
+   unresolved; agent identifiers and input order cannot break the tie.
+4. **No arbitrary evidence cardinality.** The historical `max_contexts`
+   argument is compatibility-only and may not evict observations that could
+   later affect a routing fit unless a separately governed retention model or
+   authoritative storage policy supplies that boundary.
+5. **No hand-authored fallback ranking.** When the requested virtual pool has
+   multiple eligible candidates and no fitted/evaluated model uniquely selects
+   one, the gateway must require explicit selection or fail closed. It may not
+   fall through to declaration order, provider name, model name, price without
+   an exact request shape, discovery order, or a fixed priority value.
+6. **Routing research must be implemented as research, not as vocabulary.**
+   RouteLLM learns routing from preference data; FrugalGPT learns cascades;
+   Conductor learns orchestration with reinforcement learning; TRINITY optimizes
+   an explicit coordinator with evolutionary search; Sakana Fugu is a trained
+   orchestration model grounded in Conductor and TRINITY. These works support
+   trained/evaluated routing and orchestration. They do not justify replacing
+   those learned policies with hand-authored thresholds, static lexicographic
+   keys, or similarity shortcuts.
+7. **Structured model decisions remain fail-closed.** Route-versus-conduct
+   triage and verifier decisions must use their exact structured contracts. A
+   malformed or unavailable verdict cannot synthesize a heuristic substitute.
+8. **fast-mlsirm remains the statistical quality boundary.** Applicable judged
+   response-quality observations feed the fast-mlsirm-backed psychometric path.
+   Criterion observations may inform the joint fit, but no application-level
+   hand weight or cutoff may be invented around them.
 
-The replacement ordering ladder is evidence-only:
+## Current implementation status
 
-1. **Eligibility contracts** — operator `provider_exclusions` and the
-   general-chat capability gate (`is_general_chat_agent_model_id`) always
-   partition candidates before any scoring. These are endpoint-compatibility
-   gates, not heuristics.
-2. **Static declaration order** — `_static_rank_key` orders by
-   `(-role_fit, -priority, has_affinity, -cosine_affinity, agent.id)`.
-   Role fit is exact tag membership declared by operators. Cosine affinity
-   is computed between the request text embedding and each candidate's
-   declared metadata document via the pool's own embedding member
-   (Karpukhin et al., 2020 dense-retrieval formulation), cached per text
-   hash with an LRU bound so repeated requests cost no additional calls.
-3. **Measured intra-group order** — inside one logical model group, members
-   are ordered by judged answer quality first (real-time judge feeding the
-   quality Beta-Bernoulli ledger) and transport evidence second. Both ledgers
-   rank by posterior stability divided by EWMA latency, in expected successful
-   responses per second. Token throughput remains separately observable and
-   never changes the comparable-unit score.
+The `fix/no-heuristic-batch-routing` lane removes heuristic batch admission,
+SHA-derived pseudo-embeddings, representative-token cost guesses, ambiguous
+embedding-member price/order selection, nearest-context psychometric transfer,
+psychometric identifier tie-breaking, and routing-impacting context-count
+eviction. It deliberately fails closed where independent routing evidence is
+absent.
 
-### Workflow triage without keywords
-
-The auto-mode decision "route directly or run the multi-agent workflow" is
-made by a structured triage call, not by keyword counting. The triage model
-must reply with exactly `{"workflow_required": bool}`; any other payload
-(including extra keys, wrong types, or duplicate keys) fails closed to the
-conducted workflow. Verdicts are memoized by content hash. Speed is
-explicitly not a design constraint here; correctness is.
-
-### Real-time judging on direct routes
-
-When `policy.realtime_judge` is enabled (default), every direct-route answer
-is judged before it is returned. Accepted answers record one success
-observation in the quality ledger (with provider token counts when
-reported); rejected answers record one failure and fail over to the next
-measured candidate within the configured retry budget. The final trace row
-carries the verdict so callers can audit every accept/reject decision.
-Disabling the flag keeps the legacy verification shape for deployments
-without a judge-capable member.
-
-## Alternatives rejected
-
-- Keeping keyword tables behind a feature flag: preserves silent rot and
-  unauditable decisions; deletion is cheaper than guarding.
-- Learned routers trained offline (RouteLLM-style): require labeled
-  preference data this gateway does not have per deployment; measured
-  ledgers give per-deployment truth without training data.
-- Pure latency routing: ignores whether answers were actually acceptable;
-  the quality ledger exists precisely because fast wrong answers are worse
-  than slower verified ones.
-
-## Consequences
-
-- Every miss now costs triage + worker + (optional) judge provider calls.
-  Cache-hit economics are unaffected: hits replay stored answers with zero
-  executions. Tests that assert exact call counts pin single-step routing
-  with the judge disabled to keep counts meaningful.
-- The mock transport's deterministic embeddings exist only as a test
-  fixture (`MOCK_EMBEDDING_DIMENSION = 8`) and never serve production.
-- Admin surfaces gain `routing_evidence.quality` alongside the existing
-  transport ledger so operators can see both accuracy and throughput.
-
-```mermaid
-flowchart LR
-  Req[request] --> Tri{triage gate<br/>structured JSON}
-  Tri -- workflow_required=true --> Cond[multi-agent conduct]
-  Tri -- false / cache hit --> Rank[evidence ladder]
-  Rank --> E1[eligibility partition]
-  E1 --> E2[declaration order<br/>+ cosine affinity]
-  E2 --> E3[measured group order<br/>quality then successful responses/sec]
-  E3 --> Serve[serve answer]
-  Serve --> Judge{real-time judge}
-  Judge -- accepted --> LedgerQ[quality ledger +1 success]
-  Judge -- rejected --> Failover[next measured candidate]
-```
+The broader `TaskOrchestrator` static declaration ordering and measured-group
+ordering remain separate causal-owner work on the same repository. This ADR
+must not be read as proof that those historical paths are already compliant.
 
 ## Acceptance evidence
 
-- `tests/test_measured_routing_evidence.py`: 29 tests covering exact
-  Jacobson EWMA arithmetic, Laplace-prior stability products, cosine
-  ordering, strict triage parsing, verdict caching, and judge-driven
-  failover within budget.
-- `tests/test_chat_model_capability_isolation.py::test_stale_embedding_agent_cannot_win_synthesizer_selection`
-  proves the capability gate survives the rewrite.
-- Full suite green: 1891 unit/contract tests plus 12 property/fuzz tests.
+Executable regressions must establish at minimum:
 
-## References
+- implicit latency/priority/token hints cannot select batch execution;
+- local embeddings require an explicit semantic embedding implementation;
+- table-driven cost selection requires the exact request shape and leaves equal
+  minima unresolved;
+- ambiguous embedding pools require explicit identity or a separately evaluated
+  router;
+- unseen prompt contexts cannot borrow the nearest observed fast-mlsirm score;
+- equal fast-mlsirm fitted probabilities do not use an identifier tie-break;
+- the retired context-cardinality compatibility argument cannot evict routing
+  evidence;
+- missing/non-converged fast-mlsirm evidence yields no fabricated ranking.
 
-See the doctoring record for full APA 7 references (Jacobson, 1988;
-Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
-Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021).
+Hosted exact-head tests, security checks, and independent review remain the
+merge authority. Predecessor or base-head evidence does not transfer after a
+push.
+
+## Research basis (APA 7)
+
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language
+models while reducing cost and improving performance* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2305.05176
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
+*Learning to orchestrate agents in natural language with the Conductor*
+[Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04388
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
+M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference
+data* [Preprint; revised 2025]. arXiv.
+https://doi.org/10.48550/arXiv.2406.18665
+
+Sakana AI. (2026, April 24). *Sakana Fugu: A multi-agent orchestration system as
+a foundation model*. https://sakana.ai/fugu-beta/
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
+*TRINITY: An evolved LLM coordinator* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2512.04695
