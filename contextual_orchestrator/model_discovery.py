@@ -141,27 +141,28 @@ def _response_contains_parallel_probe_tool_calls(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
     seen: set[str] = set()
-
-    def collect(value: Any) -> None:
-        if isinstance(value, dict):
-            if value.get("type") == "function":
-                function = value.get("function")
-                if isinstance(function, dict):
-                    name = function.get("name")
-                    if isinstance(name, str) and name in {"probe_a", "probe_b"}:
-                        seen.add(name)
-            if value.get("type") == "function_call":
-                name = value.get("name")
-                if isinstance(name, str) and name in {"probe_a", "probe_b"}:
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict) or tool_call.get("type") != "function":
+                    continue
+                function = tool_call.get("function")
+                name = function.get("name") if isinstance(function, dict) else None
+                if name in {"probe_a", "probe_b"}:
                     seen.add(name)
-            for child in value.values():
-                collect(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                collect(child)
-
-    collect(payload)
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            name = item.get("name")
+            if name in {"probe_a", "probe_b"}:
+                seen.add(name)
     return seen == {"probe_a", "probe_b"}
 
 

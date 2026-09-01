@@ -2630,6 +2630,20 @@ def test_response_contains_parallel_probe_tool_calls_recognizes_responses_api_sh
     )
 
 
+def test_parallel_probe_does_not_treat_echoed_tool_definitions_as_calls() -> None:
+    echoed_tools = [
+        {"type": "function", "function": {"name": name}}
+        for name in ("probe_a", "probe_b")
+    ]
+
+    assert not _response_contains_parallel_probe_tool_calls(
+        {
+            "request": {"tools": echoed_tools},
+            "choices": [{"message": {"content": "no tool calls"}}],
+        }
+    )
+
+
 def test_probe_discovered_model_tool_call_capability_single_tool_400_returns_false() -> None:
     """NIM's explicit single-tool 400 is captured as negative evidence."""
     discovered = _single_tool_discovered_model()
