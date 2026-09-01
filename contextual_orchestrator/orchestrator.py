@@ -8269,24 +8269,32 @@ class TaskOrchestrator:
 
     @staticmethod
     def _usage_has_positive_evidence(usage: Any) -> bool:
-        """Return whether a usage mapping reports at least one positive token count.
+        """Return whether Chat or Responses usage reports a positive token count.
 
         This remains the compatibility rule for aggregate usage whose origin
         is unknown. A provider-boundary zero measurement is handled separately
         by ``_usage_is_reported_token_mapping`` plus explicit provenance.
         """
-        return isinstance(usage, Mapping) and any(
-            type(usage.get(key)) is int and usage[key] > 0
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
         )
+        return any(type(value) is int and value > 0 for value in counts)
 
     @staticmethod
     def _usage_is_reported_token_mapping(usage: Any) -> bool:
-        """Validate the canonical non-negative token fields of reported usage."""
-        return isinstance(usage, Mapping) and all(
-            type(usage.get(key)) is int and usage[key] >= 0
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        """Validate complete non-negative Chat or Responses token counters."""
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
         )
+        return all(type(value) is int and value >= 0 for value in counts)
 
     @staticmethod
     def _judge_adapter_accounting_fields(
