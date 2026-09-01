@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import sys
+import threading
 import urllib.request
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -17,6 +19,9 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents  #
 from contextual_orchestrator.credentials import NotConfigured  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
+    _ProviderCancellation,
+    _PROVIDER_DNS_SLOTS,
+    _ProviderRequestCancelled,
     _chat_to_responses_payload,
     _is_local_provider_url,
     _responses_to_chat_payload,
@@ -152,7 +157,7 @@ def test_local_gateway_credential_cannot_be_attached_to_mlx_worker() -> None:
         )
 
 
-def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_without_retry() -> None:
+def test_provider_probe_leaves_registry_and_model_inference_unbounded() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
     seen: list[tuple[object, float | None]] = []
@@ -167,21 +172,31 @@ def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_witho
         })
 
     with patch.object(client, "_open_provider", side_effect=open_provider):
-        report = client.probe(agent, timeout=1.25)
+        report = client.probe(agent)
 
     assert report["status"] == "ready"
     assert report["usage"]["total_tokens"] == 7
     assert len(seen) == 2
     assert seen[0][0].get_method() == "GET"
     assert seen[0][0].full_url == "http://127.0.0.1:8080/v1/models"
+    assert seen[0][1] is None
     assert seen[1][0].get_method() == "POST"
-    assert seen[1][1] == 1.25
+    assert seen[1][1] is None
     import json
 
     payload = json.loads(seen[1][0].data)
     assert payload["max_tokens"] == 1
     assert payload["temperature"] == 0.0
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_legacy_timeout_argument_positions_remain_compatible() -> None:
+    client = ModelClient(0.25, 321, 3, connect_timeout=0.5)
+
+    assert client.timeout == 0.25
+    assert client.connect_timeout == 0.5
+    assert client.max_output_tokens == 321
+    assert client.max_retries == 3
 
 
 def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
@@ -192,7 +207,7 @@ def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
         "_open_provider",
         return_value=_Response({"object": "list", "data": [{"id": "other-model"}]}),
     ) as open_provider:
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "RuntimeError"
@@ -205,7 +220,7 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2)
     with patch.object(client, "_open_provider", side_effect=TimeoutError("probe timeout")) as open_provider:
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "TimeoutError"
@@ -218,7 +233,7 @@ def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)
     with patch.object(client, "_open_provider", side_effect=RuntimeError("provider-output-secret")):
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     serialized = json.dumps(report)
     assert "provider-output-secret" not in serialized
@@ -234,14 +249,14 @@ def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> No
     ], client=client)
     with patch.object(client, "probe", return_value={"status": "ready", "agent_id": "ready_agent", "model": "ready-model"}) as probe:
         unprobed = orchestrator.provider_readiness_report()
-        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=2.0)
+        refreshed = orchestrator.provider_readiness_report(refresh=True)
 
     assert unprobed["status"] == "unprobed"
     assert unprobed["items"][0]["status"] == "unprobed"
     assert refreshed["status"] == "ready"
     assert refreshed["ready_agent_count"] == 1
     assert refreshed["items"][1]["status"] == "disabled"
-    probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
+    probe.assert_called_once_with(orchestrator.agents[0])
 
 
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
@@ -252,10 +267,10 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     entered = threading.Event()
     release = threading.Event()
     counters = {"active": 0, "max_active": 0}
+    reports = []
     counter_lock = threading.Lock()
 
-    def probe(_agent, *, timeout):
-        del timeout
+    def probe(_agent):
         with counter_lock:
             counters["active"] += 1
             counters["max_active"] = max(counters["max_active"], counters["active"])
@@ -267,7 +282,9 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
 
     with patch.object(client, "probe", side_effect=probe):
         first = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
-        second = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        second = threading.Thread(
+            target=lambda: reports.append(orchestrator.provider_readiness_report(refresh=True))
+        )
         first.start()
         assert entered.wait(timeout=2)
         second.start()
@@ -276,9 +293,17 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
         second.join(timeout=2)
 
     assert counters["max_active"] == 1
+    assert reports == [{
+        "status": "refresh_in_progress",
+        "probe": "refresh",
+        "checked_at": None,
+        "agent_count": 1,
+        "ready_agent_count": 0,
+        "items": [],
+    }]
 
 
-def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
+def test_local_provider_serializes_model_switches_and_bounds_explicit_waiters() -> None:
     import threading
 
     first_agent = ModelAgent("first_agent", "model-a", base_url="mlx://127.0.0.1:8080/v1")
@@ -655,6 +680,10 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
             self.args = args
             self.kwargs = kwargs
             self.request_args = None
+            self.sock = None
+
+        def connect(self):
+            self.sock = Mock()
 
         def request(self, *args, **kwargs):
             self.request_args = (args, kwargs)
@@ -679,9 +708,254 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
 
     assert response.status == 200
     https_connection.assert_called_once_with(
-        "provider.example", 443, timeout=client.timeout, context=client._ssl_context
+        "provider.example", 443, timeout=None, context=client._ssl_context
     )
+    connection.sock.settimeout.assert_called_once_with(None)
     assert connection.request_args[0][0] == "POST"
+
+
+def test_cancellable_provider_call_closes_blocked_transport_without_generation_timeout() -> None:
+    entered = threading.Event()
+    released = threading.Event()
+
+    class Socket:
+        def settimeout(self, value):
+            assert value is None
+
+        def shutdown(self, _how):
+            released.set()
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = Socket()
+            self.closed = False
+
+        def connect(self):
+            return None
+
+        def request(self, *_args, **_kwargs):
+            return None
+
+        def getresponse(self):
+            entered.set()
+            assert released.wait(timeout=1)
+            raise OSError("cancelled")
+
+        def close(self):
+            self.closed = True
+
+    client = ModelClient(timeout=None)
+    connection = Connection()
+    request = urllib.request.Request("http://provider.example/v1/chat/completions")
+    call, cancel = client.cancellable_call(
+        lambda: client._open_provider(request, (socket.AF_INET, ("127.0.0.1", 80)))
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except _ProviderRequestCancelled as exc:
+            errors.append(exc)
+
+    with patch(
+        "contextual_orchestrator.orchestrator.http.client.HTTPConnection",
+        return_value=connection,
+    ):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors
+    assert connection.closed
+
+
+def test_cancellable_provider_call_stops_nonblocking_tcp_establishment() -> None:
+    entered = threading.Event()
+
+    class Socket:
+        closed = False
+
+        def setblocking(self, _enabled):
+            return None
+
+        def connect_ex(self, _sockaddr):
+            entered.set()
+            return errno.EINPROGRESS
+
+        def close(self):
+            self.closed = True
+
+    client = ModelClient()
+    connection = Socket()
+    call, cancel = client.cancellable_call(
+        lambda: client._connect_validated(
+            (socket.AF_INET, ("127.0.0.1", 443)), None, None
+        )
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except _ProviderRequestCancelled as exc:
+            errors.append(exc)
+
+    with patch("contextual_orchestrator.orchestrator.socket.socket", return_value=connection), patch(
+        "contextual_orchestrator.orchestrator.select.select", return_value=((), (), ())
+    ):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors
+    assert connection.closed
+
+
+def test_cancellable_tcp_establishment_honors_explicit_caller_deadline() -> None:
+    class Socket:
+        def setblocking(self, _enabled):
+            return None
+
+        def connect_ex(self, _sockaddr):
+            return errno.EINPROGRESS
+
+        def close(self):
+            return None
+
+    client = ModelClient()
+    call, _cancel = client.cancellable_call(
+        lambda: client._connect_validated(
+            (socket.AF_INET, ("127.0.0.1", 443)), 0.01, None
+        )
+    )
+    with patch("contextual_orchestrator.orchestrator.socket.socket", return_value=Socket()), patch(
+        "contextual_orchestrator.orchestrator.select.select", return_value=((), (), ())
+    ):
+        with pytest.raises(TimeoutError, match="explicit deadline"):
+            call()
+
+
+def test_cancellable_provider_call_stops_waiting_for_dns() -> None:
+    entered = threading.Event()
+    released = threading.Event()
+
+    def resolve(*_args, **_kwargs):
+        entered.set()
+        released.wait(timeout=1)
+        return []
+
+    client = ModelClient()
+    call, cancel = client.cancellable_call(
+        lambda: client._resolve_addresses("provider.example", 443)
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except _ProviderRequestCancelled as exc:
+            errors.append(exc)
+
+    with patch("contextual_orchestrator.orchestrator.socket.getaddrinfo", side_effect=resolve):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+        released.set()
+
+    assert not thread.is_alive()
+    assert errors
+
+
+def test_cancelled_dns_lookups_have_bounded_worker_ownership() -> None:
+    all_workers_entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    calls = 0
+
+    def resolve(*_args, **_kwargs):
+        nonlocal calls
+        with lock:
+            calls += 1
+            if calls == 4:
+                all_workers_entered.set()
+        release.wait(timeout=2)
+        return []
+
+    request_threads = []
+    cancels = []
+    errors = []
+
+    def start_request():
+        call, cancel = ModelClient().cancellable_call(
+            lambda: ModelClient._resolve_addresses("provider.example", 443)
+        )
+        cancels.append(cancel)
+
+        def run():
+            try:
+                call()
+            except _ProviderRequestCancelled as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        request_threads.append(thread)
+        thread.start()
+
+    with patch("contextual_orchestrator.orchestrator.socket.getaddrinfo", side_effect=resolve):
+        for _ in range(4):
+            start_request()
+        assert all_workers_entered.wait(timeout=1)
+        for cancel in cancels:
+            cancel()
+        for thread in request_threads:
+            thread.join(timeout=1)
+
+        start_request()
+        fifth_cancel = cancels[-1]
+        fifth_thread = request_threads[-1]
+        fifth_cancel()
+        fifth_thread.join(timeout=1)
+        with lock:
+            assert calls == 4
+        release.set()
+
+    assert all(not thread.is_alive() for thread in request_threads)
+    assert len(errors) == 5
+
+
+def test_dns_slot_returns_when_resolver_thread_cannot_start() -> None:
+    call, _cancel = ModelClient().cancellable_call(
+        lambda: ModelClient._resolve_addresses("provider.example", 443)
+    )
+
+    with patch.object(threading.Thread, "start", side_effect=RuntimeError("no thread")), patch.object(
+        _PROVIDER_DNS_SLOTS, "release", wraps=_PROVIDER_DNS_SLOTS.release
+    ) as release:
+        with pytest.raises(RuntimeError, match="no thread"):
+            call()
+
+    release.assert_called_once_with()
+
+
+def test_cancellable_provider_call_ignores_connection_close_failure() -> None:
+    class Connection:
+        sock = None
+
+        def close(self):
+            raise OSError("close failed")
+
+    scope = _ProviderCancellation()
+    scope.register(Connection())
+    scope.cancel()
 
 
 def test_validated_connect_binds_source_address() -> None:

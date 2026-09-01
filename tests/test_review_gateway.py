@@ -88,8 +88,8 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
     assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
 
 
-def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
-    """The gateway uses independently discovered providers before duplicates."""
+def test_build_review_orchestrator_uses_model_group_diversity(monkeypatch):
+    """Different concrete models are not displaced by provider grouping."""
     discovered = [
         _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
         _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),
@@ -104,7 +104,7 @@ def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
 
     assert [agent.model for agent in orchestrator.agents] == [
         "cheap_first",
-        "independent_review",
+        "cheap_second",
     ]
 
 

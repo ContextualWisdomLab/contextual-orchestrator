@@ -14,6 +14,7 @@ from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    agent_id_for,
 )
 from contextual_orchestrator.provider_bootstrap import ProviderBootstrapError
 from contextual_orchestrator.provider_catalog_bootstrap import (
@@ -89,7 +90,7 @@ def test_failed_refresh_restores_previous_credential_before_using_lkg() -> None:
     )
 
     assert get_credential(source.credential_name) == "old-working-secret"
-    assert report.selected_agent_ids == ("openai_gpt_last_known_good",)
+    assert report.selected_agent_ids == (agent_id_for(_model(source, "gpt-last-known-good")),)
     assert report.restored_credentials == (source.credential_name,)
 
 
@@ -110,7 +111,7 @@ def test_empty_refresh_restores_previous_credential_before_using_lkg() -> None:
     )
 
     assert get_credential(source.credential_name) == "old-working-secret"
-    assert report.selected_agent_ids == ("openai_gpt_last_known_good",)
+    assert report.selected_agent_ids == (agent_id_for(_model(source, "gpt-last-known-good")),)
     assert report.restored_credentials == (source.credential_name,)
 
 
@@ -188,7 +189,7 @@ def test_successful_refresh_promotes_the_candidate_credential() -> None:
     )
 
     assert get_credential(source.credential_name) == "new-working-secret"
-    assert report.selected_agent_ids == ("openai_gpt_new_live",)
+    assert report.selected_agent_ids == (agent_id_for(live),)
     assert report.restored_credentials == ()
 
 

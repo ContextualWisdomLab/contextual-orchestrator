@@ -19,6 +19,7 @@ from .model_discovery import (
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
@@ -341,7 +342,7 @@ def _discover_models_command(argv: list[str]) -> None:
             if not model.evidence_only
         ]
         bootstrap = TaskOrchestrator(
-            discovered_agents,
+            [],
             agents_db=args.agents_db,
             allow_empty_agents=True,
         )
@@ -349,7 +350,21 @@ def _discover_models_command(argv: list[str]) -> None:
             bootstrap.sync_discovered_agents(discovered_agents)
             if args.enable_cheapest:
                 for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                    agent_id = agent_id_for(model)
+                    incoming = agent_from_discovered(model)
+                    matches = [
+                        candidate
+                        for candidate in bootstrap.candidates
+                        if "discovered" in candidate.tags
+                        and candidate.provider_name == incoming.provider_name
+                        and candidate.credential_name == incoming.credential_name
+                        and candidate.model == incoming.model
+                    ]
+                    if not matches:
+                        continue
+                    agent_id = next(
+                        (candidate.id for candidate in matches if candidate.id == incoming.id),
+                        matches[-1].id,
+                    )
                     bootstrap.patch_agent("default", agent_id, {"status": "active"})
                     enabled_agent_ids.append(agent_id)
         finally:
@@ -421,7 +436,9 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []
     for model in chat_models:
-        existing = existing_by_id.get(agent_id_for(model))
+        existing = existing_by_id.get(agent_id_for(model)) or existing_by_id.get(
+            legacy_agent_id_for(model)
+        )
         routable = is_routable_discovered_model(model)
         if existing is None:
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
@@ -436,6 +453,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     existing,
                     disabled=True,
                     tags=tuple(dict.fromkeys(tags)),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
                 )
             )
         elif "spend:blocked" in existing.tags:
@@ -448,6 +466,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                         for tag in existing.tags
                         if tag not in {"spend:blocked", "spend:blocked:preserve-disabled"}
                     ),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
+                )
+            )
+        elif not existing.group_name:
+            agents.append(
+                replace(
+                    existing,
+                    group_name=agent_from_discovered(model).group_name,
                 )
             )
     result = (

@@ -295,8 +295,8 @@ def test_conflicting_duplicate_prices_are_withheld_as_ambiguous() -> None:
     ) is complete
 
 
-def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> None:
-    """The initial failover pool must span providers before repeating one."""
+def test_bootstrap_selector_prefers_model_group_diversity() -> None:
+    """The initial pool must span exact model identities before duplicate endpoints."""
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -306,21 +306,23 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
 
     price_book = PriceBook(InMemoryConfigStore())
     router_cheapest = _model("openrouter", "router-cheapest")
-    router_second = _model("openrouter", "router-second")
+    router_second = _model("openrouter", "shared-model")
+    nim_duplicate = _model("nvidia_nim", "shared-model")
     nim_model = _model("nvidia_nim", "nim-model")
     openai_model = _model("openai", "openai-model")
     _set_price(price_book, router_cheapest, 0.01)
     _set_price(price_book, router_second, 0.02)
+    _set_price(price_book, nim_duplicate, 0.03)
     _set_price(price_book, nim_model, 0.5)
     _set_price(price_book, openai_model, 1.0)
 
     selected = selector(
-        [router_second, openai_model, nim_model, router_cheapest],
+        [router_second, nim_duplicate, openai_model, nim_model, router_cheapest],
         price_book,
         3,
     )
 
-    assert selected == [router_cheapest, nim_model, openai_model]
+    assert selected == [router_cheapest, router_second, nim_model]
 
 
 def test_bootstrap_selector_keeps_nim_primary_and_sub_credential_accounts_independent() -> None:

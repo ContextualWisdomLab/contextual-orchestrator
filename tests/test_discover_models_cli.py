@@ -13,6 +13,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.__main__ import main  # noqa: E402
+from contextual_orchestrator.model_discovery import (  # noqa: E402
+    DiscoveredModel,
+    agent_from_discovered,
+    agent_id_for,
+)
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     get_credential,
@@ -178,7 +183,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     assert report["discovered_count"] == 1
     assert report["models"] == [
         {
-            "provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5",
+                "provider": "openai", "model": "gpt-5.5", "agent_id": agent_id_for(DiscoveredModel("openai", "gpt-5.5", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")),
             "is_free": False,
             "data_privacy": {
                 "zero_data_retention": "unknown",
@@ -323,7 +328,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
         set_backend(None)
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
-    assert any(agent.id == "openai_gpt_5_5" for agent in reloaded.candidates)
+    assert any(agent.model == "gpt-5.5" for agent in reloaded.candidates)
 
 
 def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:
@@ -412,11 +417,176 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
+    assert report["enabled_agent_ids"] == [
+        agent_id_for(DiscoveredModel("openrouter", "cheap-model", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "Bearer"))
+    ]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openrouter_cheap_model"].disabled is False
+    assert by_id[report["enabled_agent_ids"][0]].disabled is False
+
+
+def test_enable_cheapest_reuses_and_activates_legacy_discovered_id(tmp_path) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    model = DiscoveredModel(
+        "openrouter", "cheap-model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer", is_free=True,
+    )
+    db_path = str(tmp_path / "legacy.db")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    seeded.sync_discovered_agents([
+        replace(agent_from_discovered(model), id="openrouter_cheap_model")
+    ])
+    seeded.close()
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    stdout = StringIO()
+
+    try:
+        with (
+            patch.object(sys, "argv", [
+                "contextual-orchestrator", "discover-models", "--agents-db", db_path,
+                "--enable-cheapest", "1",
+            ]),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                return_value=_Response({
+                    "data": [{
+                        "id": "cheap-model",
+                        "pricing": {"prompt": "0", "completion": "0"},
+                    }]
+                }),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
+    reloaded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    assert [agent.id for agent in reloaded.agents] == ["openrouter_cheap_model"]
+    assert all(agent.id != agent_id_for(model) for agent in reloaded.candidates)
+    reloaded.close()
+
+
+def test_enable_cheapest_does_not_activate_matching_manual_agent(tmp_path) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    model = DiscoveredModel(
+        "openrouter", "cheap-model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer", is_free=True,
+    )
+    db_path = str(tmp_path / "manual-and-discovered.db")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    legacy = replace(agent_from_discovered(model), id="openrouter_cheap_model")
+    seeded.sync_discovered_agents([legacy])
+    manual = replace(legacy, id="manual_cheap_model", tags=("operator",))
+    seeded._pool_store.save(manual)
+    seeded.close()
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    stdout = StringIO()
+
+    try:
+        with (
+            patch.object(sys, "argv", [
+                "contextual-orchestrator", "discover-models", "--agents-db", db_path,
+                "--enable-cheapest", "1",
+            ]),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                return_value=_Response({"data": [{
+                    "id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"},
+                }]}),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["enabled_agent_ids"] == [legacy.id]
+    reloaded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    by_id = {agent.id: agent for agent in reloaded.candidates}
+    assert by_id[legacy.id].disabled is False
+    assert by_id[manual.id].disabled is True
+    reloaded.close()
+
+
+def test_enable_cheapest_preserves_manual_legacy_id_without_crashing(
+    tmp_path,
+) -> None:
+    """A manual owner of the old generated ID remains intact without a crash."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    model = DiscoveredModel(
+        "openrouter",
+        "cheap-model",
+        "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1",
+        "Bearer",
+        is_free=True,
+    )
+    db_path = str(tmp_path / "manual-legacy-collision.db")
+    manual = replace(
+        agent_from_discovered(model),
+        id="openrouter_cheap_model",
+        tags=("operator",),
+    )
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    stdout = StringIO()
+
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "contextual-orchestrator",
+                    "discover-models",
+                    "--agents-db",
+                    db_path,
+                    "--enable-cheapest",
+                    "1",
+                ],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                return_value=_Response(
+                    {
+                        "data": [
+                            {
+                                "id": "cheap-model",
+                                "pricing": {"prompt": "0", "completion": "0"},
+                            }
+                        ]
+                    }
+                ),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    assert json.loads(stdout.getvalue())["enabled_agent_ids"] == []
+    reloaded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    by_id = {agent.id: agent for agent in reloaded.candidates}
+    assert by_id[manual.id] == manual
+    assert list(by_id) == [manual.id]
+    reloaded.close()
 
 
 def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
@@ -456,9 +626,12 @@ def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
-        "openrouter_router_model",
-        "nvidia_nim_nim_model",
-        "openai_openai_model",
+        agent_id_for(DiscoveredModel(provider, model, credential, url, "Bearer"))
+        for provider, model, credential, url in (
+            ("openrouter", "router-model", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+            ("nvidia_nim", "nim-model", "NVIDIA_NIM_API_KEY", "https://integrate.api.nvidia.com/v1"),
+            ("openai", "openai-model", "OPENAI_API_KEY", "https://api.openai.com/v1"),
+        )
     ]
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     enabled = {agent.id for agent in reloaded.candidates if not agent.disabled}
