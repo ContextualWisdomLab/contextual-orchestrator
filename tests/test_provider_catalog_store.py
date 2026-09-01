@@ -13,6 +13,7 @@ from contextual_orchestrator.model_discovery import (
     ModelUnitPrice,
     ProviderModelSource,
     _currency_is_comparable,
+    _parse_openai_compatible,
 )
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_catalog_store import (
@@ -135,7 +136,18 @@ def test_successful_refresh_clears_known_limits_after_invalid_metadata() -> None
         serving_tags={known.model_id: ("discovered", "chat")},
     )
 
-    invalid = replace(known, max_output_tokens=0, context_window=-1)
+    invalid = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": known.model_id,
+                    "max_output_tokens": 0,
+                    "context_window": -1,
+                }
+            ]
+        },
+        source,
+    )[0]
     store.record_success(
         source,
         [invalid],
@@ -641,11 +653,18 @@ def test_postgres_success_clears_invalid_limit_metadata() -> None:
         "postgresql://catalog.example/db",
         connection_factory=lambda: connection,
     )
-    invalid = replace(
-        _model(source, "model-a"),
-        max_output_tokens=0,
-        context_window=-1,
-    )
+    invalid = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "model-a",
+                    "max_output_tokens": 0,
+                    "context_window": -1,
+                }
+            ]
+        },
+        source,
+    )[0]
 
     store.record_success(
         source,

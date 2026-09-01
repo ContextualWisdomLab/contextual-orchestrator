@@ -1012,12 +1012,24 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
         outputs = tuple(value for value in raw_outputs if isinstance(value, str)) if isinstance(raw_outputs, list) else ()
-        max_output_tokens = _positive_int_metadata(
-            row.get("max_output_tokens")
-        ) or _positive_int_metadata(top_provider.get("max_completion_tokens"))
-        context_window = _positive_int_metadata(
-            row.get("context_window")
-        ) or _positive_int_metadata(row.get("context_length"))
+        raw_output_limits = [
+            value
+            for container, key in (
+                (row, "max_output_tokens"),
+                (top_provider, "max_completion_tokens"),
+            )
+            if key in container
+            for value in (container[key],)
+        ]
+        raw_context_limits = [
+            row[key]
+            for key in ("context_window", "context_length")
+            if key in row
+        ]
+        output_limits = [_positive_int_metadata(value) for value in raw_output_limits]
+        context_limits = [_positive_int_metadata(value) for value in raw_context_limits]
+        max_output_tokens = next((value for value in output_limits if value is not None), None)
+        context_window = next((value for value in context_limits if value is not None), None)
         if (
             not outputs
             and not any(capability != "chat" for capability in source.capabilities)
@@ -1081,9 +1093,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 context_window=context_window,
                 max_output_tokens_conflicted=(
                     row.get("_max_output_tokens_conflicted") is True
+                    or any(value is None for value in output_limits)
                 ),
                 context_window_conflicted=(
                     row.get("_context_window_conflicted") is True
+                    or any(value is None for value in context_limits)
                 ),
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
