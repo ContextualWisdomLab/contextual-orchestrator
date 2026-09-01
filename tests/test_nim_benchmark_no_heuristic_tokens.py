@@ -89,3 +89,25 @@ def test_cheapest_worker_requires_componentwise_price_dominance() -> None:
         },
     }
     assert nb.cheapest_priced_agent(agents, dominant).model == "vendor/model-b"
+
+
+def test_fixed_sample_and_completion_floors_cannot_authorize_evidence() -> None:
+    """Hand-selected sample-size/completion cutoffs are not statistical sufficiency proof."""
+    cells: list[dict[str, object]] = []
+    for task_index in range(30):
+        task_id = f"task_{task_index}"
+        for policy_name in ("route_once", "conduct_bounded"):
+            cells.append(
+                {
+                    "policy_name": policy_name,
+                    "task_id": task_id,
+                    "run_outcome": "success",
+                }
+            )
+
+    summary = nb._evaluation_evidence_summary(cells, 30)
+    assert summary["evidence_status"] == "measurement_evidence_only"
+    assert summary["decision_use"] == "measurement_evidence_only"
+    assert summary["minimum_paired_task_count"] is None
+    assert summary["required_completion_fraction"] is None
+    assert summary["routing_recommendation"] is None
