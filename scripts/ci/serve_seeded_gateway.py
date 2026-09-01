@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Bootstrap-transport gateway launcher for CI agent loops.
 
 Seeds the five provider keys from GitHub-secrets-provided environment
@@ -10,9 +9,9 @@ routing resolve keys through ``get_credential()`` exactly like production.
 Usage:
     python scripts/ci/serve_seeded_gateway.py [extra server args...]
 
-Provider key environment variables (all optional; missing ones are skipped):
+Bootstrap environment variables (all optional; missing ones are skipped):
     OPENAI_API_KEY, OPENROUTER_API_KEY, OPENCODE_ZEN_API_KEY, BYTEZ_API_KEY,
-    NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB
+    NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, CONTEXTUAL_ORCHESTRATOR_TOKEN
 """
 
 from __future__ import annotations
@@ -29,16 +28,17 @@ from contextual_orchestrator.model_discovery import PROVIDER_MODEL_SOURCES
 PROVIDER_KEY_ENV_NAMES = tuple(
     dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
 )
+SERVER_AUTH_ENV_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
 
 def seed_credentials_from_bootstrap_env() -> list[str]:
-    """Register every present provider key into the KV; return registered names."""
+    """Register every present CI bootstrap credential; return registered names."""
     set_backend(InMemoryCredentialBackend())
     seeded: list[str] = []
-    for credential_name in PROVIDER_KEY_ENV_NAMES:
+    for credential_name in (*PROVIDER_KEY_ENV_NAMES, SERVER_AUTH_ENV_NAME):
         value = os.environ.pop(credential_name, None)
-        # Bootstrap transport only: the CI job injects secrets.<NAME> into this
-        # process environment; nothing reads os.environ again after this.
+        # Bootstrap transport only: the trusted CI job injects each value into
+        # this process environment; nothing reads os.environ again after this.
         if value:
             register_credential(credential_name, value)
             seeded.append(credential_name)

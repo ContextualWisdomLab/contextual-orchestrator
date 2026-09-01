@@ -16,10 +16,12 @@ from contextual_orchestrator import (
     ModelAgent,
     ReasoningEffortProfile,
     TaskOrchestrator,
+    default_role_effort_catalog,
 )
 from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
+    _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
@@ -540,7 +542,7 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
         "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
     }
 
-    with pytest.raises(RuntimeError, match="fallback unavailable"):
+    with pytest.raises(ProviderUpstreamError) as exc_info:
         orchestrator.proxy_completion(
             {
                 "model": TaskOrchestrator.AUTO_MODEL,
@@ -550,6 +552,9 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
             single_agent=False,
         )
 
+    assert exc_info.value.agent_id == "fallback_agent"
+    assert exc_info.value.error_code == "api_error"
+    assert "fallback unavailable" not in str(exc_info.value)
     assert orchestrator._circuit["fallback_agent"]["failures"] == 1.0
     assert "primary_agent" not in orchestrator._circuit
 
@@ -634,6 +639,33 @@ def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> 
                 "model": TaskOrchestrator.AUTO_MODEL,
                 "messages": [{"role": "user", "content": "large request"}],
             }
+        )
+
+
+def test_stale_model_then_size_failure_preserves_request_too_large() -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(404),
+            "fallback_agent": _http_error(413),
+        }
+    )
+
+    orchestrator = _build(client)
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
         )
 
 
@@ -1315,6 +1347,45 @@ def test_virtual_effort_profile_selects_a_supported_provider() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]
 
 
+def test_explicit_omit_profile_overrides_fail_closed_catalog_ranking() -> None:
+    """A request override may intentionally use an unsupported provider."""
+    client = SequencedProxyClient(
+        {
+            "unsupported_agent": {"model": "unsupported-model"},
+            "supported_agent": {"model": "supported-model"},
+        }
+    )
+    unsupported = ModelAgent(
+        "unsupported_agent",
+        "unsupported-model",
+        base_url="https://unsupported.example/v1",
+        priority=10,
+        provider_name="unsupported",
+        reasoning_effort_supported=False,
+    )
+    supported = ModelAgent(
+        "supported_agent",
+        "supported-model",
+        base_url="https://supported.example/v1",
+        priority=1,
+        provider_name="supported",
+        reasoning_effort_supported=True,
+    )
+    orchestrator = TaskOrchestrator(
+        [unsupported, supported],
+        client=client,
+        role_effort_catalog=default_role_effort_catalog(),
+    )
+
+    result = orchestrator.proxy_completion(
+        {"messages": [{"role": "user", "content": "x"}]},
+        effort_profile=ReasoningEffortProfile(unsupported_provider_fallback="omit"),
+    )
+
+    assert result["model"] == "unsupported-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unsupported_agent"]
+
+
 def test_passthrough_with_no_ranked_provider_fails_cleanly(monkeypatch) -> None:
     """An empty filtered pool reports unavailability instead of reading stale state."""
     client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
@@ -1411,3 +1482,59 @@ def test_default_mock_endpoint_represents_one_fixture_provider() -> None:
 
     assert caught.value.agent_id == "first_mock"
     assert [agent_id for agent_id, _ in client.calls] == ["first_mock"]
+
+
+def test_virtual_structured_synthesis_skips_reasoning_only_model_on_same_endpoint() -> None:
+    """A contentless virtual candidate cannot terminate same-endpoint synthesis."""
+    endpoint = "https://synthetic.invalid/v1"
+    client = SequencedProxyClient(
+        {
+            "reasoning_only": {
+                "choices": [{"message": {"content": None, "reasoning": "bounded"}}]
+            },
+            "structured_live": {
+                "model": "structured-model",
+                "choices": [{"message": {"content": '{"status":"synthetic_ok"}'}}]
+            },
+        }
+    )
+    first = ModelAgent(
+        "reasoning_only", "reasoning-model", endpoint, priority=10,
+        tags=("response_format",),
+    )
+    second = ModelAgent(
+        "structured_live", "structured-model", endpoint, priority=1,
+        tags=("response_format",),
+    )
+    orchestrator = TaskOrchestrator([first, second], client=client)
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True},
+    }
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "synthetic structured request"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+    )
+
+    assert result["model"] == "structured-model"
+    assert result["choices"][0]["message"]["content"] == '{"status":"synthetic_ok"}'
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "reasoning_only",
+        "structured_live",
+    ]
+
+
+def test_json_object_contract_rejects_non_json_and_non_object_values() -> None:
+    """json_object validation cannot accept provider prose or JSON scalars."""
+    response_format = {"type": "json_object"}
+
+    assert _structured_output_error("not json", response_format) == "invalid_json"
+    assert _structured_output_error("[]", response_format) == "invalid_json_object"
+    assert _structured_output_error('{"status":"synthetic_ok"}', response_format) is None
