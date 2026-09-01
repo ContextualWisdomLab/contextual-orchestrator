@@ -13,7 +13,7 @@ from contextual_orchestrator.openrouter_canary import (
 from contextual_orchestrator import __main__ as cli
 
 
-def _model(model_id: str, *, prompt=0.0, completion=0.0) -> DiscoveredModel:
+def _model(model_id: str, *, prompt=0.0, completion=0.0, is_free=True) -> DiscoveredModel:
     return DiscoveredModel(
         "openrouter",
         model_id,
@@ -23,7 +23,7 @@ def _model(model_id: str, *, prompt=0.0, completion=0.0) -> DiscoveredModel:
         capabilities=("chat",),
         prompt_price_per_1k=prompt,
         completion_price_per_1k=completion,
-        is_free=True,
+        is_free=is_free,
     )
 
 
@@ -97,8 +97,54 @@ def test_canary_fails_closed_on_missing_credential_or_price() -> None:
                 live=False,
                 discover=lambda *_a, **_k: [_model("ambiguous", completion=None)],
             )
+        with pytest.raises(OpenRouterCanaryError, match="zero-price"):
+            run_openrouter_free_canary(
+                live=False,
+                discover=lambda *_a, **_k: [_model("paid-verdict", is_free=False)],
+            )
     finally:
         set_backend(None)
+
+
+def test_live_preflights_output_and_removes_expired_evidence(tmp_path: Path) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    expired = tmp_path / "expired.json"
+    expired.write_text(
+        '{"provider":"openrouter","expires_at":99}', encoding="utf-8"
+    )
+    seen = {}
+
+    class Client:
+        def __init__(self, **_kwargs):
+            seen["expired_before_transport"] = not expired.exists()
+
+        def chat(self, _agent, _messages):
+            return "OK"
+
+    try:
+        run_openrouter_free_canary(
+            live=True,
+            limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+            evidence_output=expired,
+            discover=lambda *_a, **_k: [_model("current-free")],
+            client_factory=Client,
+            now=lambda: 100,
+        )
+        with pytest.raises(OpenRouterCanaryError, match="regular file"):
+            run_openrouter_free_canary(
+                live=True,
+                limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+                evidence_output=tmp_path,
+                discover=lambda *_a, **_k: pytest.fail("discovery transport"),
+                client_factory=lambda **_k: pytest.fail("completion transport"),
+                now=lambda: 100,
+            )
+    finally:
+        set_backend(None)
+    assert seen["expired_before_transport"] is True
+    assert expired.stat().st_mode & 0o777 == 0o600
 
 
 def test_cli_defaults_to_dry_run_and_live_requires_every_bound(

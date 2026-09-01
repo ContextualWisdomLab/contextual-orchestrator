@@ -50,6 +50,7 @@ def _eligible(models: list[DiscoveredModel]) -> list[DiscoveredModel]:
             if model.provider_name == "openrouter"
             and model.prompt_price_per_1k == 0.0
             and model.completion_price_per_1k == 0.0
+            and model.is_free is True
             and not model.unit_prices
             and model.currency_code == "USD"
             and not model.evidence_only
@@ -79,6 +80,29 @@ def _write_evidence(path: Path, evidence: dict[str, Any]) -> None:
         raise
 
 
+def _prepare_evidence_path(path: Path, current_time: int) -> None:
+    """Remove expired prior evidence and prove a secure atomic write is possible."""
+    try:
+        prior = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        prior = None
+    if (
+        isinstance(prior, dict)
+        and prior.get("provider") == "openrouter"
+        and type(prior.get("expires_at")) is int
+        and prior["expires_at"] <= current_time
+    ):
+        path.unlink(missing_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.preflight.", dir=path.parent
+    )
+    os.close(descriptor)
+    os.unlink(temporary_name)
+    if path.exists() and not path.is_file():
+        raise OpenRouterCanaryError("evidence output must be a regular file path")
+
+
 def run_openrouter_free_canary(
     *,
     live: bool,
@@ -103,6 +127,12 @@ def run_openrouter_free_canary(
             )
         limits.validate()
     discovered_at = int(now())
+    if live:
+        assert evidence_output is not None
+        try:
+            _prepare_evidence_path(evidence_output, discovered_at)
+        except OSError as exc:
+            raise OpenRouterCanaryError("evidence output is not writable") from exc
     candidates = _eligible(
         discover(source, timeout=limits.timeout_seconds if limits else 10)
     )

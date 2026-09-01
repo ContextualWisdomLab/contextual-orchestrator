@@ -148,7 +148,10 @@ python -m contextual_orchestrator openrouter-free-canary --live \
 Every live cap and the evidence path/retention choice is mandatory. The command
 uses only the KV-registered `OPENROUTER_API_KEY`, disables retries, makes one
 fixed prompt request, and writes atomic JSON evidence containing neither the
-prompt, response, nor credential. No workflow invokes live mode automatically.
+prompt, response, nor credential. Before transport it removes expired evidence
+at the same output path and proves that a mode-`0600` atomic write is possible;
+retention cleanup therefore runs whenever the canary is invoked. No workflow
+invokes live mode automatically.
 
 Seed the credential into the KV once at bootstrap:
 
