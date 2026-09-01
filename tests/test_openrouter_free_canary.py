@@ -13,7 +13,14 @@ from contextual_orchestrator.openrouter_canary import (
 from contextual_orchestrator import __main__ as cli
 
 
-def _model(model_id: str, *, prompt=0.0, completion=0.0, is_free=True) -> DiscoveredModel:
+def _model(
+    model_id: str,
+    *,
+    prompt=0.0,
+    completion=0.0,
+    is_free=True,
+    input_modalities=(),
+) -> DiscoveredModel:
     return DiscoveredModel(
         "openrouter",
         model_id,
@@ -24,6 +31,7 @@ def _model(model_id: str, *, prompt=0.0, completion=0.0, is_free=True) -> Discov
         prompt_price_per_1k=prompt,
         completion_price_per_1k=completion,
         is_free=is_free,
+        input_modalities=input_modalities,
     )
 
 
@@ -104,6 +112,26 @@ def test_canary_fails_closed_on_missing_credential_or_price() -> None:
             )
     finally:
         set_backend(None)
+
+
+def test_canary_reconciles_duplicate_prices_and_skips_non_text_input() -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    try:
+        result = run_openrouter_free_canary(
+            live=False,
+            discover=lambda *_a, **_k: [
+                _model("a-conflict"),
+                _model("a-conflict", prompt=0.01),
+                _model("b-image", input_modalities=("image",)),
+                _model("c-text", input_modalities=("text",)),
+            ],
+            client_factory=lambda **_k: pytest.fail("completion transport"),
+        )
+    finally:
+        set_backend(None)
+    assert result["model_id"] == "c-text"
 
 
 def test_live_preflights_output_and_removes_expired_evidence(tmp_path: Path) -> None:

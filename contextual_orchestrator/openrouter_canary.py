@@ -14,6 +14,8 @@ from .credentials import get_credential
 from .model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    _deduplicate_discovered_models,
+    _requires_non_text_input,
     agent_from_discovered,
     discover_provider_models,
     is_discovered_chat_candidate,
@@ -56,6 +58,7 @@ def _eligible(models: list[DiscoveredModel]) -> list[DiscoveredModel]:
             and not model.evidence_only
             and model.spend_admitted
             and is_discovered_chat_candidate(model)
+            and not _requires_non_text_input(model)
         ),
         key=lambda model: model.model_id,
     )
@@ -134,7 +137,9 @@ def run_openrouter_free_canary(
         except OSError as exc:
             raise OpenRouterCanaryError("evidence output is not writable") from exc
     candidates = _eligible(
-        discover(source, timeout=limits.timeout_seconds if limits else 10)
+        _deduplicate_discovered_models(
+            discover(source, timeout=limits.timeout_seconds if limits else 10)
+        )
     )
     if not candidates:
         raise OpenRouterCanaryError(
