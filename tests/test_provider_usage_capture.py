@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
@@ -68,7 +70,10 @@ def test_reported_prompt_tokens_surface_in_totals() -> None:
 
 def test_mock_prompt_tokens_source_is_estimated() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "no usage here"}])
+    # Isolate mock worker accounting from the optional model-judge extra,
+    # whose real invocation has its own reported prompt-token evidence.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "no usage here"}])
     totals = orchestrator.spend_analytics()["totals"]
     assert totals["prompt_tokens_source"] == "estimated"
     assert totals["reported_prompt_tokens"] == 0
@@ -77,7 +82,8 @@ def test_mock_prompt_tokens_source_is_estimated() -> None:
 
 def test_mock_path_stays_estimated() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "do the work"}])
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "do the work"}])
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "free-model")
 
     assert row["usage_source"] == "estimated"
@@ -87,7 +93,10 @@ def test_mock_path_stays_estimated() -> None:
 def test_conduct_all_steps_reported() -> None:
     client = _ReportingClient(completion_tokens=12)
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
-    orchestrator.run([{"role": "user", "content": "big task"}], mode="conduct")
+    # The assertion below covers the four conduct workflow steps; model-judge
+    # accounting has dedicated tests and, when installed, is a fifth call.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "big task"}], mode="conduct")
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "priced-model")
     assert row["usage_source"] == "reported"
     assert row["step_count"] == 4  # thinker/worker/verifier/synthesizer

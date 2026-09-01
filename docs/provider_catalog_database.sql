@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
+    max_output_tokens bigint CHECK (
+        max_output_tokens IS NULL
+        OR (max_output_tokens > 0 AND max_output_tokens <= 9223372036854775807)
+    ),
+    context_window bigint CHECK (
+        context_window IS NULL
+        OR (context_window > 0 AND context_window <= 9223372036854775807)
+    ),
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
     currency_code text NOT NULL,
