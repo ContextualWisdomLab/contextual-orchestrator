@@ -68,12 +68,20 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         for event in events
         if event["type"] == "response.reasoning_summary_text.delta"
     ]
-    assert summaries == [
-        "Planning the approach.",
-        "Executing the selected approach.",
-        "Checking the result for errors and unsupported claims.",
-        "Preparing the final answer.",
-    ]
+    # orchestrator/free unconditionally stays on the single-worker route path
+    # (would_route excludes it from the conduct-eligible model set -- see
+    # "Keep orchestrator/free on the auto route path"), so only the "worker"
+    # stage summary is emitted. Every other virtual model still runs the full
+    # thinker/worker/verifier/synthesizer conduct workflow.
+    if model == TaskOrchestrator.FREE_MODEL:
+        assert summaries == ["Executing the selected approach."]
+    else:
+        assert summaries == [
+            "Planning the approach.",
+            "Executing the selected approach.",
+            "Checking the result for errors and unsupported claims.",
+            "Preparing the final answer.",
+        ]
     assert all("[" not in summary for summary in summaries)
     assert any(
         event["event_name"] == "responses_orchestrated"
@@ -84,7 +92,7 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
     runs = list(orchestrator._workflow_runs.values())
     assert len(runs) == 1
     run = runs[0]
-    assert run["mode"] == "conduct"
+    assert run["mode"] == ("route" if model == TaskOrchestrator.FREE_MODEL else "conduct")
     assert run["prompt_text"] == "Research, implement, and verify a safe design."
     assert run["policy_snapshot"] == orchestrator.policy.as_dict()
     assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
@@ -473,8 +481,12 @@ def test_http_virtual_responses_preserves_message_array_and_sampling_controls() 
         thread.join(timeout=5)
 
     assert observed_messages
+    # orchestrator/free always takes the single-worker route path (see
+    # would_route), which forwards the original message array to the agent
+    # unchanged -- unlike conduct, it does not prepend a per-stage system
+    # instruction, so the caller's messages start at index 0.
     assert any(
-        [message.get("role") for message in messages][1:4]
+        [message.get("role") for message in messages][0:3]
         == ["system", "user", "assistant"]
         for messages in observed_messages
     )
@@ -526,7 +538,10 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
     ])
-    orchestrator.conduct = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
+    # orchestrator/free always takes the single-worker route path (see
+    # would_route), so streaming failures for this model surface through
+    # stream_route rather than conduct.
+    orchestrator.stream_route = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
