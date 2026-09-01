@@ -36,7 +36,12 @@ from .orchestrator import (
     TaskOrchestrator,
     load_agents,
 )
-from .openrouter_canary import OpenRouterCanaryLimits, run_openrouter_free_canary
+from .openrouter_canary import (
+    OpenRouterCanaryError,
+    OpenRouterCanaryLimits,
+    prune_expired_openrouter_canary_evidence,
+    run_openrouter_free_canary,
+)
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
@@ -502,13 +507,45 @@ def main(argv: list[str] | None = None) -> None:
         parser.add_argument("--timeout-seconds", type=_positive_int)
         parser.add_argument("--evidence-output")
         parser.add_argument("--retention-days", type=_positive_int)
+        parser.add_argument(
+            "--prune-expired-evidence",
+            help="Remove this evidence file if its recorded retention deadline has passed; never contacts OpenRouter.",
+        )
         args = parser.parse_args(arguments[1:])
+        if args.prune_expired_evidence:
+            if args.live or any(
+                value is not None
+                for value in (
+                    args.max_requests,
+                    args.max_output_tokens,
+                    args.timeout_seconds,
+                    args.evidence_output,
+                    args.retention_days,
+                )
+            ):
+                parser.error("--prune-expired-evidence cannot be combined with canary options")
+            try:
+                removed = prune_expired_openrouter_canary_evidence(
+                    Path(args.prune_expired_evidence)
+                )
+            except OpenRouterCanaryError as exc:
+                print(
+                    json.dumps({"error": {"code": exc.code, "message": str(exc)}}),
+                    file=sys.stderr,
+                )
+                raise SystemExit(1) from None
+            print(json.dumps({"expired_evidence_removed": removed}, sort_keys=True))
+            return
         supplied = (
             args.max_requests,
             args.max_output_tokens,
             args.timeout_seconds,
             args.retention_days,
         )
+        if not args.live and (
+            any(value is not None for value in supplied) or args.evidence_output
+        ):
+            parser.error("live caps and --evidence-output require --live")
         if args.live and (
             any(value is None for value in supplied) or not args.evidence_output
         ):
@@ -516,18 +553,31 @@ def main(argv: list[str] | None = None) -> None:
                 "--live requires positive request/output-token/timeout/retention caps and --evidence-output"
             )
         limits = OpenRouterCanaryLimits(*supplied) if args.live else None
-        result = run_openrouter_free_canary(
-            live=args.live,
-            limits=limits,
-            evidence_output=Path(args.evidence_output) if args.evidence_output else None,
-        )
+        try:
+            result = run_openrouter_free_canary(
+                live=args.live,
+                limits=limits,
+                evidence_output=Path(args.evidence_output) if args.evidence_output else None,
+            )
+        except OpenRouterCanaryError as exc:
+            print(
+                json.dumps({"error": {"code": exc.code, "message": str(exc)}}),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
         print(json.dumps(result, sort_keys=True))
         return
     if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
-    parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
+    parser = argparse.ArgumentParser(
+        description="Route or conduct chat requests across model agents.",
+        epilog=(
+            "Commands: register-credential, discover-models, "
+            "openrouter-free-canary, check-fast-mlsirm"
+        ),
+    )
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,

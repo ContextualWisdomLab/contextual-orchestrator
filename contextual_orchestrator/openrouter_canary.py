@@ -27,6 +27,8 @@ from .orchestrator import ModelClient
 class OpenRouterCanaryError(RuntimeError):
     """Raised before transport when the canary contract is incomplete."""
 
+    code = "openrouter_canary_failed"
+
 
 @dataclass(frozen=True)
 class OpenRouterCanaryLimits:
@@ -51,7 +53,9 @@ def _eligible(models: list[DiscoveredModel]) -> list[DiscoveredModel]:
             model
             for model in models
             if model.provider_name == "openrouter"
+            and type(model.prompt_price_per_1k) is float
             and model.prompt_price_per_1k == 0.0
+            and type(model.completion_price_per_1k) is float
             and model.completion_price_per_1k == 0.0
             and model.is_free is True
             and not model.unit_prices
@@ -109,6 +113,28 @@ def _prepare_evidence_path(path: Path, current_time: int) -> None:
     )
     os.close(descriptor)
     os.unlink(temporary_name)
+
+
+def prune_expired_openrouter_canary_evidence(
+    path: Path, *, now: Callable[[], float] = time.time
+) -> bool:
+    """Remove one expired evidence file without contacting a provider."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OpenRouterCanaryError("canary evidence could not be inspected") from exc
+    expires_at = document.get("expires_at") if isinstance(document, dict) else None
+    if type(expires_at) is not int:
+        raise OpenRouterCanaryError("canary evidence has no valid expiry")
+    if int(now()) < expires_at:
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def run_openrouter_free_canary(

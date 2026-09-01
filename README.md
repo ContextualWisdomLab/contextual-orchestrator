@@ -150,8 +150,13 @@ uses only the KV-registered `OPENROUTER_API_KEY`, disables retries, makes one
 fixed prompt request, and writes atomic JSON evidence containing neither the
 prompt, response, nor credential. Before transport it removes expired evidence
 at the same output path and proves that a mode-`0600` atomic write is possible;
-retention cleanup therefore runs whenever the canary is invoked. No workflow
-invokes live mode automatically.
+retention cleanup therefore runs whenever the canary is invoked. The file also
+records `expires_at`; run
+`python -m contextual_orchestrator openrouter-free-canary
+--prune-expired-evidence ./openrouter-canary.json` from the operator's chosen
+retention lifecycle. Cleanup reads only that local file, removes it at or after
+its deadline, and never resolves a credential, discovers a model, or calls a
+provider. This repository deliberately adds no scheduler.
 
 Seed the credential into the KV once at bootstrap:
 
