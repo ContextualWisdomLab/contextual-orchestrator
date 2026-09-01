@@ -49,8 +49,10 @@ trained Fugu, TRINITY, or Conductor clone.
    visibility, implemented as data on the step, not as a trained topology
    policy). The worker preserves the caller message array exactly once, then
    receives only its subtask and deliberately exposed prior outputs in the
-   added worker envelope. The envelope does not repeat the current task,
-   caller instructions, or source attachments.
+   added user envelope. That envelope does not repeat the current task or
+   source attachments. Caller system instructions are reasserted in the
+   stage-role system message so their authority survives provider translation;
+   they are not copied into the added user envelope.
 4. **Deterministic policy.** Worker and role selection uses a deterministic
    capability-hint heuristic so the lab runs without training data, GPUs, or
    vendor credentials. The heuristic is never an answer-quality,
