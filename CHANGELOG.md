@@ -10,6 +10,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Deprecated
+
+- Internal callers now use
+  `TaskOrchestrator.commercial_evidence_manifest_report()` /
+  `commercial_handoff_bundle_report()` directly. The deprecated `buyer_*`
+  Python aliases remain available for source, git, and submodule consumers;
+  the deprecated HTTP compatibility routes remain available as well.
+
 ### Fixed
 
 - Removed the redundant `threading.local`-backed `commercial_*_report`
