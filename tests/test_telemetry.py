@@ -59,6 +59,8 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
         assert telemetry_module._normalize_session_id(value) is None
     assert session_id_from_metadata(None) is None
     assert telemetry_module._safe_attributes({"server.port": object()}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "10.0.0.9"}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "fd00::9"}) == {}
 
     token = set_session_id("session-safe")
     try:
@@ -547,6 +549,41 @@ def test_traced_logs_actionable_bounded_failure_evidence(monkeypatch, caplog):
     assert "model_group=gpt-4.1" in caplog.text
     assert "fallback_outcome=not_attempted" in caplog.text
     assert "messages must mention json when response_format is json_object" in caplog.text
+    assert "No fallback model group" not in caplog.text
+    assert "customer-private-text" not in caplog.text
+    assert "private.example" not in caplog.text
+
+
+def test_traced_recognizes_litellm_prefixed_json_object_diagnostic(
+    monkeypatch, caplog
+):
+    """A gateway prefix cannot hide Azure's actionable JSON-object contract."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    message = (
+        "AzureException BadRequestError - 'messages' must contain the word 'json' "
+        "in some form, to use 'response_format' of type 'json_object'."
+        "No fallback model group found; customer-private-text"
+    )
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced(
+            "capability_probe.chat gpt-4.1",
+            {"contextual_orchestrator.model_group": "gpt-4.1"},
+        ):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "messages must mention json when response_format is json_object",
+    )
+    assert "provider_status=400" in caplog.text
+    assert "model_group=gpt-4.1" in caplog.text
+    assert "AzureException" not in caplog.text
     assert "No fallback model group" not in caplog.text
     assert "customer-private-text" not in caplog.text
     assert "private.example" not in caplog.text

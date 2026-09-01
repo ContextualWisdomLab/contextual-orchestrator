@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import re
 from collections.abc import Iterator, Mapping
@@ -41,7 +42,7 @@ _CONFIGURED = False
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
 _SAFE_SCHEMA_DIAGNOSTIC = re.compile(
-    r"^['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
+    r"['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
     r"(?: in some form,)? to use "
     r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
     r"(?:\.|$)",
@@ -194,6 +195,13 @@ def _safe_attributes(
         if isinstance(value, (list, tuple)):
             continue
         if isinstance(value, str):
+            if key == "server.address":
+                try:
+                    ipaddress.ip_address(value)
+                except ValueError:
+                    pass
+                else:
+                    continue
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
@@ -334,7 +342,7 @@ def traced(
             error_summary = (
                 _SAFE_SCHEMA_ERROR_SUMMARY
                 if provider_summary is not None
-                and _SAFE_SCHEMA_DIAGNOSTIC.match(provider_summary)
+                and _SAFE_SCHEMA_DIAGNOSTIC.search(provider_summary)
                 else failure_code
             )
             model_group = safe.get("contextual_orchestrator.model_group", "ungrouped")
