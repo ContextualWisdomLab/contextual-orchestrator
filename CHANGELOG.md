@@ -10,17 +10,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
-### Removed
+### Deprecated
 
-- Dropped the dead `TaskOrchestrator.buyer_evidence_manifest_report()` /
-  `buyer_handoff_bundle_report()` Python aliases. Their docstrings claimed
-  "alias for existing Python consumers", but no such consumer exists — the
-  deprecated `/api/v1/buyer_evidence_manifests/latest` and
-  `/api/v1/buyer_handoff_bundles/latest` HTTP routes already call
-  `commercial_evidence_manifest_report()` / `commercial_handoff_bundle_report()`
-  directly (since the resource-name rename in `73d04124`), and the only
-  remaining Python callers were the aliases' own dedicated tests. Those tests
-  now exercise the `commercial_*` methods they were actually meant to cover.
+- Internal callers now use
+  `TaskOrchestrator.commercial_evidence_manifest_report()` /
+  `commercial_handoff_bundle_report()` directly. The deprecated `buyer_*`
+  Python aliases remain available for source, git, and submodule consumers;
+  the deprecated HTTP compatibility routes remain available as well.
 
 ### Fixed
 

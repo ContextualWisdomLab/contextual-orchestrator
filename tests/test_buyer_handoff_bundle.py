@@ -168,6 +168,13 @@ def test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract() -> None
     assert legacy_bundle == bundle
 
 
+def test_deprecated_python_handoff_alias_preserves_payload() -> None:
+    orchestrator = build()
+    assert orchestrator.buyer_handoff_bundle_report() == (
+        orchestrator.commercial_handoff_bundle_report()
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_commercial_handoff_bundle_report_packages_sale_evidence()
     test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract()
