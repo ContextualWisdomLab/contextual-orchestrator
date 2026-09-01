@@ -87,7 +87,14 @@ def transform_orchestrator() -> None:
         segment, old_repair_except, new_repair_except, "repair exception block"
     )
 
-    advance_start = segment.index("            request_exclusions.add(failed_agent.id)")
+    # The helper introduced above contains the same request_exclusions.add()
+    # text as the pre-existing post-repair candidate-advance block. Anchor the
+    # replacement *after* the explicit failed_agent assignment so we cannot
+    # accidentally splice across the helper and the repair exception block.
+    failed_advance = segment.index("            failed_agent = final_agent")
+    advance_start = segment.index(
+        "            request_exclusions.add(failed_agent.id)", failed_advance
+    )
     advance_end = segment.index("            final_agent = next_agent", advance_start)
     old_advance = segment[advance_start:advance_end]
     new_advance = """            next_agent = next_structured_candidate(failed_agent)\n            enforce_structured_budget()\n"""
