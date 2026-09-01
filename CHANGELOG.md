@@ -20,6 +20,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Structured-output review follow-up now charges already-incurred synthesis
+  and repair usage before propagating a budget stop, keeps failed workflow
+  evidence queryable without counting it as a normal recent/completed KPI,
+  and binds a repair to the candidate whose synthesis failed. A repair-only
+  413 retires that candidate and starts a fresh synthesis on the next
+  already-eligible candidate instead of forwarding the repair prompt across
+  providers. If no eligible candidate remains, the original request-too-large
+  classification is preserved instead of being rewritten as structured-output
+  exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
+  (Devin Review, PR #1004).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

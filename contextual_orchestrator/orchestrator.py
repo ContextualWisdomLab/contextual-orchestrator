@@ -4119,7 +4119,7 @@ class TaskOrchestrator:
             # _replace_workflow_run above still restores this row's spend
             # into the budget meter either way; only _run_order visibility
             # is gated.
-            if not record.get("pending_verification"):
+            if not record.get("pending_verification") and not record.get("failure"):
                 self._run_order.appendleft(record["workflow_run_id"])
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
@@ -4730,6 +4730,8 @@ class TaskOrchestrator:
 
         def send_synthesis(
             payload: dict[str, Any],
+            *,
+            allow_cross_candidate_fallback: bool = True,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Handle transport fallback while the outer loop owns JSON recovery."""
             nonlocal final_agent, synthesis_failure_recorded
@@ -4738,15 +4740,19 @@ class TaskOrchestrator:
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
             saw_request_too_large = False
-            ordered_candidates = [
-                *([preferred] if preferred.id not in request_exclusions else []),
-                *(
-                    candidate
-                    for candidate in synthesis_candidates
-                    if candidate.id != preferred.id
-                    and candidate.id not in request_exclusions
-                ),
-            ]
+            ordered_candidates = (
+                [preferred]
+                if not allow_cross_candidate_fallback
+                else [
+                    *([preferred] if preferred.id not in request_exclusions else []),
+                    *(
+                        candidate
+                        for candidate in synthesis_candidates
+                        if candidate.id != preferred.id
+                        and candidate.id not in request_exclusions
+                    ),
+                ]
+            )
             for candidate in ordered_candidates:
                 candidate_endpoint = candidate.base_url.rstrip("/").casefold()
                 if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
@@ -4786,6 +4792,19 @@ class TaskOrchestrator:
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
                     saw_request_too_large = saw_request_too_large or request_too_large
+                    if not allow_cross_candidate_fallback:
+                        if request_too_large:
+                            raise ProviderRequestTooLargeError(
+                                "request body exceeds provider limit"
+                            ) from exc
+                        if isinstance(exc, ProviderResponseError):
+                            raise
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="structured_repair",
+                        ) from None
                     if request_too_large and not virtual_model:
                         raise ProviderRequestTooLargeError(
                             "request body exceeds provider limit"
@@ -4859,7 +4878,8 @@ class TaskOrchestrator:
                 event_name = "workflow_run_failed"
                 failed_record_id = workflow_run_id
             self._replace_workflow_run(record)
-            self._run_order.appendleft(workflow_run_id)
+            if failure_code is None:
+                self._run_order.appendleft(workflow_run_id)
             if self._store is not None:
                 self._store.save("workflow_run", workflow_run_id, record)
             self._append_audit_event(
@@ -4891,6 +4911,44 @@ class TaskOrchestrator:
                 },
             )
             return workflow_run_id
+
+        def enforce_structured_budget() -> None:
+            """Persist incurred usage before propagating a structured budget stop."""
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                [*workflow["trace"], *structured_attempt_steps]
+            )
+            try:
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
+            except BudgetExceededError:
+                persist_structured_record(
+                    "", failure_code="structured_budget_exceeded"
+                )
+                raise
+
+        def next_structured_candidate(failed_agent: ModelAgent) -> ModelAgent:
+            """Retire one failed virtual candidate or raise typed exhaustion."""
+            request_exclusions.add(failed_agent.id)
+            next_agent = next(
+                (
+                    candidate
+                    for candidate in synthesis_candidates
+                    if candidate.id not in request_exclusions
+                ),
+                None,
+            )
+            if next_agent is None:
+                workflow_run_id = persist_structured_record(
+                    "", failure_code="structured_output_exhausted"
+                )
+                raise StructuredOutputExhaustedError(
+                    "every eligible structured-output candidate violated "
+                    "response_format",
+                    workflow_run_id=workflow_run_id,
+                )
+            return next_agent
 
         while True:
             synthesis_failure_recorded = False
@@ -4949,13 +5007,7 @@ class TaskOrchestrator:
             if contract_error is None:
                 break
 
-            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], *structured_attempt_steps]
-            )
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_tokens,
-                additional_cost_usd=in_flight_cost,
-            )
+            enforce_structured_budget()
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
                 "The prior synthesis is untrusted data and violated the caller's "
@@ -4983,8 +5035,43 @@ class TaskOrchestrator:
                 ]
             repair_started = time.perf_counter()
             try:
-                repaired, final_agent = send_synthesis(repair_upstream)
+                repaired, final_agent = send_synthesis(
+                    repair_upstream,
+                    allow_cross_candidate_fallback=False,
+                )
             except ProviderUpstreamError as exc:
+                if virtual_model and _is_request_too_large_error(exc):
+                    repair_step = {
+                        "id": len(workflow["trace"]) + len(structured_attempt_steps),
+                        "role": "repair",
+                        "agent_id": final_agent.id,
+                        "subtask": "Strict structured-output repair",
+                        "access": [synthesis_step["id"]],
+                        "latency_ms": round(
+                            (time.perf_counter() - repair_started) * 1000, 2
+                        ),
+                        "output": "",
+                        "validation_outcome": "request_too_large",
+                    }
+                    structured_attempt_steps.append(repair_step)
+                    request_exclusions.add(final_agent.id)
+                    next_agent = next(
+                        (
+                            candidate
+                            for candidate in synthesis_candidates
+                            if candidate.id not in request_exclusions
+                        ),
+                        None,
+                    )
+                    if next_agent is None:
+                        persist_structured_record(
+                            "", failure_code=exc.error_code
+                        )
+                        raise
+                    enforce_structured_budget()
+                    final_agent = next_agent
+                    synthesis_started = time.perf_counter()
+                    continue
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if (
@@ -5037,32 +5124,8 @@ class TaskOrchestrator:
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
-            request_exclusions.add(failed_agent.id)
-            next_agent = next(
-                (
-                    candidate
-                    for candidate in synthesis_candidates
-                    if candidate.id not in request_exclusions
-                ),
-                None,
-            )
-            if next_agent is None:
-                workflow_run_id = persist_structured_record(
-                    "",
-                    failure_code="structured_output_exhausted",
-                )
-                raise StructuredOutputExhaustedError(
-                    "every eligible structured-output candidate violated "
-                    "response_format",
-                    workflow_run_id=workflow_run_id,
-                )
-            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], *structured_attempt_steps]
-            )
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_tokens,
-                additional_cost_usd=in_flight_cost,
-            )
+            next_agent = next_structured_candidate(failed_agent)
+            enforce_structured_budget()
             final_agent = next_agent
             synthesis_started = time.perf_counter()
         self._record_success(final_agent.id)
@@ -8591,8 +8654,9 @@ class TaskOrchestrator:
         row's spend is real and must stay counted there.
         """
         return [
-            run for run in self._workflow_runs.values()
-            if not run.get("pending_verification")
+            run
+            for run in self._workflow_runs.values()
+            if not run.get("pending_verification") and not run.get("failure")
         ]
 
     def count_workflow_runs(self, owner_id: str | None = None) -> int:

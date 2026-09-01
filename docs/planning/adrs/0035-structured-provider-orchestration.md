@@ -91,6 +91,27 @@ the existing circuit ledger; success clears it.
 - Tool execution cannot gain multi-agent verification until an OpenAI-compatible
   stateful tool-loop contract is implemented.
 
+## Research artifact reuse and redistribution
+
+This correctness repair does not introduce a new routing objective; it
+restores ADR 0035's already-accepted bounded candidate-recovery semantics.
+A repair-only request-size rejection retires that virtual candidate and
+starts a fresh synthesis only on another already-eligible candidate; when
+none remains, the request-size error remains the terminal classification
+rather than being rewritten as structured-output exhaustion. Previously
+excluded candidates are never retried.
+
+The relevant routing literature is already committed in this repository as
+redistributable artifacts: [`RouteLLM`](../../papers/routellm-routing-2406.18665.pdf)
+and [`Hybrid LLM`](../../papers/hybrid-llm-query-routing-2404.14618.pdf).
+Their cost/quality-aware routing evidence supports selecting among eligible
+model candidates; it does not authorize bypassing caller endpoint, privacy,
+or budget constraints. Conductor and TRINITY remain cite-link-summary
+references in `docs/papers/README.md` because this repository has not
+independently established a redistribution grant for those newer preprints;
+duplicating their PDFs in this PR would therefore weaken, not strengthen,
+the repository's copyright rule.
+
 ## References
 
 Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).

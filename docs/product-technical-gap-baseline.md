@@ -1,5 +1,13 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
+
+- **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.
+- **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
+- **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
+- **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
+- **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
