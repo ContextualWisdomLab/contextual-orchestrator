@@ -3707,6 +3707,24 @@ class TaskOrchestrator:
         }
     )
 
+    @staticmethod
+    def proxy_completion_requires_conduct(
+        body: Mapping[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        single_agent: bool = True,
+    ) -> bool:
+        """Return whether a provider-shaped request takes the conduct path."""
+        normalized_endpoint = endpoint.strip("/")
+        return not single_agent and (
+            normalized_endpoint == "responses"
+            or any(
+                key in body
+                and not _is_omit_equivalent_control(key, body.get(key))
+                for key in _PASSTHROUGH_TRIGGER_KEYS
+            )
+        )
+
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -3727,13 +3745,10 @@ class TaskOrchestrator:
         """
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
-        if not single_agent and (
-            normalized_endpoint == "responses"
-            or any(
-                key in body
-                and not _is_omit_equivalent_control(key, body.get(key))
-                for key in _PASSTHROUGH_TRIGGER_KEYS
-            )
+        if self.proxy_completion_requires_conduct(
+            body,
+            endpoint=normalized_endpoint,
+            single_agent=single_agent,
         ):
             result = self._orchestrated_provider_completion(
                 body,

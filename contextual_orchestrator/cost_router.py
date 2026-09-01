@@ -309,9 +309,13 @@ class CostRoutingCoordinator:
                 with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
                     routing_controls,
                     model_name=model_name,
-                    required_roles=("worker",)
-                    if mode == "route"
-                    else ("thinker", "worker", "verifier", "synthesizer"),
+                    required_roles=("thinker", "worker", "verifier", "synthesizer")
+                    if self.orchestrator.proxy_completion_requires_conduct(
+                        provider_request,
+                        endpoint=provider_endpoint,
+                        single_agent=False,
+                    )
+                    else ("worker",),
                 ):
                     provider_response = self.orchestrator.proxy_completion(
                         provider_request,

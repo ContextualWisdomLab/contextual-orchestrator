@@ -741,3 +741,48 @@ def test_coordinator_auto_preflights_conduct_roles_before_triage() -> None:
         )
 
     assert client.calls == []
+
+
+def test_coordinator_plain_proxy_preflights_only_worker_role() -> None:
+    """Plain provider requests must not require conduct-only role eligibility."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                provider_exclusions=("verifier",),
+            )
+        ],
+        client=_CandidateClient(),
+    )
+    observed: list[bool] = []
+
+    def proxy_completion(*_args, **_kwargs):
+        observed.append(orchestrator._request_candidate_allowed(orchestrator.agents[0]))
+        return {
+            "model": "worker-model",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "orchestration": {"workflow_run_id": "run_plain_candidate"},
+        }
+
+    orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_plain_candidate",
+        "mode": "route",
+        "answer": "worker answer",
+        "trace": [],
+    }
+
+    result = CostRoutingCoordinator(orchestrator).complete(
+        [{"role": "user", "content": "plain proxy"}],
+        mode="auto",
+        model_name="orchestrator/auto",
+        hints={"candidate_id": "worker_only"},
+        provider_request={
+            "model": "orchestrator/auto",
+            "messages": [{"role": "user", "content": "plain proxy"}],
+        },
+    )
+
+    assert observed == [True]
+    assert result["orchestration"]["workflow_run_id"] == "run_plain_candidate"
