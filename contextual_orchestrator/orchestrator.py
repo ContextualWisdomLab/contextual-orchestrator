@@ -5373,6 +5373,9 @@ class TaskOrchestrator:
                     (
                         agent.provider_name,
                         agent.model,
+                        # Keep this byte-for-byte aligned with
+                        # model_discovery.legacy_agent_id_for without importing
+                        # that orchestrator-dependent module here.
                         re.sub(r"[^a-z0-9]+", "_", f"{agent.provider_name}_{agent.model}".casefold()).strip("_"),
                     )
                 )

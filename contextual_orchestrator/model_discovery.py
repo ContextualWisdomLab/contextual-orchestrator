@@ -1421,7 +1421,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 def legacy_agent_id_for(discovered: DiscoveredModel) -> str:
     """Return the pre-fingerprint identifier used by durable discovered agents."""
-    return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
+    return _SLUG_RE.sub(
+        "_", f"{discovered.provider_name}_{discovered.model_id}".casefold()
+    ).strip("_")
 
 
 def model_group_name_for(discovered: DiscoveredModel) -> str:
