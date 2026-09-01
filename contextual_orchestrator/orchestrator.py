@@ -5722,9 +5722,10 @@ class TaskOrchestrator:
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
         caller_instructions = "\n\n".join(
-            message["content"]
+            instruction
             for message in messages
-            if message.get("role") == "system" and isinstance(message.get("content"), str)
+            if message.get("role") == "system"
+            if (instruction := _coerce_message_content_text(message.get("content")))
         )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
@@ -5788,16 +5789,7 @@ class TaskOrchestrator:
             if progress is not None:
                 progress(step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
-            instruction = (
-                f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\n"
-                f"Subtask:\n{step.subtask}"
-            )
-            user_content: str | list[dict[str, Any]] = instruction
-            if source_images:
-                user_content = [
-                    {"type": "text", "text": instruction},
-                    *copy.deepcopy(source_images),
-                ]
+            instruction = f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
             step_messages = [
                 {
                     "role": "system",
@@ -5811,7 +5803,7 @@ class TaskOrchestrator:
                 *copy.deepcopy(messages),
                 {
                     "role": "user",
-                    "content": user_content,
+                    "content": instruction,
                 },
             ]
             start = time.perf_counter()
