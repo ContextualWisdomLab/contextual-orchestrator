@@ -33,6 +33,12 @@ from .cost_router import (
     InvalidBatchModelError,
 )
 from .batch_routing import BatchDownloadError, BatchRequest
+from .debug_logging import (
+    redact_credential_shaped_keys,
+    response_metadata_for_log,
+    summarize_payload_for_log,
+    summarize_request_for_log,
+)
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
@@ -62,6 +68,7 @@ from .telemetry import (
     reset_session_id,
     session_id_from_headers,
     session_id_from_request,
+    session_id_hash,
     set_session_id,
 )
 from .video_jobs import (
@@ -248,7 +255,8 @@ ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orches
 ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
-    "endpoint_equivalence", "stream_usage_supported",
+    "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
+    "context_window",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -264,6 +272,8 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "group_name",
     "endpoint_equivalence",
     "stream_usage_supported",
+    "max_output_tokens",
+    "context_window",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
@@ -5048,6 +5058,21 @@ def _strip_internal_fields(value: Any) -> Any:
 
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # The DEBUG response-body summary logs only an allowlisted metadata
+        # shape (has_error/model/choice_count/usage) via
+        # response_metadata_for_log -- never the payload itself. redact_value
+        # only pattern-matches a secret's in-string *value* shape, and even
+        # the additional redact_credential_shaped_keys pass only masks
+        # *credential*-shaped JSON keys; neither ever masks ordinary response
+        # text (choices[].message.content, tool-call arguments, an
+        # error.message that can reflect caller-supplied input), which is not
+        # a credential but can still carry PII or business-sensitive content
+        # (CWE-532). redact_credential_shaped_keys is applied on top of the
+        # allowlist anyway, defense-in-depth, in case a future allowlist
+        # field ever collides with a credential-shaped key name.
+        log_safe_payload = redact_credential_shaped_keys(response_metadata_for_log(safe_payload))
+        _LOGGER.debug(summarize_payload_for_log("response", log_safe_payload))
     public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return public_payload
@@ -5429,17 +5454,87 @@ def build_server(
         # semantics: assume the connection closes until a request says keep-alive.
         close_connection = True
 
+        def send_response(self, code: int, message: str | None = None) -> None:
+            """Capture the response status for the per-request log, then delegate to stdlib.
+
+            `_last_status` (read by `_log_request_summary`) used to be set
+            only by this class's own `_send`/`_send_text`/`_send_bytes`/
+            `_send_sse` writers. A response the framework generates itself --
+            e.g. `BaseHTTPRequestHandler`'s built-in 501 for an unsupported
+            HTTP method, or a `send_error` call from `parse_request()` on a
+            malformed request line -- calls `send_response` directly and
+            bypasses all of those writers, so the INFO summary logged
+            `status=-` even though a real status was already sent to the
+            client. `send_response` is stdlib's own single choke point every
+            response path (including its own `send_error`) already goes
+            through, so overriding it here captures the status for every
+            current and future response path uniformly, not just this
+            module's own writers.
+            """
+            self._last_status = code
+            super().send_response(code, message)
+
+        def parse_request(self) -> bool:
+            """Timestamp the moment real request data starts being handled.
+
+            ``BaseHTTPRequestHandler.handle_one_request`` blocks on
+            ``self.rfile.readline()`` *before* calling this method -- on a
+            keep-alive connection that read waits on the client's idle time
+            between requests, not on any processing this server does.
+            Recording ``_request_started`` here, at the top of
+            ``parse_request`` (immediately after that blocking read has
+            already returned real request bytes), keeps
+            ``_log_request_summary``'s ``latency_ms`` scoped to actual
+            request handling instead of also counting the client's think
+            time.
+            """
+            self._request_started = time.monotonic()
+            return super().parse_request()
+
         def handle_one_request(self) -> None:
             """Reset per-request state before parsing each persistent request.
 
             Body-consumption tracking must restart per request so an unread
             declared body still closes the connection, and correlation/trace
             state must never leak across requests on a reused connection.
+
+            ``command``/``path`` are reset here too: stdlib's own
+            ``handle_one_request`` only assigns them when it actually parses a
+            request line, so on a keep-alive connection's *last* call --
+            triggered by the client closing the connection, where nothing is
+            read at all -- they would otherwise still hold the *previous*
+            request's values. Resetting them first lets
+            ``_log_request_summary``'s existing "nothing to report" guard
+            correctly recognize that no new request happened this call,
+            instead of logging the prior request a second time with a
+            statusless "phantom" entry.
+
+            ``_request_started`` is reset to ``None`` here too, ahead of the
+            blocking read: it is only ever set for real inside
+            ``parse_request`` above (once request data has actually
+            arrived), and a call that reads nothing at all (a closed
+            keep-alive connection) never reaches that point -- exactly the
+            case ``_log_request_summary``'s own guard already skips.
+
+            ``_response_headers_sent`` is reset to ``False`` here too: it is
+            the per-request marker ``_write_response`` reads to decide
+            whether a caught disconnect happened before or after the status
+            line/headers were actually flushed to the client (see
+            ``_write_response``'s docstring). Resetting it per request keeps
+            a prior request's successful delivery from leaking into this
+            one's disconnect classification on a reused keep-alive
+            connection.
             """
             self._request_body_consumed = False
+            self._last_status = None
+            self._response_headers_sent = False
+            self.command = None
+            self.path = None
+            self._request_started = None
             try:
                 super().handle_one_request()
             finally:
+                self._log_request_summary(self._request_started)
                 self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
@@ -5453,6 +5548,59 @@ def build_server(
                 )
             ):
                 self.close_connection = True
+
+        def _log_request_summary(self, started: float | None) -> None:
+            """Emit one body-free INFO summary line per completed request.
+
+            Carries method, path, status, latency, and the bounded ADR 0122
+            correlation hash only -- never headers, a query string beyond the
+            raw path, or a request/response body. A connection that never
+            delivered any request bytes at all (the client simply closed a
+            reused keep-alive connection) has no method, no path, AND no
+            status, and is skipped -- there is nothing to report.
+
+            A request that *did* deliver bytes but whose request line
+            ``parse_request`` rejected as malformed (or that stdlib's
+            ``handle_one_request`` rejected outright as too long, before
+            ever calling our ``parse_request`` override) still gets a real
+            status sent to the client -- 400 or 414 -- via ``send_error``,
+            which flows through the ``send_response`` override above into
+            ``_last_status``, even though ``command``/``path`` stay unset
+            (stdlib's own ``parse_request`` explicitly resets ``self.command``
+            to ``None`` "in case of error on the first line" and never
+            reaches the later assignment that would set ``path``). Skipping
+            on method/path alone, as this used to, silently dropped that
+            entry even though a real response was sent. ``_last_status`` is
+            reset to ``None`` at the top of every ``handle_one_request`` call
+            and only ever (re)populated by ``send_response`` during this
+            call's own processing, so treating "some status was recorded"
+            as an equally valid reason to log -- not just "some
+            method/path was recorded" -- captures every request that
+            actually produced a response while still skipping a truly
+            byte-free keep-alive close.
+
+            ``started`` being ``None`` still means ``parse_request`` was
+            never entered (true of both the byte-free close above and the
+            too-long-request-line case, which stdlib rejects before ever
+            calling it); the ``or time.monotonic()`` fallback below keeps
+            that from ever raising on a future stdlib change.
+            """
+            if not _LOGGER.isEnabledFor(logging.INFO):
+                return
+            method = getattr(self, "command", None)
+            path = getattr(self, "path", None)
+            status = getattr(self, "_last_status", None)
+            if not method and not path and status is None:
+                return
+            _LOGGER.info(
+                summarize_request_for_log(
+                    method=method or "-",
+                    path=path or "-",
+                    status=status,
+                    latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
+                    session_id_hash=session_id_hash(),
+                )
+            )
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
@@ -7893,6 +8041,25 @@ def build_server(
             socket and raises again -- uncaught this time, crashing the
             request-handling thread (visible as a second, unhandled
             BrokenPipeError in server logs after the first).
+
+            A caught disconnect can strike in two different places, and only
+            one of them means the client received nothing:
+
+            * Before the status line/headers were flushed (``end_headers()``
+              itself raises, or an earlier ``send_response``/``send_header``
+              call does). The client has no real response at all.
+            * After ``end_headers()`` already completed -- a later body
+              write in the same call, or a later ``_write_sse`` frame on an
+              SSE stream ``_begin_sse`` already opened successfully. The
+              client DID receive the real status line and headers; only the
+              body (or a later chunk of it) was cut short.
+
+            Every ``_send*``/``_begin_sse`` writer sets
+            ``self._response_headers_sent = True`` immediately after its own
+            ``end_headers()`` call returns, so that flag -- reset to
+            ``False`` once per request by ``handle_one_request`` -- tells
+            this shared choke point which of the two cases just happened,
+            without each writer needing its own disconnect-handling logic.
             """
             # A rejection can happen before _read_json (authentication, rate
             # limiting, or media type). Reusing that HTTP/1.1 connection would
@@ -7909,6 +8076,27 @@ def build_server(
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
                 _LOGGER.debug("client_disconnected")
+                # `_send*`/`_begin_sse` writers record their *intended*
+                # status in `self._last_status` before calling this method
+                # (and `send_response`'s override above does the same for
+                # whatever status the writer itself sends) -- but a dead
+                # peer before headers were ever flushed means that status
+                # was never actually delivered. Left uncorrected in that
+                # case, `_log_request_summary` reads `_last_status` straight
+                # into the per-request INFO summary, falsely reporting a
+                # completed 200/4xx/5xx response for a request whose write
+                # failed before anything reached the client. Clear it back
+                # to the same `None` this module already uses for "a
+                # response was never sent" ONLY then -- a disconnect that
+                # struck after `_response_headers_sent` was already set
+                # means the client genuinely received that status, so
+                # clearing it here would instead falsely report "no status"
+                # for a request that was, in fact, answered.
+                # `hasattr`/`getattr` guard against tests that call this
+                # method directly against a bare `object()` stand-in for
+                # `self`, which has no instance `__dict__` to assign into.
+                if hasattr(self, "_last_status") and not getattr(self, "_response_headers_sent", False):
+                    self._last_status = None
                 return False
 
         def _send(
@@ -7918,6 +8106,7 @@ def build_server(
             *,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            self._last_status = status
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
             def _write() -> None:
@@ -7928,11 +8117,17 @@ def build_server(
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
+                # Marks that the status line/headers were actually flushed
+                # to the client -- see `_write_response`'s docstring. Must
+                # be set only after `end_headers()` returns without raising,
+                # and only before the body write that might still fail.
+                self._response_headers_sent = True
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
+            self._last_status = status
             raw = payload.encode("utf-8")
 
             def _write() -> None:
@@ -7941,22 +8136,27 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self._last_status = status
+
             def _write() -> None:
                 self.send_response(status)
                 self.send_header("content-type", content_type)
                 self.send_header("content-length", str(len(payload)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(payload)
 
             self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
+            self._last_status = status
             raw = body.encode("utf-8")
 
             def _write() -> None:
@@ -7966,12 +8166,14 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
+            self._last_status = 200
             self.close_connection = True
 
             def _write() -> None:
@@ -7980,10 +8182,21 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
 
             return self._write_response(_write)
 
         def _write_sse(self, frame: str) -> bool:
+            """Write one SSE frame; relies on a prior successful `_begin_sse`.
+
+            Never touches `self._response_headers_sent` itself: a caller
+            only ever reaches this after `_begin_sse` already returned
+            `True`, so that flag is already set from the initial headers
+            flush. If a *later* frame's write fails here, `_write_response`
+            correctly sees the flag still set and preserves the 200 that was
+            genuinely already delivered, instead of erasing it.
+            """
+
             def _write() -> None:
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
