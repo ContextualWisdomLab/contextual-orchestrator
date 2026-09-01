@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import urllib.error
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -44,8 +43,12 @@ _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
 _SAFE_SCHEMA_DIAGNOSTIC = re.compile(
     r"^['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
     r"(?: in some form,)? to use "
-    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)\.?$",
+    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
+    r"(?:\.|$)",
     re.IGNORECASE,
+)
+_SAFE_SCHEMA_ERROR_SUMMARY = (
+    "messages must mention json when response_format is json_object"
 )
 _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
@@ -324,21 +327,15 @@ def traced(
             failure_code = classified.error_code
             provider_status = classified.provider_status
             # Arbitrary provider prose can echo caller content even when it has
-            # no assignment-shaped marker. Only one fixed-vocabulary schema
-            # diagnostic is safe enough to export; every other HTTP/provider
-            # failure uses the package-owned stable code.
-            provider_summary = (
-                safe_provider_message(exc)
-                if isinstance(exc, urllib.error.HTTPError)
-                else None
-            )
+            # no assignment-shaped marker. Recognize one exact schema contract,
+            # export our fixed wording, and reduce everything else to its stable
+            # package-owned code.
+            provider_summary = safe_provider_message(exc)
             error_summary = (
-                provider_summary
+                _SAFE_SCHEMA_ERROR_SUMMARY
                 if provider_summary is not None
-                and _SAFE_SCHEMA_DIAGNOSTIC.fullmatch(provider_summary)
+                and _SAFE_SCHEMA_DIAGNOSTIC.match(provider_summary)
                 else failure_code
-                if isinstance(exc, urllib.error.HTTPError)
-                else safe_provider_message(classified) or failure_code
             )
             model_group = safe.get("contextual_orchestrator.model_group", "ungrouped")
             fallback_outcome = safe.get(
