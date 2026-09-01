@@ -21,6 +21,7 @@ from .evidence_batch_routing import (
     RoutingPolicy,
     cheapest_upstream,
     prohibited_heuristic_embedding,
+    resolve_embedding_target_evidence_only,
 )
 
 # Patch the already-loaded protocol module before downstream modules import its
@@ -54,6 +55,13 @@ from .cost_ledger import (
 )
 from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
+
+# The legacy coordinator still contains a price/order ranking helper used by
+# historical tests and non-authoritative diagnostics.  Production embedding
+# target resolution is replaced at class load so both package and submodule
+# imports require explicit or uniquely eligible routing evidence.
+CostRoutingCoordinator._resolve_embedding_target = resolve_embedding_target_evidence_only
+
 from .cefr_language_observation import (
     CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1,
     FAST_MLSIRM_SCORING_SCHEMA_VERSION,
