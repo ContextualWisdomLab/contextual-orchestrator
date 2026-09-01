@@ -175,6 +175,29 @@ def test_live_preflights_output_and_removes_expired_evidence(tmp_path: Path) -> 
     assert expired.stat().st_mode & 0o777 == 0o600
 
 
+def test_live_rejects_fifo_before_discovery_or_completion_transport(tmp_path: Path) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("OPENROUTER_API_KEY", "secret")
+    set_backend(backend)
+    fifo = tmp_path / "evidence.fifo"
+    fifo_path = str(fifo)
+    import os
+
+    os.mkfifo(fifo_path)
+    try:
+        with pytest.raises(OpenRouterCanaryError, match="regular file"):
+            run_openrouter_free_canary(
+                live=True,
+                limits=OpenRouterCanaryLimits(1, 8, 3, 7),
+                evidence_output=fifo,
+                discover=lambda *_a, **_k: pytest.fail("discovery transport"),
+                client_factory=lambda **_k: pytest.fail("completion transport"),
+                now=lambda: 100,
+            )
+    finally:
+        set_backend(None)
+
+
 def test_cli_defaults_to_dry_run_and_live_requires_every_bound(
     monkeypatch, capsys
 ) -> None:

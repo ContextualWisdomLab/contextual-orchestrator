@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import time
 from typing import Any, Callable
@@ -86,6 +87,12 @@ def _write_evidence(path: Path, evidence: dict[str, Any]) -> None:
 def _prepare_evidence_path(path: Path, current_time: int) -> None:
     """Remove expired prior evidence and prove a secure atomic write is possible."""
     try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        mode = None
+    if mode is not None and not stat.S_ISREG(mode):
+        raise OpenRouterCanaryError("evidence output must be a regular file path")
+    try:
         prior = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
         prior = None
@@ -102,8 +109,6 @@ def _prepare_evidence_path(path: Path, current_time: int) -> None:
     )
     os.close(descriptor)
     os.unlink(temporary_name)
-    if path.exists() and not path.is_file():
-        raise OpenRouterCanaryError("evidence output must be a regular file path")
 
 
 def run_openrouter_free_canary(
