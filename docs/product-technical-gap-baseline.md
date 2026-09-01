@@ -2680,3 +2680,8 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+
+## 2026-09-01 no-heuristic NIM benchmark accounting repair
+
+Causal owner: `contextual_orchestrator/nim_benchmark.py`. The benchmark previously used an explicit `~4 chars/token` approximation to admit calls, lower output allowances, enforce equal-token cells, calculate hypothetical cost, and backfill missing trace usage. That violates ADR-0006 and the organization no-heuristics contract. PR #1000 removes the approximation from every benchmark decision/evidence path: complete provider-reported prompt/completion usage is now mandatory, missing evidence fails closed, and cost remains unknown rather than inferred. The same repair removes the benchmark's implicit 1:1 input/output price weight and model-id tie-break; automatic cheapest-worker selection now requires a uniquely component-wise dominant published price vector. Hosted exact-head tests/security/review remain required before protected-main integration.

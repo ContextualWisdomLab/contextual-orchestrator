@@ -11,6 +11,7 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -421,10 +422,10 @@ def test_equal_budget_structured_transport_alias_and_invalid_usage() -> None:
     cell = nb.EqualBudgetModelClient(
         StructuredDelegate(), total_token_budget=100, maximum_calls=1
     )
-    response = cell.proxy_send_once(
-        _mock_agents("dryrun/chat-basic")[0], "responses", {"input": "judge"}
-    )
-    assert response["usage"]["prompt_tokens"] == "unknown"
+    with pytest.raises(nb.BenchmarkContractError, match="provider-reported"):
+        cell.proxy_send_once(
+            _mock_agents("dryrun/chat-basic")[0], "responses", {"input": "judge"}
+        )
 
 
 def test_equal_budget_client_forwards_delegate_controls() -> None:
@@ -451,14 +452,22 @@ def test_equal_budget_client_fails_closed_on_call_and_prompt_limits() -> None:
             _mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "again"}]
         )
 
+    class ReportedUsageDelegate(ModelClient):
+        def chat(self, *args, **kwargs):  # type: ignore[override]
+            return "answer"
+
+        def take_usage(self):  # type: ignore[override]
+            return {"prompt_tokens": 1, "completion_tokens": 1}
+
     tight = nb.EqualBudgetModelClient(
-        ModelClient(), total_token_budget=1, maximum_calls=1
+        ReportedUsageDelegate(), total_token_budget=1, maximum_calls=1
     )
-    with pytest.raises(nb.PolicyTokenBudgetExceeded, match="total-token"):
-        tight.chat(
-            _mock_agents("dryrun/chat-basic")[0],
-            [{"role": "user", "content": "x" * 100}],
-        )
+    tight.chat(
+        _mock_agents("dryrun/chat-basic")[0],
+        [{"role": "user", "content": "any prompt length"}],
+    )
+    with pytest.raises(nb.PolicyTokenBudgetExceeded, match="provider-reported"):
+        tight.take_usage()
 
 
 # --------------------------------------------------------------------------
@@ -1237,18 +1246,10 @@ def test_cell_usage_reported_vs_estimated_and_failover() -> None:
             "agent_id": "worker_one",
             "output": "answer text",
             "usage": {"prompt_tokens": float("nan"), "completion_tokens": float("inf")},
-        },
-        {
-            "id": 1,
-            "role": "worker",
-            "agent_id": "worker_one",
-            "output": None,
-            "usage": "corrupted",
-        },
+        }
     ]
-    _usage, summary = nb._cell_usage(adversarial_trace, agents_by_id, "prompt text")
-    assert summary["token_usage_source"] == "estimated"
-    assert summary["total_tokens"] > 0
+    with pytest.raises(nb.BenchmarkContractError, match="provider-reported"):
+        nb._cell_usage(adversarial_trace, agents_by_id, "prompt text")
 
 
 def test_cell_usage_rejects_unknown_agent_as_contract_error() -> None:
@@ -1295,6 +1296,7 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
                     "role": "worker",
                     "agent_id": "worker_one",
                     "output": "a zebra appears",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4},
                 }
             ],
         },
@@ -1406,8 +1408,8 @@ def test_cheapest_priced_agent_selection() -> None:
         )
         is None
     )
-    # Deterministic tiebreak: equal combined rate resolves by model id.
-    assert nb.cheapest_priced_agent(agents, scenario).model == "vendor/model-b"
+    # Equal price vectors are unresolved; model identity is not routing evidence.
+    assert nb.cheapest_priced_agent(agents, scenario) is None
 
 
 def test_planned_evaluation_requests_formula() -> None:
@@ -1451,14 +1453,19 @@ def test_evaluate_policies_contract_failures() -> None:
 
 
 def test_evaluate_policies_all_arms_with_pricing() -> None:
-    agents = _mock_agents("dryrun/chat-basic", "dryrun/chat-vision")
+    agents = [
+        dataclasses.replace(agent, base_url=nb.NIM_DEFAULT_ENDPOINT)
+        for agent in _mock_agents("dryrun/chat-basic", "dryrun/chat-vision")
+    ]
     scenario = nb.load_pricing_scenario(PRICING_SCENARIO_PATH)
     budget = nb.RequestBudget(200)
     evaluation = nb.evaluate_policies(
         agents,
         _mini_manifest(3),
         scenario,
-        nb._BudgetedModelClient(budget),
+        nb._BudgetedModelClient(
+            budget, transport=nb.build_dry_run_transport()
+        ),
         budget,
         nb._deterministic_timer(),
     )
@@ -1487,7 +1494,14 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert all(
         cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
     )
-    assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
+    assert conduct_cells
+    assert all(cell["run_outcome"] == "failure" for cell in conduct_cells)
+    assert all(
+        "multiple eligible agents require complete exact-context psychometric routing evidence or explicit model/agent selection"
+        in cell["outcome_reason"]
+        for cell in conduct_cells
+    )
+    assert all(cell["token_usage_source"] == "reported" for cell in conduct_cells)
     assert cells == sorted(
         cells, key=lambda cell: (cell["policy_name"], cell["task_id"])
     )
@@ -1535,7 +1549,7 @@ def test_equal_budget_take_usage_reconciles_prompt_and_completion_independently(
     assert cell.observed_prompt_tokens == 1
     assert cell.observed_completion_tokens == 0
     assert cell.observed_tokens == 1
-    assert cell.estimated_usage_by_model[agent.model] == {
+    assert cell.reported_usage_by_model[agent.model] == {
         "prompt_tokens": 1,
         "completion_tokens": 0,
     }
@@ -1546,6 +1560,9 @@ def test_evaluate_policies_records_observed_budget_overflow() -> None:
         def chat(self, *args, **kwargs) -> str:  # type: ignore[override]
             del args, kwargs
             return "x" * 5000
+
+        def take_usage(self):
+            return {"prompt_tokens": 300, "completion_tokens": 300}
 
     evaluation = nb.evaluate_policies(
         _mock_agents("dryrun/chat-basic"),
@@ -1564,10 +1581,17 @@ def test_evaluate_policies_records_observed_budget_overflow() -> None:
 
 
 def test_evaluate_policies_skip_reasons_without_pricing() -> None:
+    class ReportedUsageClient(ModelClient):
+        def chat(self, *args, **kwargs):  # type: ignore[override]
+            return "answer"
+
+        def take_usage(self):  # type: ignore[override]
+            return {"prompt_tokens": 1, "completion_tokens": 1}
+
     agents = _mock_agents("vendor/model-a")
     budget = nb.RequestBudget(200)
     evaluation = nb.evaluate_policies(
-        agents, _mini_manifest(), None, ModelClient(), budget
+        agents, _mini_manifest(), None, ReportedUsageClient(), budget
     )
     assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
     unpriced_scenario = {
@@ -1579,10 +1603,10 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
         agents,
         _mini_manifest(),
         unpriced_scenario,
-        ModelClient(),
+        ReportedUsageClient(),
         nb.RequestBudget(200),
     )
-    assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
+    assert evaluation["cheapest_worker_skip_reason"] == "no_uniquely_price_dominant_worker"
 
 
 # --------------------------------------------------------------------------
@@ -2017,8 +2041,21 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
         )
         # The evaluation compares every required system.
         assert first["evaluation"]["best_single_worker_hindsight"] is not None
-        assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
-        assert first["evaluation"]["paired_comparisons"]
+        assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"] == []
+        ambiguous_cells = [
+            cell
+            for cell in first["evaluation"]["evaluation_cells"]
+            if cell["run_outcome"] == "failure"
+            and "multiple eligible agents require complete exact-context psychometric routing evidence or explicit model/agent selection"
+            in cell["outcome_reason"]
+        ]
+        assert ambiguous_cells
+        assert all(cell["token_usage_source"] == "reported" for cell in ambiguous_cells)
+        assert first["evaluation"]["paired_comparisons"] == []
+        assert all(
+            cell["run_outcome"] == "failure"
+            for cell in first["evaluation"]["evaluation_cells"]
+        )
         # Deterministic artifacts: identical reports across runs.
         with open(os.path.join(tmp, "one", "benchmark_report.json"), "rb") as handle:
             first_bytes = handle.read()
@@ -2072,7 +2109,16 @@ def test_live_run_end_to_end_offline() -> None:
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
     ModelClient._validate_provider = lambda self, agent: None
-    ModelClient._send = lambda self, agent, payload: "stub live answer"
+    def _stub_live_send(self, agent, payload):
+        del agent, payload
+        self._local.usage = {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        return "stub live answer"
+
+    ModelClient._send = _stub_live_send
     try:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(
@@ -2104,7 +2150,16 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
     ModelClient._validate_provider = lambda self, agent: None
-    ModelClient._send = lambda self, agent, payload: "stub live answer"
+    def _stub_live_send(self, agent, payload):
+        del agent, payload
+        self._local.usage = {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        return "stub live answer"
+
+    ModelClient._send = _stub_live_send
     try:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(

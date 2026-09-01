@@ -80,8 +80,16 @@ from .provider_transport import (
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer."""
-    return (len(text) + 3) // 4 if text else 0
+    """Reject character-count token estimation at the benchmark boundary.
+
+    Provider chat framing, tool schemas, and multimodal serialization are
+    provider-owned. Text length is not token evidence and must never affect
+    benchmark admission, allowance, cost, or quality evidence.
+    """
+    del text
+    raise BenchmarkContractError(
+        "heuristic token estimation is prohibited; provider-reported usage is required"
+    )
 
 
 BENCHMARK_SCHEMA_VERSION = "1.0.0"
@@ -483,13 +491,7 @@ class PolicyTokenBudgetExceeded(RuntimeError):
 
 
 class EqualBudgetModelClient:
-    """Delegate model calls while enforcing an equal per-cell budget.
-
-    Direct, route-once, conduct, and cheapest-worker cells all receive the same
-    total prompt-plus-completion token allowance and the same declared maximum-
-    call envelope. The wrapper lowers each provider call's output cap to the
-    remaining allowance and reconciles estimates with provider-reported usage.
-    """
+    """Delegate model calls using only complete provider-reported token evidence."""
 
     def __init__(
         self,
@@ -497,16 +499,6 @@ class EqualBudgetModelClient:
         total_token_budget: int,
         maximum_calls: int,
     ) -> None:
-        """Create a cell-local limiter around an existing provider client.
-
-        Args:
-            delegate: Existing request-budgeted provider client.
-            total_token_budget: Cell-wide prompt-plus-completion allowance.
-            maximum_calls: Maximum calls available to every compared policy.
-
-        Raises:
-            ValueError: If either allowance is boolean or not positive.
-        """
         if (
             isinstance(total_token_budget, bool)
             or not isinstance(total_token_budget, int)
@@ -523,12 +515,13 @@ class EqualBudgetModelClient:
         self.total_token_budget = total_token_budget
         self.maximum_calls = maximum_calls
         self.observed_calls = 0
+        self.reported_usage_calls = 0
         self.observed_tokens = 0
         self.observed_prompt_tokens = 0
         self.observed_completion_tokens = 0
         self.attempted_models: list[dict[str, Any]] = []
-        self.estimated_usage_by_model: dict[str, dict[str, int]] = {}
-        self._pending_estimated_usage: tuple[str, int, int] | None = None
+        self.reported_usage_by_model: dict[str, dict[str, int]] = {}
+        self._pending_model: str | None = None
         self._exceeded = False
         self._contract_error: BenchmarkContractError | None = None
 
@@ -548,27 +541,73 @@ class EqualBudgetModelClient:
 
     @property
     def remaining_tokens(self) -> int:
-        """Return the non-negative token allowance remaining in this cell."""
+        """Return the allowance remaining after authoritative observed usage."""
         return max(0, self.total_token_budget - self.observed_tokens)
 
     @property
     def exceeded(self) -> bool:
-        """Return whether observed usage crossed the configured allowance."""
+        """Return whether authoritative observed usage crossed the cell allowance."""
         return self._exceeded
 
     @property
     def contract_error(self) -> BenchmarkContractError | None:
-        """Return a transport-contract failure swallowed by orchestration failover."""
+        """Return a transport/evidence contract failure swallowed by failover."""
         return self._contract_error
 
     @staticmethod
     def _coerce_usage_count(value: Any) -> int | None:
-        """Return one valid non-negative provider token count, otherwise ``None``."""
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        """Return one valid non-negative provider token count, else ``None``."""
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
-        if not math.isfinite(value) or value < 0:
-            return None
-        return int(value)
+        return value
+
+    def _record_reported_usage(self, model_id: str, usage: Any) -> dict[str, Any]:
+        """Record complete provider usage or fail closed without estimation."""
+        if not isinstance(usage, dict):
+            error = BenchmarkContractError(
+                "provider-reported prompt and completion token usage is required"
+            )
+            self._contract_error = error
+            raise error
+        prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
+        completion_tokens = self._coerce_usage_count(usage.get("completion_tokens"))
+        if prompt_tokens is None or completion_tokens is None:
+            error = BenchmarkContractError(
+                "provider-reported prompt and completion token usage is required"
+            )
+            self._contract_error = error
+            raise error
+        self.reported_usage_calls += 1
+        self.observed_prompt_tokens += prompt_tokens
+        self.observed_completion_tokens += completion_tokens
+        self.observed_tokens += prompt_tokens + completion_tokens
+        bucket = self.reported_usage_by_model.setdefault(
+            model_id, {"prompt_tokens": 0, "completion_tokens": 0}
+        )
+        bucket["prompt_tokens"] += prompt_tokens
+        bucket["completion_tokens"] += completion_tokens
+        self._exceeded = self.observed_tokens > self.total_token_budget
+        if self._exceeded:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell total-token allowance exceeded by provider-reported usage"
+            )
+        return usage
+
+    def _begin_call(self, agent: ModelAgent) -> int:
+        """Admit one call using only observed budget state and the declared call cap."""
+        if self._exceeded or self.observed_calls >= self.maximum_calls:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell maximum-call allowance exhausted"
+            )
+        if self.remaining_tokens < 1:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell total-token allowance exhausted"
+            )
+        self.observed_calls += 1
+        self.attempted_models.append(
+            {"role": "attempted", "agent_id": agent.id, "model_id": agent.model}
+        )
+        return min(int(self._delegate.max_output_tokens), self.remaining_tokens)
 
     def chat(
         self,
@@ -578,136 +617,54 @@ class EqualBudgetModelClient:
         top_p: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
     ) -> str:
-        """Perform one delegated call within the remaining cell allowance.
-
-        Raises:
-            PolicyTokenBudgetExceeded: If the call or token allowance is already
-                exhausted or the prompt cannot fit.
-        """
-        if self._exceeded or self.observed_calls >= self.maximum_calls:
-            raise PolicyTokenBudgetExceeded(
-                "policy cell maximum-call allowance exhausted"
-            )
-        prompt_text = json.dumps(messages, ensure_ascii=False, sort_keys=True)
-        prompt_tokens = estimate_tokens(prompt_text)
-        output_allowance = self.remaining_tokens - prompt_tokens
-        if output_allowance < 1:
-            raise PolicyTokenBudgetExceeded(
-                "policy cell total-token allowance exhausted"
-            )
-
-        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
-        self.observed_calls += 1
-        self.observed_prompt_tokens += prompt_tokens
-        self.observed_tokens += prompt_tokens
-        self.attempted_models.append(
-            {"role": "attempted", "agent_id": agent.id, "model_id": agent.model}
-        )
-        usage = self.estimated_usage_by_model.setdefault(
-            agent.model, {"prompt_tokens": 0, "completion_tokens": 0}
-        )
-        usage["prompt_tokens"] += prompt_tokens
+        """Perform one call; accounting completes only from ``take_usage``."""
+        output_cap = self._begin_call(agent)
+        self._pending_model = agent.model
         try:
             with self._delegate.request_settings(max_output_tokens=output_cap):
-                answer = self._delegate.chat(
-                    agent,
-                    messages,
-                    temperature,
-                    top_p,
-                    effort_profile,
+                return self._delegate.chat(
+                    agent, messages, temperature, top_p, effort_profile
                 )
         finally:
             delegate_error = getattr(self._delegate, "benchmark_contract_error", None)
             if isinstance(delegate_error, BenchmarkContractError):
                 self._contract_error = delegate_error
 
-        completion_tokens = estimate_tokens(answer)
-        self.observed_tokens += completion_tokens
-        self.observed_completion_tokens += completion_tokens
-        usage["completion_tokens"] += completion_tokens
-        self._pending_estimated_usage = (agent.model, prompt_tokens, completion_tokens)
-        self._exceeded = self.observed_tokens > self.total_token_budget
-        return answer
-
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Apply the cell call/token envelope to structured judge requests."""
-        if self._exceeded or self.observed_calls >= self.maximum_calls:
-            raise PolicyTokenBudgetExceeded(
-                "policy cell maximum-call allowance exhausted"
-            )
-        prompt_tokens = estimate_tokens(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        )
-        output_allowance = self.remaining_tokens - prompt_tokens
-        if output_allowance < 1:
-            raise PolicyTokenBudgetExceeded(
-                "policy cell total-token allowance exhausted"
-            )
+        """Apply the same evidence-only envelope to structured judge requests."""
+        output_cap = self._begin_call(agent)
         request = dict(payload)
         requested_cap = request.get("max_tokens")
         request["max_tokens"] = min(
-            requested_cap if type(requested_cap) is int and requested_cap > 0 else output_allowance,
-            output_allowance,
+            requested_cap
+            if type(requested_cap) is int and requested_cap > 0
+            else output_cap,
+            output_cap,
         )
-        self.observed_calls += 1
-        self.observed_prompt_tokens += prompt_tokens
-        self.observed_tokens += prompt_tokens
-        self.attempted_models.append(
-            {"role": "attempted", "agent_id": agent.id, "model_id": agent.model}
-        )
-        model_usage = self.estimated_usage_by_model.setdefault(
-            agent.model, {"prompt_tokens": 0, "completion_tokens": 0}
-        )
-        model_usage["prompt_tokens"] += prompt_tokens
         response = self._delegate.proxy_send(agent, endpoint, request)
-        answer = ModelClient._response_content(agent, response)
-        completion_tokens = estimate_tokens(answer)
-        self.observed_tokens += completion_tokens
-        self.observed_completion_tokens += completion_tokens
-        model_usage["completion_tokens"] += completion_tokens
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            reported_prompt = self._coerce_usage_count(usage.get("prompt_tokens"))
-            reported_completion = self._coerce_usage_count(usage.get("completion_tokens"))
-            if reported_prompt is not None and reported_completion is not None:
-                self.observed_prompt_tokens += reported_prompt - prompt_tokens
-                self.observed_completion_tokens += reported_completion - completion_tokens
-                self.observed_tokens += (
-                    reported_prompt + reported_completion - prompt_tokens - completion_tokens
-                )
-                model_usage["prompt_tokens"] += reported_prompt - prompt_tokens
-                model_usage["completion_tokens"] += reported_completion - completion_tokens
-        self._exceeded = self.observed_tokens > self.total_token_budget
+        self._record_reported_usage(agent.model, response.get("usage"))
         return response
 
     def proxy_send_once(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Keep endpoint-race structured sends inside the same cell boundary."""
+        """Keep endpoint-race sends inside the same evidence-only boundary."""
         return self.proxy_send(agent, endpoint, payload)
 
     def take_usage(self) -> dict[str, Any] | None:
-        """Return delegated usage and replace the latest estimate when valid."""
+        """Require complete provider usage for the preceding chat call."""
         usage = self._delegate.take_usage()
-        pending = self._pending_estimated_usage
-        self._pending_estimated_usage = None
-        if pending is None or not isinstance(usage, dict):
+        pending_model = self._pending_model
+        self._pending_model = None
+        delegate_error = getattr(self._delegate, "benchmark_contract_error", None)
+        if isinstance(delegate_error, BenchmarkContractError):
+            self._contract_error = delegate_error
             return usage
-        prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
-        completion_tokens = self._coerce_usage_count(usage.get("completion_tokens"))
-        if prompt_tokens is None or completion_tokens is None:
+        if pending_model is None:
             return usage
-        model, estimated_prompt, estimated_completion = pending
-        self.observed_prompt_tokens += prompt_tokens - estimated_prompt
-        self.observed_completion_tokens += completion_tokens - estimated_completion
-        self.observed_tokens = self.observed_prompt_tokens + self.observed_completion_tokens
-        model_usage = self.estimated_usage_by_model[model]
-        model_usage["prompt_tokens"] += prompt_tokens - estimated_prompt
-        model_usage["completion_tokens"] += completion_tokens - estimated_completion
-        self._exceeded = self.observed_tokens > self.total_token_budget
-        return usage
+        return self._record_reported_usage(pending_model, usage)
 
 
 # --------------------------------------------------------------------------
@@ -1863,14 +1820,9 @@ def _cell_usage(
     agents_by_id: dict[str, str],
     task_prompt: str,
 ) -> tuple[dict[str, dict[str, int]], dict[str, Any]]:
-    """Aggregate per-model token usage for one cell, labeling its source honestly.
-
-    Provider-reported usage wins; steps without usable reported numbers fall
-    back to the repo's character-length estimate and mark the whole cell
-    ``estimated`` (never silently mixed into ``reported``).
-    """
+    """Aggregate complete provider-reported usage for one evaluation cell."""
+    del task_prompt
     usage_by_model: dict[str, dict[str, int]] = {}
-    any_estimated = False
     models_used: list[dict[str, Any]] = []
     for row in trace:
         agent_id = row.get("served_agent_id") or row["agent_id"]
@@ -1891,12 +1843,10 @@ def _cell_usage(
         usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
         prompt_tokens = _coerce_token_count(usage.get("prompt_tokens"))
         completion_tokens = _coerce_token_count(usage.get("completion_tokens"))
-        if prompt_tokens is None:
-            prompt_tokens = estimate_tokens(task_prompt)
-            any_estimated = True
-        if completion_tokens is None:
-            completion_tokens = estimate_tokens(row.get("output") or "")
-            any_estimated = True
+        if prompt_tokens is None or completion_tokens is None:
+            raise BenchmarkContractError(
+                "provider-reported prompt and completion token usage is required"
+            )
         bucket = usage_by_model.setdefault(
             model_id, {"prompt_tokens": 0, "completion_tokens": 0}
         )
@@ -1906,14 +1856,13 @@ def _cell_usage(
     completion_total = sum(
         bucket["completion_tokens"] for bucket in usage_by_model.values()
     )
-    summary = {
+    return usage_by_model, {
         "prompt_tokens": prompt_total,
         "completion_tokens": completion_total,
         "total_tokens": prompt_total + completion_total,
-        "token_usage_source": "estimated" if any_estimated else "reported",
+        "token_usage_source": "reported",
         "models_used": models_used,
     }
-    return usage_by_model, summary
 
 
 def _classify_run_error(exc: Exception) -> str:
@@ -1976,7 +1925,7 @@ def run_policy_cell(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
-            "token_usage_source": "estimated" if incurred else "unavailable",
+            "token_usage_source": incurred.get("token_usage_source", "unavailable"),
             "actual_cost_usd": 0.0,
             "hypothetical_cost_usd": "unknown",
             "models_used": incurred.get("models_used", []),
@@ -2017,29 +1966,43 @@ def run_policy_cell(
     }
 
 
-def _combined_rate(pricing_scenario: dict[str, Any], model_id: str) -> float | None:
-    """Combined input+output USD/1M rate for cheapest-worker selection, or ``None``."""
+def _price_vector(
+    pricing_scenario: dict[str, Any], model_id: str
+) -> tuple[float, float] | None:
+    """Return the explicit (input, output) USD/1M price vector, or ``None``."""
     rate = pricing_scenario["usd_per_million_tokens"].get(model_id)
     if rate is None:
         return None
-    return float(rate["input"]) + float(rate["output"])
+    return float(rate["input"]), float(rate["output"])
 
 
 def cheapest_priced_agent(
     agents: list[ModelAgent], pricing_scenario: dict[str, Any] | None
 ) -> ModelAgent | None:
-    """The cheapest scenario-priced worker (deterministic tiebreak by model id)."""
+    """Return a uniquely component-wise price-dominant worker, if identified."""
     if pricing_scenario is None:
         return None
     priced = [
-        (rate, agent.model, agent)
+        (vector, agent)
         for agent in agents
-        for rate in [_combined_rate(pricing_scenario, agent.model)]
-        if rate is not None
+        for vector in [_price_vector(pricing_scenario, agent.model)]
+        if vector is not None
     ]
-    if not priced:
+    if len(priced) != len(agents):
         return None
-    return min(priced, key=lambda row: (row[0], row[1]))[2]
+    winners: list[ModelAgent] = []
+    for vector, agent in priced:
+        if all(
+            other_agent is agent
+            or (
+                vector[0] <= other[0]
+                and vector[1] <= other[1]
+                and (vector[0] < other[0] or vector[1] < other[1])
+            )
+            for other, other_agent in priced
+        ):
+            winners.append(agent)
+    return winners[0] if len(winners) == 1 else None
 
 
 def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> int:
@@ -2247,6 +2210,11 @@ def evaluate_policies(
                 "completion_tokens": cell_client.observed_completion_tokens,
                 "total_tokens": cell_client.observed_tokens,
                 "models_used": cell_client.attempted_models,
+                "token_usage_source": (
+                    "reported"
+                    if cell_client.reported_usage_calls == cell_client.observed_calls
+                    else "unavailable"
+                ),
             },
         )
         cell.update(
@@ -2258,17 +2226,6 @@ def evaluate_policies(
                 "remaining_budget_tokens": cell_client.remaining_tokens,
             }
         )
-        if cell["token_usage_source"] == "estimated" and cell_client.observed_calls:
-            cell.update(
-                {
-                    "prompt_tokens": cell_client.observed_prompt_tokens,
-                    "completion_tokens": cell_client.observed_completion_tokens,
-                    "total_tokens": cell_client.observed_tokens,
-                    "hypothetical_cost_usd": hypothetical_cost_usd(
-                        pricing_scenario, cell_client.estimated_usage_by_model
-                    ),
-                }
-            )
         if cell_client.exceeded:
             cell["run_outcome"] = "failure"
             cell["outcome_reason"] = "observed_usage_exceeded_equal_token_budget"
@@ -2296,7 +2253,7 @@ def evaluate_policies(
         cheapest_skip_reason = (
             "no_pricing_scenario_supplied"
             if pricing_scenario is None
-            else "no_worker_priced_by_scenario"
+            else "no_uniquely_price_dominant_worker"
         )
     else:
         for task in tasks:
@@ -3042,12 +2999,22 @@ def _dry_run_success_body(path: str) -> bytes:
     if path.endswith("/embeddings"):
         return json.dumps({"data": [{"embedding": [0.0, 0.1]}]}).encode("utf-8")
     if path.endswith("/responses"):
-        return json.dumps({"output_text": "OK"}).encode("utf-8")
+        return json.dumps(
+            {
+                "output_text": "OK",
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        ).encode("utf-8")
     if path.endswith("/audio/transcriptions"):
         return json.dumps({"text": "ok"}).encode("utf-8")
     if path.endswith("/audio/speech"):
         return b"RIFF\x00\x00\x00\x00WAVEdryrunaudio"
-    return json.dumps({"choices": [{"message": {"content": "OK"}}]}).encode("utf-8")
+    return json.dumps(
+        {
+            "choices": [{"message": {"content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    ).encode("utf-8")
 
 
 def _dry_run_probe_capability(path: str, body: bytes | None) -> str:
@@ -3197,7 +3164,11 @@ def run_benchmark(
         clock: Callable[[], float] = dry_run_clock
         probe_timer: Callable[[], float] = dry_run_probe_timer
         timer = _deterministic_timer()
-        eval_base_url = "mock://nim-dry-run"
+        # Keep dry-run fully in-process while exercising the same provider-usage
+        # extraction contract as live evaluation. A mock:// agent bypasses the injected
+        # benchmark transport inside _BudgetedModelClient and therefore cannot supply
+        # authoritative usage evidence.
+        eval_base_url = endpoint
         eval_client: ModelClient = _BudgetedModelClient(
             request_budget,
             transport=active_transport,

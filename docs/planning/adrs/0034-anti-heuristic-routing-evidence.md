@@ -133,3 +133,10 @@ a foundation model*. https://sakana.ai/fugu-beta/
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
 *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv.
 https://doi.org/10.48550/arXiv.2512.04695
+
+
+## 2026-09-01 NIM benchmark token-evidence amendment
+
+The NIM benchmark MUST NOT reconstruct chat prompt or completion usage from character length. ADR-0006 is authoritative: provider chat framing, tool schemas, and multimodal serialization are provider-owned and cannot be recovered from a raw tokenizer or text-length proxy. Equal-budget evaluation therefore records and enforces only complete provider-reported `prompt_tokens` and `completion_tokens`; missing or malformed usage fails closed. Cost evidence is unavailable rather than estimated. The cheapest-worker baseline likewise uses component-wise dominance over the explicit input/output price vector and leaves equal or crossing vectors unresolved instead of imposing an unstated prompt/completion mixture or model-id tie-break.
+
+NVIDIA. (2026). *NVIDIA NIM for large language models: OpenAI-compatible APIs*. NVIDIA Developer Documentation. The chat-completions response contract exposes provider `usage.prompt_tokens`, `usage.completion_tokens`, and `usage.total_tokens`; these reported counts are the benchmark authority rather than character-length reconstruction.
