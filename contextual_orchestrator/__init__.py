@@ -76,6 +76,22 @@ from .cefr_language_observation import (
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .evidence_model_selection import (
+    measured_member_order_fail_closed,
+    prohibited_static_rank_key,
+    ranked_agents_evidence_only,
+    requested_agent_evidence_only,
+)
+
+# Runtime model selection must not fall through to the historical static
+# priority/cosine/id key or the hand-composed transport score.  Keep the
+# compatibility source available for incremental deletion, but make every
+# package/submodule import observe the fail-closed selection boundary now.
+TaskOrchestrator._ranked_agents = ranked_agents_evidence_only
+TaskOrchestrator._requested_agent = requested_agent_evidence_only
+TaskOrchestrator._static_rank_key = prohibited_static_rank_key
+TaskOrchestrator._measured_member_order = measured_member_order_fail_closed
+
 from .release_authorization import evaluate_release_authorization
 from .reasoning_effort_profile import (
     EffortProfileError,
