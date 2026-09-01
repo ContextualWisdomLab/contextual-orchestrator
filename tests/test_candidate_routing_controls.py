@@ -351,6 +351,118 @@ def test_http_conduct_preflight_rejects_role_ineligible_pin() -> None:
     assert client.calls == []
 
 
+def test_http_auto_preflight_accepts_worker_only_pin_when_free_model_always_routes() -> None:
+    """``orchestrator/free`` auto mode never needs a live triage call to prove
+    the direct route: ``TaskOrchestrator.would_route`` short-circuits to
+    True from ``model_name`` alone for FREE_MODEL, so preflight can safely
+    require only the worker role -- unlike GATEWAY_DEFAULT_MODEL/AUTO_MODEL
+    auto requests (see ``test_http_conduct_preflight_rejects_role_ineligible_pin``),
+    where the route-vs-conduct decision genuinely requires a pin-scoped
+    triage provider call and preflight stays conservative instead of risking
+    it. Covers both /v1/chat/completions and non-streamed/streamed
+    /v1/responses so every auto-mode preflight site shares the contract.
+    """
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                tags=("cost:free",),
+                provider_exclusions=("thinker", "verifier", "synthesizer"),
+            )
+        ],
+        client=client,
+    )
+    token = "candidate-routing-free-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        chat_status, chat_body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/free",
+                "messages": [{"role": "user", "content": "hello"}],
+                "mode": "auto",
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+        responses_status, responses_body = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/free",
+                "input": "hello",
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+        stream_status, stream_events = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/free",
+                "input": "hello",
+                "stream": True,
+                "routing": {"candidate_id": "worker_only"},
+            },
+            stream=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert chat_status == 200
+    assert chat_body["choices"][0]["message"]["content"] == "candidate b"
+    assert chat_body["orchestration"]["mode"] == "route"
+    assert chat_body["orchestration"]["routing"]["served_candidate_id"] == "worker_only"
+
+    assert responses_status == 200
+    assert isinstance(responses_body, dict)
+    assert responses_body["output"][-1]["content"][0]["text"] == "candidate b"
+
+    assert stream_status == 200
+    assert isinstance(stream_events, list) and stream_events
+
+    assert client.calls == ["worker_only", "worker_only", "worker_only"]
+
+
+def test_coordinator_auto_route_only_pin_succeeds_for_free_model() -> None:
+    """Direct ``CostRoutingCoordinator.complete`` callers get the same
+    provable-route carve-out as HTTP callers (see
+    ``test_http_auto_preflight_accepts_worker_only_pin_when_free_model_always_routes``):
+    FREE_MODEL's auto-mode decision is provider-free, so a worker-only pin
+    must not be rejected the way the GATEWAY_DEFAULT_MODEL/AUTO_MODEL case
+    still is in ``test_coordinator_auto_preflights_conduct_roles_before_triage``.
+    """
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                tags=("cost:free",),
+                provider_exclusions=("thinker", "verifier", "synthesizer"),
+            )
+        ],
+        client=client,
+    )
+
+    result = CostRoutingCoordinator(orchestrator).complete(
+        [{"role": "user", "content": "hello"}],
+        mode="auto",
+        model_name="orchestrator/free",
+        hints={"candidate_id": "worker_only"},
+    )
+
+    assert result["mode"] == "route"
+    assert result["candidate_routing"]["served_candidate_id"] == "worker_only"
+    assert client.calls == ["worker_only"]
+
+
 def test_response_candidate_evidence_does_not_mutate_workflow_history() -> None:
     client = _CandidateClient()
     orchestrator = TaskOrchestrator(

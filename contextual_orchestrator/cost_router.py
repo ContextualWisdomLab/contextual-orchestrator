@@ -757,9 +757,9 @@ class CostRoutingCoordinator:
             with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
                 routing_controls,
                 model_name=model_name,
-                required_roles=("worker",)
-                if mode == "route"
-                else ("thinker", "worker", "verifier", "synthesizer"),
+                required_roles=self.orchestrator.candidate_pin_required_roles(
+                    mode, model_name
+                ),
             ):
                 result = self.orchestrator.run(messages, **run_kwargs)
                 routing_evidence = self.orchestrator._candidate_routing_evidence(result)

@@ -5410,6 +5410,37 @@ class TaskOrchestrator:
             )
         )
 
+    def candidate_pin_required_roles(
+        self, mode: str, model_name: str = GATEWAY_DEFAULT_MODEL
+    ) -> tuple[str, ...]:
+        """Roles a candidate pin/exclusion must satisfy for ``mode``, provider-free.
+
+        ``mode="route"`` only ever serves the worker role. ``mode="auto"``
+        resolves to that same direct route whenever :meth:`would_route`'s own
+        ``model_name`` branch already decides it -- i.e. whenever
+        ``model_name`` is not one of the two virtual models real
+        route-vs-conduct triage chooses between. The only such value
+        reachable here is ``FREE_MODEL``: :meth:`candidate_routing_policy`
+        itself rejects a pin/exclusion against any other non-virtual
+        ``model_name`` before roles are ever checked. That FREE_MODEL case
+        is therefore decided with zero provider calls, so a pin only needs
+        the worker role there too.
+
+        For ``mode="auto"`` against ``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``
+        -- and for ``mode="conduct"`` -- the real decision needs a live
+        triage call that, with a pin active, would run against the pinned
+        candidate itself (triage agent selection is pin-scoped) before this
+        preflight has cleared it as eligible. Validation stays conservative
+        there and requires the full conduct role set instead of risking
+        that call; this is a known architectural limit of provider-free
+        preflight, not an oversight (see PR #983 discussion).
+        """
+        if mode == "route":
+            return ("worker",)
+        if mode == "auto" and model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+            return ("worker",)
+        return ("thinker", "worker", "verifier", "synthesizer")
+
     def stream_route(
         self,
         messages: list[ChatMessage],

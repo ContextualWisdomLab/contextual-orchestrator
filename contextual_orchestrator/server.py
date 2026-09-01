@@ -7182,10 +7182,8 @@ def build_server(
                         orchestrator,
                         request_routing,
                         model_name,
-                        required_roles=(
-                            ("worker",)
-                            if mode == "route"
-                            else ("thinker", "worker", "verifier", "synthesizer")
+                        required_roles=orchestrator.candidate_pin_required_roles(
+                            mode, model_name
                         ),
                         required_tags=(
                             ("vision",)
@@ -7828,11 +7826,8 @@ def build_server(
                             orchestrator,
                             responses_routing_control,
                             model_name,
-                            required_roles=(
-                                "thinker",
-                                "worker",
-                                "verifier",
-                                "synthesizer",
+                            required_roles=orchestrator.candidate_pin_required_roles(
+                                "auto", model_name
                             ),
                             required_tags=(
                                 ("vision",)
@@ -7909,11 +7904,8 @@ def build_server(
                             orchestrator,
                             responses_routing_control,
                             model_name,
-                            required_roles=(
-                                "thinker",
-                                "worker",
-                                "verifier",
-                                "synthesizer",
+                            required_roles=orchestrator.candidate_pin_required_roles(
+                                "auto", model_name
                             ),
                             required_tags=(
                                 ("vision",)
