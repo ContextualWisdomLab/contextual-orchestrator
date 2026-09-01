@@ -285,7 +285,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         return "recovered"
 
     with patch.object(orch.client, "chat", side_effect=flaky_chat):
-        output, served, usage = orch._invoke(
+        output, served, served_model, usage = orch._invoke(
             orch.candidates[0],
             [{"role": "user", "content": "go"}],
             text="go",
@@ -293,6 +293,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         )
     assert output == "recovered"
     assert served == "planner_agent"
+    assert served_model == "mock-model"
     assert usage is None
     assert len(sleeps) == 1
     fallback = orch.list_recent_audit_events()[0]
@@ -314,10 +315,12 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
 
         class judge_cls:
             def __init__(self, adapter, mode, accept_threshold):
-                del adapter, mode, accept_threshold
+                self.adapter = adapter
+                del mode, accept_threshold
 
             def judge(self, task, answer, criteria):
                 del task, answer, criteria
+                self.adapter.complete([{"role": "user", "content": "judge"}])
 
                 class _Result:
                     accepted = True
@@ -345,6 +348,13 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
         verification = orch._model_judge_verification("task", fallback)
     assert verification["accepted"] is False
     assert "IRT projection" in verification["reason"]
+    # The provider call already completed and reported real usage before the
+    # IRT projection itself failed -- that accounting must survive the
+    # fail-closed verdict, or the already-incurred spend becomes invisible
+    # to _run_budget_output_by_model/spend_analytics (Devin review on #961).
+    assert verification["judge_agent_id"] == "planner_agent"
+    assert verification["judge_model"] == "mock-model"
+    assert verification["judge_usage"] == {"completion_tokens": 3}
 
 
 # -- PII protection on analytics events ----------------------------------------------

@@ -287,6 +287,9 @@ class _FastMLSIJudgeAdapter:
     text: str
     judge: str
     served_agent_id: str | None = None
+    served_model: str | None = None
+    served_usage: dict[str, Any] | None = None
+    served_output: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
 
@@ -304,7 +307,7 @@ class _FastMLSIJudgeAdapter:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(
+        output, served_id, served_model, usage = self.orchestrator._invoke(
             self._agent(),
             messages,
             text=self.text,
@@ -312,7 +315,9 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
         )
-        return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
+        return self._completion_payload(
+            output, served_id, served_model, usage, self.mode if mode is None else mode
+        )
 
     def complete_structured(
         self,
@@ -343,19 +348,34 @@ class _FastMLSIJudgeAdapter:
         response = self.orchestrator.client.proxy_send(
             agent, "chat/completions", request
         )
+        # Captured immediately once the provider call itself returns, before
+        # _response_content's own content validation gets a chance to raise
+        # on a malformed structured response (Devin review on #961): that
+        # billed call already happened by this point, and this accounting
+        # must survive validation failing on how to interpret its result.
+        self.served_agent_id = agent.id
+        self.served_model = agent.model
+        self.served_usage = (
+            response.get("usage") if isinstance(response.get("usage"), dict) else None
+        )
         output = ModelClient._response_content(agent, response)
-        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
-        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+        return self._completion_payload(
+            output, agent.id, agent.model, self.served_usage, self.mode if mode is None else mode
+        )
 
     def _completion_payload(
         self,
         output: str,
         served_id: str,
+        served_model: str,
         usage: dict[str, Any] | None,
         mode: str,
     ) -> dict[str, Any]:
         """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
+        self.served_model = served_model
+        self.served_usage = usage
+        self.served_output = output
         trace = [
             {
                 "id": 0,
@@ -3887,7 +3907,26 @@ class TaskOrchestrator:
             )
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
-            self._run_order.appendleft(record["workflow_run_id"])
+            # A batch_route row persisted before judging (see batch_route's
+            # own pending-record comment) carries an explicit
+            # "pending_verification" marker and intentionally never reaches
+            # _run_order during normal, same-process operation -- it is not
+            # yet a complete result. Reloading it into _run_order here would
+            # make it appear in recent-run/admin listings after a restart
+            # even though it never would have without one (Devin review,
+            # PR #961). _is_trace_complete() is not this gate: it also
+            # requires a truthy "answer", so a genuinely completed route/
+            # stream/conduct/batch run that happens to carry an empty
+            # answer would wrongly vanish from _run_order on reload while
+            # still showing up in it during live operation (a follow-up
+            # Devin review round on this same reload path) -- the explicit
+            # marker is the only thing that actually distinguishes a
+            # not-yet-judged batch row from every other persisted run.
+            # _replace_workflow_run above still restores this row's spend
+            # into the budget meter either way; only _run_order visibility
+            # is gated.
+            if not record.get("pending_verification"):
+                self._run_order.appendleft(record["workflow_run_id"])
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
         for event in self._store.load("analytics", self._analytics_events.maxlen):
@@ -5039,9 +5078,12 @@ class TaskOrchestrator:
         """Route many prompts through the provider's Batch API and persist each run.
 
         The cheap lane for bulk/eval workloads (~50% provider discount, async window) —
-        not for latency-sensitive chat. Each prompt gets the same worker selection as
-        ``route_once``; results are persisted as normal route runs (with provider usage
-        when reported) so spend analytics and the admin console see them unchanged.
+        not for latency-sensitive chat. Each prompt gets the same worker selection and
+        the same ``_realtime_route_judge`` verification as ``route_once``: a genuine
+        fast-mlsirm verdict when ``policy.realtime_judge`` is on (the default), or the
+        same reviewed fallback shape when an operator has explicitly turned it off.
+        Results are persisted as normal route runs (with provider usage when reported)
+        so spend analytics and the admin console see them unchanged.
         """
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
@@ -5053,26 +5095,138 @@ class TaskOrchestrator:
         for index, (prompt, agent) in enumerate(selected):
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
+        # Every worker request within one provider group completes together,
+        # in that group's single batch_chat() call, before the next group's
+        # call even starts -- unlike route_once/conduct(), a later row's real
+        # spend is never hidden behind a not-yet-executed provider call.
+        # _replace_workflow_run is the sole path that updates the in-memory
+        # budget meter, so a completed worker result that is never persisted
+        # is real, already-incurred spend that would otherwise silently
+        # vanish from budget accounting -- either the moment a later
+        # checkpoint raises (Devin review, PR #961), or, just as real, the
+        # moment a *later group's* batch_chat() call itself raises before any
+        # row from an earlier, already-succeeded group had been persisted at
+        # all (a further Devin review round on the same finding: building
+        # every group's results into one flat dict before persisting any of
+        # them left an already-succeeded group's spend exposed to a
+        # completely unrelated later group's failure). Each group's rows are
+        # now persisted immediately after that group's own batch_chat() call
+        # validates, before moving on to the next group -- to the in-memory
+        # meter AND, when a durable --state-db is configured, to the store
+        # too, or a process restart before judging reloads none of this
+        # batch's spend and repeats the same gap (a second Devin review round
+        # on that finding) -- with no verification yet, before any budget
+        # check that could raise. An explicit "pending_verification" marker
+        # (rather than inferring pending-ness from _is_trace_complete(),
+        # which also requires a truthy "answer" and so would misclassify a
+        # completed route/stream/conduct run that legitimately received an
+        # empty answer -- a third Devin review round on this same reload
+        # path) is the only way _reload_state() tells this row apart from
+        # every other, already-judged persisted run; a judged record below
+        # carries no such key, so it reads exactly like any other completed
+        # run once replaced. This pending state gets no run_order/audit/
+        # analytics "workflow_run_created" side effects until it is actually
+        # judged below, matching the fact that it is not yet a complete
+        # result -- and, for the same reason, count_workflow_runs()/
+        # analytics_snapshot()/sales_readiness_report() read completed runs
+        # through _completed_workflow_runs(), which excludes it the same way
+        # _run_order already does (a fourth Devin review round: those
+        # consumers had been reading _workflow_runs directly and so still
+        # counted an interrupted batch's pending rows as finished results).
         answers: dict[int, dict[str, Any]] = {}
-        batch_latency_ms_by_agent: dict[str, float] = {}
+        prepared_rows: dict[int, dict[str, Any]] = {}
+        run_ids: dict[int, str] = {}
         for agent_id, requests in requests_by_agent.items():
+            # A prior group's spend is already reflected in the budget meter
+            # by its own pending persist below, so a later group must not
+            # start a fresh, avoidable provider batch call once that spend
+            # alone already exceeds the cap (Devin review on #961) -- the
+            # same "block before the next not-yet-incurred provider call"
+            # check used at entry and before each judge call below.
+            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+                budget = self.budget_status()
+                if budget["exceeded"]:
+                    if not self.policy.realtime_judge:
+                        # An earlier, already-completed group's rows would
+                        # otherwise stay pending_verification forever: this
+                        # raise means batch_route never reaches its normal
+                        # per-row judging pass for them, but finalizing them
+                        # is zero-cost when judging is disabled -- no reason
+                        # to leave already-done work stuck (Devin review on
+                        # #961). Real spend is never at risk: only rows
+                        # already persisted as pending by an earlier group
+                        # are finalized here, and this group's own
+                        # not-yet-started batch_chat() call is still blocked
+                        # by the raise below.
+                        for pending_index in prepared_rows:
+                            self._finalize_batch_row(
+                                prompt=selected[pending_index][0],
+                                agent=selected[pending_index][1],
+                                result=answers[pending_index],
+                                row=prepared_rows[pending_index],
+                                run_id=run_ids[pending_index],
+                            )
+                    raise BudgetExceededError("spend budget exceeded", detail=budget)
+            agent = agents_by_id[agent_id]
             effort_profile = self._role_effort_profile("worker")
             batch_started_at = time.perf_counter()
             batch = (
                 self.client.batch_chat(
-                    agents_by_id[agent_id], requests, effort_profile=effort_profile
+                    agent, requests, effort_profile=effort_profile
                 )
                 if effort_profile is not None
-                else self.client.batch_chat(agents_by_id[agent_id], requests)
+                else self.client.batch_chat(agent, requests)
             )
             # One provider batch call covers every request in this group. Record
             # its shared elapsed time on each trace row without claiming
             # unavailable per-request timing precision.
-            batch_latency_ms_by_agent[agent_id] = round(
-                (time.perf_counter() - batch_started_at) * 1000,
-                2,
-            )
-            results = _validate_batch_results(requests, batch)
+            batch_latency_ms = round((time.perf_counter() - batch_started_at) * 1000, 2)
+            try:
+                results = _validate_batch_results(requests, batch)
+            except (TypeError, RuntimeError):
+                # _validate_batch_results is all-or-nothing by design (shared
+                # with ModelClient.batch_chat()'s own internal call, where
+                # that contract is correct) -- but one malformed or missing
+                # item in this group's response must not also erase every
+                # other, perfectly valid item's already-incurred spend in
+                # the same paid provider call (Devin review on #961). Salvage
+                # whatever items in the raw response independently satisfy
+                # the same per-item validity check _validate_batch_results
+                # itself uses, persist their real spend as pending exactly
+                # like the normal path below, then still raise -- the group
+                # as a whole remains correctly unusable as a completed run.
+                if isinstance(batch, Mapping):
+                    seen_indices: set[int] = set()
+                    for custom_id, result in batch.items():
+                        if (
+                            not isinstance(custom_id, str)
+                            or custom_id not in requests
+                            or not isinstance(result, Mapping)
+                            or not isinstance(result.get("content"), str)
+                        ):
+                            continue
+                        _prefix, _suffix = custom_id.rsplit("_", 1)
+                        index = int(_suffix)
+                        if (
+                            _prefix != "task"
+                            or custom_id != f"task_{index}"
+                            or not 0 <= index < len(selected)
+                            or index in answers
+                            or index in seen_indices
+                        ):
+                            continue
+                        seen_indices.add(index)
+                        answers[index] = dict(result)
+                        prompt, salvage_agent = selected[index]
+                        row, run_id = self._persist_pending_batch_row(
+                            prompt=prompt,
+                            agent=salvage_agent,
+                            result=answers[index],
+                            batch_latency_ms=batch_latency_ms,
+                        )
+                        prepared_rows[index] = row
+                        run_ids[index] = run_id
+                raise
             for custom_id, result in results.items():
                 # _validate_batch_results already pinned every result key to the
                 # canonical requested task_{index} identifiers, so hostile or
@@ -5089,47 +5243,163 @@ class TaskOrchestrator:
                 if index in answers:  # pragma: no cover - results keys are unique
                     raise RuntimeError("batch provider returned a duplicate request identifier")
                 answers[index] = result
+                prompt = selected[index][0]
+                row, run_id = self._persist_pending_batch_row(
+                    prompt=prompt,
+                    agent=agent,
+                    result=result,
+                    batch_latency_ms=batch_latency_ms,
+                )
+                prepared_rows[index] = row
+                run_ids[index] = run_id
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
-            result = answers[index]
-            row: dict[str, Any] = {
-                "id": 0, "role": "worker", "agent_id": agent.id,
-                "model": agent.model,
-                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
-                "latency_ms": batch_latency_ms_by_agent[agent.id],
-                "subtask": "Direct route (batched)", "access": [], "output": result["content"],
-            }
-            if result.get("usage") is not None:
-                row["usage"] = result["usage"]
-            record = self._with_effort_snapshot(
-                {
-                    "workflow_run_id": f"run_{uuid.uuid4().hex}",
-                    "created_at": int(time.time()),
-                    "mode": "route",
-                    "policy_mode": "route",
-                    "prompt_text": prompt,
-                    "answer": result["content"],
-                    "trace": [row],
-                    "policy_snapshot": self.policy.as_dict(),
-                    "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
-                }
+            # Every row's worker spend is already reflected in the budget
+            # meter by the pending persist above, so this checkpoint is the
+            # same "block before the next not-yet-incurred provider call"
+            # check the entry-point check above and conduct()'s per-step
+            # checkpoint both use -- the judge call below is the only spend
+            # this check needs to gate. When realtime_judge is off,
+            # _realtime_route_judge returns its zero-cost reviewed fallback
+            # without any provider call at all (Devin review on #961): there
+            # is no next spend left to gate, so this checkpoint must not
+            # fire and strand an already-completed, already-paid-for worker
+            # answer just because the batch's total (worker-only) spend
+            # happens to already exceed the cap.
+            if self.policy.realtime_judge and (
+                self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None
+            ):
+                budget = self.budget_status()
+                if budget["exceeded"]:
+                    raise BudgetExceededError("spend budget exceeded", detail=budget)
+            records.append(
+                self._finalize_batch_row(
+                    prompt=prompt,
+                    agent=agent,
+                    result=answers[index],
+                    row=prepared_rows[index],
+                    run_id=run_ids[index],
+                )
             )
-            self._replace_workflow_run(record)
-            self._run_order.appendleft(record["workflow_run_id"])
-            if self._store is not None:
-                self._store.save("workflow_run", record["workflow_run_id"], record)
-            self._append_audit_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-            )
-            self.record_analytics_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-            )
-            records.append(record)
         return records
+
+    def _persist_pending_batch_row(
+        self,
+        *,
+        prompt: str,
+        agent: ModelAgent,
+        result: dict[str, Any],
+        batch_latency_ms: float,
+    ) -> tuple[dict[str, Any], str]:
+        """Persist one batched worker answer as an unjudged pending run.
+
+        Shared by the normal per-group result loop and its malformed-response
+        salvage path (Devin review on #961), so a partially invalid batch
+        response persists every independently-valid item's real spend the
+        same way a fully valid one does. Returns the trace row (still needing
+        ``_finalize_batch_row``'s judge verdict) and the generated run id.
+        """
+        row: dict[str, Any] = {
+            "id": 0, "role": "worker", "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "latency_ms": batch_latency_ms,
+            "subtask": "Direct route (batched)", "access": [], "output": result["content"],
+        }
+        if result.get("usage") is not None:
+            row["usage"] = result["usage"]
+        run_id = f"run_{uuid.uuid4().hex}"
+        pending_record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {},
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(pending_record)
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, pending_record)
+        return row, run_id
+
+    def _finalize_batch_row(
+        self,
+        *,
+        prompt: str,
+        agent: ModelAgent,
+        result: dict[str, Any],
+        row: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Judge one already-persisted pending batch row and record it as complete.
+
+        Shared by ``batch_route``'s normal per-row judging pass and its
+        inter-group budget checkpoint's early-finalize path (Devin review on
+        #961): a later group's own budget check can raise before this normal
+        pass ever reaches an earlier, already-completed group's rows. When
+        ``policy.realtime_judge`` is off that finalization is zero-cost (the
+        same reviewed fallback ``_realtime_route_judge`` always returns for a
+        disabled judge, no provider call), so there is no reason to leave an
+        already-done row stuck ``pending_verification`` forever just because
+        a *different* group's spend exhausted the cap.
+        """
+        # Judge each batched answer exactly like route_once: a genuine
+        # fast-mlsirm verdict when policy.realtime_judge is on (the
+        # default), or the same reviewed fallback shape when an operator
+        # has explicitly turned it off. Never a fabricated, ungated pass.
+        # latency_seconds is None: the shared batch call's elapsed time
+        # already recorded on this row is not one answer's honest
+        # wall-clock latency -- recording it into the synchronous-route
+        # quality EWMA would corrupt future route_once member ordering
+        # with async batch queueing time. The trace row's own latency_ms
+        # keeps that shared timing visible as raw, honestly-labeled
+        # evidence.
+        verification = self._realtime_route_judge(
+            text=prompt,
+            answer=result["content"],
+            served_id=agent.id,
+            latency_seconds=None,
+            usage=result.get("usage"),
+            free_only=False,
+        )
+        row["realtime_judge"] = {
+            "accepted": verification["accepted"],
+            "reason": verification["reason"],
+        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": verification,
+            }
+        )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+        )
+        return record
 
     def run_evaluation(
         self, prompts: list[str], mode: str = "auto", owner_id: str | None = None
@@ -5620,7 +5890,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, attempt_usage = self._invoke(
+            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
                 candidate,
                 messages,
                 text=text,
@@ -5689,7 +5959,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
-        latency_seconds: float,
+        latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
         prompt_context: str | None = None,
@@ -5699,7 +5969,11 @@ class TaskOrchestrator:
         Accepted answers record one success observation (with provider token
         counts when reported); rejected or unjudgeable answers record one
         failure, so measured accuracy -- not just transport success -- steers
-        subsequent member ordering inside model groups.
+        subsequent member ordering inside model groups. ``latency_seconds`` is
+        ``None`` when the caller has no single-attempt wall-clock timing to
+        honestly attribute to this one answer (see
+        ``ModelGroupRouter.observe_success``); the success/failure signal is
+        still recorded, just not a misleading latency sample.
         """
         output_tokens = self._usage_completion_tokens(usage)
 
@@ -5867,7 +6141,7 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(
+            output, served_id, _served_model, usage = self._invoke(
                 agent,
                 step_messages,
                 text=task,
@@ -6331,7 +6605,7 @@ class TaskOrchestrator:
         served_id: str,
         *,
         accepted: bool,
-        latency_seconds: float,
+        latency_seconds: float | None,
         output_tokens: int | None,
         irt_row: tuple[int, ...] = (),
     ) -> None:
@@ -6971,7 +7245,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
-    ) -> tuple[str, str, dict[str, Any] | None]:
+    ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
         ``ModelClient`` handles provider transport retries. This layer classifies
@@ -7011,7 +7285,7 @@ class TaskOrchestrator:
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
 
-            def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
+            def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
@@ -7019,7 +7293,7 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                     usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-                return output, agent.id, usage
+                return output, agent.id, agent.model, usage
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
@@ -7046,7 +7320,7 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
                 self._record_success(outcome.winner_endpoint_id)
-                usage = outcome.value[2]
+                usage = outcome.value[3]
                 output_tokens = None
                 if isinstance(usage, dict):
                     reported = usage.get("completion_tokens", usage.get("output_tokens"))
@@ -7169,7 +7443,7 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
-                return output, agent.id, usage
+                return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
@@ -7408,6 +7682,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
+        judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
             judge = next(
                 agent
@@ -7451,11 +7726,39 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                verification["judge_agent_id"] = judge_adapter.served_agent_id
-            if result.usage:
+            verification.update(self._judge_adapter_accounting_fields(judge_adapter))
+            # The adapter's provider-boundary capture is authoritative for
+            # usage. fast-mlsirm aggregates a missing trace usage into a
+            # non-empty zero-token mapping, which must not turn an unmeasured
+            # call into provider-reported zero spend here.
+            result_usage_has_positive_evidence = isinstance(result.usage, Mapping) and any(
+                type(result.usage.get(key)) is int and result.usage[key] > 0
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+            if result.usage and (
+                judge_adapter.served_usage is not None or result_usage_has_positive_evidence
+            ):
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
+            # The provider call has already completed by this point (result
+            # is a real response, with judge_agent_id/judge_model/judge_usage
+            # already captured above) -- an invalid IRT projection is a
+            # publication-safety failure, not evidence the call never
+            # happened. Every fail-closed verdict from here on must still
+            # carry this accounting subset, or _run_budget_output_by_model/
+            # spend_analytics (which key off exactly these fields) silently
+            # lose an already-incurred, real judge spend the moment
+            # publication is rejected (Devin review on #961).
+            accounting_fields = {
+                key: verification[key]
+                for key in (
+                    "judge_agent_id",
+                    "judge_model",
+                    "judge_usage",
+                    "judge_output_text",
+                )
+                if key in verification
+            }
             criterion_scores = getattr(result, "criterion_scores", None)
             to_irt_row = getattr(result, "to_irt_row", None)
             if isinstance(criterion_scores, Mapping) and callable(to_irt_row):
@@ -7467,6 +7770,7 @@ class TaskOrchestrator:
                         "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
                         "verifier_output": verifier_output,
                         "judge": "model",
+                        **accounting_fields,
                     }
                 if (
                     len(criterion_scores) < 2
@@ -7478,6 +7782,7 @@ class TaskOrchestrator:
                         "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
                         "verifier_output": verifier_output,
                         "judge": "model",
+                        **accounting_fields,
                     }
                 verification["judge_criterion_scores"] = dict(criterion_scores)
                 verification["judge_irt_item_type"] = "dichotomous"
@@ -7489,6 +7794,7 @@ class TaskOrchestrator:
                 "reason": "model judge returned an invalid structured verdict; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
             }
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
@@ -7496,7 +7802,51 @@ class TaskOrchestrator:
                 "reason": "model judge unavailable; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
             }
+
+    @staticmethod
+    def _judge_adapter_accounting_fields(
+        judge_adapter: "_FastMLSIJudgeAdapter | None",
+    ) -> dict[str, Any]:
+        """Return whatever judge spend evidence a (possibly failed) call captured.
+
+        A malformed structured verdict, or any other failure after the
+        provider call itself completed, must not erase that call's real
+        spend from budget/spend accounting (Devin review on #961):
+        ``_FastMLSIJudgeAdapter`` records ``served_agent_id``/``served_model``/
+        ``served_usage`` as soon as its own ``complete()``/``complete_structured()``
+        returns, independently of whether the caller (fast-mlsirm) later
+        raises while turning that response into a verdict. ``judge_adapter``
+        itself can be ``None`` when the failure happened before one was even
+        constructed (e.g. no eligible judge agent), in which case there is
+        genuinely no call to account for.
+        """
+        if judge_adapter is None:
+            return {}
+        fields: dict[str, Any] = {}
+        if judge_adapter.served_agent_id is not None:
+            fields["judge_agent_id"] = judge_adapter.served_agent_id
+        if judge_adapter.served_model is not None:
+            fields["judge_model"] = judge_adapter.served_model
+        if judge_adapter.served_usage:
+            # A falsy served_usage (missing/invalid response usage) is left
+            # genuinely absent rather than fabricated as reported-zero
+            # (Devin review on #961, on this same fix): judge_agent_id/
+            # judge_model above already keep a completed-but-unmeasured call
+            # attributable, and downstream budget/spend consumers derive an
+            # honest estimated fallback from the judge's own served_output
+            # text instead of trusting a fabricated "reported" usage dict.
+            fields["judge_usage"] = judge_adapter.served_usage
+        if judge_adapter.served_output is not None:
+            # The judge's own generated text, not the verifier_output text
+            # it was judging (Devin review on #961, on this same fallback
+            # fix): estimating "judge output tokens" from the worker
+            # answer it evaluated -- rather than what the judge itself
+            # generated -- systematically mis-sizes the estimate whenever
+            # the two lengths differ.
+            fields["judge_output_text"] = judge_adapter.served_output
+        return fields
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
         """Prepare evidence for the model judge without making a heuristic decision."""
@@ -7692,11 +8042,29 @@ class TaskOrchestrator:
         ][start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
+    def _completed_workflow_runs(self) -> list[dict[str, Any]]:
+        """Return workflow runs visible to completed-run consumers.
+
+        Excludes ``batch_route``'s not-yet-judged ``pending_verification``
+        rows (Devin review on #961): those are kept in ``_workflow_runs`` so
+        their real, already-incurred spend is never lost, but a pending row
+        is not a finished result and must not inflate a completed-run count,
+        analytics KPI, or commercial-readiness metric -- the same reasoning
+        that already keeps them out of ``_run_order``/``list_recent_runs``.
+        Spend surfaces (``spend_analytics``) deliberately keep iterating
+        ``_workflow_runs`` directly instead of this helper, since a pending
+        row's spend is real and must stay counted there.
+        """
+        return [
+            run for run in self._workflow_runs.values()
+            if not run.get("pending_verification")
+        ]
+
     def count_workflow_runs(self, owner_id: str | None = None) -> int:
-        """Count only workflow runs visible to the requested owner."""
+        """Count only completed workflow runs visible to the requested owner."""
         return sum(
             owner_id is None or record.get("owner_id") == owner_id
-            for record in self._workflow_runs.values()
+            for record in self._completed_workflow_runs()
         )
 
     def list_recent_audit_events(
@@ -7786,6 +8154,35 @@ class TaskOrchestrator:
             )
             output_tokens, _reported = _step_output_tokens(step)
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
+        verification = record.get("verification")
+        if isinstance(verification, Mapping):
+            judge_agent_id = verification.get("judge_agent_id")
+            if judge_agent_id is not None:
+                # A completed judge call (judge_agent_id is only ever set
+                # once one has) whose response carried no valid usage must
+                # still count toward the budget meter, or a run of
+                # unmeasured judge calls could exceed a spend cap this
+                # conservative-by-design check exists to enforce. Fall back
+                # to the same estimate-from-real-text _step_output_tokens
+                # already applies to worker steps with no reported usage
+                # (Devin review on #961: an earlier revision of this fix
+                # fabricated a "reported" zero-token dict instead). Estimate
+                # from judge_output_text (the judge's own generated
+                # rationale), not verifier_output (the worker answer it was
+                # judging) -- a second Devin review on this same fallback
+                # caught estimating from the wrong side of the call.
+                completion_tokens, _judge_reported = _step_output_tokens(
+                    {
+                        "usage": verification.get("judge_usage"),
+                        "output": verification.get("judge_output_text", ""),
+                    }
+                )
+                judge_model = verification.get("judge_model") or model_by_agent.get(
+                    judge_agent_id, "unknown"
+                )
+                output_by_model[judge_model] = (
+                    output_by_model.get(judge_model, 0) + completion_tokens
+                )
         return output_by_model
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
@@ -7871,6 +8268,57 @@ class TaskOrchestrator:
                 bucket["step_count"] += 1
                 bucket["reported_steps"] += 1 if is_reported else 0
                 total_output_tokens += effective
+
+            verification = run.get("verification")
+            judge_agent_id = (
+                verification.get("judge_agent_id")
+                if isinstance(verification, Mapping)
+                else None
+            )
+            if judge_agent_id is not None:
+                # A completed judge call (judge_agent_id is only ever set
+                # once one has) must stay visible here even when its
+                # response carried no valid usage, or a real, incurred
+                # judge call is silently absent from buyer-facing spend
+                # analytics entirely. Mirror the worker-step loop above
+                # exactly: estimate from the real judged text, and let
+                # _step_output_tokens report the honest reported/estimated
+                # split instead of a fabricated "reported" dict (Devin
+                # review on #961: an earlier revision of this fix fed a
+                # zero-token usage that _step_output_tokens then counted
+                # as genuinely provider-reported). Estimate from
+                # judge_output_text (the judge's own generated rationale),
+                # not verifier_output (the worker answer it was judging) --
+                # a second Devin review on this same fallback caught
+                # estimating from the wrong side of the call.
+                judge_usage = verification.get("judge_usage")
+                judge_text = verification.get("judge_output_text", "")
+                judge_model = verification.get("judge_model") or model_by_agent.get(
+                    judge_agent_id, "unknown"
+                )
+                judge_estimated = estimate_tokens(judge_text)
+                judge_output, judge_reported = _step_output_tokens(
+                    {"usage": judge_usage, "output": judge_text}
+                )
+                if judge_reported and isinstance(judge_usage, Mapping):
+                    judge_prompt = judge_usage.get("prompt_tokens")
+                    if type(judge_prompt) is int and judge_prompt >= 0:
+                        reported_prompt_tokens += judge_prompt
+                        any_reported_prompt = True
+                bucket = by_model.setdefault(
+                    judge_model,
+                    {
+                        "estimated_output_tokens": 0,
+                        "output_tokens": 0,
+                        "step_count": 0,
+                        "reported_steps": 0,
+                    },
+                )
+                bucket["estimated_output_tokens"] += judge_estimated
+                bucket["output_tokens"] += judge_output
+                bucket["step_count"] += 1
+                bucket["reported_steps"] += 1 if judge_reported else 0
+                total_output_tokens += judge_output
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
@@ -7960,7 +8408,7 @@ class TaskOrchestrator:
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
-        runs = list(self._workflow_runs.values())
+        runs = self._completed_workflow_runs()
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
@@ -8058,7 +8506,7 @@ class TaskOrchestrator:
         """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
-        runs = list(self._workflow_runs.values())
+        runs = self._completed_workflow_runs()
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]

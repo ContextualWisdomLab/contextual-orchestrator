@@ -282,7 +282,307 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
-<<<<<<< HEAD
+- `batch_route` no longer fabricates a hardcoded, ungated
+  `{"accepted": True, "verifier_output": ""}` verification verdict for every
+  batched answer regardless of `policy.realtime_judge`. It now calls the same
+  `_realtime_route_judge` path `route_once`/`stream_route` use: a genuine
+  fast-mlsirm judge verdict when `realtime_judge` is on (the default, feeding
+  the quality ledger like serial runs already do), or the identical reviewed
+  `{"accepted": True, "reason": "single route path", "verifier_output": answer}`
+  fallback when an operator has explicitly turned `realtime_judge` off —
+  closing the gap between the function's docstring claim of route_once parity
+  and its actual (previously unguarded) behavior.
+- (Devin review on #961) `batch_route` no longer feeds one shared Batch API
+  call's total elapsed time into every one of its answers' synchronous-route
+  quality latency EWMA. That elapsed time covers every prompt the provider
+  batched together, not any single answer's honest wall-clock latency — doing
+  so let one slow or large batch demote a fast model in later interactive
+  `route_once` ranking. `ModelGroupRouter.observe_success` now accepts
+  `latency_seconds=None` for exactly this case: stability/rate evidence (the
+  judge's accept/reject verdict, request-rate tracking) is still recorded,
+  but neither the latency nor tokens-per-second EWMA are updated from a
+  duration that would not honestly describe one attempt. The trace row's own
+  `latency_ms` keeps the real shared batch timing visible as raw evidence.
+- (Devin review on #961) `batch_route`'s one-time spend-budget check at entry
+  did not cover the N additional judge provider calls its loop makes
+  afterward, so a large batch under a configured `budget_max_output_tokens`/
+  `budget_max_cost_usd` cap could keep issuing judge calls well past the
+  cap before the whole batch finally returned. The loop now re-checks
+  accumulated in-batch spend before each item's judge call, the same
+  per-step budget checkpoint `conduct()` already uses via
+  `_trace_budget_spend`, so a batch fails closed mid-loop instead of only
+  after every item has already run. That first per-item checkpoint design
+  double-counted already-persisted rows (each prior row's spend is
+  reflected in the budget meter as soon as `_replace_workflow_run` persists
+  it, so re-adding it as "in-flight" charged it twice) — fixed to check
+  only the current row. That in turn undercounted: every worker request in
+  a batch actually completes together, before any judge call starts, so a
+  later row's spend is real and already incurred the moment the batch
+  finishes, not hidden behind a not-yet-executed provider call the way a
+  later `conduct()` step's spend is. Checking only the current row let the
+  aggregate spend of the rest of the batch — already incurred, just not yet
+  persisted — pass every individual per-row check and reach every judge
+  call uncounted. Each checkpoint now sums every row from the current index
+  through the end of the batch (rows before it are already reflected in the
+  meter by earlier iterations of the same loop), so a batch whose aggregate
+  worker spend alone already exceeds the cap blocks its very first judge
+  call. That aggregate checkpoint in turn raised `BudgetExceededError`
+  before persisting any of the batch's already-completed worker rows —
+  since `_replace_workflow_run` is the sole path that updates the budget
+  meter, a batch that failed this checkpoint left its real, already-incurred
+  provider spend completely uncounted, so a caller retrying the same
+  over-budget batch could keep incurring real spend indefinitely against an
+  unchanged meter. Every row's worker result is now persisted immediately
+  (with no verification yet — `_is_trace_complete()` already reads that
+  honestly as incomplete, the same as any other genuinely-unfinished run)
+  before any budget check that could raise, so the checkpoint before each
+  judge call is now the same simple "block before the next not-yet-incurred
+  provider call" check `conduct()`'s entry point uses, and a retry after
+  `BudgetExceededError` fails closed immediately instead of re-incurring
+  the same spend. That fix still only updated the in-memory budget meter:
+  a completed batch's pending rows were never written to the durable
+  `--state-db` store, so a process restart before judging reloaded none of
+  a failed batch's spend, and the same over-budget batch could be retried
+  with a full budget again after every restart. Pending rows are now saved
+  to the store too, the same as a judged run already was. That durable save
+  had its own follow-up gap: `_reload_state()` unconditionally added every
+  loaded `workflow_run` to `_run_order` (the recency structure behind
+  `list_recent_runs()`), so a reloaded pending row -- never added to
+  `_run_order` during normal, same-process operation because it is not yet
+  a complete result -- would appear as a completed run in admin/API
+  listings after a restart even though it never would have without one.
+  `_reload_state()` now only adds a reloaded record to `_run_order` when
+  `_is_trace_complete()` says it actually is one; its spend still restores
+  into the budget meter either way. `_is_trace_complete()` was the wrong
+  predicate for that gate, though: it also requires a truthy `"answer"`,
+  so a genuinely completed `route`/`stream`/`conduct`/`batch` run that
+  legitimately reported an empty answer would wrongly vanish from
+  `_run_order` on reload while it would have stayed visible without a
+  restart (every live-operation `_run_order.appendleft` call is
+  unconditional). The pending batch row now carries an explicit
+  `"pending_verification"` marker instead, and `_reload_state()` gates on
+  its absence — the only thing that actually distinguishes a not-yet-judged
+  batch row from every other persisted run, regardless of what its answer
+  happens to be.
+- `batch_route`'s real judge calls (see above) reported provider usage that
+  `spend_analytics()` never counted — it only ever traversed each run's
+  worker `trace` steps, so a batch under active `realtime_judge` judging
+  could consume real judge tokens and budget while remaining invisible to
+  buyer-facing spend/cost analytics. `spend_analytics()` now also attributes
+  reported `verification.judge_usage` completion tokens to the judge's
+  model, matching how `_run_budget_output_by_model` (the live budget meter)
+  already counted it; missing/invalid judge usage stays absent rather than
+  estimated from unrelated verifier text. (Devin review on #961) That judge
+  model was being re-resolved from the *current* agent pool on every read
+  (`model_by_agent.get(judge_agent_id, "unknown")` in both
+  `_run_budget_output_by_model` and `spend_analytics()`), unlike worker
+  steps, whose `model_name` is pinned into the persisted record at write
+  time. If a judge agent's id was later reused for a different model (the
+  real `sync_discovered_agents` re-discovery upsert path) or the agent left
+  the pool, previously-recorded judge spend would silently reattribute to
+  the new model or an unpriced/unknown bucket — a live report of judge
+  spend could rewrite history on every pool change instead of describing
+  what actually happened. `_model_judge_verification` now resolves and
+  persists a `verification["judge_model"]` at judge-call time (the served
+  agent's model at that exact moment, following failover the same way
+  `judge_agent_id` already does), and both read sites prefer that stored
+  value, falling back to the old live-pool resolution only for
+  already-persisted records that predate this fix. (Devin review on #961)
+  That first fix still resolved `judge_model` via one more `self.candidates`
+  lookup performed right after the provider call returned -- narrower than
+  the original bug, but not closed: `self.candidates` is a plain mutable
+  list a concurrent admin request (agent add/remove/re-discovery) can
+  reassign in the gap between the call completing and that lookup running,
+  which could still mis-price that one call against whatever the pool
+  became a moment later. `_invoke` (and the model-group endpoint race path
+  inside it) now returns the exact `ModelAgent.model` of the agent object
+  the call actually succeeded against, captured from the same local
+  reference used for its `agent.id` -- no separate lookup, so there is no
+  window left to race. `_FastMLSIJudgeAdapter` carries it the same way it
+  already carries `served_agent_id`, and `_model_judge_verification` reads
+  it directly instead of touching `self.candidates` at all. The two
+  non-judge callers of `_invoke` (`route_once`'s worker call, `conduct()`'s
+  step call) accept the new return value and discard it, unchanged from
+  before -- those callers' own `trace` row `model` field already comes
+  from the originally-selected candidate, not this served value, and stays
+  that way; only the judge path, where this PR introduced the bug, changes
+  behavior. New regression test drives the real judge harness and mutates
+  the pool from inside the scripted judge's own `judge()` call --
+  immediately after its provider call completes but before
+  `_model_judge_verification` builds its result -- and asserts the
+  persisted `judge_model` still reflects what actually served the request.
+  (Devin review on #961) `batch_route` groups prompts by worker agent and
+  runs one `batch_chat()` provider call per group; it built every group's
+  results into one flat dict before persisting any of them, so if an
+  earlier group's call already succeeded (real, incurred provider spend)
+  and a later, unrelated group's call then raised, the whole `batch_route`
+  call raised before the earlier group's rows were ever persisted --
+  losing that spend from budget accounting entirely, not just leaving it
+  pending. Each group's rows are now persisted as pending immediately after
+  that group's own `batch_chat()` call validates, before the next group's
+  call starts, the same as every row within one group already was.
+  (Devin review on #961) `count_workflow_runs()`, `analytics_snapshot()`,
+  and `sales_readiness_report()` read `_workflow_runs` directly, so an
+  interrupted batch's `pending_verification` rows -- deliberately excluded
+  from `_run_order`/`list_recent_runs()` -- still counted as finished
+  results in those completed-run consumers (e.g. a workflow-runs API
+  `total_count` that pagination could never actually reach). All three now
+  read through a new `_completed_workflow_runs()` helper that excludes
+  pending rows; `spend_analytics()` deliberately keeps iterating
+  `_workflow_runs` directly, since a pending row's incurred spend must
+  still be counted there. (Devin review on #961) Two more findings on the
+  same restructured group loop: the one-time budget check at `batch_route`'s
+  entry did not cover a later group's `batch_chat()` call once each group
+  started persisting its own spend immediately, so a later group could
+  still start unconditionally even after an earlier group's own spend
+  alone already exceeded the cap -- incurring avoidable provider charges
+  on an already-over-budget batch. Each group's loop iteration now re-checks
+  the budget first, the same "block before the next not-yet-incurred
+  provider call" check already used at entry and before each judge call.
+  Conversely, the per-item checkpoint before each judge call fired
+  regardless of `policy.realtime_judge`, even though `_realtime_route_judge`
+  makes no provider call at all when judging is disabled (it returns a
+  zero-cost reviewed fallback) -- there was no next spend for that
+  checkpoint to gate, so an already-exhausted budget could strand an
+  already-completed, already-paid-for worker answer that needed no further
+  spend to finalize. That checkpoint now only runs when
+  `policy.realtime_judge` is on. New regression tests:
+  `test_batch_route_blocks_a_later_group_once_an_earlier_group_exhausts_budget`
+  (two groups, the first exhausts the cap; asserts the second group's
+  `batch_chat()` is never called) and
+  `test_batch_route_disabled_judging_never_strands_a_completed_answer_on_budget`
+  (`realtime_judge=False`, budget exhausted by the one worker call; asserts
+  `batch_route` still returns the completed, reviewed-fallback-verified
+  record instead of raising). (Devin review on #961) One more finding
+  combining the two above: `batch_route` defers all judging to a second
+  pass over every group, so the inter-group budget checkpoint could still
+  raise before that pass ever reached an already-completed earlier group
+  -- and with `realtime_judge` off, finalizing that group costs nothing,
+  so leaving its answers stuck `pending_verification` forever (with no
+  retry/resume path that would ever revisit them) served no purpose.
+  Extracted the per-row judge-and-persist logic from the judging pass into
+  a new `_finalize_batch_row()` helper; the inter-group checkpoint now
+  calls it for every already-persisted row before raising, whenever
+  `policy.realtime_judge` is off (real spend stays safe either way: only
+  already-completed groups' rows are finalized, and the raise still blocks
+  the next group's own not-yet-started `batch_chat()` call). New regression
+  test `test_batch_route_finalizes_completed_group_before_blocking_a_later_one_when_judging_is_free`:
+  two groups, `realtime_judge=False`, the first exhausts the cap; asserts
+  the second group's call is still blocked while the first group's run is
+  a finalized, visible result rather than a stuck pending row. (Devin
+  review on #961) Two further findings, both about losing evidence for
+  spend that has already genuinely happened. First: `batch_route` validated
+  each group's entire response via `_validate_batch_results` before
+  persisting any of it, so one malformed or missing item in an otherwise-
+  valid group's response discarded every other, independently-valid item's
+  already-incurred spend alongside it -- the same class of loss already
+  fixed across groups, but now within one group's own paid provider call.
+  `batch_route` now catches that validation failure, salvages every item in
+  the raw response that independently satisfies the same per-item
+  validity check, persists their spend as pending exactly like the normal
+  path (extracted into a new `_persist_pending_batch_row()` helper shared
+  by both), and then still raises -- the group as a whole remains correctly
+  unusable as a completed run. Second: inside `_model_judge_verification`,
+  the judge's provider call can complete and report real usage, with
+  `judge_agent_id`/`judge_model`/`judge_usage` already captured, before the
+  *separate* IRT-projection validation step rejects the result; both of its
+  fail-closed branches returned a fresh dict literal that discarded those
+  three fields, making an already-incurred judge spend invisible to
+  `_run_budget_output_by_model`/`spend_analytics()`. Both branches now carry
+  the same accounting subset forward. New/extended regression tests:
+  `test_batch_route_rejects_incomplete_or_empty_provider_results` (extended
+  to assert the group's two other, valid items survive as pending, with
+  their spend counted, while the malformed one is excluded) and
+  `test_model_judge_irt_projection_failure_fails_closed` (extended to
+  assert the fail-closed verdict still carries `judge_agent_id`/
+  `judge_model`/`judge_usage` from the already-completed provider call).
+  (Devin review on #961) One more accounting-loss finding in the same
+  vein: `_FastMLSIJudgeAdapter` only captured `served_agent_id`/
+  `served_model` on completion, not usage, so a malformed structured
+  verdict raised by fast-mlsirm *after* the provider call itself
+  succeeded (inside `judge()`'s own response parsing, before ever
+  returning a `result` object to `_model_judge_verification`) still
+  discarded that call's real usage on the way to its two outer
+  fail-closed returns (`except components.format_error` / generic
+  `except Exception`). The adapter now also records `served_usage` at
+  completion time, and both outer except blocks include whatever subset
+  of `judge_agent_id`/`judge_model`/`judge_usage` a new
+  `_judge_adapter_accounting_fields()` helper finds already captured on
+  the adapter -- empty when the failure happened before any call
+  completed (nothing to account for), populated otherwise. New
+  regression test
+  `test_fast_mlsirm_format_error_after_completed_call_preserves_accounting`:
+  the scripted judge calls the adapter's `complete()` (a real, successful
+  completion) before raising the configured format error; asserts the
+  fail-closed result still carries `judge_agent_id`/`judge_model`. The
+  pre-existing `test_fast_mlsirm_format_error_fails_closed` (whose judge
+  raises before ever calling the adapter) is extended to assert the
+  opposite: no accounting fields, since genuinely no call happened.
+  (Devin review on #961) The same residual gap existed one call site
+  earlier: `_FastMLSIJudgeAdapter.complete_structured()` only stored
+  `served_agent_id`/`served_model`/`served_usage` via `_completion_payload`,
+  which runs *after* `ModelClient._response_content()` validates the
+  response has usable assistant content. A real, billed provider response
+  with no usable content (reasoning-only, or a missing message) makes
+  `_response_content` raise before `_completion_payload` ever runs, so that
+  already-incurred structured-call spend was lost the same way the
+  previous fix closed for judge-side (fast-mlsirm) failures. Accounting is
+  now captured immediately once `proxy_send()` returns, before content
+  validation runs. New regression test
+  `test_judge_adapter_preserves_accounting_on_malformed_structured_response`:
+  `proxy_send` returns a response with real `usage` but no assistant
+  content; asserts the raised `ProviderResponseError` still leaves
+  `served_agent_id`/`served_model`/`served_usage` populated on the adapter.
+  (CodeRabbit review on #961) All of the accounting-preservation fixes
+  above still had one gap: every site that builds `judge_usage` (the
+  ACCEPT-path verdict, and `_judge_adapter_accounting_fields`'s two
+  fail-closed branches) only included it when the provider response's own
+  `usage` was a truthy dict — a completed call whose response carried no
+  valid usage (missing, `None`, or the wrong type) still vanished from
+  `judge_usage` entirely, making that real, incurred call invisible to
+  `_run_budget_output_by_model`/`spend_analytics` — not even counted as
+  estimated, just silently absent.
+  **Correction (Devin review on the same #961 fix)**: the first attempt at
+  this fix recorded an explicit `{"prompt_tokens": 0, "completion_tokens":
+  0, "total_tokens": 0}` whenever a call completed, matching fast-mlsirm's
+  own `_usage(trace)` zero-fill. That made a genuinely unmeasured call
+  indistinguishable from one the provider actually reported as zero-cost
+  — `spend_analytics`'s `usage_source` labeling then presented an
+  unmeasured paid call as `"reported"`, contradicting this repo's own
+  Honest metrics convention (`CLAUDE.md`; the
+  "missing/invalid judge usage stays absent" framing several paragraphs
+  above is also superseded by this correction, back to its original
+  intent). `judge_usage` is now left genuinely absent when unmeasured;
+  `judge_agent_id`/`judge_model` alone keep the call attributable, and
+  both `_run_budget_output_by_model` (budget enforcement) and
+  `spend_analytics` (buyer-facing reporting) now fall back to
+  `estimate_tokens()` — the same ~4-chars/token heuristic estimate the
+  worker-step trace loop already uses for a step with no reported usage —
+  routed through the same `_step_output_tokens` helper so the honest
+  reported-vs-estimated split (`usage_source: estimated/reported/mixed`)
+  falls out for free instead of being hand-rolled. Real provider-reported
+  usage still passes through unchanged and is still preferred whenever
+  present.
+  **Second correction (a further Devin review on the same fallback)**:
+  that estimate was first taken from `verification["verifier_output"]` —
+  the *worker's answer*, i.e. the judge's own *input*, not what the judge
+  itself generated. A judge that reads a long answer but writes a short
+  "ACCEPT" verdict (or vice versa) would be mis-sized in either direction.
+  `_FastMLSIJudgeAdapter` now also records `served_output` (the judge's
+  raw completion text) at the same point it already captures
+  `served_agent_id`/`served_model`/`served_usage`, and the shared accounting
+  helper persists it as `judge_output_text`. Both budget/spend consumers estimate from
+  `judge_output_text` instead of `verifier_output`.
+  `tests/test_batch_optimizer.py::test_batch_route_budget_counts_only_the_current_uncommitted_worker`
+  updated twice in the course of this: its local scripted judge never
+  calls the adapter at all, so the expected budget remains the 7 real
+  worker tokens; no nonexistent judge call or cost is fabricated. New regression test
+  `test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget`
+  drives the existing scripted-client ACCEPT path (which never supplies a
+  usage dict), asserts `judge_usage` stays absent, `judge_output_text`
+  holds the exact judge completion, and the budget contribution matches an
+  estimate from that text specifically — deliberately different in length
+  from `verifier_output` so the two can't pass by coincidence.
 - (Devin review on #958) `_orchestrated_provider_completion`'s structured/
   Responses synthesis path (the `single_agent=False` branch of
   `proxy_completion`) resolved its caller-supplied `effort_profile` override
@@ -301,7 +601,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   path's existing pattern and `_ranked_agents`' own documented intent that
   every role-based selection path -- "structured synthesis" included -- stay
   consistent with the effort catalog's eligibility guard.
-=======
 - (CodeRabbit review on #946) **Credential leak via cross-host redirect,
   doubled by #923's retry.** `_fetch_json` -- the function every standard
   provider's authenticated "list models" call goes through (openai,
@@ -429,7 +728,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
->>>>>>> origin/main
 
 ### Added
 
