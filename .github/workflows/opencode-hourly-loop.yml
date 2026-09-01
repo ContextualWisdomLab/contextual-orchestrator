@@ -119,6 +119,7 @@ jobs:
       - name: Point OpenCode at the local gateway
         run: |
           set -euo pipefail
+          umask 077
           mkdir -p ~/.config/opencode
           cat > ~/.config/opencode/opencode.json <<JSON
           {

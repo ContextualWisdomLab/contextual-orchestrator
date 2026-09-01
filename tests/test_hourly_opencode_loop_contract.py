@@ -24,7 +24,9 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "python -m pip install --require-hashes -r requirements.lock" in workflow
     assert "--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow
     assert "--auth-token=" not in workflow
+    assert "--auth-token " not in workflow
     assert "GATEWAY_BEARER_TOKEN" not in workflow
+    assert "umask 077" in workflow
     installer = Path("scripts/ci/install_locked_opencode.mjs").read_text()
     assert "optionalDependencies" in installer
     assert "installed.version !== expectedVersion" in installer
