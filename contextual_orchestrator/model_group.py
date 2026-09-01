@@ -179,25 +179,35 @@ class ModelGroupRouter:
     def observe_success(
         self,
         member_id: str,
-        latency_seconds: float,
+        latency_seconds: float | None,
         output_tokens: int | None = None,
         total_tokens: int | None = None,
     ) -> None:
-        """Record one successful attempt with its measured wall-clock latency.
+        """Record one successful attempt, with wall-clock latency when honestly known.
 
         ``output_tokens`` carries the provider-reported completion token count
         for the same attempt. When supplied it also feeds the tokens-per-second
         EWMA (Jacobson 1988 estimator applied to throughput samples); when
         omitted only latency evidence is recorded and no token count is ever
-        inferred or invented.
+        inferred or invented. ``latency_seconds`` is ``None`` when no
+        single-attempt wall-clock timing exists for this success (for example,
+        one shared Batch API call covering several answers) -- stability
+        evidence and rate tracking are still recorded, but neither the
+        latency EWMA nor the tokens-per-second EWMA are updated from a
+        duration that would not honestly describe this one attempt.
         """
-        if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
-            raise TypeError("latency_seconds must be a real number")
-        latency = float(latency_seconds)
-        if not math.isfinite(latency):
-            raise ValueError("latency_seconds must be finite")
-        if latency < 0:
-            raise ValueError("latency_seconds must be nonnegative")
+        clamped: float | None
+        if latency_seconds is None:
+            clamped = None
+        else:
+            if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
+                raise TypeError("latency_seconds must be a real number")
+            latency = float(latency_seconds)
+            if not math.isfinite(latency):
+                raise ValueError("latency_seconds must be finite")
+            if latency < 0:
+                raise ValueError("latency_seconds must be nonnegative")
+            clamped = max(latency, self._min_latency_seconds)
         if output_tokens is not None and (
             isinstance(output_tokens, bool)
             or not isinstance(output_tokens, int)
@@ -210,22 +220,24 @@ class ModelGroupRouter:
             or total_tokens <= 0
         ):
             raise ValueError("total_tokens must be a positive integer when provided")
-        clamped = max(latency, self._min_latency_seconds)
-        try:
-            throughput_sample = None if output_tokens is None else float(output_tokens) / clamped
-        except OverflowError:
-            raise ValueError("output_tokens must be representable as a finite float") from None
-        if throughput_sample is not None and not math.isfinite(throughput_sample):
-            raise ValueError("output_tokens must be representable as a finite float")
+        throughput_sample = None
+        if output_tokens is not None and clamped is not None:
+            try:
+                throughput_sample = float(output_tokens) / clamped
+            except OverflowError:
+                raise ValueError("output_tokens must be representable as a finite float") from None
+            if not math.isfinite(throughput_sample):
+                raise ValueError("output_tokens must be representable as a finite float")
         with self._lock:
             state = self._ensure_locked(member_id)
             state["alpha"] = float(state["alpha"]) + 1.0
-            ewma = state["ewma"]
-            state["ewma"] = (
-                clamped
-                if ewma is None
-                else (1.0 - self._ewma_gain) * float(ewma) + self._ewma_gain * clamped
-            )
+            if clamped is not None:
+                ewma = state["ewma"]
+                state["ewma"] = (
+                    clamped
+                    if ewma is None
+                    else (1.0 - self._ewma_gain) * float(ewma) + self._ewma_gain * clamped
+                )
             if throughput_sample is not None:
                 tps = state["ewma_tps"]
                 state["ewma_tps"] = (

@@ -13,6 +13,8 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import (
+    _COMMERCIAL_REPORT_CACHE,
+    BudgetExceededError,
     ModelAgent,
     TaskOrchestrator,
     WorkflowStep,
@@ -142,9 +144,9 @@ def test_batch_route_enforces_budget_and_request_identifier_contract() -> None:
         with pytest.raises(RuntimeError, match="spend budget exceeded"):
             orch.batch_route(["prompt one"])
 
-    # Without an exceeded budget the batch path answers and persists normally.
-    records = orch.batch_route(["prompt two"])
-    assert len(records) == 1
+    # Missing authoritative accounting blocks an enabled budget before dispatch.
+    with pytest.raises(BudgetExceededError, match="measurement unavailable"):
+        orch.batch_route(["prompt two"])
 
 
 def test_batch_route_persists_runs_when_a_state_db_is_configured(tmp_path) -> None:
@@ -285,7 +287,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         return "recovered"
 
     with patch.object(orch.client, "chat", side_effect=flaky_chat):
-        output, served, usage = orch._invoke(
+        output, served, served_model, usage = orch._invoke(
             orch.candidates[0],
             [{"role": "user", "content": "go"}],
             text="go",
@@ -293,6 +295,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         )
     assert output == "recovered"
     assert served == "planner_agent"
+    assert served_model == "mock-model"
     assert usage is None
     assert len(sleeps) == 1
     fallback = orch.list_recent_audit_events()[0]
@@ -314,10 +317,12 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
 
         class judge_cls:
             def __init__(self, adapter, mode, accept_threshold):
-                del adapter, mode, accept_threshold
+                self.adapter = adapter
+                del mode, accept_threshold
 
             def judge(self, task, answer, criteria):
                 del task, answer, criteria
+                self.adapter.complete([{"role": "user", "content": "judge"}])
 
                 class _Result:
                     accepted = True
@@ -345,6 +350,13 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
         verification = orch._model_judge_verification("task", fallback)
     assert verification["accepted"] is False
     assert "IRT projection" in verification["reason"]
+    # The provider call already completed and reported real usage before the
+    # IRT projection itself failed -- that accounting must survive the
+    # fail-closed verdict, or the already-incurred spend becomes invisible
+    # to _run_budget_output_by_model/spend_analytics (Devin review on #961).
+    assert verification["judge_agent_id"] == "planner_agent"
+    assert verification["judge_model"] == "mock-model"
+    assert verification["judge_usage"] == {"completion_tokens": 3}
 
 
 # -- PII protection on analytics events ----------------------------------------------
@@ -437,7 +449,7 @@ def test_openai_models_deduplicate_models_and_unknown_ids_raise() -> None:
 # -- spend analytics usage-source classification ---------------------------------------
 
 
-def test_spend_analytics_marks_mixed_usage_sources_per_model() -> None:
+def test_spend_analytics_marks_partial_unknown_usage_unavailable() -> None:
     orch = _orch(_agent(), _agent("builder_agent"))
     run = {
         "workflow_run_id": "run_mixed",
@@ -462,7 +474,8 @@ def test_spend_analytics_marks_mixed_usage_sources_per_model() -> None:
     by_model = {row["model"]: row for row in report["by_model"]}
     planner_row = by_model["mock-model"]
     assert planner_row["step_count"] == 3
-    assert planner_row["usage_source"] == "mixed"
+    assert planner_row["usage_source"] == "unavailable"
+    assert planner_row["output_tokens"] is None
 
 
 # -- readiness criteria -----------------------------------------------------------------
@@ -602,9 +615,7 @@ def test_policy_safety_counts_exclusion_misses_and_unknown_agents() -> None:
 def test_commercial_report_cache_hits_within_one_scope() -> None:
     """Nested sibling reports reuse cached results inside one cache scope."""
     orchestrator = build()
-    local = orchestrator._commercial_report_cache_local
-    local.cache = {}
-    local.depth = 1
+    token = _COMMERCIAL_REPORT_CACHE.set({})
     try:
         first = orchestrator.commercial_readiness_report(
             target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
@@ -613,8 +624,7 @@ def test_commercial_report_cache_hits_within_one_scope() -> None:
             target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
         )
     finally:
-        local.depth = 0
-        local.cache = {}
+        _COMMERCIAL_REPORT_CACHE.reset(token)
     assert first is second
 
 
