@@ -237,16 +237,6 @@ def get_backend() -> CredentialBackend:
     return _credential_backend
 
 
-def set_backend(credential_backend: CredentialBackend | None) -> None:
-    """Install or reset the active credential backend.
-
-    Used by bootstrap wiring and by tests to inject an in-memory backend.
-    """
-    global _credential_backend
-    with _credential_backend_lock:
-        _credential_backend = credential_backend
-
-
 def _compatibility_argument(
     semantic_value: Any,
     semantic_name: str,
@@ -271,6 +261,23 @@ def _reject_unknown_compatibility_kwargs(compatibility_kwargs: dict[str, Any]) -
     if compatibility_kwargs:
         unexpected_names = ", ".join(sorted(compatibility_kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected_names}")
+
+
+def set_backend(
+    credential_backend: CredentialBackend | None = _MISSING_ARGUMENT,
+    **compatibility_kwargs: Any,
+) -> None:
+    """Install or reset the active credential backend through a semantic identifier."""
+    resolved_credential_backend = _compatibility_argument(
+        credential_backend,
+        "credential_backend",
+        "backend",
+        compatibility_kwargs,
+    )
+    _reject_unknown_compatibility_kwargs(compatibility_kwargs)
+    global _credential_backend
+    with _credential_backend_lock:
+        _credential_backend = cast(CredentialBackend | None, resolved_credential_backend)
 
 
 def get_credential(
@@ -340,17 +347,30 @@ def _install_credential_public_signatures() -> None:
         Parameter.POSITIONAL_OR_KEYWORD,
         annotation=str,
     )
-    get_credential.__signature__ = Signature(  # type: ignore[attr-defined]
-        parameters=[semantic_name],
-        return_annotation=str | None,
+    semantic_backend = Parameter(
+        "credential_backend",
+        Parameter.POSITIONAL_OR_KEYWORD,
+        annotation=CredentialBackend | None,
     )
-    register_credential.__signature__ = Signature(  # type: ignore[attr-defined]
-        parameters=[semantic_name, semantic_value],
-        return_annotation=None,
+    setattr(
+        set_backend,
+        "__signature__",
+        Signature(parameters=[semantic_backend], return_annotation=None),
     )
-    delete_credential.__signature__ = Signature(  # type: ignore[attr-defined]
-        parameters=[semantic_name],
-        return_annotation=None,
+    setattr(
+        get_credential,
+        "__signature__",
+        Signature(parameters=[semantic_name], return_annotation=str | None),
+    )
+    setattr(
+        register_credential,
+        "__signature__",
+        Signature(parameters=[semantic_name, semantic_value], return_annotation=None),
+    )
+    setattr(
+        delete_credential,
+        "__signature__",
+        Signature(parameters=[semantic_name], return_annotation=None),
     )
 
 
