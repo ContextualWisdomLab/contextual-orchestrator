@@ -11,16 +11,12 @@ sibling checkout, shell out to Podman/containerd, or invent an application-servi
 
 The upstream foundation is Draft PR
 [`quarantine-sandbox-runtime#1`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime/pull/1).
-Reviewed source head `984d3a6ea2c267c8dd647fabf698465eb4ac0980` fixes its DDD build boundary and
-guarantees lease termination after every live post-launch assertion. Hosted job `99750285437` passed
-the real rootless-Podman isolation and cleanup lane at that exact source head. Documentation tip
-`dac7a0c3ba39af2058c462ef2eb9cf4c0a40c059` independently repeated the real lane successfully in
-job `99750695476`. Source head `53d8246caf55e1527cc75a8b2e9c6eddb6b4b9a9` additionally bounds
-connect/read/write I/O and has a deterministic stalled-server regression test; current
-documentation-only tip `4b0bb12e9bd10e5c9bf65ca970ab3b8332c5e972` records
-the same evidence in the changelog. Hosted job `99752631458` passed the real lane at that exact tip;
-the remaining hosted gates are pending. The successful runs prove the current Podman profile on its
-Linux acceptance runner; they
+Current source head `28c497ff01b26e21d2ff1f3c23dd23c6ec31eaba` fixes the DDD build boundary,
+guarantees lease cleanup after bounded connect/read/write assertions, and binds every effective
+isolation-policy field into one canonical SHA-256 carried by both the Podman resource label and
+returned lease. Hosted job `99755350740` passed the real rootless-Podman isolation, readiness,
+cleanup, and leak-rejection lane at that exact head; the remaining hosted gates are pending. This
+proves the current Podman profile on its Linux acceptance runner; it
 do not prove that a consumable cross-process contract has been published or that protected upstream
 truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
 queued or pending.
@@ -30,8 +26,9 @@ crate currently exposes an embeddable Rust API but no supported authenticated pr
 generated Python binding. Its lease publishes `127.0.0.1`, which is usable only under a defined
 co-location/network-namespace topology. It also lacks caller-scoped lease ownership/idempotency,
 stable bounded wire errors and semantic response validation. The lease already reports immutable
-image, backend, and policy identifiers, but its attestation lacks verified runtime artifact/build
-provenance and cryptographic binding; durable restart/orphan reclamation is also absent. Implementing this repository's
+image, backend, policy identifier, and canonical effective-policy SHA-256, but its attestation lacks
+verified runtime artifact/build provenance and cryptographic signing; durable restart/orphan
+reclamation is also absent. Implementing this repository's
 ACL before those contracts exist would either duplicate privileged runtime behavior or fabricate an
 interface that the provider does not support.
 
