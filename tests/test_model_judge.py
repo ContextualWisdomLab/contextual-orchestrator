@@ -12,6 +12,7 @@ from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
 from types import SimpleNamespace
+import urllib.error
 from unittest.mock import patch
 
 import pytest
@@ -22,9 +23,15 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     ModelClient,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
     _parse_model_judge_reply,
     _structured_output_error,
+)
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
+    EffortProfileError,
+    ReasoningEffortProfile,
 )
 
 
@@ -127,6 +134,81 @@ def test_structured_model_judge_accepts() -> None:
     assert result["answer"] == "step-output(4)"
 
 
+def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget() -> None:
+    """A completed judge call must never vanish from budget/spend accounting.
+
+    ``_ScriptedClient`` (used by ``_orch``) has no ``take_usage``, so
+    ``_invoke`` returns ``usage=None`` even though a real provider call
+    happened. Before this fix, ``_judge_adapter_accounting_fields`` only
+    included ``judge_usage`` when ``served_usage`` was truthy, so this
+    genuinely-completed call was entirely invisible to
+    ``_run_budget_output_by_model``/spend analytics — not even counted as
+    an estimated-usage step, just silently dropped.
+
+    An earlier revision of this fix fabricated an explicit zero-token
+    ``judge_usage`` dict instead, but that made an unmeasured call
+    indistinguishable from one the provider genuinely reported as
+    zero-cost (Devin review on #961) — ``judge_usage`` must stay genuinely
+    absent when unmeasured. ``judge_agent_id``/``judge_model`` alone keep
+    the call attributable, and budget/spend consumers derive an honest
+    estimated-token fallback from ``judge_output_text`` (the judge's own
+    generated rationale) instead. A second Devin review on that same
+    fallback caught a first attempt estimating from ``verifier_output``
+    (the worker answer being judged) instead — the wrong side of the
+    call, and a different length here on purpose so the two can't pass
+    by coincidence.
+    """
+    class _ZeroAggregateUsageJudge(_ScriptedFastJudge):
+        def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+            result = super().judge(task=task, answer=answer, criteria=criteria)
+            result.usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            return result
+
+    components = orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_ZeroAggregateUsageJudge,
+        criterion_cls=_ScriptedCriterion,
+        format_error=ValueError,
+    )
+    class _ExactTestCounter:
+        def count_text(self, text: str, model: str = "") -> int:
+            return len(text.split())
+
+        def count_messages(self, messages: list[dict], model: str = "") -> int:
+            return sum(len(m.get("content", "").split()) for m in messages)
+
+    orchestrator, _ = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
+    orchestrator.token_counter = _ExactTestCounter()
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=components,
+    ):
+        result = orchestrator.conduct(MESSAGES)
+    verification = result["verification"]
+    assert verification["accepted"] is True
+    assert verification["judge_agent_id"] == "general_agent"
+    assert verification["judge_model"] == "model-x"
+    assert "judge_usage" not in verification
+    assert verification["judge_output_text"] == (
+        '{"decision":"ACCEPT","reason":"The report supports the answer."}'
+    )
+    assert verification["verifier_output"] != verification["judge_output_text"]
+
+    isolated_record = {"trace": [], "verification": verification}
+    budget_contribution, _ = orchestrator._run_budget_output_by_model(isolated_record)
+    assert budget_contribution["model-x"] == len(
+        verification["judge_output_text"].split()
+    )
+    assert budget_contribution["model-x"] != len(
+        verification["verifier_output"].split()
+    )
+    assert budget_contribution["model-x"] > 0
+
+
 def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:
@@ -206,6 +288,50 @@ def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
         result = orchestrator.conduct(MESSAGES, model_name="requested_model_group")
     assert result["verification"]["accepted"] is True
     assert set(client.agent_ids) == {"group_member"}
+
+
+def test_explicit_structured_group_model_pins_every_provider_call() -> None:
+    class _RecordingClient(_ScriptedClient):
+        def __init__(self) -> None:
+            super().__init__('{"decision":"ACCEPT","reason":"Exact judge passed."}')
+            self.calls_by_kind: list[tuple[str, str]] = []
+
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            self.calls_by_kind.append(("evidence_or_judge", agent.id))
+            return super().chat(agent, messages, **kwargs)
+
+        def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
+            del endpoint, body
+            self.calls_by_kind.append(("synthesis", agent.id))
+            return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    client = _RecordingClient()
+    selected = ModelAgent(
+        "selected_member", "selected-model", group_name="shared_model_group"
+    )
+    sibling = ModelAgent(
+        "sibling_member", "sibling-model", group_name="shared_model_group", priority=100
+    )
+    orchestrator = TaskOrchestrator([selected, sibling], client=client)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": selected.model,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert result["choices"][0]["message"]["content"] == '{"status":"ok"}'
+    assert client.calls_by_kind == [
+        *(('evidence_or_judge', selected.id) for _ in range(5)),
+        ("synthesis", selected.id),
+    ]
 
 
 def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -> None:
@@ -364,7 +490,7 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
         with patch.object(
             orchestrator,
             "_invoke",
-            return_value=("judge completion", "backup_judge", {"total_tokens": 7}),
+            return_value=("judge completion", "backup_judge", "backup-model", {"total_tokens": 7}),
         ):
             result = orchestrator._model_judge_verification(
                 "task",
@@ -374,12 +500,76 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
     assert result["accepted"] is True
     assert result["judge"] == "model"
     assert result["judge_agent_id"] == "backup_judge"
+    # Captured directly from _invoke's return value, not re-resolved from the
+    # candidate pool -- "backup_judge" is not a real pool member here.
+    assert result["judge_model"] == "backup-model"
     assert result["judge_orchestration_mode"] == "route"
     assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
     assert result["judge_criterion_scores"] == {"evidence_quality": 0.8, "risk_signal": 0.9}
     assert result["judge_irt_item_type"] == "dichotomous"
     assert result["judge_irt_row"] == [1, 1]
     assert result["reason"] == "structured score exceeded threshold"
+
+
+def test_judge_model_survives_concurrent_pool_change_during_verification() -> None:
+    """A judge's served model must be captured atomically with its provider call,
+    not re-derived from ``self.candidates`` afterward (Devin review on #961): a
+    concurrent admin request can mutate the pool in the gap between the judge's
+    completion returning and any later lookup, which would otherwise mis-price
+    (or lose) that exact call's spend."""
+
+    class _ConcurrentMutationJudge:
+        def __init__(self, orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            self.adapter = orchestrator
+            self.mode = mode
+            self.accept_threshold = accept_threshold
+
+        def judge(self, **_) -> object:
+            self.adapter.complete([{"role": "user", "content": "ping"}])
+            # Simulate a concurrent request reassigning the pool -- same agent
+            # id, different model -- in the window between this judge's own
+            # provider call completing and _model_judge_verification building
+            # its verification dict from the adapter's result.
+            self.adapter.orchestrator.candidates = [
+                ModelAgent("general_agent", "model-mutated-concurrently", tags=("reasoning",))
+            ]
+            return type("Result", (), {
+                "accepted": True,
+                "rationale": "structured score exceeded threshold",
+                "criterion_scores": {"evidence_quality": 0.8, "risk_signal": 0.9},
+                "usage": None,
+                "orchestration_mode": self.mode,
+                "to_irt_row": lambda *, item_type: (1, 1),
+            })
+
+    class _FormatError(Exception):
+        pass
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_ConcurrentMutationJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+        )
+
+    assert result["judge_agent_id"] == "general_agent"
+    # The judge actually served against model-x; the pool mutation happened
+    # only after that call completed, so it must not leak into this record.
+    assert result["judge_model"] == "model-x"
 
 
 def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
@@ -398,7 +588,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     with patch.object(
         orchestrator,
         "_invoke",
-        return_value=("judge completion", "general_agent", None),
+        return_value=("judge completion", "general_agent", "model-x", None),
     ) as invoke:
         completion = adapter.complete(
             [{"role": "user", "content": "ping"}],
@@ -550,6 +740,152 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
 
 
+def test_structured_repair_does_not_retry_request_excluded_model() -> None:
+    stale = ModelAgent("stale_agent", "stale-model", "mock://catalog")
+    live = ModelAgent("live_agent", "live-model", "mock://catalog")
+    orchestrator = TaskOrchestrator([stale, live])
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        if calls == [stale.id]:
+            raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+        if calls == [stale.id, live.id]:
+            return {"choices": [{"message": {"content": '{"input_count":6}'}}]}
+        if agent.id == live.id:
+            raise urllib.error.HTTPError("https://synthetic.invalid", 413, "large", {}, None)
+        return {"choices": [{"message": {"content": '{"input_count":10}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(
+            orchestrator,
+            "conduct",
+            return_value={"mode": "conduct", "answer": "evidence", "trace": [], "verification": {}},
+        ),
+        patch.object(orchestrator, "_select_agent", return_value=stale),
+        patch.object(orchestrator, "_failover_candidates", return_value=[stale, live]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderRequestTooLargeError),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert calls == [stale.id, live.id, live.id]
+
+
+def test_virtual_structured_schema_failure_advances_on_same_endpoint() -> None:
+    """A virtual candidate that fails synthesis and repair is excluded once."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog")
+    other = ModelAgent("other_agent", "other-model", "mock://other")
+    orchestrator = TaskOrchestrator([first, second, other])
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        count = 10 if agent.id == second.id else 6
+        return {"choices": [{"message": {"content": f'{{"input_count": {count}}}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(
+            orchestrator,
+            "_failover_candidates",
+            return_value=[first, second, other],
+        ),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert result["choices"][0]["message"]["content"] == '{"input_count": 10}'
+    assert calls == [first.id, first.id, second.id]
+    assert other.id not in calls
+
+
+def test_explicit_structured_schema_failure_remains_pinned() -> None:
+    """An explicit model never switches after its synthesis and repair fail schema."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog")
+    orchestrator = TaskOrchestrator([first, second])
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"input_count": 6}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator.client, "proxy_send", side_effect=send),
+        pytest.raises(
+            ProviderResponseError,
+            match="structured synthesis and repair violated response_format",
+        ),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": first.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert calls == [first.id, first.id]
+
+
 def test_structured_synthesis_failure_updates_provider_health() -> None:
     """A failed final provider is excluded by the existing circuit policy."""
     orchestrator, _ = _orch("unused")
@@ -559,7 +895,7 @@ def test_structured_synthesis_failure_updates_provider_health() -> None:
             "proxy_send",
             side_effect=RuntimeError("synthetic provider failure"),
         ),
-        pytest.raises(RuntimeError, match="synthetic provider failure"),
+        pytest.raises(ProviderUpstreamError) as exc_info,
     ):
         orchestrator.proxy_completion(
             {
@@ -570,7 +906,72 @@ def test_structured_synthesis_failure_updates_provider_health() -> None:
             single_agent=False,
         )
 
+    assert exc_info.value.agent_id == "general_agent"
+    assert "synthetic provider failure" not in str(exc_info.value)
     assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
+def test_structured_repair_transport_failure_is_classified() -> None:
+    orchestrator, _ = _orch("unused")
+    invalid = {"choices": [{"message": {"content": "not json"}}]}
+
+    with (
+        patch.object(
+            orchestrator.client,
+            "proxy_send",
+            side_effect=[invalid, urllib.error.URLError("synthetic repair outage")],
+        ),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "result",
+                        "strict": True,
+                        "schema": {"type": "object"},
+                    },
+                },
+            },
+            single_agent=False,
+        )
+
+    assert exc_info.value.error_code == "provider_connection_error"
+    assert exc_info.value.agent_id == "general_agent"
+    assert "synthetic repair outage" not in str(exc_info.value)
+    assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
+def test_structured_synthesis_profile_error_does_not_penalize_provider() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "general_agent",
+                "model-x",
+                base_url="https://provider.example/v1",
+                reasoning_effort_supported=False,
+                tags=("reasoning", "writing", "planning", "research"),
+            )
+        ],
+        client=_ScriptedClient("unused"),
+    )
+    profile = ReasoningEffortProfile(unsupported_provider_fallback="error")
+
+    with pytest.raises(EffortProfileError, match="support is unproven"):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {"type": "json_object"},
+            },
+            effort_profile=profile,
+            single_agent=False,
+        )
+
+    assert "general_agent" not in orchestrator._circuit
 
 
 def test_structured_repair_is_blocked_by_completed_synthesis_budget() -> None:
@@ -667,6 +1068,33 @@ def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> N
     assert result["judge_orchestration_mode"] == "route"
 
 
+def test_model_judge_does_not_retry_request_excluded_agent() -> None:
+    stale = ModelAgent("stale_agent", "stale-model", tags=("reasoning", "writing"))
+    live = ModelAgent("live_agent", "live-model", tags=("reasoning", "writing"))
+    calls = []
+
+    class _Client(ModelClient):
+        def chat(self, agent, messages, temperature=None):
+            del messages, temperature
+            calls.append(agent.id)
+            return '{"decision":"ACCEPT","reason":"live judge"}'
+
+    orchestrator = TaskOrchestrator([stale, live], client=_Client())
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ), patch.object(orchestrator, "_ranked_agents", return_value=[stale, live]):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+            excluded_agent_ids={stale.id},
+        )
+
+    assert result["accepted"] is True
+    assert calls == [live.id]
+
+
 def test_fast_mlsirm_invalid_irt_projection_fails_closed() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:
@@ -736,6 +1164,55 @@ def test_fast_mlsirm_format_error_fails_closed() -> None:
     assert result["accepted"] is False
     assert result["judge"] == "model"
     assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
+    # No provider call ever completed here (judge() raises before calling
+    # the adapter at all), so there is genuinely no spend to account for.
+    assert "judge_agent_id" not in result
+    assert "judge_usage" not in result
+
+
+def test_fast_mlsirm_format_error_after_completed_call_preserves_accounting() -> None:
+    """A malformed verdict must not erase a judge call that already happened.
+
+    Devin review on #961: _FastMLSIJudgeAdapter captures served_agent_id/
+    served_model/served_usage as soon as its own complete() returns,
+    independently of whether the caller (fast-mlsirm) later raises while
+    turning that response into a verdict. The fail-closed return for that
+    case must still carry that already-captured accounting.
+    """
+    class _FormatError(Exception):
+        pass
+
+    class _FlakyAfterCompletionJudge:
+        def __init__(self, adapter, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            del mode, accept_threshold
+            self.adapter = adapter
+
+        def judge(self, **_) -> None:
+            self.adapter.complete([{"role": "user", "content": "ping"}])
+            raise _FormatError("invalid structured verdict")
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_FlakyAfterCompletionJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is False
+    assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
+    assert result["judge_agent_id"] == "general_agent"
+    assert result["judge_model"] == "model-x"
 
 
 def test_broken_fast_mlsirm_import_does_not_bypass_required_judge_path() -> None:

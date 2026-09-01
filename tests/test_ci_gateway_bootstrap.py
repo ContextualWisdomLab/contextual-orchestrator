@@ -27,12 +27,16 @@ def test_seed_credentials_copies_present_provider_keys_into_kv(monkeypatch) -> N
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "zen-secret")
+    monkeypatch.setenv(module.SERVER_AUTH_ENV_NAME, "-loopback-token")
 
     assert module.seed_credentials_from_bootstrap_env() == [
         "OPENROUTER_API_KEY",
         "OPENCODE_ZEN_API_KEY",
+        module.SERVER_AUTH_ENV_NAME,
     ]
     assert "OPENROUTER_API_KEY" not in module.os.environ
     assert "OPENCODE_ZEN_API_KEY" not in module.os.environ
+    assert module.SERVER_AUTH_ENV_NAME not in module.os.environ
     monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "changed-after-bootstrap")
     assert get_credential("OPENCODE_ZEN_API_KEY") == "zen-secret"
+    assert get_credential(module.SERVER_AUTH_ENV_NAME) == "-loopback-token"
