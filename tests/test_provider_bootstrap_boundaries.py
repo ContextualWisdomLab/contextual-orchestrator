@@ -403,16 +403,32 @@ def test_durable_pool_collision_preflight_prevents_partial_activation(tmp_path: 
     restarted.close()
 
 
-def test_unicode_legacy_collision_preflight_leaves_pool_unchanged(tmp_path: Any) -> None:
-    """A case-fold expansion collision must fail before any selected row is saved."""
+@pytest.mark.parametrize(
+    ("model_id", "legacy_id", "capabilities"),
+    (
+        ("Straße/Model", "openrouter_stra_e_model", ()),
+        ("模型", "openrouter_model", ("image",)),
+    ),
+)
+def test_unicode_legacy_collision_preflight_leaves_pool_unchanged(
+    tmp_path: Any,
+    model_id: str,
+    legacy_id: str,
+    capabilities: tuple[str, ...],
+) -> None:
+    """Historical Unicode legacy IDs must collide before any selected row is saved."""
     from dataclasses import replace
+
     from contextual_orchestrator import TaskOrchestrator
 
     agents_db = str(tmp_path / "unicode_collision.db")
-    collision = _model("openrouter", "OPENROUTER_API_KEY", "Straße/Model")
+    collision = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", model_id),
+        capabilities=capabilities,
+    )
     manual = replace(
         pb._active_agent_from_discovered(collision),
-        id="openrouter_strasse_model",
+        id=legacy_id,
         base_url="https://manual.example/v1",
         disabled=True,
         tags=("manual",),
