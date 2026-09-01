@@ -192,6 +192,7 @@ class _FakeBatchApiClient:
                         "body": {
                             "choices": [{"message": {"role": "assistant", "content": "batched answer"}}],
                             "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+                            "orchestration": {"trace": [{"output": "intermediate"}]},
                         }
                     },
                 }
@@ -222,6 +223,7 @@ def test_pg_llm_batch_backend_submits_and_retrieves() -> None:
     assert item.prompt_tokens == 12
     assert item.completion_tokens == 8
     assert item.model == "gpt-x"
+    assert item.trace == [{"output": "intermediate"}]
     assert "download_results" in client.calls
 
 

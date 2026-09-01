@@ -405,6 +405,10 @@ class PgLlmBatchBackend:
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
+            orchestration = body.get("orchestration")
+            trace = body.get("trace")
+            if trace is None and isinstance(orchestration, dict):
+                trace = orchestration.get("trace")
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
@@ -416,7 +420,7 @@ class PgLlmBatchBackend:
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
-                    trace=body.get("trace"),
+                    trace=trace,
                 )
             )
         return items
