@@ -14,6 +14,10 @@ from contextual_orchestrator.credentials import (
     register_credential,
     set_backend,
 )
+from contextual_orchestrator.provider_bootstrap import (
+    PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
+    register_provider_credentials_atomically,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -86,3 +90,15 @@ def test_unknown_credential_keywords_fail_closed() -> None:
     """Reject arbitrary compatibility kwargs at the public registry boundary."""
     with pytest.raises(TypeError, match="unexpected"):
         get_credential(credential_name="OPENAI_API_KEY", alias="OTHER_API_KEY")
+
+
+def test_atomic_memory_bootstrap_survives_public_naming_repair() -> None:
+    """Keep package-level single-lock batch registration working after public renames."""
+    credential_name = PROVIDER_ACCEPTED_CREDENTIAL_NAMES[0]
+
+    registered_names = register_provider_credentials_atomically(
+        {credential_name: "atomic-secret"}
+    )
+
+    assert registered_names == (credential_name,)
+    assert get_credential(credential_name=credential_name) == "atomic-secret"
