@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+from types import SimpleNamespace
+
 import pytest
 
+from contextual_orchestrator import CostRoutingCoordinator
 from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     LocalEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
     cheapest_upstream,
+)
+from contextual_orchestrator.evidence_batch_routing import (
+    resolve_embedding_target_evidence_only,
 )
 from contextual_orchestrator.kv_config import InMemoryConfigStore
 
@@ -34,6 +41,46 @@ class _StaticPriceBook:
     ) -> tuple[float, str, bool]:
         del provider, model
         return float(prompt_tokens + completion_tokens), "USD", True
+
+
+class _EmbeddingOrchestrator:
+    AUTO_MODEL = "auto"
+
+    def __init__(self, candidates: list[object]) -> None:
+        self._candidates = candidates
+
+    def request_policy(self, zdr_only: bool):
+        del zdr_only
+        return nullcontext()
+
+    def _capability_agents(self, capability: str, model: str | None = None) -> list[object]:
+        del model
+        assert capability == "embedding"
+        return list(self._candidates)
+
+
+class _ChangingCandidate:
+    """Candidate whose accessors expose TOCTOU if the resolver reads twice."""
+
+    def __init__(self) -> None:
+        self.id_reads = 0
+        self.model_reads = 0
+
+    @property
+    def id(self) -> str:
+        self.id_reads += 1
+        return "agent-a" if self.id_reads == 1 else "agent-mutated"
+
+    @property
+    def model(self) -> str:
+        self.model_reads += 1
+        return "model-a" if self.model_reads == 1 else "model-mutated"
+
+
+def _coordinator_with_candidates(candidates: list[object]) -> CostRoutingCoordinator:
+    coordinator = object.__new__(CostRoutingCoordinator)
+    coordinator.orchestrator = _EmbeddingOrchestrator(candidates)
+    return coordinator
 
 
 def test_implicit_hints_and_token_threshold_cannot_select_batch() -> None:
@@ -86,3 +133,47 @@ def test_cost_selector_requires_an_explicit_request_shape() -> None:
 
     with pytest.raises(TypeError):
         cheapest_upstream(candidates, _StaticPriceBook())
+
+
+def test_coordinator_uses_evidence_only_embedding_resolver() -> None:
+    """The production coordinator must not retain its legacy price/order resolver."""
+    assert CostRoutingCoordinator._resolve_embedding_target is resolve_embedding_target_evidence_only
+
+
+def test_unspecified_embedding_route_rejects_multiple_eligible_candidates() -> None:
+    """Price and static discovery order cannot resolve an ambiguous embedding pool."""
+    coordinator = _coordinator_with_candidates(
+        [
+            SimpleNamespace(id="agent-a", model="model-a"),
+            SimpleNamespace(id="agent-b", model="model-b"),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="explicit agent_id"):
+        coordinator._resolve_embedding_target("contextual-orchestrator", False, None)
+
+
+def test_single_embedding_candidate_is_snapshotted_once_before_selection() -> None:
+    """Changing getters cannot alter identity between eligibility and returned route."""
+    candidate = _ChangingCandidate()
+    coordinator = _coordinator_with_candidates([candidate])
+
+    assert coordinator._resolve_embedding_target(
+        "contextual-orchestrator", False, None
+    ) == ("model-a", "agent-a")
+    assert candidate.id_reads == 1
+    assert candidate.model_reads == 1
+
+
+def test_explicit_embedding_agent_resolves_without_rank_or_price_authority() -> None:
+    """Explicit eligible identity remains valid even when the pool is ambiguous."""
+    coordinator = _coordinator_with_candidates(
+        [
+            SimpleNamespace(id="agent-a", model="model-a"),
+            SimpleNamespace(id="agent-b", model="model-b"),
+        ]
+    )
+
+    assert coordinator._resolve_embedding_target(
+        "contextual-orchestrator", False, "agent-b"
+    ) == ("model-b", "agent-b")
