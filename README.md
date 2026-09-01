@@ -231,6 +231,21 @@ The API and admin plane include bounded operational evidence for areas such as:
 - evaluation replay and baseline comparison;
 - enterprise-pilot and commercial due-diligence readiness evidence.
 
+### Buyer evidence endpoints
+
+Buyer-facing commercial evidence is exposed as bounded reporting artifacts rather than as certification or transaction authority. The current API keeps these surfaces individually discoverable so a prospective buyer or operator can retrieve the latest available packet without reverse-engineering internal modules:
+
+| Evidence surface | Current endpoint |
+| --- | --- |
+| buyer acceptance workflow | `/api/v1/commercial_buyer_acceptance_workflows/latest` |
+| commercial demo scenarios | `/api/v1/commercial_demo_scenarios/latest` |
+| commercial proposal packet | `/api/v1/commercial_proposal_packets/latest` |
+| commercial purchase approval packet | `/api/v1/commercial_purchase_approval_packets/latest` |
+| commercial due diligence room | `/api/v1/commercial_due_diligence_rooms/latest` |
+| commercial investment committee memo | `/api/v1/commercial_investment_committee_memos/latest` |
+
+These endpoints report repository/runtime evidence and may legitimately return warning, proposed, incomplete, or not-ready states. They do not create buyer approval, customer commitments, deployment truth, valuation, legal clearance, or a completed transaction. See [`docs/rest_api_design.md`](docs/rest_api_design.md) and the corresponding commercial evidence documents for field-level contracts and status semantics.
+
 Readiness and commercial endpoints are evidence/reporting surfaces. They are not compliance certifications, valuation guarantees, customer commitments or substitutes for deployment-specific review.
 
 ## Security posture
