@@ -6428,6 +6428,7 @@ def build_server(
                     endpoint_policy = orchestrator.routing_endpoint_scope(
                         endpoint_routing.get("endpoint") if endpoint_routing else None,
                         body.get("model"),
+                        model_was_provided="model" in body,
                     )
                     try:
                         endpoint_policy.__enter__()

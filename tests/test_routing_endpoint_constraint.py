@@ -31,11 +31,44 @@ class _RecordingClient(ModelClient):
         self.agent_ids.append(agent.id)
         return json.dumps({"workflow_required": False})
 
+    def proxy_send(  # type: ignore[override]
+        self, agent: ModelAgent, endpoint: str, payload: dict
+    ) -> dict:
+        self.agent_ids.append(agent.id)
+        if endpoint == "responses":
+            return {
+                "object": "response",
+                "model": payload["model"],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "synthetic response"}],
+                    }
+                ],
+            }
+        return {
+            "id": "chatcmpl-endpoint-test",
+            "object": "chat.completion",
+            "model": payload["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "synthetic response"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
 
 def _orchestrator() -> TaskOrchestrator:
     return TaskOrchestrator(
         [
-            ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
+            ModelAgent(
+                "agent_a",
+                "model-a",
+                base_url="https://a.example/v1",
+                group_name="shared_reasoning_model",
+            ),
             ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
         ],
         client=_RecordingClient(),
@@ -170,6 +203,102 @@ def test_http_surfaces_constrain_candidates_and_preserve_envelopes(path: str, pa
 
         payload["routing"] = {"endpoint": "https://missing.example"}
         status, document = _post_json(server, path, payload)
+        assert status == 400
+        assert document["error"]["code"] == "endpoint_unavailable"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "model": "  model-a  ",
+                "messages": [{"role": "user", "content": "synthetic answer"}],
+            },
+        ),
+        ("/v1/responses", {"model": " shared-reasoning-model ", "input": "synthetic answer"}),
+    ],
+)
+def test_http_endpoint_scope_accepts_normalized_models_and_group_aliases(
+    path: str, payload: dict
+) -> None:
+    orchestrator = _orchestrator()
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {**payload, "routing": {"endpoint": "https://a.example"}},
+        )
+        assert status == 200, document
+        assert set(orchestrator.client.agent_ids) == {"agent_a"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "synthetic answer"}],
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": "synthetic answer",
+            },
+        ),
+    ],
+)
+def test_http_endpoint_scope_rejects_endpoint_without_local_virtual_capacity(
+    path: str, payload: dict
+) -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_only",
+                "embedding-model",
+                base_url="https://paid.example/v1",
+                tags=("embedding",),
+            ),
+            ModelAgent(
+                "free_elsewhere",
+                "free-model",
+                base_url="https://free.example/v1",
+                tags=("cost:free",),
+            ),
+        ],
+        client=_RecordingClient(),
+        cache_ttl=60,
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {**payload, "routing": {"endpoint": "https://paid.example"}},
+        )
         assert status == 400
         assert document["error"]["code"] == "endpoint_unavailable"
     finally:

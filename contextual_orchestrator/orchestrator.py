@@ -93,6 +93,7 @@ _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
 _REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_request_endpoint_identity", default=None
 )
+_INVALID_REQUESTED_MODEL = object()
 
 
 class EndpointUnavailableError(ValueError):
@@ -4504,7 +4505,13 @@ class TaskOrchestrator:
         return raw
 
     @contextmanager
-    def routing_endpoint_scope(self, endpoint: str | None, requested_model: Any):
+    def routing_endpoint_scope(
+        self,
+        endpoint: str | None,
+        requested_model: Any,
+        *,
+        model_was_provided: bool = True,
+    ):
         """Constrain this request to agents whose configured endpoint matches exactly."""
         if endpoint is None:
             yield
@@ -4519,23 +4526,57 @@ class TaskOrchestrator:
         )
         if not matching:
             raise EndpointUnavailableError("endpoint_unavailable")
-        if requested_model not in {
-            None,
-            self.GATEWAY_DEFAULT_MODEL,
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
-        } and not any(
-            agent.id in matching and agent.model == requested_model
-            for agent in self.agents
-        ):
-            raise EndpointUnavailableError("endpoint_unavailable")
         ids_token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
         identity_token = _REQUEST_ENDPOINT_IDENTITY.set(normalized)
         try:
+            if not self._request_endpoint_supports_model(
+                self._normalize_endpoint_requested_model(
+                    requested_model, model_was_provided=model_was_provided
+                )
+            ):
+                raise EndpointUnavailableError("endpoint_unavailable")
             yield
         finally:
             _REQUEST_ENDPOINT_IDENTITY.reset(identity_token)
             _REQUEST_ENDPOINT_AGENT_IDS.reset(ids_token)
+
+    def _normalize_endpoint_requested_model(
+        self, requested_model: Any, *, model_was_provided: bool
+    ) -> Any:
+        """Reuse request-model normalization without preempting later HTTP errors."""
+        if requested_model is None:
+            return _INVALID_REQUESTED_MODEL if model_was_provided else None
+        if type(requested_model) is not str:
+            return _INVALID_REQUESTED_MODEL
+        normalized = requested_model.strip()
+        if not normalized or len(normalized) > 256:
+            return _INVALID_REQUESTED_MODEL
+        return normalized
+
+    def _request_endpoint_supports_model(self, requested_model: Any) -> bool:
+        """Fail closed only for real endpoint/model conflicts on the active request."""
+        if requested_model is _INVALID_REQUESTED_MODEL:
+            return True
+        if requested_model in {
+            None,
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }:
+            try:
+                ranked = self._ranked_agents(
+                    "request endpoint probe",
+                    "worker",
+                    free_only=requested_model == self.FREE_MODEL,
+                )
+            except RuntimeError:
+                return False
+            return bool(ranked)
+        try:
+            self._requested_agent(requested_model)
+        except ValueError:
+            return False
+        return True
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""

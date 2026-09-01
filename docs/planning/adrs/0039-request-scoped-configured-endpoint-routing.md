@@ -38,3 +38,17 @@ Deployments can constrain one request without creating arbitrary outbound
 request capability or losing provider discovery. Tests use synthetic endpoint
 names; runtime endpoint selectors and credentials do not enter repository
 artifacts.
+
+## References
+
+National Institute of Standards and Technology. (2024). *Artificial
+intelligence risk management framework: Generative artificial intelligence
+profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1
+
+Nielsen, I., Motwani, S., Guan, Y., et al. (2025). *Learning to orchestrate
+agents in natural language with the conductor* [Preprint]. arXiv.
+https://arxiv.org/abs/2512.04388
+
+Xu, Z., Zhou, K., Shek, T., et al. (2025). *TRINITY: An evolved LLM
+coordinator for complex real-world workflows* [Preprint]. arXiv.
+https://arxiv.org/abs/2512.04695
