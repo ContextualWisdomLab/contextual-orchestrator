@@ -714,6 +714,15 @@ def _refresh_discovered_tool_call_tags(
     operator-authored ``tool_call:single``/``tool_call:multi`` override that
     predates any discovery evidence: it is never removed just because
     discovery later supplies -- and then withdraws -- unrelated evidence.
+
+    A same-polarity collision (an operator's plain tag already reads the
+    same value discovery now independently reports) is handled the same
+    way: discovery never claims ownership -- by adding its hidden marker --
+    of a visible tag that is already present without one. The two tags are
+    string-identical, so there would otherwise be no way to tell them apart
+    on a later refresh; leaving the marker off means the pre-existing tag
+    is never mistaken for discovery's own and never gets removed just
+    because discovery's evidence later goes stale.
     """
     discovery_owned_visible_tag = {
         DISCOVERY_TOOL_CALL_SINGLE_TAG: "tool_call:single",
@@ -728,7 +737,10 @@ def _refresh_discovered_tool_call_tags(
         for tag in tags
         if tag not in hidden_tags and tag not in owned_visible_tags
     ]
-    return tuple(dict.fromkeys(refreshed)) + discovery_tool_call_tags(model)
+    new_evidence_tags = discovery_tool_call_tags(model)
+    if new_evidence_tags and new_evidence_tags[0] in refreshed:
+        return tuple(dict.fromkeys(refreshed))
+    return tuple(dict.fromkeys(refreshed)) + new_evidence_tags
 
 
 def _probe_configured_gateway_structured_chat(
