@@ -50,6 +50,23 @@ def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
 
 
+def test_judged_ranking_log_does_not_label_quality_as_throughput() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("worker_one", "model-one", group_name="shared_model"),
+            ModelAgent("worker_two", "model-two", group_name="shared_model"),
+        ]
+    )
+    orchestrator._quality_router.observe_success("worker_one", 1.0)
+
+    with _captured_logs(logging.DEBUG) as buffer:
+        orchestrator._measured_member_order(["worker_one", "worker_two"])
+
+    output = buffer.getvalue()
+    assert "judged_quality=True evidence_score=" in output
+    assert "success_rps=" not in output
+
+
 def test_send_with_retry_debug_logs_redact_secret_shaped_error_message() -> None:
     """THE key secret-leak test: a fake credential shape must never reach captured logs."""
 

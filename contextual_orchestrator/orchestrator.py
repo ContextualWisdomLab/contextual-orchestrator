@@ -6057,7 +6057,7 @@ class TaskOrchestrator:
         if _LOGGER.isEnabledFor(logging.DEBUG):
             for member_id in member_ids:
                 _LOGGER.debug(
-                    "rank_candidate agent_id=%s judged_quality=%s success_rps=%.3f",
+                    "rank_candidate agent_id=%s judged_quality=%s evidence_score=%.3f",
                     member_id,
                     judged_quality,
                     router.member_score(member_id),
