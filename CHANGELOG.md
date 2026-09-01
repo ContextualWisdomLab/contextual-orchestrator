@@ -14,7 +14,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
-  access list instead of duplicating the task, instructions, or attachments.
+  access list instead of duplicating the task or source attachments.
 - Configured-gateway discovery now removes its blank bootstrap row after a
   concrete catalog's chat candidates fail bounded readiness, so virtual
   requests cannot bypass an authentication failure through an unprobed seed;

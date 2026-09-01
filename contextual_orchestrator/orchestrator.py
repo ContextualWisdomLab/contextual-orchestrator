@@ -5721,6 +5721,11 @@ class TaskOrchestrator:
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
+        caller_instructions = "\n\n".join(
+            message["content"]
+            for message in messages
+            if message.get("role") == "system" and isinstance(message.get("content"), str)
+        )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
@@ -5791,6 +5796,7 @@ class TaskOrchestrator:
                         f"Role: {step.role}\n"
                         "Use only the original task and the accessed prior steps. "
                         "Return concise, directly useful work."
+                        + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
                 *copy.deepcopy(messages),

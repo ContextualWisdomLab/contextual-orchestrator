@@ -87,8 +87,8 @@ def test_access_lists_actually_isolate_context() -> None:
     assert "step-output(2)" in step3_prompt and "step-output(3)" in step3_prompt
 
 
-def test_workflow_step_carries_current_task_and_caller_instructions_once() -> None:
-    """Workers receive one canonical copy of current task and caller policy."""
+def test_workflow_step_carries_current_task_and_source_context_once() -> None:
+    """Workers receive one canonical copy of task and source-bearing history."""
     orchestrator, client = _orch(json.dumps(PLAN))
     orchestrator.conduct(
         [
@@ -102,9 +102,9 @@ def test_workflow_step_carries_current_task_and_caller_instructions_once() -> No
     step_messages = client.calls[1]
     serialized = json.dumps(step_messages)
     assert serialized.count("CURRENT_TASK_SENTINEL") == 1
-    assert serialized.count("CALLER_POLICY_SENTINEL") == 1
     assert serialized.count("EARLIER_TURN_SENTINEL") == 1
     assert serialized.count("EARLIER_ANSWER_SENTINEL") == 1
+    assert "Caller instructions:\nCALLER_POLICY_SENTINEL" in step_messages[0]["content"]
     assert sum(
         message.get("role") == "user" and message.get("content") == "CURRENT_TASK_SENTINEL"
         for message in step_messages
