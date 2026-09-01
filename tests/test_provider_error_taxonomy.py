@@ -82,7 +82,7 @@ def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> 
     actionable = "'messages' must contain the word 'json' to use json_object"
     assert safe_provider_message(
         _body_http_error(400, {"error": {"message": actionable}})
-    ) == actionable
+    ) == "messages must mention json when response_format is json_object"
     for diagnostic in (
         "messages=[{'role':'user','content':'customer secret'}]",
         '"messages": [{"role":"user","content":"customer secret"}]',
@@ -93,6 +93,13 @@ def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> 
         assert safe_provider_message(
             _body_http_error(400, {"error": {"message": diagnostic}})
         ) is None
+
+    assert safe_provider_message(
+        _body_http_error(
+            400,
+            {"error": {"message": "messages rejected; customer-private-text"}},
+        )
+    ) is None
 
 
 def test_safe_message_hides_unparseable_bodies_and_urls() -> None:

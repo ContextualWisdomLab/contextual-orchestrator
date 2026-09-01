@@ -42,10 +42,9 @@ _CONFIGURED = False
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
 _SAFE_SCHEMA_DIAGNOSTIC = re.compile(
-    r"['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
-    r"(?: in some form,)? to use "
+    r"messages (?:must contain the word ['\"]?json['\"]?(?: in some form,)? to use "
     r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
-    r"(?:\.|$)",
+    r"(?:\.|$)|must mention json when response_format is json_object)",
     re.IGNORECASE,
 )
 _SAFE_SCHEMA_ERROR_SUMMARY = (
