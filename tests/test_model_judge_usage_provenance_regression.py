@@ -51,8 +51,8 @@ def _adapter(*, usage_source: str | None) -> _FastMLSIJudgeAdapter:
     adapter = _FastMLSIJudgeAdapter(
         orchestrator=None,  # type: ignore[arg-type]
         text="task",
-        judge="judge-agent",
-        served_agent_id="judge-agent",
+        judge="judge_agent",
+        served_agent_id="judge_agent",
         served_model="judge-model",
         served_usage=dict(ZERO_USAGE),
         served_output="judge rationale",
@@ -94,7 +94,7 @@ def test_unknown_all_zero_usage_remains_unmeasured() -> None:
 def test_structured_adapter_captures_provider_usage_source_at_transport_boundary() -> None:
     """Structured judge capture records whether zero usage came from a provider."""
     provider_agent = ModelAgent(
-        "judge-agent",
+        "judge_agent",
         "judge-model",
         base_url="https://provider.example/v1",
         tags=("verification",),
@@ -118,7 +118,7 @@ def test_structured_adapter_captures_provider_usage_source_at_transport_boundary
 def test_plain_adapter_captures_served_provider_usage_source() -> None:
     """Fallback-aware plain completion classifies the agent that actually served."""
     provider_agent = ModelAgent(
-        "judge-agent",
+        "judge_agent",
         "judge-model",
         base_url="https://provider.example/v1",
         tags=("verification",),
@@ -145,7 +145,7 @@ def test_plain_adapter_captures_served_provider_usage_source() -> None:
 def test_structured_adapter_reads_usage_once_at_transport_boundary() -> None:
     """A changing getter cannot substitute different usage after validation."""
     provider_agent = ModelAgent(
-        "judge-agent",
+        "judge_agent",
         "judge-model",
         base_url="https://provider.example/v1",
         tags=("verification",),
@@ -167,7 +167,7 @@ def test_structured_adapter_reads_usage_once_at_transport_boundary() -> None:
 def test_structured_adapter_snapshots_mutable_usage_alias() -> None:
     """Later mutation of the provider response cannot rewrite captured evidence."""
     provider_agent = ModelAgent(
-        "judge-agent",
+        "judge_agent",
         "judge-model",
         base_url="https://provider.example/v1",
         tags=("verification",),
@@ -194,7 +194,7 @@ def test_structured_adapter_snapshots_mutable_usage_alias() -> None:
 def test_structured_adapter_marks_mock_zero_usage_as_synthetic() -> None:
     """The identical mock value shape is explicitly non-authoritative."""
     mock_agent = ModelAgent(
-        "judge-agent",
+        "judge_agent",
         "judge-model",
         base_url="mock://catalog",
         tags=("verification",),

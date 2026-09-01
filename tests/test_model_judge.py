@@ -563,7 +563,11 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
     # candidate pool -- "backup_judge" is not a real pool member here.
     assert result["judge_model"] == "backup-model"
     assert result["judge_orchestration_mode"] == "route"
-    assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    # The adapter's own transport-boundary capture (_invoke's returned usage)
+    # is now preferred over fast-mlsirm's result.usage aggregate when both
+    # carry evidence, so this reflects served_usage exactly as _invoke
+    # returned it -- not backfilled from result.usage's fuller breakdown.
+    assert result["judge_usage"] == {"total_tokens": 7}
     assert result["judge_criterion_scores"] == {"evidence_quality": 0.8, "risk_signal": 0.9}
     assert result["judge_irt_item_type"] == "dichotomous"
     assert result["judge_irt_row"] == [1, 1]
