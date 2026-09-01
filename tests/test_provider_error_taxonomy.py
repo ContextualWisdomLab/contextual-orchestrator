@@ -85,6 +85,8 @@ def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> 
     ) == actionable
     for diagnostic in (
         "messages=[{'role':'user','content':'customer secret'}]",
+        '"messages": [{"role":"user","content":"customer secret"}]',
+        "'content': 'customer secret'",
         "prompt=customer secret",
         "input: customer secret",
     ):

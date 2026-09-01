@@ -50,7 +50,7 @@ _SENSITIVE_PROVIDER_MESSAGE = _re.compile(
     r"https?://|"
     r"(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)|"
     r"\b(?:api[_ -]?key|authorization|bearer|password|secret|token|prompt|input)\b|"
-    r"\b(?:messages?|content)\s*(?:[:=]|\[|\{)"
+    r"\b(?:messages?|content)[\"']?\s*(?:[:=]|\[|\{)"
     r")"
 )
 
