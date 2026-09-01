@@ -403,10 +403,38 @@ def test_durable_pool_collision_preflight_prevents_partial_activation(tmp_path: 
     restarted.close()
 
 
+def test_unicode_legacy_collision_preflight_leaves_pool_unchanged(tmp_path: Any) -> None:
+    """A case-fold expansion collision must fail before any selected row is saved."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "unicode_collision.db")
+    collision = _model("openrouter", "OPENROUTER_API_KEY", "Straße/Model")
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id="openrouter_strasse_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
 def test_durable_pool_sync_closes_temporary_orchestrator(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
-) -> None:
+    ) -> None:
     """A refresh must stop telemetry owned by its temporary orchestrator."""
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.provider_bootstrap import (
