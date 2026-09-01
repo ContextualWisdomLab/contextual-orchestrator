@@ -12,6 +12,85 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Added the missing CLI on-ramp for the issue #568 / ADR 0021 per-role
+  reasoning-effort catalog: the new `--role-effort-catalog default` flag now
+  loads `default_role_effort_catalog()` and passes it into `TaskOrchestrator`.
+  Previously `role_effort_catalog` had no caller anywhere in `__main__.py`, so
+  `apply_effort_profile` always ran its `profile=None` no-op branch in the
+  shipped CLI/server and the catalog's temperature/top_p/seed/reasoning_effort
+  injection and replayable `reasoning_effort_snapshot` were unreachable in
+  production. Omitting the flag keeps every payload byte-for-byte unchanged;
+  this does not touch the locked route/conduct selection defaults. Research
+  grounding for `reasoning_effort_profile` (Fugu's latency-versus-quality
+  split, TRINITY roles, Conductor steps/access lists) is already cited in
+  [`docs/architecture.md`](docs/architecture.md#implementation-mapping) next to this
+  module; this CLI on-ramp reuses that existing catalog and cites no new
+  claims of its own.
+- Startup now refuses `--role-effort-catalog default` when no agent in the
+  configured pool proves native `reasoning_effort` support (explicit
+  `"reasoning_effort_supported": true`, or a `mock://` agent). Every role in
+  the default catalog fails closed (`unsupported_provider_fallback="abstain"`,
+  per ADR 0021), and ordinary real-provider agent configs and auto-discovered
+  agents never set `reasoning_effort_supported` — without this guard the flag
+  would construct successfully and then raise `EffortProfileError` on every
+  request. `--agents examples/agents.mock.json` (the CLI default) is
+  unaffected; only a non-mock pool without proven support is now rejected at
+  startup, before any request is attempted.
+- The startup guard above only proved that *some* agent in the pool supports
+  `reasoning_effort`; ordinary role-based selection (`route_once`, `conduct`,
+  `stream_route`, `batch_route`, structured-synthesis passthrough) could still
+  rank or select an *unsupported* agent from a mixed pool ahead of a
+  supported one. `route_once`/`conduct` already recovered via `_invoke`'s
+  generic tool-failure failover, but `stream_route` and `batch_route` call
+  the provider directly with no failover and would raise `EffortProfileError`
+  outright. `TaskOrchestrator._ranked_agents` now narrows role-based
+  candidates to agents that prove `reasoning_effort` support whenever the
+  role's `role_effort_catalog` entry fails closed
+  (`unsupported_provider_fallback` other than `"omit"`), falling back to the
+  unfiltered set only when no candidate in that narrower selection proves
+  support (e.g. a required tag or free-only filter excluded the pool's only
+  supporting agent). This mirrors the equivalent filter already applied on
+  `proxy_completion`'s passthrough failover, which now shares the same
+  `_eligible_role_effort_candidates` helper instead of a duplicated inline
+  check. Runtime agent patch, removal, and discovery synchronization now
+  revalidate the same catalog invariant before committing a pool mutation,
+  so a live server cannot disable or remove its last eligible supporting
+  agent and strand a fail-closed role after startup.
+- The startup guard above still only proved that *some enabled agent
+  anywhere* in the pool supports `reasoning_effort`, which is weaker than
+  what role-based selection actually requires: `_ranked_agents`/
+  `_select_agent` only ever offer a role a *general-chat* agent (see
+  `_is_general_chat_agent`) that is not excluded from that specific role via
+  `provider_exclusions`. A pool whose only proving agent was non-chat (e.g.
+  an embedding-only model with `reasoning_effort_supported: true`), or was
+  excluded from every active fail-closed role, passed the old check and
+  still failed every request for that role (`EffortProfileError`, or
+  `RuntimeError("no eligible agent available for role=...")` when the sole
+  prover was role-excluded). `_require_eligible_role_effort_agents` now
+  reapplies the same general-chat and `provider_exclusions` eligibility
+  rules used by role selection, per active fail-closed role, reusing
+  `agent_proves_reasoning_effort_support`/`_eligible_role_effort_candidates`
+  rather than new logic. Deliberately does not reapply
+  `_zdr_agent_allowed`, since that gate is per-request privacy-policy state,
+  not a static pool property.
+- The startup rejection path now closes the already-constructed
+  `TaskOrchestrator` (`orchestrator.close()`) before calling argparse's
+  `parser.error()` (which raises `SystemExit`), instead of relying on
+  process exit to release its optional durable resources
+  (`state_db`/`agents_db` connections). This only matters for an embedded
+  caller of `contextual_orchestrator.__main__.main()` that catches
+  `SystemExit` and keeps running in the same process; the CLI/process-exit
+  path was already unaffected.
+- `TaskOrchestrator.proxy_completion`'s single-agent passthrough (the
+  server's `tool_loop` call site, and any other caller that omits
+  `effort_profile`) now defaults an unset `effort_profile` to the opted-in
+  `role_effort_catalog`'s `"worker"` entry — the role every selection/
+  failover call in that method already uses — instead of silently skipping
+  sampling/token/seed/reasoning-effort injection. This mirrors the
+  pre-existing `effort_profile or self._role_effort_profile("synthesizer")`
+  fallback `_orchestrated_provider_completion` already applies for its own
+  role. A caller that passes its own `effort_profile` is unaffected, and so
+  is every caller when no `role_effort_catalog` is configured.
 - Batch cost retrieval now preserves cache hits, completed endpoint-race loser
   usage, and strict provider usage evidence. Remote fallbacks retain the real
   submitted prompt, repeated result retrieval reuses deterministic ledger ids,
@@ -203,6 +282,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+<<<<<<< HEAD
+- (Devin review on #958) `_orchestrated_provider_completion`'s structured/
+  Responses synthesis path (the `single_agent=False` branch of
+  `proxy_completion`) resolved its caller-supplied `effort_profile` override
+  only for the final `apply_effort_profile` payload call, not for the
+  synthesizer's own selection (`_select_agent`), replica lookup
+  (`_ranked_agents`), or failover list (`_failover_candidates`) — those three
+  call sites omitted `effort_profile` entirely and so silently fell back to
+  the raw `role_effort_catalog` entry inside `_ranked_agents`. A fail-closed
+  override (`unsupported_provider_fallback` other than `"omit"`) could still
+  rank/select an unproven-support agent ahead of a proven one, and
+  `apply_effort_profile` then raised `EffortProfileError` outright — with no
+  failover, unlike the identical scenario on the plain passthrough path,
+  which already threads its override through every selection call site. Now
+  resolves `effort_profile or self._role_effort_profile("synthesizer")` once,
+  up front, and passes it to all three call sites, matching the passthrough
+  path's existing pattern and `_ranked_agents`' own documented intent that
+  every role-based selection path -- "structured synthesis" included -- stay
+  consistent with the effort catalog's eligibility guard.
+=======
 - (CodeRabbit review on #946) **Credential leak via cross-host redirect,
   doubled by #923's retry.** `_fetch_json` -- the function every standard
   provider's authenticated "list models" call goes through (openai,
@@ -330,6 +429,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+>>>>>>> origin/main
 
 ### Added
 

@@ -2635,6 +2635,28 @@ def test_sync_discovered_agents_adds_and_updates_idempotently() -> None:
     assert stored.group_name == "shared_reasoning_model"
 
 
+def test_sync_discovered_agents_persists_operator_group_on_refresh(tmp_path) -> None:
+    db_path = str(tmp_path / "pool.db")
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="meta/llama-3.3",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+    )
+    agent = agent_from_discovered(discovered)
+    first = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
+    first.sync_discovered_agents([agent])
+    first.set_model_group("shared_reasoning_model", [agent.id])
+    first.sync_discovered_agents([agent])
+    first.close()
+
+    restarted = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
+    stored = next(candidate for candidate in restarted.candidates if candidate.id == agent.id)
+    assert stored.group_name == "shared_reasoning_model"
+    restarted.close()
+
+
 def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None:
     db_path = str(tmp_path / "pool.db")
     discovered = DiscoveredModel(

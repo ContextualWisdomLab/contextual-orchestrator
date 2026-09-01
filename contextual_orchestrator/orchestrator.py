@@ -586,6 +586,56 @@ class ModelAgent:
         )
 
 
+def agent_proves_reasoning_effort_support(agent: ModelAgent) -> bool:
+    """Return whether ``agent`` has proven native ``reasoning_effort`` support.
+
+    True only when the agent explicitly declares ``reasoning_effort_supported:
+    true``, or when the agent is an in-process ``mock://`` harness agent (used
+    by tests and evaluation, where support is trivially true). Ordinary
+    real-provider agents -- including every shipped example config and every
+    auto-discovered agent, neither of which set ``reasoning_effort_supported``
+    today -- default to unproven (``None``) and are therefore NOT eligible
+    until an operator explicitly marks per-agent support. See ADR 0021
+    (``docs/planning/adrs/0021-reasoning-effort-profiles.md``): "An unknown
+    provider fails closed unless the operator explicitly picks the omit
+    fallback."
+    """
+    return agent.reasoning_effort_supported is True or (
+        agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://")
+    )
+
+
+def _eligible_role_effort_candidates(
+    candidates: list[ModelAgent],
+    profile: ReasoningEffortProfile | None,
+) -> list[ModelAgent]:
+    """Narrow ranked candidates to agents that prove reasoning-effort support.
+
+    A profile that fails closed (``unsupported_provider_fallback`` other than
+    ``"omit"``) must never hand ``apply_effort_profile`` an agent whose
+    support is unproven -- that raises ``EffortProfileError``. Some call
+    paths (``_invoke``'s generic tool-failure classification) already
+    recover from that error by failing over to the next candidate, but
+    others (``stream_route``, ``batch_route``, structured-synthesis
+    passthrough) call the provider directly with no such recovery, so this
+    filter is what keeps a mixed pool safe everywhere: only proven agents
+    are even offered as the primary or a failover candidate. Falls back to
+    the unfiltered candidates when none of them prove support (e.g. the
+    pool's only supporting agent was excluded by a required tag or
+    free-only filter upstream), so that edge case still gets an attempt and
+    a clear failure/failover instead of a silently emptied candidate list.
+    Mirrors the filter ``TaskOrchestrator.proxy_completion`` already applies
+    for its own caller-supplied effort profile.
+    """
+    if profile is None or profile.unsupported_provider_fallback == "omit":
+        return candidates
+    supported = [
+        candidate for candidate in candidates
+        if agent_proves_reasoning_effort_support(candidate)
+    ]
+    return supported or candidates
+
+
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
     return is_general_chat_candidate(
@@ -1720,10 +1770,7 @@ class ModelClient:
         """Apply an opt-in profile while proving provider support before egress."""
         if api_surface not in {"chat.completions", "responses"}:
             raise ValueError("api_surface must be chat.completions or responses")
-        supports = (
-            agent.reasoning_effort_supported is True
-            or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
-        )
+        supports = agent_proves_reasoning_effort_support(agent)
         applied = apply_request_profile(
             payload,
             profile,
@@ -3883,6 +3930,18 @@ class TaskOrchestrator:
         own — they take the plain passthrough path exactly like an absent key.
         Direct callers retain the established single-provider passthrough
         contract.
+
+        ``effort_profile=None`` (the default) does not mean "no profile": on
+        every single-agent passthrough path below (including the server's
+        tool-loop call site) it resolves to the opted-in
+        ``role_effort_catalog``'s ``"worker"`` entry, since this method
+        always selects/fails over across a "worker"-role agent when the
+        caller does not name one. This mirrors
+        ``_orchestrated_provider_completion``'s identical fallback to its own
+        ``"synthesizer"`` entry. A caller that passes its own
+        ``effort_profile`` is unaffected, and so is every caller when no
+        ``role_effort_catalog`` is configured (``_role_effort_profile``
+        returns ``None`` and behavior is unchanged).
         """
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
@@ -3899,6 +3958,18 @@ class TaskOrchestrator:
                 endpoint=normalized_endpoint,
                 effort_profile=effort_profile,
             )
+        # Every path below this point resolves one "worker"-role agent (see
+        # _select_agent(..., "worker", ...) and _failover_candidates(...,
+        # "worker", ...) further down), so an unset caller profile defaults
+        # to the worker role's own catalog entry -- mirroring the identical
+        # `effort_profile or self._role_effort_profile(role)` pattern
+        # _orchestrated_provider_completion already applies for its
+        # "synthesizer" role. This keeps every proxy_completion caller (the
+        # server's single-agent tool loop included) inside an opted-in
+        # role_effort_catalog's sampling/token/seed/reasoning settings
+        # without each call site having to resolve the profile itself; a
+        # caller that explicitly passes its own effort_profile is untouched.
+        effort_profile = effort_profile or self._role_effort_profile("worker")
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -3941,6 +4012,7 @@ class TaskOrchestrator:
                 "worker",
                 free_only=requested_model == self.FREE_MODEL,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
         replica_agent_ids = (
             set.intersection(*(set(value) for value in file_replicas.values()))
@@ -3963,6 +4035,7 @@ class TaskOrchestrator:
                     "worker",
                     free_only=requested_model == self.FREE_MODEL,
                     prompt_context=prompt_context,
+                    effort_profile=effort_profile,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -4039,22 +4112,9 @@ class TaskOrchestrator:
             "worker",
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
+            effort_profile=effort_profile,
         )
-        if (
-            effort_profile is not None
-            and effort_profile.unsupported_provider_fallback != "omit"
-        ):
-            supported = [
-                candidate
-                for candidate in ranked_candidates
-                if candidate.reasoning_effort_supported is True
-                or (
-                    candidate.reasoning_effort_supported is None
-                    and candidate.base_url.startswith("mock://")
-                )
-            ]
-            if supported:
-                ranked_candidates = supported
+        ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
         for candidate in ranked_candidates:
@@ -4170,6 +4230,12 @@ class TaskOrchestrator:
         free_only = requested_model == self.FREE_MODEL
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
+        # Resolved once, up front, so the caller's effort_profile override (or
+        # its catalog fallback) governs synthesizer eligibility and failover
+        # ranking identically to how it later shapes the outgoing payload --
+        # see _ranked_agents' `effort_profile or self._role_effort_profile(role)`
+        # pattern this mirrors for every other role-based selection path.
+        active_profile = effort_profile or self._role_effort_profile("synthesizer")
         final_agent = (
             next(
                 (
@@ -4198,6 +4264,7 @@ class TaskOrchestrator:
                         (("response_format",) if response_format_requested else ())
                     ),
                     prompt_context=prompt_context,
+                    effort_profile=active_profile,
                 )
             except RuntimeError as exc:
                 if required_tags:
@@ -4233,6 +4300,7 @@ class TaskOrchestrator:
                     required_tags=required_tags,
                     free_only=free_only,
                     prompt_context=prompt_context,
+                    effort_profile=active_profile,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -4334,7 +4402,6 @@ class TaskOrchestrator:
                     "stream": False,
                 }
             )
-        active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
             "contextual-orchestrator",
@@ -4372,6 +4439,7 @@ class TaskOrchestrator:
                 required_tags=required_tags,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
+                effort_profile=active_profile,
             )
             if virtual_model
             else [final_agent]
@@ -5230,7 +5298,7 @@ class TaskOrchestrator:
         }
 
     def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        """Apply governance updates to an agent and emit an audit event."""
+        """Apply governance updates without invalidating the active effort catalog."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
         current = self._agent_in_pool(agent_pool_id, worker_agent_id)
@@ -5270,6 +5338,7 @@ class TaskOrchestrator:
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
+        self._require_role_effort_pool(updated_candidates)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self.candidates = updated_candidates
@@ -5439,6 +5508,7 @@ class TaskOrchestrator:
         """
         existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
         updated_candidates = list(self.candidates)
+        effective_discovered_agents: list[ModelAgent] = []
         added: list[str] = []
         updated: list[str] = []
         for agent in discovered_agents:
@@ -5454,7 +5524,10 @@ class TaskOrchestrator:
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
-            if self._pool_store is not None:
+            effective_discovered_agents.append(agent)
+        self._require_role_effort_pool(updated_candidates)
+        if self._pool_store is not None:
+            for agent in effective_discovered_agents:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
@@ -5473,12 +5546,16 @@ class TaskOrchestrator:
         return {"added": added, "updated": updated}
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
-        """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
+        """Remove an agent while preserving enabled and role-effort invariants."""
         target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
+        remaining_candidates = [
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ]
+        self._require_role_effort_pool(remaining_candidates)
+        self.candidates = remaining_candidates
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
@@ -5885,6 +5962,41 @@ class TaskOrchestrator:
         )
         return record
 
+    def _unsupported_role_effort_roles(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> list[str]:
+        """Return fail-closed catalog roles lacking an eligible proving agent."""
+        if self.role_effort_catalog is None:
+            return []
+        pool = self.candidates if candidates is None else candidates
+        chat_agents = [
+            agent
+            for agent in pool
+            if not agent.disabled and _is_general_chat_agent(agent)
+        ]
+        return sorted(
+            role
+            for role, profile in self.role_effort_catalog.items()
+            if profile.unsupported_provider_fallback != "omit"
+            and not any(
+                agent_proves_reasoning_effort_support(agent)
+                for agent in chat_agents
+                if role not in agent.provider_exclusions
+            )
+        )
+
+    def _require_role_effort_pool(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> None:
+        """Reject a pool mutation that would strand a fail-closed catalog role."""
+        unsupported_roles = self._unsupported_role_effort_roles(candidates)
+        if unsupported_roles:
+            raise ValueError(
+                "agent pool mutation would leave fail-closed role-effort roles "
+                "without an enabled eligible agent that proves native support: "
+                + ", ".join(unsupported_roles)
+            )
+
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Return the opt-in profile bound to one workflow role."""
         if self.role_effort_catalog is None:
@@ -5916,17 +6028,29 @@ class TaskOrchestrator:
         back to the fixed template — a bad plan must never break the request.
         """
         planner = self._select_agent(task, "thinker")
+        roles = ("thinker", "worker", "verifier", "synthesizer")
+        eligible_by_role = {
+            role: {
+                agent.id
+                for agent in self._ranked_agents(task, role)
+                if role not in agent.provider_exclusions
+            }
+            for role in roles
+        }
         pool = "\n".join(
-            f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+            f"- {agent.id}: model={agent.model}, "
+            f"roles={','.join(role for role in roles if agent.id in eligible_by_role[role])}, "
+            f"tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
+            if any(agent.id in eligible_by_role[role] for role in roles)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
             'Return ONLY a JSON object, no prose: {"steps": [{"id": 0, "role": "thinker|worker|verifier|synthesizer", '
             '"agent_id": "<agent id>", "subtask": "natural-language instruction", "access": [prior step ids]}]}\n'
             f"Rules: 2 to {self.policy.max_workflow_steps} steps; ids sequential from 0; access may list only earlier "
-            "step ids (each step sees ONLY the outputs it lists); the final step must produce the answer; include a "
+            "step ids (each step sees ONLY the outputs it lists); assign each step only to an agent listing that role; "
+            "the final step must produce the answer; include a "
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
@@ -5967,10 +6091,16 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
+            eligible_ids = {
+                agent.id
+                for agent in self._ranked_agents(subtask, role)
+                if role not in agent.provider_exclusions
+            }
             if (
                 assigned is None
                 or not _is_general_chat_agent(assigned)
                 or not self._zdr_agent_allowed(assigned)
+                or assigned.id not in eligible_ids
             ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
@@ -6044,6 +6174,7 @@ class TaskOrchestrator:
         chat_only: bool = True,
         candidate_pool: Iterable[ModelAgent] | None = None,
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
 
@@ -6068,6 +6199,19 @@ class TaskOrchestrator:
         surprise. This is a deliberate reuse of an existing, audited signal
         (``chat_only`` already means "the caller does not know which
         capability will be needed"), not a new implicit distinction.
+
+        When ``chat_only`` and an opt-in ``role_effort_catalog`` entry for
+        ``role`` fails closed (``unsupported_provider_fallback`` other than
+        ``"omit"``), the result is further narrowed to agents that prove
+        ``reasoning_effort`` support via :func:`_eligible_role_effort_candidates`
+        -- with automatic fallback to the unfiltered set when none prove it.
+        This keeps every role-based selection and failover path (route,
+        conduct, stream, batch, structured synthesis) consistent with the
+        startup guard's own intent: a role the guard let through must never
+        still hand an unsupported agent to ``apply_effort_profile``, which
+        would raise ``EffortProfileError``. ``chat_only=False`` (only
+        ``_capability_agents``) is a distinct, non-role capability lookup and
+        is deliberately left out of this filter.
         """
         source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
@@ -6082,6 +6226,10 @@ class TaskOrchestrator:
             and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if chat_only:
+            candidates = _eligible_role_effort_candidates(
+                candidates, effort_profile or self._role_effort_profile(role)
+            )
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
                 "rank_partition role=%s candidates=%d free_only=%s chat_only=%s",
@@ -6455,6 +6603,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         prefer_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
@@ -6474,6 +6623,7 @@ class TaskOrchestrator:
                 free_only=free_only,
                 required_tags=required_tags,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
             if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
@@ -7065,6 +7215,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         allowed_agent_ids: set[str] | None = None,
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> list[ModelAgent]:
         try:
             ranked = self._ranked_agents(
@@ -7072,6 +7223,7 @@ class TaskOrchestrator:
                 role,
                 required_tags=required_tags,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
         except RuntimeError:
             if required_tags:

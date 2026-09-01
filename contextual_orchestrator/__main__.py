@@ -39,6 +39,7 @@ from .orchestrator import (
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
+from .reasoning_effort_profile import default_role_effort_catalog
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -196,6 +197,71 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("positive integer required")
     return parsed
+
+
+def _require_eligible_role_effort_agents(
+    orchestrator: TaskOrchestrator,
+    parser: argparse.ArgumentParser,
+    agents_source: str,
+) -> None:
+    """Fail fast when an opted-in role-effort catalog cannot be honored.
+
+    ``default_role_effort_catalog()`` fails closed
+    (``unsupported_provider_fallback="abstain"``) for every role by design
+    (ADR 0021): native ``reasoning_effort`` is sent only to a provider that
+    proves support, and an unproven provider must not silently receive it
+    either. Ordinary real-provider agent configs (e.g.
+    ``examples/agents.openai.json``) and every auto-discovered agent never
+    set ``reasoning_effort_supported``, so without this check
+    ``--role-effort-catalog default`` would construct successfully and then
+    raise ``EffortProfileError`` on every subsequent request. Reject at
+    startup instead, with an actionable fix, rather than after the pool is
+    already live for ``--serve`` or a CLI prompt.
+
+    Proving support somewhere in the pool is not sufficient on its own:
+    role-based selection (``TaskOrchestrator._ranked_agents`` /
+    ``_select_agent``) only ever offers one *general-chat* agent (see
+    ``_is_general_chat_agent``) that is not excluded from that specific role
+    via ``provider_exclusions`` for a given role. A pool whose only proving
+    agent is non-chat (e.g. an embedding-only model with
+    ``reasoning_effort_supported: true``), or is excluded from every active
+    fail-closed role, would pass a pool-wide "any agent anywhere proves
+    support" check and still fail every request for that role at request
+    time -- either ``EffortProfileError`` (no proving candidate was ever
+    offered) or ``RuntimeError("no eligible agent available for
+    role=...")`` (the only proving candidate was role-excluded). So this
+    delegates to the orchestrator's shared pool-invariant check, which applies
+    the same general-chat, ``provider_exclusions``, and native-support rules
+    both here and on later runtime pool mutations. A pool that passes this
+    guard has at least one eligible, proving agent for each active fail-closed
+    role. The invariant deliberately does NOT reapply ``_zdr_agent_allowed``: that gate
+    depends on per-request privacy-policy state
+    (``request_policy(zdr_only=...)``), not a static pool property, so it
+    cannot be evaluated once at startup without assuming every future
+    request's privacy scope.
+    """
+    catalog = orchestrator.role_effort_catalog
+    if catalog is None:
+        return
+    unsupported_roles = orchestrator._unsupported_role_effort_roles()
+    if not unsupported_roles:
+        return
+    orchestrator.close()
+    parser.error(
+        "--role-effort-catalog default requires, for every fail-closed role "
+        f"({', '.join(unsupported_roles)}), at least one enabled general-chat "
+        f"agent in --agents {agents_source!r} that both proves native "
+        "reasoning-effort support and is not excluded from that role via "
+        "provider_exclusions: set \"reasoning_effort_supported\": true on a "
+        "chat-capable agent (not an embedding/rerank/transcription-only "
+        "model) that is not listed in that role's provider_exclusions, or "
+        "point --agents at a mock:// pool (e.g. examples/agents.mock.json) "
+        "for evaluation. Every role in the default catalog fails closed "
+        "(unsupported_provider_fallback='abstain') without that proof, so "
+        "every request for an unsupported role would otherwise raise "
+        "EffortProfileError or find no eligible agent. See ADR 0021 "
+        "(docs/planning/adrs/0021-reasoning-effort-profiles.md)."
+    )
 
 
 def _non_negative_int(value: str) -> int:
@@ -766,6 +832,25 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    parser.add_argument(
+        "--role-effort-catalog",
+        choices=["default"],
+        default=None,
+        help=(
+            "Opt in to the issue #568 per-role reasoning-effort catalog (ADR 0021). "
+            "'default' loads default_role_effort_catalog(), applying each workflow "
+            "role's temperature/top_p/seed/max_output_tokens and (only where a provider "
+            "proves support) native reasoning_effort, and attaching a replayable "
+            "reasoning_effort_snapshot to complete/run/stream_route/batch_route "
+            "results. Omit to keep today's payload unchanged -- this does not "
+            "change route/conduct selection defaults, which stay locked until "
+            "production_default_change_allowed is true. Every role in 'default' "
+            "fails closed for a provider that has not proven support, so at "
+            "least one --agents entry needs \"reasoning_effort_supported\": "
+            "true (or a mock:// base_url) -- startup refuses the flag "
+            "otherwise."
+        ),
+    )
     _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
 
@@ -785,9 +870,19 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        role_effort_catalog=(
+            default_role_effort_catalog() if args.role_effort_catalog == "default" else None
+        ),
     )
     if args.auto_discover_model_agents:
-        _auto_discover_runtime_agents(orchestrator)
+        try:
+            _auto_discover_runtime_agents(orchestrator)
+        except ValueError as exc:
+            orchestrator.close()
+            parser.error(str(exc))
+
+    if args.role_effort_catalog is not None:
+        _require_eligible_role_effort_agents(orchestrator, parser, args.agents)
 
     if args.no_realtime_judge:
         orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
