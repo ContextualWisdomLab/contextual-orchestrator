@@ -16,8 +16,8 @@ Backends are pluggable behind :class:`CredentialBackend`:
 
 * :class:`InMemoryCredentialBackend` — default; dev/test, needs no Postgres.
 * :class:`PostgresCredentialBackend` — pgcrypto-encrypted Postgres registry,
-  consistent with the org reference pattern (xtrmLLMBatchPython's
-  ``get_credential(name)`` over a pgp_sym_encrypt/decrypt column).
+  consistent with the org reference pattern while using semantic credential
+  identifiers internally.
 
 Backend selection is a bootstrap setting read from
 ``CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`` (``memory`` default, or ``postgres``).
@@ -25,9 +25,10 @@ Backend selection is a bootstrap setting read from
 
 from __future__ import annotations
 
+from inspect import Parameter, Signature
 import os
 import threading
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 
 class NotConfigured(RuntimeError):
@@ -42,15 +43,15 @@ class NotConfigured(RuntimeError):
 class CredentialBackend(Protocol):
     """Pluggable credential registry interface (a tiny KV of named secrets)."""
 
-    def get(self, name: str) -> str | None:
-        """Return the secret for ``name`` or ``None`` when it is not registered."""
+    def get(self, credential_name: str) -> str | None:
+        """Return the secret for ``credential_name`` or ``None`` when absent."""
         ...
 
-    def set(self, name: str, value: str) -> None:
-        """Register (or replace) the secret stored under ``name``."""
+    def set(self, credential_name: str, credential_value: str) -> None:
+        """Register or replace ``credential_value`` under ``credential_name``."""
         ...
 
-    def delete(self, name: str) -> None:
+    def delete(self, credential_name: str) -> None:
         """Remove one credential after an unvalidated candidate promotion."""
         ...
 
@@ -59,23 +60,23 @@ class InMemoryCredentialBackend:
     """Process-local credential registry for dev and tests (no Postgres needed)."""
 
     def __init__(self) -> None:
-        self._store: dict[str, str] = {}
-        self._lock = threading.Lock()
+        self._credential_store: dict[str, str] = {}
+        self._credential_lock = threading.Lock()
 
-    def get(self, name: str) -> str | None:
-        """Return the in-memory secret for ``name`` or ``None``."""
-        with self._lock:
-            return self._store.get(name)
+    def get(self, credential_name: str) -> str | None:
+        """Return the in-memory secret for ``credential_name`` or ``None``."""
+        with self._credential_lock:
+            return self._credential_store.get(credential_name)
 
-    def set(self, name: str, value: str) -> None:
-        """Store ``value`` under ``name`` in the in-memory registry."""
-        with self._lock:
-            self._store[name] = value
+    def set(self, credential_name: str, credential_value: str) -> None:
+        """Store ``credential_value`` under ``credential_name`` in memory."""
+        with self._credential_lock:
+            self._credential_store[credential_name] = credential_value
 
-    def delete(self, name: str) -> None:
-        """Remove ``name`` from the in-memory credential registry if present."""
-        with self._lock:
-            self._store.pop(name, None)
+    def delete(self, credential_name: str) -> None:
+        """Remove ``credential_name`` from the in-memory registry if present."""
+        with self._credential_lock:
+            self._credential_store.pop(credential_name, None)
 
 
 # --- Postgres pgcrypto-encrypted credential registry ------------------------
@@ -119,7 +120,7 @@ class PostgresCredentialBackend:
             raise NotConfigured("Postgres credential backend requires a bootstrap passphrase")
         self._dsn = dsn
         self._passphrase = passphrase
-        self._ensured = False
+        self._schema_ensured = False
 
     @property
     def connection_dsn(self) -> str:
@@ -146,107 +147,211 @@ class PostgresCredentialBackend:
     def _connect(self):
         try:
             import psycopg
-        except ImportError as exc:
+        except ImportError as import_failure:
             raise NotConfigured(
                 "PostgresCredentialBackend needs the 'db' extra (psycopg); "
                 "install contextual-orchestrator[db]"
-            ) from exc
+            ) from import_failure
         return psycopg.connect(self._dsn)
 
-    def _ensure_schema(self, conn) -> None:
-        if self._ensured:
+    def _ensure_schema(self, database_connection) -> None:
+        if self._schema_ensured:
             return
-        with conn.cursor() as cur:
-            cur.execute(CREATE_PROVIDER_CREDENTIALS_SQL)
-        conn.commit()
-        self._ensured = True
+        with database_connection.cursor() as database_cursor:
+            database_cursor.execute(CREATE_PROVIDER_CREDENTIALS_SQL)
+        database_connection.commit()
+        self._schema_ensured = True
 
-    def get(self, name: str) -> str | None:
-        """Decrypt and return the secret for ``name`` via pgcrypto, or ``None``."""
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            with conn.cursor() as cur:
-                cur.execute(
+    def get(self, credential_name: str) -> str | None:
+        """Decrypt and return ``credential_name`` via pgcrypto, or ``None``."""
+        with self._connect() as database_connection:
+            self._ensure_schema(database_connection)
+            with database_connection.cursor() as database_cursor:
+                database_cursor.execute(
                     "SELECT pgp_sym_decrypt(encrypted_value, %s) "
                     "FROM provider_credentials WHERE credential_name = %s",
-                    (self._passphrase, name),
+                    (self._passphrase, credential_name),
                 )
-                row = cur.fetchone()
-        if row is None:
+                credential_row = database_cursor.fetchone()
+        if credential_row is None:
             return None
-        value = row[0]
-        return value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else value
+        credential_value = credential_row[0]
+        return (
+            credential_value.decode("utf-8")
+            if isinstance(credential_value, (bytes, bytearray))
+            else credential_value
+        )
 
-    def set(self, name: str, value: str) -> None:
-        """Encrypt ``value`` with pgcrypto and upsert it under ``name``."""
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            with conn.cursor() as cur:
-                cur.execute(
+    def set(self, credential_name: str, credential_value: str) -> None:
+        """Encrypt and upsert ``credential_value`` under ``credential_name``."""
+        with self._connect() as database_connection:
+            self._ensure_schema(database_connection)
+            with database_connection.cursor() as database_cursor:
+                database_cursor.execute(
                     "INSERT INTO provider_credentials (credential_name, encrypted_value, updated_at) "
                     "VALUES (%s, pgp_sym_encrypt(%s, %s), now()) "
                     "ON CONFLICT (credential_name) DO UPDATE SET "
                     "encrypted_value = EXCLUDED.encrypted_value, updated_at = now()",
-                    (name, value, self._passphrase),
+                    (credential_name, credential_value, self._passphrase),
                 )
-            conn.commit()
+            database_connection.commit()
 
-    def delete(self, name: str) -> None:  # pragma: no cover - requires a live Postgres
+    def delete(
+        self, credential_name: str
+    ) -> None:  # pragma: no cover - requires a live Postgres
         """Delete one encrypted credential after a failed candidate promotion."""
-        with self._connect() as conn:
-            self._ensure_schema(conn)
-            with conn.cursor() as cur:
-                cur.execute(
+        with self._connect() as database_connection:
+            self._ensure_schema(database_connection)
+            with database_connection.cursor() as database_cursor:
+                database_cursor.execute(
                     "DELETE FROM provider_credentials WHERE credential_name = %s",
-                    (name,),
+                    (credential_name,),
                 )
-            conn.commit()
+            database_connection.commit()
 
 
-_backend: CredentialBackend | None = None
-_backend_lock = threading.Lock()
+_credential_backend: CredentialBackend | None = None
+_credential_backend_lock = threading.Lock()
+_MISSING_ARGUMENT: Any = object()
 
 
 def _select_backend() -> CredentialBackend:
     """Choose a backend from the bootstrap selector env (transport, not a secret)."""
-    kind = os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", "memory").strip().lower()
-    if kind in ("", "memory"):
+    backend_kind = os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", "memory").strip().lower()
+    if backend_kind in ("", "memory"):
         return InMemoryCredentialBackend()
-    if kind == "postgres":
+    if backend_kind == "postgres":
         return PostgresCredentialBackend.from_env()
-    raise NotConfigured(f"unknown credential backend {kind!r}; expected 'memory' or 'postgres'")
+    raise NotConfigured(
+        f"unknown credential backend {backend_kind!r}; expected 'memory' or 'postgres'"
+    )
 
 
 def get_backend() -> CredentialBackend:
     """Return the process credential backend, creating it from bootstrap on first use."""
-    global _backend
-    if _backend is None:
-        with _backend_lock:
-            if _backend is None:
-                _backend = _select_backend()
-    return _backend
+    global _credential_backend
+    if _credential_backend is None:
+        with _credential_backend_lock:
+            if _credential_backend is None:
+                _credential_backend = _select_backend()
+    return _credential_backend
 
 
-def set_backend(backend: CredentialBackend | None) -> None:
-    """Install (or, with ``None``, reset) the active credential backend.
+def set_backend(credential_backend: CredentialBackend | None) -> None:
+    """Install or reset the active credential backend.
 
     Used by bootstrap wiring and by tests to inject an in-memory backend.
     """
-    global _backend
-    with _backend_lock:
-        _backend = backend
+    global _credential_backend
+    with _credential_backend_lock:
+        _credential_backend = credential_backend
 
 
-def get_credential(name: str) -> str | None:
-    """Resolve a named runtime secret from the KV. Never reads os.getenv for it."""
-    return get_backend().get(name)
+def _compatibility_argument(
+    semantic_value: Any,
+    semantic_name: str,
+    legacy_name: str,
+    compatibility_kwargs: dict[str, Any],
+) -> Any:
+    """Resolve one semantic argument from its bounded legacy keyword alias."""
+    legacy_present = legacy_name in compatibility_kwargs
+    if semantic_value is not _MISSING_ARGUMENT:
+        if legacy_present:
+            raise TypeError(
+                f"{semantic_name} cannot be combined with legacy {legacy_name}"
+            )
+        return semantic_value
+    if legacy_present:
+        return compatibility_kwargs.pop(legacy_name)
+    raise TypeError(f"missing required argument: {semantic_name}")
 
 
-def register_credential(name: str, value: str) -> None:
-    """Register a named secret into the KV (used by the bootstrap CLI)."""
-    get_backend().set(name, value)
+def _reject_unknown_compatibility_kwargs(compatibility_kwargs: dict[str, Any]) -> None:
+    """Reject arbitrary kwargs instead of silently broadening the compatibility seam."""
+    if compatibility_kwargs:
+        unexpected_names = ", ".join(sorted(compatibility_kwargs))
+        raise TypeError(f"unexpected keyword argument(s): {unexpected_names}")
 
 
-def delete_credential(name: str) -> None:
-    """Remove a named credential from the KV after an unvalidated promotion."""
-    get_backend().delete(name)
+def get_credential(
+    credential_name: str = _MISSING_ARGUMENT,
+    **compatibility_kwargs: Any,
+) -> str | None:
+    """Resolve a named runtime secret from the KV without runtime env fallback."""
+    resolved_credential_name = _compatibility_argument(
+        credential_name,
+        "credential_name",
+        "name",
+        compatibility_kwargs,
+    )
+    _reject_unknown_compatibility_kwargs(compatibility_kwargs)
+    return get_backend().get(cast(str, resolved_credential_name))
+
+
+def register_credential(
+    credential_name: str = _MISSING_ARGUMENT,
+    credential_value: str = _MISSING_ARGUMENT,
+    **compatibility_kwargs: Any,
+) -> None:
+    """Register a named secret into the KV through semantic public identifiers."""
+    resolved_credential_name = _compatibility_argument(
+        credential_name,
+        "credential_name",
+        "name",
+        compatibility_kwargs,
+    )
+    resolved_credential_value = _compatibility_argument(
+        credential_value,
+        "credential_value",
+        "value",
+        compatibility_kwargs,
+    )
+    _reject_unknown_compatibility_kwargs(compatibility_kwargs)
+    get_backend().set(
+        cast(str, resolved_credential_name),
+        cast(str, resolved_credential_value),
+    )
+
+
+def delete_credential(
+    credential_name: str = _MISSING_ARGUMENT,
+    **compatibility_kwargs: Any,
+) -> None:
+    """Remove a named credential through the semantic public identifier."""
+    resolved_credential_name = _compatibility_argument(
+        credential_name,
+        "credential_name",
+        "name",
+        compatibility_kwargs,
+    )
+    _reject_unknown_compatibility_kwargs(compatibility_kwargs)
+    get_backend().delete(cast(str, resolved_credential_name))
+
+
+def _install_credential_public_signatures() -> None:
+    """Expose required semantic names while runtime legacy aliases remain private."""
+    semantic_name = Parameter(
+        "credential_name",
+        Parameter.POSITIONAL_OR_KEYWORD,
+        annotation=str,
+    )
+    semantic_value = Parameter(
+        "credential_value",
+        Parameter.POSITIONAL_OR_KEYWORD,
+        annotation=str,
+    )
+    get_credential.__signature__ = Signature(  # type: ignore[attr-defined]
+        parameters=[semantic_name],
+        return_annotation=str | None,
+    )
+    register_credential.__signature__ = Signature(  # type: ignore[attr-defined]
+        parameters=[semantic_name, semantic_value],
+        return_annotation=None,
+    )
+    delete_credential.__signature__ = Signature(  # type: ignore[attr-defined]
+        parameters=[semantic_name],
+        return_annotation=None,
+    )
+
+
+_install_credential_public_signatures()
