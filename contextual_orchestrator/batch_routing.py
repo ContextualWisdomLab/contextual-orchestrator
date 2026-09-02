@@ -481,7 +481,7 @@ class PgLlmBatchBackend:
         return f"memory://{uuid.uuid4().hex}"
 
     @staticmethod
-    def _run(coro: Any) -> Any:
+    def _run_batch_coroutine(coro: Any) -> Any:
         return asyncio.run(coro)
 
     def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
@@ -498,7 +498,7 @@ class PgLlmBatchBackend:
                 metadata=metadata,
             )
 
-        job_payload = self._run(_submit())
+        job_payload = self._run_batch_coroutine(_submit())
         batch_id = job_payload["id"]
         # Tracked requests are stored as JSON primitives (not dataclass
         # instances) so the registry can be a JSON-backed Valkey mapping;
@@ -521,7 +521,7 @@ class PgLlmBatchBackend:
         async def _poll() -> Dict[str, Any]:
             return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
 
-        status = self._run(_poll())
+        status = self._run_batch_coroutine(_poll())
         return {
             "job_id": job.job_id,
             "status": status.get("status"),
@@ -539,7 +539,7 @@ class PgLlmBatchBackend:
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
-        payload = self._run(_download())
+        payload = self._run_batch_coroutine(_download())
         if not payload.get("success"):
             reason = payload.get("reason") or payload.get("error")
             _LOGGER.warning(
@@ -1225,7 +1225,7 @@ class PgLlmBatchEmbeddingBackend:
         return f"memory://{uuid.uuid4().hex}"
 
     @staticmethod
-    def _run(coro: Any) -> Any:
+    def _run_batch_coroutine(coro: Any) -> Any:
         return asyncio.run(coro)
 
     def submit(
@@ -1255,7 +1255,7 @@ class PgLlmBatchEmbeddingBackend:
                 metadata=job_metadata,
             )
 
-        job_payload = self._run(_submit())
+        job_payload = self._run_batch_coroutine(_submit())
         batch_id = job_payload["id"]
         self._jobs[batch_id] = {
             "endpoint_alias": self._endpoint_alias,
@@ -1279,7 +1279,7 @@ class PgLlmBatchEmbeddingBackend:
         async def _poll() -> Dict[str, Any]:
             return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
 
-        status = self._run(_poll())
+        status = self._run_batch_coroutine(_poll())
         return {
             "job_id": job.job_id,
             "status": status.get("status"),
@@ -1297,7 +1297,7 @@ class PgLlmBatchEmbeddingBackend:
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
-        payload = self._run(_download())
+        payload = self._run_batch_coroutine(_download())
         if not payload.get("success"):
             reason = payload.get("reason") or payload.get("error")
             _LOGGER.warning(
