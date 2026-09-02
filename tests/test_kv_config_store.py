@@ -262,7 +262,7 @@ def test_migration_re_checks_immediately_before_writing_to_narrow_the_race(
     something: without it, this exact interleaving would silently overwrite
     the operator's real value with the stale legacy one.
     """
-    legacy_category, (replacement_category, config_keys) = next(
+    _legacy_category, (_replacement_category, config_keys) = next(
         iter(_LEGACY_CATEGORY_MIGRATIONS.items())
     )
     config_key = config_keys[0]
