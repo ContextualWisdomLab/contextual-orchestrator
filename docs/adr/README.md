@@ -15,6 +15,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0005](0005-verbose-debug-logging.md) | Verbose/debug logging with a redaction safety net | Accepted | OWASP Logging Cheat Sheet; NIST SP 800-92 log management; Python `logging` HOWTO |
 | [0005](0005-provider-embedding-lease-and-token-accounting.md) | Provider-embedding lease and token-accounting boundary | Accepted | Redis distributed-lock ownership/fencing guidance; PyO3 modules; OpenAI public cl100k mappings |
 | [0006](0006-authoritative-chat-token-accounting.md) | Authoritative chat token accounting | Accepted | OpenAI Chat usage contract and exact tiktoken model mappings; PyO3 modules |
+| [0007](0007-hourly-loop-orchestrator-free-pool-pin.md) | Pin the hourly OpenCode maintenance loop to `orchestrator/free` | Accepted | `.github` ADR-0003 (OpenCode/Noema zero-priced-only default); naruon ADR-0005 (companion fix) |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv

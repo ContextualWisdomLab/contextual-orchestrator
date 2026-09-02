@@ -5,6 +5,19 @@ name: OpenCode hourly maintenance loop
 # auto-discovered providers and operator-managed model-group routing.
 # The agent works the PR queue (review -> fix -> recheck -> merge), root-causes
 # failing checks, and advances docs/product-technical-gap-baseline.md items.
+#
+# The agent requests the fixed virtual pool id "orchestrator/free" (zero-cost,
+# ZDR-first), not "orchestrator/auto" -- "auto-discovered providers" above is
+# the gateway's own provider/credential discovery (--auto-discover-model-agents),
+# a separate concern from which pool OpenCode routes through. This mirrors
+# every other OpenCode/Noema review consumer across the ecosystem
+# (ContextualWisdomLab/.github ADR-0003: "OpenCode and Noema admit only
+# zero-priced routes"; only Strix's security-analysis use case has a
+# documented, evidence-tiered exception onto "orchestrator/auto"). This
+# repo's own hourly loop -- general review/fix/merge maintenance, not
+# security analysis -- has no such exception and previously used
+# "orchestrator/auto" with no ADR justifying the divergence; see
+# docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md.
 
 on:
   schedule:
@@ -124,7 +137,7 @@ jobs:
           cat > ~/.config/opencode/opencode.json <<JSON
           {
             "\$schema": "https://opencode.ai/config.json",
-            "model": "contextual_orchestrator_gateway/orchestrator/auto",
+            "model": "contextual_orchestrator_gateway/orchestrator/free",
             "provider": {
               "contextual_orchestrator_gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -134,7 +147,7 @@ jobs:
                   "apiKey": "${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "orchestrator/auto": { "name": "measured automatic orchestration" }
+                  "orchestrator/free": { "name": "zero-cost, ZDR-first pool" }
                 }
               }
             }
@@ -153,7 +166,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/auto \
+          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/free \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
