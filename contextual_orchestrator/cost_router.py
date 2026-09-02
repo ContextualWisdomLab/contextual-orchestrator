@@ -42,7 +42,7 @@ from .batch_routing import (
 )
 from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook, PriceEntry
-from .kv_config import InMemoryConfigStore, migrate_legacy_categories
+from .kv_config import InMemoryConfigStore
 from .model_discovery import _currency_is_comparable
 from .token_counting import (
     TokenCountUnavailable,
@@ -91,12 +91,6 @@ class CostRoutingCoordinator:
     ) -> None:
         self.orchestrator = orchestrator
         self.config = config_store or InMemoryConfigStore()
-        # get_config_store() runs this at factory-build time, but a caller may
-        # inject an already-constructed store (e.g. a real Postgres-backed one
-        # carrying pre-existing legacy routing.* rows) directly here instead --
-        # RoutingPolicy and build_job_registry below both read from self.config,
-        # so migrate it at this one shared boundary rather than the factory alone.
-        migrate_legacy_categories(self.config)
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
         self._race_usage_context = _RACE_USAGE_CONTEXT

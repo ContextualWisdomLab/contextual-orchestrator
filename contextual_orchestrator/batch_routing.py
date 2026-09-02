@@ -39,6 +39,7 @@ from .batch_job_registry import (
     JobRegistryFactory,
     _claim_renewal_interval_seconds,
 )
+from .kv_config import migrate_legacy_categories
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +97,12 @@ class RoutingPolicy:
     """
 
     def __init__(self, config_store: Any) -> None:
+        # get_config_store() runs this at factory-build time, but a caller may
+        # construct and inject its own store directly here instead -- e.g. a
+        # real Postgres-backed store already carrying pre-existing legacy
+        # routing.* rows. Migrate at this actual consumption boundary so
+        # every RoutingPolicy, however constructed, sees migrated values.
+        migrate_legacy_categories(config_store)
         self._config = config_store
 
     def _batch_enabled(self) -> bool:
