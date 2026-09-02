@@ -4037,11 +4037,7 @@ class TaskOrchestrator:
         # this closes the same gap for direct Python-API callers, who would
         # otherwise have a malformed control silently treated as "no
         # control" instead of surfacing the caller bug (#983 finding 2).
-        if (
-            "candidate_id" in routing
-            and candidate_id is not None
-            and not isinstance(candidate_id, str)
-        ):
+        if "candidate_id" in routing and not isinstance(candidate_id, str):
             raise ValueError("candidate_id must be a non-empty agent ID")
         if "exclude_candidate_ids" in routing and not isinstance(excluded, (list, tuple)):
             raise ValueError("exclude_candidate_ids must contain at most 32 agent IDs")
@@ -5696,6 +5692,20 @@ class TaskOrchestrator:
                 "policy_mode": mode,
                 "prompt_text": prompt,
                 "answer": result["answer"],
+                # conduct() (round 6, #983) records which trace row's output
+                # actually became "answer" as answering_step_id, so
+                # _candidate_routing_evidence can resolve the served
+                # candidate by identity instead of a fragile text match.
+                # run() must carry it through here or every conduct() caller
+                # that reaches routing evidence via a persisted workflow
+                # run (CostRoutingCoordinator.complete() in cost_router.py)
+                # loses that identity and can misattribute a duplicate-text
+                # answer to an earlier step (#983 Devin finding: "Duplicate
+                # outputs misidentify serving candidate"). route_once()
+                # results have no answering_step_id; None here is the
+                # correct no-signal case _candidate_routing_evidence already
+                # falls back on.
+                "answering_step_id": result.get("answering_step_id"),
                 "cache_status": result.get("cache_status", "disabled"),
                 "trace": result["trace"],
                 "policy_snapshot": self.policy.as_dict(),

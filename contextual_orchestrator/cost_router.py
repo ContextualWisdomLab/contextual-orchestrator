@@ -572,9 +572,24 @@ class CostRoutingCoordinator:
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
         routing_controls = hints if isinstance(hints, dict) else {}
-        has_candidate_controls = bool(
-            routing_controls.get("candidate_id")
-            or routing_controls.get("exclude_candidate_ids")
+        # Detect an active candidate control by key *presence*, not
+        # truthiness: an explicitly malformed value (candidate_id=None,
+        # exclude_candidate_ids=None or a non-list/tuple) must still force
+        # the sync path below so TaskOrchestrator.candidate_routing_policy's
+        # real validation gets a chance to reject it, rather than silently
+        # falling through the batch branch's early return and dropping the
+        # malformed control entirely. An explicit empty exclude_candidate_ids
+        # list/tuple is the one genuine no-op -- it is not a request for any
+        # candidate behavior -- so it alone stays excluded from this check
+        # (#983 Devin/CodeRabbit finding: direct Python API callers can lose
+        # or bypass routing validation).
+        excluded_control = routing_controls.get("exclude_candidate_ids")
+        excluded_is_explicit_empty = (
+            isinstance(excluded_control, (list, tuple)) and not excluded_control
+        )
+        has_candidate_controls = "candidate_id" in routing_controls or (
+            "exclude_candidate_ids" in routing_controls
+            and not excluded_is_explicit_empty
         )
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         try:

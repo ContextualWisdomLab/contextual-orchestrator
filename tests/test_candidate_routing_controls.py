@@ -319,19 +319,24 @@ def test_candidate_routing_policy_rejects_present_but_falsy_malformed_controls()
             ):
                 pass
 
-    for value in (False, 0, 1.5, [], {}):
+    # candidate_id=None must raise exactly like every other malformed-falsy
+    # shape (CodeRabbit finding on #983: the prior `candidate_id is not
+    # None` guard let an explicit None silently reach the no-op branch
+    # below instead of surfacing the caller bug, unlike
+    # exclude_candidate_ids=None above which already raised correctly).
+    for value in (False, 0, 1.5, [], {}, None):
         with pytest.raises(ValueError, match="candidate_id"):
             with orchestrator.candidate_routing_policy({"candidate_id": value}):
                 pass
 
-    # Absent fields, an explicit None routing mapping, an explicit None
-    # candidate_id, and an explicit empty list exclude_candidate_ids all
-    # remain no-ops -- the existing contract for "no control requested".
+    # Absent fields, an explicit None routing mapping, and an explicit
+    # empty list/tuple exclude_candidate_ids all remain no-ops -- the
+    # existing contract for "no control requested". An *absent*
+    # candidate_id key is the only candidate_id shape that is a no-op; an
+    # explicitly present candidate_id=None is not (see the loop above).
     with orchestrator.candidate_routing_policy(None):
         pass
     with orchestrator.candidate_routing_policy({}):
-        pass
-    with orchestrator.candidate_routing_policy({"candidate_id": None}):
         pass
     with orchestrator.candidate_routing_policy({"exclude_candidate_ids": []}):
         pass
@@ -490,6 +495,49 @@ def test_http_auto_preflight_accepts_worker_only_pin_when_free_model_always_rout
     assert isinstance(stream_events, list) and stream_events
 
     assert client.calls == ["worker_only", "worker_only", "worker_only"]
+
+
+def test_coordinator_malformed_candidate_id_none_is_not_dropped_by_batch_routing() -> None:
+    """A direct ``CostRoutingCoordinator.complete`` caller (the Python API,
+    not HTTP -- ``server.py``'s own ``_validate_routing`` already normalizes
+    an explicit ``candidate_id: None`` to "missing" before this layer ever
+    sees it) who passes a malformed ``candidate_id: None`` alongside a batch
+    channel request must still get the loud ``ValueError`` from
+    ``candidate_routing_policy``, not a silently-accepted batch job envelope
+    that drops the malformed control entirely. ``has_candidate_controls``
+    previously used truthiness (``bool(hints.get("candidate_id") or ...)``),
+    so ``candidate_id: None`` was indistinguishable from an absent key and
+    let the request take the early batch-channel return path before
+    validation ever ran (CodeRabbit finding on #983: "direct Python API
+    callers can lose or bypass routing validation")."""
+    orchestrator = TaskOrchestrator([ModelAgent("candidate_a", "model-a")])
+
+    with pytest.raises(ValueError, match="candidate_id"):
+        CostRoutingCoordinator(orchestrator).complete(
+            [{"role": "user", "content": "hello"}],
+            mode="auto",
+            model_name=TaskOrchestrator.AUTO_MODEL,
+            hints={"candidate_id": None, "channel": "batch"},
+        )
+
+
+def test_coordinator_explicit_empty_exclusion_still_takes_the_batch_path() -> None:
+    """Mirror/regression guard for the fix above: an explicit empty
+    ``exclude_candidate_ids: []`` remains a genuine no-op (not a malformed
+    value), so it must still be free to take the batch channel exactly as
+    it did before -- this is the earlier #983 fix ("빈 제외 목록을 후보
+    제어로 처리하지 마십시오") that the presence-based ``candidate_id``
+    check above must not regress."""
+    orchestrator = TaskOrchestrator([ModelAgent("candidate_a", "model-a")])
+
+    result = CostRoutingCoordinator(orchestrator).complete(
+        [{"role": "user", "content": "hello"}],
+        mode="auto",
+        model_name=TaskOrchestrator.AUTO_MODEL,
+        hints={"exclude_candidate_ids": [], "channel": "batch"},
+    )
+
+    assert result["channel"] == "batch"
 
 
 def test_coordinator_auto_route_only_pin_succeeds_for_free_model() -> None:
@@ -1610,6 +1658,78 @@ def test_served_candidate_id_matches_later_step_on_duplicate_accepted_text(
     assert result["trace"][3]["output"] == "duplicate output"
     assert result["answer"] == "duplicate output"
     assert result["answering_step_id"] == 3
+    assert evidence["served_candidate_id"] == "synth_agent"
+
+
+def test_run_persists_answering_step_id_for_candidate_routing_evidence(
+    monkeypatch,
+) -> None:
+    """``TaskOrchestrator.run()`` persists a workflow-run record built from
+    ``conduct()``'s result; it must carry ``answering_step_id`` through, or
+    every ``run()``-based caller that resolves routing evidence from the
+    persisted record -- chiefly ``CostRoutingCoordinator.complete()`` in
+    cost_router.py, the coordinator/HTTP ordinary chat and non-streamed
+    Responses path -- loses that identity and falls back to the fragile
+    text-match heuristic, which can misattribute a duplicate-text answer to
+    an earlier step (#983 Devin finding: "Duplicate outputs misidentify
+    serving candidate"). This is the same scenario as
+    ``test_served_candidate_id_matches_later_step_on_duplicate_accepted_text``
+    above, but exercised through ``run()`` -- the exact record-construction
+    boundary the finding named -- instead of calling ``conduct()``
+    directly."""
+
+    class _CollidingClient(ModelClient):
+        def chat(self, agent, messages, effort_profile=None):
+            if agent.id in ("worker_agent", "synth_agent"):
+                # Deliberately duplicate text across an earlier and a later
+                # step so two trace rows share the exact same "output".
+                return "duplicate output"
+            return f"{agent.id} output"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("thinker_agent", "model-thinker"),
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("verifier_agent", "model-verifier"),
+            ModelAgent("synth_agent", "model-synth"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=_CollidingClient(),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_plan",
+        lambda task, *, model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL: [
+            WorkflowStep(0, "thinker", "thinker_agent", "decompose"),
+            WorkflowStep(1, "worker", "worker_agent", "work", (0,)),
+            WorkflowStep(2, "verifier", "verifier_agent", "verify", (0, 1)),
+            WorkflowStep(3, "synthesizer", "synth_agent", "synthesize", (0, 1, 2)),
+        ],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *args, **kwargs: {
+            "accepted": True,
+            "reason": "test forces acceptance",
+            "verifier_output": "verifier_agent output",
+            "judge": "model",
+        },
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        record = orchestrator.run(
+            [{"role": "user", "content": "task"}], mode="conduct"
+        )
+        evidence = orchestrator._candidate_routing_evidence(record)
+
+    assert [row["output"] for row in record["trace"]][1] == "duplicate output"
+    assert [row["output"] for row in record["trace"]][3] == "duplicate output"
+    assert record["answer"] == "duplicate output"
+    assert record["answering_step_id"] == 3
+    assert evidence is not None
     assert evidence["served_candidate_id"] == "synth_agent"
 
 
