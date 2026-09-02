@@ -346,11 +346,11 @@ def test_bootstrap_selector_prefers_model_group_diversity() -> None:
         3,
     )
 
-    # nim_duplicate (0.03) beats openai_model (1.0) on price alone, but
-    # nim_duplicate shares router_second's model group ("shared-model") --
-    # admitting it would not add a new independently-failing path, only a
-    # pricier duplicate of a model already covered. openai_model is both a
-    # new provider and a new model group, so it is preferred instead.
+    # router_second is only deferred in the first pass because openrouter
+    # already contributed, so "shared-model" is not yet a selected model
+    # group. nim_duplicate therefore enters as both a new provider and a new
+    # model group, and openai_model takes the last slot as the third
+    # independent provider ahead of the deferred openrouter candidate.
     assert selected == [router_cheapest, nim_duplicate, openai_model]
     assert {model.provider_name for model in selected} == {
         "openrouter",
