@@ -38,7 +38,8 @@ consume untrusted bytes/JSON:
     (ADR 0041). Must never raise and must never return ``True`` unless every
     present monetary value is a valid non-negative finite zero.
 11. ``server._validate_routing`` -- request-local channel and candidate
-    controls. Successful candidate arrays are bounded, unique, and non-empty.
+    controls. Successful candidate arrays are unique and non-empty, with no
+    repository-authored cardinality cutoff.
 12. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
     observation boundary. Arbitrary JSON must fail closed or round-trip to the
     same bounded published-language payload.
@@ -211,7 +212,12 @@ def exercise_request_body(raw: bytes) -> None:
             pass
         else:
             excluded = (routing or {}).get("exclude_candidate_ids", [])
-            assert len(excluded) <= 32
+            # No repository-authored cardinality cutoff: the fixed 32-ID
+            # exclusion ceiling was removed from both the OpenAPI schema and
+            # this runtime validator (PR #983's no-heuristics correction).
+            # The normal authenticated request-size boundary is the only
+            # remaining limit, so this fuzz invariant must not reassert a
+            # stale cap the validator no longer enforces.
             assert len(excluded) == len(set(excluded))
             assert all(isinstance(value, str) and value for value in excluded)
 
