@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atheris harness for the governed rater observation parser."""
+"""Atheris harness for the trusted governed-rater observation parser."""
 
 import json
 import sys
@@ -10,11 +10,11 @@ import atheris
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 with atheris.instrument_imports():
-    from fuzz.targets import exercise_rater_observation
+    from fuzz.rater_observation_target import exercise_rater_observation
 
 
 def one_input(data: bytes) -> None:
-    """Feed one decoded JSON value through the observation parser."""
+    """Feed one decoded JSON value through the trusted observation parser."""
     try:
         value = json.loads(data)
     except (UnicodeDecodeError, ValueError, RecursionError):

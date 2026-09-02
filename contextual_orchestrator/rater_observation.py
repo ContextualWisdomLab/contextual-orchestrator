@@ -4,8 +4,8 @@ The module is an Anti-Corruption Layer between provider-specific structured
 outputs and the published language owned by ``fast-mlsirm``. It preserves
 criterion observations, abstentions, uncertainty, review signals, and opaque
 evidence references while structurally rejecting scores and decisions. Every
-operational observation is bound to the exact immutable criterion meaning used
-for the exact run and item.
+provider result must be checked against a separately trusted immutable
+criterion-set binding supplied by the owning evaluation workflow.
 """
 
 from __future__ import annotations
@@ -131,10 +131,10 @@ def _json_depth_is_bounded(value: str) -> bool:
 
 
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
-    """Require one string-keyed mapping."""
-    if not isinstance(value, Mapping):
+    """Require one exact string-keyed mapping."""
+    if type(value) is not dict:
         raise RaterObservationError(
-            "invalid_object", f"{field_name} must be an object"
+            "invalid_object", f"{field_name} must be an exact object"
         )
     if any(type(key) is not str for key in value):
         raise RaterObservationError(
@@ -176,10 +176,10 @@ def _reference_tuple(
     maximum: int,
     allow_empty: bool,
 ) -> tuple[str, ...]:
-    """Copy one bounded unique reference collection."""
-    if not isinstance(value, (list, tuple)):
+    """Copy one bounded unique exact reference collection."""
+    if type(value) not in (list, tuple):
         raise RaterObservationError(
-            "invalid_references", f"{field_name} must be an array"
+            "invalid_references", f"{field_name} must be an exact array"
         )
     if (not allow_empty and not value) or len(value) > maximum:
         lower_bound = 0 if allow_empty else 1
@@ -218,6 +218,27 @@ def _criterion_set(value: Any) -> CriterionSetExecutionBinding:
         return CriterionSetExecutionBinding.from_mapping(value)
     except EvaluationCriterionBindingError as exc:
         raise RaterObservationError(exc.code, str(exc)) from exc
+
+
+def _trusted_criterion_set(
+    value: CriterionSetExecutionBinding | None,
+) -> CriterionSetExecutionBinding:
+    """Require a separately supplied, intact criterion-set domain value."""
+    if value is None:
+        raise RaterObservationError(
+            "trusted_criterion_set_required",
+            "provider output requires a separately trusted criterion set",
+        )
+    if type(value) is not CriterionSetExecutionBinding:
+        raise RaterObservationError(
+            "invalid_expected_criterion_set",
+            "expected_criterion_set has the wrong domain type",
+        )
+    try:
+        value._assert_integrity()
+    except EvaluationCriterionBindingError as exc:
+        raise RaterObservationError(exc.code, str(exc)) from exc
+    return value
 
 
 @dataclass(frozen=True)
@@ -373,7 +394,7 @@ class CriterionObservation:
 
 @dataclass(frozen=True)
 class RaterInvocation:
-    """Aggregate root for one rater execution against one frozen criterion set."""
+    """Aggregate root for one rater execution against one trusted criterion set."""
 
     invocation_ref: str
     configuration: RaterConfigurationIdentity
@@ -400,6 +421,10 @@ class RaterInvocation:
             raise RaterObservationError(
                 "invalid_criterion_set", "criterion_set has the wrong domain type"
             )
+        try:
+            self.criterion_set._assert_integrity()
+        except EvaluationCriterionBindingError as exc:
+            raise RaterObservationError(exc.code, str(exc)) from exc
         for field_name in (
             "invocation_ref",
             "evaluation_run_snapshot_ref",
@@ -417,7 +442,7 @@ class RaterInvocation:
                 "invocation rubric must match the frozen criterion-set rubric",
             )
         if (
-            not isinstance(self.observations, (list, tuple))
+            type(self.observations) not in (list, tuple)
             or not self.observations
             or len(self.observations) > MAX_RATER_OBSERVATIONS
         ):
@@ -441,7 +466,14 @@ class RaterInvocation:
                 "criterion_coverage_mismatch",
                 "observations must cover every bound criterion exactly once",
             )
-        for observation in observations:
+        observations_by_ref = {
+            observation.criterion_ref: observation for observation in observations
+        }
+        ordered_observations = tuple(
+            observations_by_ref[criterion_ref]
+            for criterion_ref in self.criterion_set.criterion_refs
+        )
+        for observation in ordered_observations:
             if observation.status != "observed":
                 continue
             criterion = self.criterion_set.criterion(observation.criterion_ref)
@@ -450,11 +482,17 @@ class RaterInvocation:
                     "category_not_admitted",
                     "observed category is not admitted by the bound criterion",
                 )
-        object.__setattr__(self, "observations", observations)
+        object.__setattr__(self, "observations", ordered_observations)
 
     @classmethod
-    def from_json(cls, value: str) -> "RaterInvocation":
-        """Decode raw JSON while rejecting duplicate members at every depth."""
+    def from_json(
+        cls,
+        value: str,
+        *,
+        expected_criterion_set: CriterionSetExecutionBinding | None = None,
+    ) -> "RaterInvocation":
+        """Decode provider JSON under a separately trusted criterion set."""
+        trusted = _trusted_criterion_set(expected_criterion_set)
         if type(value) is not str:
             raise RaterObservationError(
                 "invalid_json", "invocation JSON must be a string"
@@ -471,11 +509,17 @@ class RaterInvocation:
             raise RaterObservationError(
                 "invalid_json", "invocation JSON is invalid"
             ) from exc
-        return cls.from_mapping(payload)
+        return cls.from_mapping(payload, expected_criterion_set=trusted)
 
     @classmethod
-    def from_mapping(cls, value: Any) -> "RaterInvocation":
-        """Apply the Anti-Corruption Layer to an untrusted invocation envelope."""
+    def from_mapping(
+        cls,
+        value: Any,
+        *,
+        expected_criterion_set: CriterionSetExecutionBinding | None = None,
+    ) -> "RaterInvocation":
+        """Admit provider output only under independently trusted criterion meaning."""
+        trusted = _trusted_criterion_set(expected_criterion_set)
         payload = _mapping(value, "invocation")
         _reject_unknown_fields(payload, _INVOCATION_FIELDS, "invocation")
         missing = _INVOCATION_FIELDS - set(payload)
@@ -490,7 +534,21 @@ class RaterInvocation:
                 "invalid_observations",
                 f"observations must contain 1..{MAX_RATER_OBSERVATIONS} criteria",
             )
-        criterion_set = _criterion_set(payload["criterion_set"])
+        echoed = _criterion_set(payload["criterion_set"])
+        if (
+            echoed.criterion_set_snapshot_ref
+            != trusted.criterion_set_snapshot_ref
+            or echoed.criterion_set_sha256 != trusted.criterion_set_sha256
+            or echoed.to_payload() != trusted.to_payload()
+        ):
+            raise RaterObservationError(
+                "criterion_set_substitution",
+                "provider criterion set does not match the trusted evaluation policy",
+            )
+        parsed_observations = tuple(
+            CriterionObservation.from_mapping(item, criterion_ref=criterion_ref)
+            for criterion_ref, item in raw_observations.items()
+        )
         return cls(
             contract_id=payload["contract_id"],
             invocation_ref=payload["invocation_ref"],
@@ -501,16 +559,17 @@ class RaterInvocation:
             item_instance_ref=payload["item_instance_ref"],
             task_revision_ref=payload["task_revision_ref"],
             rubric_revision_ref=payload["rubric_revision_ref"],
-            criterion_set=criterion_set,
+            criterion_set=trusted,
             response_evidence_ref=payload["response_evidence_ref"],
-            observations=tuple(
-                CriterionObservation.from_mapping(item, criterion_ref=criterion_ref)
-                for criterion_ref, item in raw_observations.items()
-            ),
+            observations=parsed_observations,
         )
 
     def to_payload(self) -> dict[str, Any]:
         """Return a detached provider-neutral invocation snapshot."""
+        try:
+            self.criterion_set._assert_integrity()
+        except EvaluationCriterionBindingError as exc:
+            raise RaterObservationError(exc.code, str(exc)) from exc
         return {
             "contract_id": self.contract_id,
             "invocation_ref": self.invocation_ref,
