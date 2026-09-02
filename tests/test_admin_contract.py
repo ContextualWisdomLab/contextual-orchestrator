@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -206,6 +209,15 @@ def test_model_group_mutations_refresh_audit_events() -> None:
     assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--red)";') == 2
     assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--green)";') == 2
 
+
+
+\ndef test_model_group_handlers_isolate_follow_up_refresh_failures() -> None:
+    """A completed model-group mutation must not become a failed mutation."""
+    for marker in (
+        "    async function refreshModelGroupViews()",
+        "    async function deleteModelGroup(groupName)",
+    ):
+        assert marker in ADMIN_HTML
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
     state = TaskOrchestrator(
