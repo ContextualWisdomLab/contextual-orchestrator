@@ -247,7 +247,7 @@ class BatchDownloadError(RuntimeError):
     """A batch backend's result download explicitly failed.
 
     Raised instead of silently returning an empty result list when the
-    injected client reports ``{\"success\": False, ...}`` — a transient
+    injected client reports ``{"success": False, ...}`` — a transient
     download error, or the batch having actually expired/errored upstream
     after ``poll()`` already reported ``is_complete=True``. An empty list is
     reserved for a batch that legitimately completed with zero items;
@@ -329,7 +329,7 @@ class LocalBatchBackend:
     """In-process batch backend that runs each request via an injected runner.
 
     Preserves the mock/local path: no external service, no Postgres. The runner
-    is any callable ``(messages, mode, model) -> {\"answer\": str, \"mode\": str}`` — the
+    is any callable ``(messages, mode, model) -> {"answer": str, "mode": str}`` — the
     orchestrator's own ``complete`` fits directly. Results are computed eagerly
     on submit and returned verbatim on retrieve, so the batch lifecycle is fully
     observable in tests.
