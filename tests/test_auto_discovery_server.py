@@ -15,6 +15,7 @@ from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
     model_group_name_for,
 )
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
@@ -330,6 +331,56 @@ def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
 
     assert restarted.candidates[0].disabled is True
     assert "structured:blocked" in restarted.candidates[0].tags
+
+
+def test_failed_gateway_probe_disables_legacy_id_persisted_agent(
+    monkeypatch, tmp_path
+) -> None:
+    """A persisted agent kept under the pre-fingerprint legacy id is disabled too.
+
+    A failed configured-gateway structured probe is recorded only under the
+    new fingerprinted id (``agent_id_for``), but a persisted agent from
+    before model-group fingerprinting keeps its legacy id
+    (``legacy_agent_id_for``). The ``runtime_models`` membership check must
+    accept either id form -- matching the ``existing_by_id`` fallback lookup
+    used later in the same function -- otherwise a legacy-id agent whose
+    model now fails the probe is silently dropped from ``runtime_models``,
+    ``sync_discovered_agents`` is never called for it, and it is left
+    enabled (and unpersisted) indefinitely.
+    """
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="stale-legacy-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    existing = replace(
+        agent_from_discovered(model),
+        id=legacy_agent_id_for(model),
+        disabled=False,
+    )
+    agents_db = str(tmp_path / "agents.db")
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([existing], agents_db=agents_db)
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["updated"] == [existing.id]
+    persisted = next(agent for agent in orchestrator.candidates if agent.id == existing.id)
+    assert persisted.disabled is True
+    assert "structured:blocked" in persisted.tags
 
 
 def test_failed_gateway_probe_keeps_persisted_embedding_capability(

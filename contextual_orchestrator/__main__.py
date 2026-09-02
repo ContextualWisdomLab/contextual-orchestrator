@@ -774,7 +774,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             or "embedding" in model.capabilities
             or (
                 agent_id_for(model) in failed_configured_gateway_probe_ids
-                and agent_id_for(model) in existing_by_id
+                # A failed probe is only ever recorded under the new
+                # fingerprinted id, but a persisted agent from before
+                # model-group fingerprinting may still be keyed by its
+                # legacy id (see ``existing`` below); accept either so a
+                # failed legacy-id endpoint reaches the disable path
+                # instead of being silently dropped and left enabled.
+                and (
+                    agent_id_for(model) in existing_by_id
+                    or legacy_agent_id_for(model) in existing_by_id
+                )
             )
         )
     ]
