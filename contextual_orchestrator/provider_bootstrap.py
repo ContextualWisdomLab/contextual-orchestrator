@@ -71,7 +71,14 @@ class ProviderBootstrapError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderBootstrapReport:
-    """Secret-free evidence emitted after one provider bootstrap run."""
+    """Secret-free evidence emitted after one provider bootstrap run.
+
+    When a durable agent pool is requested, ``selected_agent_ids`` uses the
+    resolved persisted identities and therefore names the same agents as
+    ``enabled_agent_ids``. This keeps legacy-ID migration from exposing two
+    identifier generations for one selected endpoint. Ephemeral runs have no
+    persisted identities, so ``selected_agent_ids`` uses the generated IDs.
+    """
 
     registered_credentials: tuple[str, ...]
     discovered_model_count: int
@@ -361,12 +368,13 @@ def bootstrap_provider_runtime(
     # input with a positive limit and raises ValueError for a non-positive one,
     # so the selection here is never empty.
     selected = select_model_group_diverse_models(eligible, limit=model_limit)
-    selected_ids = tuple(agent_id_for(model) for model in selected)
+    generated_selected_ids = tuple(agent_id_for(model) for model in selected)
     enabled_ids = (
         _synchronize_durable_agent_pool(agents_db, selected)
         if agents_db
         else ()
     )
+    selected_ids = enabled_ids if agents_db else generated_selected_ids
 
     return ProviderBootstrapReport(
         registered_credentials=registered,
