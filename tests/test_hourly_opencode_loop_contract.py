@@ -3,14 +3,15 @@
 from pathlib import Path
 
 
-def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() -> None:
-    """Keep scheduled agent traffic on the seeded gateway and required key set."""
+def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() -> None:
+    """Keep scheduled agent traffic on the governed free pool and required key set."""
     workflow = Path(".github/workflows/opencode-hourly-loop.yml").read_text()
     prompt = Path(".github/opencode/hourly-loop-prompt.md").read_text()
 
     assert 'cron: "23 * * * *"' in workflow
     assert "--auto-discover-model-agents" in workflow
-    assert workflow.count("contextual_orchestrator_gateway/orchestrator/auto") == 2
+    assert workflow.count("contextual_orchestrator_gateway/orchestrator/free") == 2
+    assert "contextual_orchestrator_gateway/orchestrator/auto" not in workflow
     for credential_name in (
         "BYTEZ_API_KEY",
         "NVIDIA_NIM_API_KEY",
@@ -44,3 +45,16 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "clear redundancy or" in prompt
     assert "Rust is authoritative" in prompt
     assert "LLM-token arithmetic in Python" in prompt
+
+
+def test_hourly_loop_has_no_repository_authored_model_job_deadline() -> None:
+    """Do not terminate model-backed maintenance by a hand-selected wall-clock cap."""
+    workflow = Path(".github/workflows/opencode-hourly-loop.yml").read_text()
+    prompt = Path(".github/opencode/hourly-loop-prompt.md").read_text()
+
+    loop_header = workflow.split("\n  loop:\n", 1)[1].split("\n    permissions:\n", 1)[0]
+    assert "timeout-minutes:" not in loop_header
+    assert "at most 45 minutes" not in prompt
+    assert "highest-leverage gap" not in prompt
+    assert "Do not impose a repository-authored elapsed-time limit on model work" in prompt
+    assert "do not invent an ordering" in prompt
