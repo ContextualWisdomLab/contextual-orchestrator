@@ -6,20 +6,44 @@ name: Release
 # deliberate, maintainer-dispatched action only -- it never runs on push,
 # schedule, or as a side effect of merging to main. It never re-implements
 # GitHub branch-protection governance: it verifies the released commit really
-# is protected main's current, untampered tip, then re-runs this repository's
-# own primary regression gate fresh before cutting anything.
+# is (or, for a resume, once really was) protected main's tip, then re-runs
+# this repository's own primary regression gate fresh before cutting
+# anything.
+#
+# The very first thing the workflow does (`tag_state`, below) is decide
+# which of two situations this dispatch is, and which exact commit
+# (TARGET_SHA) every later gate must evaluate against:
+#   - a FRESH publish (no `vX.Y.Z` tag exists yet) -- TARGET_SHA is this
+#     dispatch's own commit, GITHUB_SHA, which must equal main's live
+#     current tip; or
+#   - a RESUME of a tag-only interrupted publication (the tag already
+#     exists -- pushed by an earlier run that then failed before creating
+#     the GitHub Release -- and points at a commit that really was main's
+#     tip at some point, i.e. an ancestor of main's current tip). TARGET_SHA
+#     is the tag's own target commit, which main is very likely to have
+#     advanced past by now -- that is expected, not an error, and every
+#     later gate (checks-green, version match, release-notes rendering)
+#     evaluates against TARGET_SHA, never against a possibly-stale
+#     GITHUB_SHA/current-main value. A tag that exists but points at a
+#     commit that is *not* an ancestor of main's current tip is a genuine
+#     conflict and is still rejected outright -- a tag is never moved or
+#     reused for a different release.
 #
 # Two jobs, least-privilege: `verify` runs with no write permission and no
 # persisted git credentials while it executes repository-controlled code
 # (the test suite, release-notes rendering) -- a `contents: write` token is
 # never present alongside that code. `publish` holds the write token, and its
-# very first steps re-check protected main's tip and every check reported
-# for that exact commit, immediately before tag creation, right after
-# `verify`'s potentially long-running gate finishes. That tip/checks
-# recheck is still a check-then-act window, not an atomic guarantee -- see
-# docs/planning/adrs/0129-canonical-immutable-release.md's "Known
-# limitations" section and docs/RELEASING.md for the accepted residual risk
-# and the recovery path if it is ever actually hit.
+# very first steps re-check (for a fresh publish only -- see above)
+# protected main's tip and every check reported for TARGET_SHA, immediately
+# before tag creation, right after `verify`'s potentially long-running gate
+# finishes. That tip/checks recheck is still a check-then-act window, not an
+# atomic guarantee -- see docs/planning/adrs/0129-canonical-immutable-release.md's
+# "Known limitations" section and docs/RELEASING.md for the accepted
+# residual risk and the recovery path if it is ever actually hit.
+#
+# The checks-green gate itself is one shared script
+# (scripts/ci/release_checks_gate.sh) that both jobs call, rather than two
+# inline copies that could silently drift from each other.
 
 on:
   workflow_dispatch:
@@ -33,16 +57,16 @@ permissions:
   contents: read
 
 # This repository's own known push-triggered job names (ci.yml, fuzz.yml,
-# security.yml) -- shared by both jobs' checks-green gate below so a
-# `commits/$SHA/check-runs` report that is empty, or missing one of them,
-# is treated as "not ready yet", never as vacuously "nothing to block on".
-# A dispatch fired moments after a merge can race GitHub's own registration
-# of this new tip's push-triggered check-runs: the API can legitimately
-# return an empty or partial list before GitHub has even created the
-# entries, and filtering an empty/partial list for "not complete+green" is
-# vacuously empty too -- which previously let a release publish before
-# Security/Fuzz/CodeQL had even started (Devin finding). Kept in sync with
-# those three workflows' job `name:` values by
+# security.yml) -- shared by both jobs' checks-green gate (see
+# scripts/ci/release_checks_gate.sh) so a `commits/$SHA/check-runs` report
+# that is empty, or missing one of them, is treated as "not ready yet",
+# never as vacuously "nothing to block on". A dispatch fired moments after a
+# merge can race GitHub's own registration of this new tip's push-triggered
+# check-runs: the API can legitimately return an empty or partial list
+# before GitHub has even created the entries, and filtering an empty/partial
+# list for "not complete+green" is vacuously empty too -- which previously
+# let a release publish before Security/Fuzz/CodeQL had even started (Devin
+# finding). Kept in sync with those three workflows' job `name:` values by
 # tests/test_release_workflow_contract.py; update this list in the same PR
 # that adds, removes, or renames a push-triggered job in any of them.
 env:
@@ -67,6 +91,7 @@ jobs:
     outputs:
       tag_resume: ${{ steps.tag_state.outputs.tag_resume }}
       release_resume: ${{ steps.tag_state.outputs.release_resume }}
+      target_sha: ${{ steps.tag_state.outputs.target_sha }}
     steps:
       - name: Checkout protected main (no write credentials)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -75,9 +100,129 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Verify this commit is protected main's current, untampered tip
+      - name: Determine whether this is a fresh publish or a resume, and the exact commit to operate on
+        id: tag_state
         run: |
           set -euo pipefail
+          # The commits API dereferences an annotated or lightweight tag to
+          # its target commit in one call, and needs no local git fetch or
+          # push credential -- this step runs with contents: read only. One
+          # `gh api` call captures both stdout (the SHA, via --jq) and
+          # stderr (2>&1) together, so a failure never needs a second,
+          # separate call just to read the error text -- that would double
+          # the API/rate-limit cost and open a race where state changes
+          # between the two calls.
+          #
+          # A failed lookup is NOT automatically "tag absent" (Devin
+          # finding): only a confirmed HTTP 404 means that. Any other
+          # failure -- rate limit, auth, network blip, a GitHub 5xx -- must
+          # fail this step closed instead, so a bad transient result never
+          # gets treated as "safe to create fresh" (which could then race
+          # `git tag` itself failing with a confusing "already exists", or
+          # worse, silently proceed on a wrong assumption). `gh`'s HTTP
+          # error wrapper reliably renders as "... (HTTP <code>)" on
+          # stderr; grep for the specific 404 rendering rather than
+          # inferring absence from any nonzero exit.
+          if ! tag_lookup_output="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" --jq .sha 2>&1)"; then
+            if printf '%s' "${tag_lookup_output}" | grep -q "HTTP 404"; then
+              echo "::notice::Tag v${RELEASE_VERSION} does not exist yet (confirmed 404); this is a fresh publish."
+              echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
+              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
+              echo "target_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+              echo "TARGET_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+              exit 0
+            fi
+            echo "::error::Could not determine whether tag v${RELEASE_VERSION} already exists: the lookup failed with an error other than a confirmed 404, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${tag_lookup_output}" >&2
+            exit 1
+          fi
+          tag_commit="${tag_lookup_output}"
+
+          if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+            # main may simply have advanced past the tag's target commit
+            # since it was pushed -- a tag-only interrupted publication (the
+            # tag was pushed by an earlier run that then failed before ever
+            # creating the GitHub Release, and one or more merges landed on
+            # main before this retry). That is a safe, legitimate resume,
+            # not a conflict: distinguish it from a genuine conflict -- a
+            # tag that points at a commit which was never on main's history
+            # at all (e.g. a stray or wrong tag) -- by checking whether the
+            # tag's target commit is an ancestor of (or equal to) main's own
+            # current live tip via the compare API. Only a commit that
+            # really was main's history at some point is safe to finish
+            # publishing; the tag itself is still never moved or reused for
+            # a different commit. Any failure of this lookup itself (rate
+            # limit, network, 5xx) fails the whole step closed via `set -e`
+            # above, the same fail-closed default every other lookup in
+            # this step handles explicitly.
+            compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...main" --jq .status)"
+            case "${compare_status}" in
+              identical|ahead)
+                echo "::notice::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, an ancestor of main's current tip; main has advanced since the tag was pushed (a tag-only interrupted publication). Resuming publication for the tagged commit -- never moving or reusing the tag for a different one."
+                ;;
+              *)
+                echo "::error::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, which is not an ancestor of main's current tip (compare status: ${compare_status}); a release tag is never moved onto a different commit. Publish a new version instead." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          target_sha="${tag_commit}"
+
+          echo "tag_resume=true" >> "${GITHUB_OUTPUT}"
+          echo "target_sha=${target_sha}" >> "${GITHUB_OUTPUT}"
+          echo "TARGET_SHA=${target_sha}" >> "${GITHUB_ENV}"
+
+          # A published Release already existing does not mean nothing is
+          # left to resume: creating a Release can publish the Release
+          # object and then fail partway through uploading its assets, in
+          # which case the tag and the Release both already exist but a
+          # release asset (the SBOM) can still be missing. A Release already
+          # existing for TARGET_SHA's tag is a safe resume that still
+          # attempts the best-effort asset attach in `publish`, never a
+          # reject -- see Devin's follow-up finding on this PR.
+          #
+          # As with the tag lookup above, a failed `gh release view` is NOT
+          # automatically "Release absent" (Devin finding): only a
+          # confirmed 404 means that. `gh`'s release-specific lookup
+          # renders a missing release as the literal "release not found"
+          # (its generic HTTP error wrapper, "... (HTTP 404)", is matched
+          # too as a defensive fallback); any other failure must fail this
+          # step closed rather than risking a wrongful create attempt
+          # against an unknown state.
+          if ! release_view_error="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" 2>&1 >/dev/null)"; then
+            if printf '%s' "${release_view_error}" | grep -qiE "release not found|HTTP 404"; then
+              echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} with no published GitHub Release yet (confirmed absent); resuming publication instead of re-tagging."
+              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
+            else
+              echo "::error::Could not determine whether a GitHub Release already exists for v${RELEASE_VERSION}: gh release view failed with an error other than a confirmed absence, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${release_view_error}" >&2
+              exit 1
+            fi
+          else
+            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming to attach any still-missing release assets rather than treating this as nothing left to resume."
+            echo "release_resume=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Check out the exact commit this run will operate on
+        run: |
+          set -euo pipefail
+          # A fresh publish's TARGET_SHA already equals the checked-out
+          # GITHUB_SHA, so this is a no-op switch. A resume's TARGET_SHA is
+          # an older commit than GITHUB_SHA (main has advanced) -- the
+          # tag_state step above confirmed it is an ancestor of main's
+          # current tip, so it is guaranteed to already be present in this
+          # checkout's full history (fetch-depth: 0). Every later step in
+          # this job (the version check, the test suite, release-notes
+          # rendering) must read TARGET_SHA's own tree, never GITHUB_SHA's,
+          # so a resume never renders notes or validates a version against
+          # commits that landed on main after the tag was pushed.
+          git checkout "${TARGET_SHA}"
+
+      - name: Verify this commit is protected main's current, untampered tip (fresh publish only)
+        run: |
+          set -euo pipefail
+          if [ "${TARGET_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::notice::Resuming an already-tagged commit (${TARGET_SHA}); main's current tip is not required to match it for a resume -- skipping the fresh-publish freshness check."
+            exit 0
+          fi
           remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
             echo "::error::Dispatched commit ${GITHUB_SHA} is not protected main's current tip (${remote_head}); a merge landed after this run started. Re-dispatch against the fresh tip." >&2
@@ -85,53 +230,7 @@ jobs:
           fi
 
       - name: Verify every check reported for this commit is complete and green
-        run: |
-          set -euo pipefail
-          checks_pages="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" --paginate --slurp)"
-          # main's own required-check gate already had to pass on the *PR's*
-          # head SHA before this squash/merge commit could exist -- but
-          # separate push-triggered workflows (Security, Fuzz, ...) run
-          # again against this exact new main-tip SHA and can still be
-          # in flight or have failed. Deliberately checks *every* check-run
-          # GitHub reports for this SHA (not a ruleset-derived "required"
-          # subset -- ADR 0129 rejected the ruleset-name lookup specifically
-          # to avoid needing `administration: read`; checking everything is
-          # strictly more conservative and only needs `checks: read`).
-          # Excludes this release run's own check-runs (both verify's and
-          # publish's) via their shared GITHUB_RUN_ID, or a workflow_dispatch
-          # would always find itself as an unfinished check and deadlock.
-          observed_checks="$(echo "${checks_pages}" | jq --arg run_id "${GITHUB_RUN_ID}" '
-            [ .[] | .check_runs[]? ]
-            | map(select((.details_url // "") | contains("/actions/runs/" + $run_id + "/") | not))
-          ')"
-          # Devin finding: a dispatch fired moments after a merge can race
-          # GitHub's own registration of this new tip's push-triggered
-          # check-runs, so `observed_checks` above can legitimately be empty
-          # or partial before those checks exist as entries at all --
-          # filtering an empty/partial list for "not complete+green" is
-          # vacuously empty too, which previously let this gate PASS before
-          # Security/Fuzz/CodeQL had even started. Close it the same
-          # conservative, no-ruleset way as the check above: every one of
-          # RELEASE_EXPECTED_PUSH_CHECKS (this repository's own known
-          # push-triggered job names) must already be a registered
-          # check-run for this commit -- absence from a report that has not
-          # caught up yet is "not ready", never "nothing to block on".
-          missing_checks="$(echo "${observed_checks}" | jq --argjson expected "${RELEASE_EXPECTED_PUSH_CHECKS}" '
-            ($expected - ([.[] | .name] | unique))
-          ')"
-          missing_count="$(echo "${missing_checks}" | jq 'length')"
-          if [ "${missing_count}" != "0" ]; then
-            echo "::error::${missing_count} expected push-triggered check(s) for commit ${GITHUB_SHA} have not registered yet (GitHub may still be creating check-runs for this new main tip): $(echo "${missing_checks}" | jq -c .). Wait a few moments and re-dispatch." >&2
-            exit 1
-          fi
-          not_ready="$(echo "${observed_checks}" | jq '
-            map(select(.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null)))
-          ')"
-          not_ready_count="$(echo "${not_ready}" | jq 'length')"
-          if [ "${not_ready_count}" != "0" ]; then
-            echo "::error::${not_ready_count} check(s) for commit ${GITHUB_SHA} are not both complete and green (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
-            exit 1
-          fi
+        run: bash scripts/ci/release_checks_gate.sh
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
@@ -148,77 +247,8 @@ jobs:
           set -euo pipefail
           declared="$(python -c 'from scripts.ci.release_notes import read_declared_version; print(read_declared_version(open("pyproject.toml", encoding="utf-8").read()))')"
           if [ "${declared}" != "${RELEASE_VERSION}" ]; then
-            echo "::error::pyproject.toml's [project] table declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
+            echo "::error::pyproject.toml's [project] table at commit ${TARGET_SHA} declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
             exit 1
-          fi
-
-      - name: Determine whether the release tag is a fresh publish or a safe resume
-        id: tag_state
-        run: |
-          set -euo pipefail
-          # The commits API dereferences an annotated or lightweight tag to
-          # its target commit in one call, and needs no local git fetch or
-          # push credential -- this step runs with contents: read only.
-          #
-          # A failed lookup is NOT automatically "tag absent" (Devin
-          # finding): only a confirmed HTTP 404 means that. Any other
-          # failure -- rate limit, auth, network blip, a GitHub 5xx -- must
-          # fail this step closed instead, so a bad transient result never
-          # gets treated as "safe to create fresh" (which could then race
-          # `git tag` itself failing with a confusing "already exists", or
-          # worse, silently proceed on a wrong assumption). `gh`'s HTTP
-          # error wrapper reliably renders as "... (HTTP <code>)" on
-          # stderr; grep for the specific 404 rendering rather than
-          # inferring absence from any nonzero exit.
-          if ! tag_lookup_output="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" --jq .sha 2>/dev/null)"; then
-            tag_lookup_error="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" 2>&1 >/dev/null || true)"
-            if printf '%s' "${tag_lookup_error}" | grep -q "HTTP 404"; then
-              echo "::notice::Tag v${RELEASE_VERSION} does not exist yet (confirmed 404); this is a fresh publish."
-              echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
-              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-            echo "::error::Could not determine whether tag v${RELEASE_VERSION} already exists: the lookup failed with an error other than a confirmed 404, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${tag_lookup_error}" >&2
-            exit 1
-          fi
-          tag_commit="${tag_lookup_output}"
-
-          if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
-            echo "::error::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, not this run's commit (${GITHUB_SHA}); a release tag is never moved onto a different commit. Publish a new version instead." >&2
-            exit 1
-          fi
-
-          echo "tag_resume=true" >> "${GITHUB_OUTPUT}"
-
-          # A published Release already existing does not mean nothing is
-          # left to resume: creating a Release can publish the Release
-          # object and then fail partway through uploading its assets, in
-          # which case the tag and the Release both already exist but a
-          # release asset (the SBOM) can still be missing. Reject only a
-          # tag pointing at a different commit (above); a Release already
-          # existing for *this* commit is a safe resume that still
-          # attempts the best-effort asset attach in `publish`, never a
-          # reject -- see Devin's follow-up finding on this PR.
-          #
-          # As with the tag lookup above, a failed `gh release view` is NOT
-          # automatically "Release absent" (Devin finding): only a
-          # confirmed 404 means that. `gh`'s release-specific lookup
-          # renders a missing release as the literal "release not found"
-          # (its generic HTTP error wrapper, "... (HTTP 404)", is matched
-          # too as a defensive fallback); any other failure must fail this
-          # step closed rather than risking a wrongful create attempt
-          # against an unknown state.
-          if ! release_view_error="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" 2>&1 >/dev/null)"; then
-            if printf '%s' "${release_view_error}" | grep -qiE "release not found|HTTP 404"; then
-              echo "::notice::Tag v${RELEASE_VERSION} already points at this commit with no published GitHub Release yet (confirmed absent); resuming publication instead of re-tagging."
-              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
-            else
-              echo "::error::Could not determine whether a GitHub Release already exists for v${RELEASE_VERSION}: gh release view failed with an error other than a confirmed absence, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${release_view_error}" >&2
-              exit 1
-            fi
-          else
-            echo "::notice::Tag v${RELEASE_VERSION} already points at this commit and its GitHub Release already exists; resuming to attach any still-missing release assets rather than treating this as nothing left to resume."
-            echo "release_resume=true" >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Run the full required test suite fresh on this exact commit
@@ -232,15 +262,15 @@ jobs:
             --changelog CHANGELOG.md \
             --version "${RELEASE_VERSION}" \
             --repository "${GITHUB_REPOSITORY}" \
-            --commit-sha "${GITHUB_SHA}" \
+            --commit-sha "${TARGET_SHA}" \
             --output release-notes.md
 
       - name: Fetch the CycloneDX SBOM for this commit, best-effort
         run: |
           set -uo pipefail
           run_id=""
-          if ! run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${GITHUB_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"; then
-            echo "::warning::Could not query Security workflow runs for commit ${GITHUB_SHA} (permission or API error); publishing without an SBOM asset."
+          if ! run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"; then
+            echo "::warning::Could not query Security workflow runs for commit ${TARGET_SHA} (permission or API error); publishing without an SBOM asset."
             run_id=""
           fi
           if [ -n "${run_id}" ]; then
@@ -248,7 +278,7 @@ jobs:
               echo "::warning::Security workflow run ${run_id} has no downloadable cyclonedx-sbom artifact; publishing without it."
             fi
           else
-            echo "::warning::No successful Security workflow run found for commit ${GITHUB_SHA}; publishing without an SBOM asset."
+            echo "::warning::No successful Security workflow run found for commit ${TARGET_SHA}; publishing without an SBOM asset."
           fi
 
       - name: Upload rendered notes and SBOM for the publish job
@@ -274,17 +304,23 @@ jobs:
       RELEASE_VERSION: ${{ inputs.version }}
       TAG_RESUME: ${{ needs.verify.outputs.tag_resume }}
       RELEASE_RESUME: ${{ needs.verify.outputs.release_resume }}
+      TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
     steps:
       - name: Checkout protected main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
+          ref: ${{ needs.verify.outputs.target_sha }}
           persist-credentials: true
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Re-verify protected main has not advanced since verification started
+      - name: Re-verify protected main has not advanced since verification started (fresh publish only)
         run: |
           set -euo pipefail
+          if [ "${TARGET_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::notice::Resuming an already-tagged commit (${TARGET_SHA}); no current-main-tip recheck applies to a resume."
+            exit 0
+          fi
           remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
             echo "::error::Protected main advanced to ${remote_head} while the verify job was testing and rendering notes for ${GITHUB_SHA}; refusing to publish a now-superseded commit as the latest release. Re-dispatch against the fresh tip." >&2
@@ -292,33 +328,7 @@ jobs:
           fi
 
       - name: Re-verify every check reported for this commit is complete and green
-        run: |
-          set -euo pipefail
-          checks_pages="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" --paginate --slurp)"
-          observed_checks="$(echo "${checks_pages}" | jq --arg run_id "${GITHUB_RUN_ID}" '
-            [ .[] | .check_runs[]? ]
-            | map(select((.details_url // "") | contains("/actions/runs/" + $run_id + "/") | not))
-          ')"
-          # Same expected-checks cross-reference as verify's gate -- see the
-          # comment there and on RELEASE_EXPECTED_PUSH_CHECKS at the top of
-          # this file. Re-checked here too since this recheck must be just
-          # as authoritative as the first one, not a weaker echo of it.
-          missing_checks="$(echo "${observed_checks}" | jq --argjson expected "${RELEASE_EXPECTED_PUSH_CHECKS}" '
-            ($expected - ([.[] | .name] | unique))
-          ')"
-          missing_count="$(echo "${missing_checks}" | jq 'length')"
-          if [ "${missing_count}" != "0" ]; then
-            echo "::error::${missing_count} expected push-triggered check(s) for commit ${GITHUB_SHA} have not registered yet (GitHub may still be creating check-runs for this new main tip): $(echo "${missing_checks}" | jq -c .). Wait a few moments and re-dispatch." >&2
-            exit 1
-          fi
-          not_ready="$(echo "${observed_checks}" | jq '
-            map(select(.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null)))
-          ')"
-          not_ready_count="$(echo "${not_ready}" | jq 'length')"
-          if [ "${not_ready_count}" != "0" ]; then
-            echo "::error::${not_ready_count} check(s) for commit ${GITHUB_SHA} are not both complete and green (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
-            exit 1
-          fi
+        run: bash scripts/ci/release_checks_gate.sh
 
       - name: Download the release notes and SBOM produced by verify
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # actions/download-artifact@v5

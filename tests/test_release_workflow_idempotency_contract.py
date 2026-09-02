@@ -92,10 +92,10 @@ def _tag_state_step(workflow: str) -> str:
     """Return just the `verify` job's tag-resume-determination step body."""
     verify_block = _job_block(workflow, "verify")
     step_start = verify_block.index(
-        "Determine whether the release tag is a fresh publish or a safe resume"
+        "Determine whether this is a fresh publish or a resume, and the exact commit to operate on"
     )
     next_step_start = verify_block.index(
-        "Run the full required test suite fresh on this exact commit"
+        "Check out the exact commit this run will operate on"
     )
     return verify_block[step_start:next_step_start]
 
@@ -121,6 +121,7 @@ def test_tag_state_step_exists_with_a_stable_output() -> None:
     assert "outputs:" in verify_block
     assert "tag_resume: ${{ steps.tag_state.outputs.tag_resume }}" in verify_block
     assert "release_resume: ${{ steps.tag_state.outputs.release_resume }}" in verify_block
+    assert "target_sha: ${{ steps.tag_state.outputs.target_sha }}" in verify_block
 
 
 def test_absent_tag_is_a_fresh_publish_checked_before_any_reject_branch() -> None:
@@ -169,28 +170,55 @@ def test_tag_lookup_non_404_error_fails_closed_not_treated_as_absent() -> None:
     assert "release_resume=" not in fail_closed_branch
 
 
-def test_tag_pointing_at_a_different_commit_is_rejected_not_moved() -> None:
-    """A tag that exists but targets a different commit must fail the run
-    outright -- a release tag is never moved onto a new commit."""
+def test_tag_pointing_elsewhere_is_checked_against_main_via_ancestry_not_rejected_outright() -> None:
+    """A tag pointing at a commit other than this dispatch's own GITHUB_SHA
+    is *not* automatically rejected (Devin finding: "Tag-only retries
+    mislabel releases") -- main may simply have advanced past the tag's
+    target since it was pushed. The mismatch branch must consult the
+    compare API to decide ancestor-of-main (safe resume) vs genuinely
+    elsewhere (reject), not exit 1 unconditionally."""
     step = _tag_state_step(_workflow_text())
     assert '${tag_commit}" != "${GITHUB_SHA}' in step
     mismatch_index = step.index('${tag_commit}" != "${GITHUB_SHA}')
-    # The very next non-blank statement after the mismatch check must exit
-    # nonzero -- reject, don't silently continue past a moved tag.
-    following = step[mismatch_index : mismatch_index + 400]
-    assert "::error::" in following
-    assert "exit 1" in following
+    compare_index = step.index("repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...main", mismatch_index)
+    case_index = step.index('case "${compare_status}" in', compare_index)
+    assert mismatch_index < compare_index < case_index
+
+
+def test_tag_pointing_at_a_commit_not_an_ancestor_of_main_is_rejected_not_moved() -> None:
+    """A tag whose target commit is genuinely not part of main's history
+    (compare status anything other than identical/ahead) must still fail
+    the run outright -- a release tag is never moved onto, or reused for,
+    a different commit."""
+    step = _tag_state_step(_workflow_text())
+    case_index = step.index('case "${compare_status}" in')
+    default_arm_index = step.index("*)", case_index)
+    esac_index = step.index("esac", default_arm_index)
+    default_arm = step[default_arm_index:esac_index]
+    assert "::error::" in default_arm
+    assert "exit 1" in default_arm
+    assert "never moved onto a different commit" in default_arm
+
+    identical_ahead_index = step.index("identical|ahead)", case_index)
+    assert case_index < identical_ahead_index < default_arm_index, (
+        "the ancestor (resume) arm must be checked before the catch-all reject arm"
+    )
+    resume_arm = step[identical_ahead_index:default_arm_index]
+    assert "::error::" not in resume_arm
+    assert "exit 1" not in resume_arm
 
 
 def test_tag_matching_commit_sets_tag_resume_before_branching_on_release_existence() -> None:
-    """Once the tag is confirmed to point at this exact commit, `tag_resume`
-    is set unconditionally -- only whether the GitHub Release itself
-    already exists (`release_resume`) still needs its own branch."""
+    """Once the tag is confirmed safe to resume from (either it points at
+    this exact commit, or it is an ancestor of main's current tip),
+    `tag_resume` is set unconditionally -- only whether the GitHub Release
+    itself already exists (`release_resume`) still needs its own branch."""
     step = _tag_state_step(_workflow_text())
     mismatch_index = step.index('${tag_commit}" != "${GITHUB_SHA}')
+    target_sha_assignment_index = step.index('target_sha="${tag_commit}"')
     tag_resume_true_index = step.index('echo "tag_resume=true"')
     release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
-    assert mismatch_index < tag_resume_true_index < release_view_index
+    assert mismatch_index < target_sha_assignment_index < tag_resume_true_index < release_view_index
 
 
 def test_tag_matching_commit_with_existing_release_resumes_to_attach_missing_assets() -> None:
@@ -318,16 +346,18 @@ def test_release_asset_attach_always_runs_and_is_best_effort() -> None:
     assert "--clobber" in attach_step
 
 
-# --- Confirmed-absence vs transient-failure real-execution simulation
-# --- (Devin finding: "API failures block release recovery") ----------------
+# --- Confirmed-absence vs transient-failure, and ancestor-vs-conflict,
+# --- real-execution simulation (Devin findings: "API failures block
+# --- release recovery" and "Tag-only retries mislabel releases") -----------
 #
 # The tests above prove the *branch structure* of the tag_state step's real
 # YAML text. These go further: they execute that exact, unmodified script
 # (never a hand-copied stand-in that could silently drift from it) under
-# bash, against a stub `gh` selected by GH_STUB_MODE, covering every branch
-# end-to-end -- exit code and the actual GITHUB_OUTPUT lines written -- the
-# same real-execution technique tests/test_release_workflow_contract.py
-# uses for the checks-green gate.
+# bash, against a stub `gh` that distinguishes calls by the actual endpoint
+# requested, covering every branch end-to-end -- exit code, the actual
+# GITHUB_OUTPUT lines written, and the actual GITHUB_ENV (TARGET_SHA) line
+# written -- the same real-execution technique
+# tests/test_release_workflow_contract.py uses for the checks-green gate.
 
 
 def _tag_state_script(workflow: str) -> str:
@@ -354,36 +384,70 @@ def _tag_state_script(workflow: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# A resume-from-an-older-commit case (main has advanced past the tag) and a
+# genuinely-elsewhere case (not an ancestor of main at all) need SHAs
+# distinct from both each other and from _SIM_GITHUB_SHA, so a test can
+# never pass by accident if the script mixed the two commits up.
+_SIM_OLDER_TAG_SHA = "a" * 40
+_SIM_UNRELATED_TAG_SHA = "b" * 40
+
+
 _STUB_GH_TAG_RELEASE_LOOKUP = """#!/usr/bin/env bash
-# Stub gh CLI for hand-simulating the tag_state step's two lookups against
+# Stub gh CLI for hand-simulating the tag_state step's three lookups (tag
+# existence, main-ancestry compare, Release existence) against
 # deliberately-crafted success/confirmed-absence/transient-failure cases,
-# selected via GH_STUB_TAG_MODE and GH_STUB_RELEASE_MODE.
+# selected via GH_STUB_TAG_MODE, GH_STUB_COMPARE_MODE, and
+# GH_STUB_RELEASE_MODE. Distinguishes gh invocations by the actual endpoint
+# requested ($2), not only by which mode env var happens to be set -- so a
+# new gh call this step adds later would fail this stub with an explicit
+# "unhandled" error rather than silently being answered by the wrong
+# canned response (CodeRabbit test-hardening finding).
 tag_mode="${GH_STUB_TAG_MODE:-}"
+compare_mode="${GH_STUB_COMPARE_MODE:-}"
 release_mode="${GH_STUB_RELEASE_MODE:-}"
+tag_sha="${GH_STUB_TAG_SHA:-${SIM_GITHUB_SHA}}"
 
 if [ "$1" = "api" ]; then
-  case "${tag_mode}" in
-    tag_confirmed_404)
-      echo "gh: No commit found for SHA: v${RELEASE_VERSION} (HTTP 404)" >&2
-      exit 1
+  request="$2"
+  case "${request}" in
+    *"/commits/v${RELEASE_VERSION}"*)
+      case "${tag_mode}" in
+        tag_confirmed_404)
+          echo "gh: No commit found for SHA: v${RELEASE_VERSION} (HTTP 404)" >&2
+          exit 1
+          ;;
+        tag_rate_limited)
+          echo "gh: API rate limit exceeded for user ID 123. (HTTP 403)" >&2
+          exit 1
+          ;;
+        tag_network_error)
+          echo 'gh: Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' >&2
+          exit 1
+          ;;
+        tag_exists)
+          echo "${tag_sha}"
+          exit 0
+          ;;
+        *) echo "unhandled stub gh api tag mode: ${tag_mode}" >&2; exit 97 ;;
+      esac
       ;;
-    tag_rate_limited)
-      echo "gh: API rate limit exceeded for user ID 123. (HTTP 403)" >&2
-      exit 1
+    *"/compare/"*)
+      case "${compare_mode}" in
+        identical) echo "identical"; exit 0 ;;
+        ahead) echo "ahead"; exit 0 ;;
+        behind) echo "behind"; exit 0 ;;
+        diverged) echo "diverged"; exit 0 ;;
+        compare_error)
+          echo "gh: API rate limit exceeded for user ID 123. (HTTP 403)" >&2
+          exit 1
+          ;;
+        *) echo "unhandled stub gh api compare mode: ${compare_mode}" >&2; exit 97 ;;
+      esac
       ;;
-    tag_network_error)
-      echo 'gh: Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' >&2
-      exit 1
+    *)
+      echo "unhandled stub gh api request: $*" >&2
+      exit 98
       ;;
-    tag_exists)
-      if printf '%s\\n' "$*" | grep -q -- '--jq'; then
-        echo "${SIM_GITHUB_SHA}"
-      else
-        echo "{\\"sha\\":\\"${SIM_GITHUB_SHA}\\"}"
-      fi
-      exit 0
-      ;;
-    *) echo "unhandled stub gh api tag mode: ${tag_mode}" >&2; exit 97 ;;
   esac
 elif [ "$1" = "release" ] && [ "$2" = "view" ]; then
   case "${release_mode}" in
@@ -409,13 +473,21 @@ fi
 
 
 def _run_tag_state_script(
-    tmp_path: Path, script: str, *, tag_mode: str, release_mode: str = ""
-) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    tmp_path: Path,
+    script: str,
+    *,
+    tag_mode: str,
+    release_mode: str = "",
+    compare_mode: str = "",
+    tag_sha: str = _SIM_GITHUB_SHA,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict[str, str]]:
     """Execute the real tag_state script against the stub gh above.
 
-    Returns the completed process plus the `GITHUB_OUTPUT` lines actually
-    written, parsed into a dict (empty if the step exited before writing
-    any, e.g. the fail-closed branches).
+    Returns the completed process, the `GITHUB_OUTPUT` lines actually
+    written parsed into a dict (empty if the step exited before writing
+    any, e.g. the fail-closed branches), and the `GITHUB_ENV` lines
+    actually written parsed the same way (TARGET_SHA, once the run reaches
+    far enough to set it).
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -427,6 +499,8 @@ def _run_tag_state_script(
     script_path.write_text(script, encoding="utf-8")
     output_path = tmp_path / "github_output"
     output_path.write_text("", encoding="utf-8")
+    env_path = tmp_path / "github_env"
+    env_path.write_text("", encoding="utf-8")
 
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -435,8 +509,11 @@ def _run_tag_state_script(
     env["GITHUB_SHA"] = _SIM_GITHUB_SHA
     env["SIM_GITHUB_SHA"] = _SIM_GITHUB_SHA
     env["GITHUB_OUTPUT"] = str(output_path)
+    env["GITHUB_ENV"] = str(env_path)
     env["GH_STUB_TAG_MODE"] = tag_mode
     env["GH_STUB_RELEASE_MODE"] = release_mode
+    env["GH_STUB_COMPARE_MODE"] = compare_mode
+    env["GH_STUB_TAG_SHA"] = tag_sha
 
     result = subprocess.run(
         ["bash", str(script_path)],
@@ -445,22 +522,28 @@ def _run_tag_state_script(
         text=True,
         check=False,
     )
-    outputs: dict[str, str] = {}
-    for line in output_path.read_text(encoding="utf-8").splitlines():
-        if "=" in line:
-            key, _, value = line.partition("=")
-            outputs[key] = value
-    return result, outputs
+
+    def _parse(path: Path) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                parsed[key] = value
+        return parsed
+
+    return result, _parse(output_path), _parse(env_path)
 
 
 def test_simulated_tag_confirmed_404_resumes_as_fresh_publish(tmp_path: Path) -> None:
     """End-to-end: a confirmed-404 tag lookup exits 0 with both resume flags
-    false, never reaching the release-view lookup at all."""
+    false and target_sha set to the dispatch commit, never reaching the
+    ancestry-compare or release-view lookups at all."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_confirmed_404")
+    result, outputs, env_vars = _run_tag_state_script(tmp_path, script, tag_mode="tag_confirmed_404")
     assert result.returncode == 0, result.stderr
-    assert outputs == {"tag_resume": "false", "release_resume": "false"}
+    assert outputs == {"tag_resume": "false", "release_resume": "false", "target_sha": _SIM_GITHUB_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
 
 
 def test_simulated_tag_lookup_rate_limited_fails_closed(tmp_path: Path) -> None:
@@ -469,10 +552,11 @@ def test_simulated_tag_lookup_rate_limited_fails_closed(tmp_path: Path) -> None:
     as tag-absent."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_rate_limited")
+    result, outputs, env_vars = _run_tag_state_script(tmp_path, script, tag_mode="tag_rate_limited")
     assert result.returncode != 0
     assert "NOT confirmed" in result.stderr
     assert outputs == {}
+    assert env_vars == {}
 
 
 def test_simulated_tag_lookup_network_error_fails_closed(tmp_path: Path) -> None:
@@ -480,10 +564,112 @@ def test_simulated_tag_lookup_network_error_fails_closed(tmp_path: Path) -> None
     fail closed, not be misread as tag-absent."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_network_error")
+    result, outputs, env_vars = _run_tag_state_script(tmp_path, script, tag_mode="tag_network_error")
     assert result.returncode != 0
     assert "NOT confirmed" in result.stderr
     assert outputs == {}
+    assert env_vars == {}
+
+
+def test_simulated_tag_at_the_dispatch_commit_resumes_without_a_compare_call(tmp_path: Path) -> None:
+    """End-to-end: the tag exists and already points at this exact dispatch
+    commit (main has not advanced at all) -- the original, still-supported
+    resume case. No ancestry compare is needed (and the stub would fail
+    the run if one were attempted with no compare mode configured), and
+    target_sha equals the dispatch commit."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path, script, tag_mode="tag_exists", tag_sha=_SIM_GITHUB_SHA, release_mode="release_confirmed_absent"
+    )
+    assert result.returncode == 0, result.stderr
+    assert outputs == {"tag_resume": "true", "release_resume": "false", "target_sha": _SIM_GITHUB_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
+
+
+def test_simulated_tag_resumes_from_an_older_ancestor_commit_after_main_advanced(tmp_path: Path) -> None:
+    """The real bug fix, end-to-end: the tag exists and points at an OLDER
+    commit than this dispatch's GITHUB_SHA (main has advanced since the tag
+    was pushed -- a tag-only interrupted publication). The ancestry compare
+    reports "ahead" (the tag's commit is an ancestor of main's current
+    tip), so this resumes safely using the TAG'S OWN commit as target_sha,
+    never the newer dispatch commit -- exactly the scenario that was
+    previously rejected outright as a false conflict."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path,
+        script,
+        tag_mode="tag_exists",
+        tag_sha=_SIM_OLDER_TAG_SHA,
+        compare_mode="ahead",
+        release_mode="release_confirmed_absent",
+    )
+    assert result.returncode == 0, result.stderr
+    assert outputs == {"tag_resume": "true", "release_resume": "false", "target_sha": _SIM_OLDER_TAG_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_OLDER_TAG_SHA}
+
+
+def test_simulated_tag_resumes_when_compare_reports_identical(tmp_path: Path) -> None:
+    """Defensive coverage of the compare API's "identical" status alongside
+    "ahead" -- both mean the tag's target commit is (or was) main's own
+    tip, so both are safe to resume from."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path,
+        script,
+        tag_mode="tag_exists",
+        tag_sha=_SIM_OLDER_TAG_SHA,
+        compare_mode="identical",
+        release_mode="release_confirmed_absent",
+    )
+    assert result.returncode == 0, result.stderr
+    assert outputs["tag_resume"] == "true"
+    assert outputs["target_sha"] == _SIM_OLDER_TAG_SHA
+    assert env_vars == {"TARGET_SHA": _SIM_OLDER_TAG_SHA}
+
+
+@pytest.mark.parametrize("compare_status", ["diverged", "behind"])
+def test_simulated_tag_pointing_at_a_non_ancestor_commit_is_rejected(tmp_path: Path, compare_status: str) -> None:
+    """The tag exists but points at a commit that is genuinely not part of
+    main's history (never main's tip at any point, or main's tip is itself
+    behind it) -- a real conflict, still rejected outright. No outputs are
+    written; the tag is never moved or reused."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path,
+        script,
+        tag_mode="tag_exists",
+        tag_sha=_SIM_UNRELATED_TAG_SHA,
+        compare_mode=compare_status,
+    )
+    assert result.returncode != 0
+    assert "never moved onto a different commit" in result.stderr
+    assert _SIM_UNRELATED_TAG_SHA in result.stderr
+    assert outputs == {}
+    assert env_vars == {}
+
+
+def test_simulated_compare_lookup_error_fails_closed(tmp_path: Path) -> None:
+    """A transient failure of the ancestry-compare call itself (rate limit,
+    network, 5xx) must fail this step closed via the script's `set -e`,
+    the same fail-closed default every other lookup in this step handles
+    explicitly -- never silently treated as either a safe resume or a
+    confirmed conflict."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path,
+        script,
+        tag_mode="tag_exists",
+        tag_sha=_SIM_OLDER_TAG_SHA,
+        compare_mode="compare_error",
+    )
+    assert result.returncode != 0
+    assert outputs == {}
+    assert env_vars == {}
 
 
 def test_simulated_release_confirmed_absent_resumes_publication(tmp_path: Path) -> None:
@@ -492,25 +678,28 @@ def test_simulated_release_confirmed_absent_resumes_publication(tmp_path: Path) 
     release_resume=false, no error."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(
+    result, outputs, env_vars = _run_tag_state_script(
         tmp_path, script, tag_mode="tag_exists", release_mode="release_confirmed_absent"
     )
     assert result.returncode == 0, result.stderr
-    assert outputs == {"tag_resume": "true", "release_resume": "false"}
+    assert outputs == {"tag_resume": "true", "release_resume": "false", "target_sha": _SIM_GITHUB_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
 
 
 def test_simulated_release_lookup_rate_limited_fails_closed_after_tag_resume(tmp_path: Path) -> None:
-    """End-to-end: tag exists at this commit (tag_resume=true is safely
-    written), but the release lookup then hits a transient error -- must
-    fail closed rather than guessing the Release is absent."""
+    """End-to-end: tag exists at this commit (tag_resume=true and
+    target_sha are safely written), but the release lookup then hits a
+    transient error -- must fail closed rather than guessing the Release
+    is absent."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(
+    result, outputs, env_vars = _run_tag_state_script(
         tmp_path, script, tag_mode="tag_exists", release_mode="release_rate_limited"
     )
     assert result.returncode != 0
     assert "NOT confirmed" in result.stderr
-    assert outputs == {"tag_resume": "true"}
+    assert outputs == {"tag_resume": "true", "target_sha": _SIM_GITHUB_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
 
 
 def test_simulated_release_already_exists_resumes_asset_attach(tmp_path: Path) -> None:
@@ -519,11 +708,12 @@ def test_simulated_release_already_exists_resumes_asset_attach(tmp_path: Path) -
     error."""
     workflow = _workflow_text()
     script = _tag_state_script(workflow)
-    result, outputs = _run_tag_state_script(
+    result, outputs, env_vars = _run_tag_state_script(
         tmp_path, script, tag_mode="tag_exists", release_mode="release_exists"
     )
     assert result.returncode == 0, result.stderr
-    assert outputs == {"tag_resume": "true", "release_resume": "true"}
+    assert outputs == {"tag_resume": "true", "release_resume": "true", "target_sha": _SIM_GITHUB_SHA}
+    assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
 
 
 # --- `actions: read` scoping (Devin finding 2) -------------------------------
@@ -583,7 +773,7 @@ def test_publish_jobs_first_step_is_checkout_and_second_is_the_final_tip_check()
         if line.strip().startswith("- name:")
     ]
     assert step_names[0] == "Checkout protected main"
-    assert step_names[1] == "Re-verify protected main has not advanced since verification started"
+    assert step_names[1] == "Re-verify protected main has not advanced since verification started (fresh publish only)"
 
 
 def test_release_artifacts_flow_from_verify_to_publish_via_upload_download() -> None:

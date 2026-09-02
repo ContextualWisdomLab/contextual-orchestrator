@@ -184,23 +184,35 @@ Before any tag or Release is created, the release job:
    correctly "not ready", never "nothing to block on". This is still the
    same no-ruleset, `checks: read`-only approach: a fixed, repository-owned
    name list, not a call to the branch-ruleset API.
-3. Parses `pyproject.toml`'s `version = "..."` and fails closed unless it is
-   byte-for-byte equal to the `version` input. A release never redefines what
-   version a commit is; the version bump is a normal, already-reviewed PR
-   that must land first.
-4. Fails closed if git tag `v${version}` already exists locally or on the
-   remote — an existing tag is never moved, deleted, or overwritten
-   (immutability) — except a tag/Release resume at this exact commit, a safe
-   retry of a previously-interrupted run (see `docs/RELEASING.md`). Both the
-   tag-existence and Release-existence lookups distinguish a *confirmed*
-   absence (an HTTP 404 from the commits API; a "release not found" from
-   `gh release view`) from every other lookup failure — rate limit, auth,
-   network blip, a GitHub 5xx (a later Devin finding, "API failures block
-   release recovery"). Only a confirmed absence proceeds as a fresh
-   publish or resume; any other failure fails the step closed instead of
-   guessing "absent" and risking a wrong create attempt against unconfirmed
-   state — a later dispatch then retries and resolves cleanly once the
-   transient failure clears.
+3. Parses `pyproject.toml`'s `[project]` table (via stdlib `tomllib`, a real
+   TOML parser — not a regex scan, which cannot reliably distinguish a
+   `[project]` table header followed by a trailing comment, a single- or
+   double-quoted version value, or a multiline string containing a line
+   that starts with `[`, from a genuine table boundary or version field)
+   and fails closed unless its `version` is byte-for-byte equal to the
+   `version` input. A release never redefines what version a commit is; the
+   version bump is a normal, already-reviewed PR that must land first.
+4. Fails closed if tag `v${version}` already exists on the remote (queried
+   via the commits API, never a local tag check) and points at a commit
+   that is *not* an ancestor of protected `main`'s current tip — an
+   existing tag is never moved, deleted, or overwritten (immutability), and
+   is never reused for a different release. A tag that *is* an ancestor of
+   `main`'s current tip (identical to it, or main has since advanced past
+   it) is a tag-only interrupted publication — the tag was pushed by an
+   earlier run that then failed before ever creating the GitHub Release —
+   and resumes safely: every later gate (checks-green, this version check,
+   release-notes rendering) evaluates against the *tag's own target
+   commit*, never against a possibly-stale `GITHUB_SHA`/current-`main`
+   value (a later Devin finding, "Tag-only retries mislabel releases" — see
+   `docs/RELEASING.md`). Both the tag-existence and Release-existence
+   lookups distinguish a *confirmed* absence (an HTTP 404 from the commits
+   API; a "release not found" from `gh release view`) from every other
+   lookup failure — rate limit, auth, network blip, a GitHub 5xx (a later
+   Devin finding, "API failures block release recovery"). Only a confirmed
+   absence proceeds as a fresh publish or resume; any other failure fails
+   the step closed instead of guessing "absent" and risking a wrong create
+   attempt against unconfirmed state — a later dispatch then retries and
+   resolves cleanly once the transient failure clears.
 5. Runs this repository's own full test suite fresh, on the exact commit
    about to be tagged (`uv run --locked --extra api --extra db --extra queue
    --group dev python -m pytest -q`, the same invocation `ci.yml`'s "Full
@@ -309,6 +321,21 @@ this mechanism implements, not an academic literature review:
 
 ## Known limitations
 
+### Resume evaluates against the tag's own target commit, not a fresh publish's main-tip check
+
+The main-tip freshness recheck described below applies only to a **fresh**
+publish (no `v${version}` tag exists yet), where `TARGET_SHA` is this
+dispatch's own commit and must still equal `main`'s live current tip. A
+**resume** of a tag-only interrupted publication — the tag already exists
+and points at a commit that is an ancestor of `main`'s current tip —
+deliberately skips that comparison instead of failing it: `main` having
+advanced past the tag's target commit is the expected, common case a
+resume exists to handle (a later Devin finding, "Tag-only retries mislabel
+releases"), not evidence of staleness. The tagged commit is already
+immutable once pushed, so there is nothing for a live main-tip comparison
+to protect against for a resume; the checks-green gate still re-runs
+against `TARGET_SHA` itself in both cases.
+
 ### Residual check-then-act window before the tag/Release are created
 
 Devin flagged this gate's re-verification (main's tip, then every check for
@@ -317,7 +344,8 @@ immediately before anything is created) as still leaving a race: if `main`
 advances, or a check regresses, in the moments between that recheck and the
 actual `git push origin refs/tags/...` / `gh release create`, the workflow
 would still publish the commit that *was* the verified, all-green tip
-moments earlier.
+moments earlier. This window applies to a fresh publish only — see the
+resume note directly above.
 
 This is real, and it is also an inherent limitation of any check-then-act
 sequence against an API with no atomic "create this tag only if branch `X`

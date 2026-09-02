@@ -95,6 +95,58 @@ def test_read_declared_version_ignores_a_same_named_key_in_a_later_table() -> No
     assert module.read_declared_version(pyproject) == "0.2.0"
 
 
+def test_read_declared_version_tolerates_a_trailing_comment_on_the_project_header() -> None:
+    """`[project] # comment` is valid TOML; a regex anchored on `^\\[project\\]\\s*$`
+    would reject it as "no [project] table" (CodeRabbit finding: TOML parsed
+    with regex instead of a real parser)."""
+    module = _module()
+    pyproject = '[project] # the project table\nname = "x"\nversion = "0.2.0"\n'
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
+def test_read_declared_version_accepts_a_single_quoted_version() -> None:
+    """TOML allows single-quoted (literal) strings too, not just double
+    quotes -- a regex anchored on `"([^"]+)"` would miss this."""
+    module = _module()
+    pyproject = "[project]\nname = 'x'\nversion = '0.2.0'\n"
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
+def test_read_declared_version_tolerates_a_trailing_comment_on_the_version_line() -> None:
+    """`version = "0.2.0"  # released` is valid TOML; a regex requiring
+    `\\s*$` right after the closing quote would reject it."""
+    module = _module()
+    pyproject = '[project]\nname = "x"\nversion = "0.2.0"  # released\n'
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
+def test_read_declared_version_is_not_confused_by_a_multiline_string_containing_a_bracket_line() -> None:
+    """A multiline string value whose body has a line starting with `[` must
+    never be mistaken for the next table's header -- a regex scanning for
+    `^\\[` to find the `[project]` table's own boundary would truncate the
+    table body before `version` and wrongly report it missing."""
+    module = _module()
+    pyproject = (
+        "[project]\n"
+        'name = "x"\n'
+        'description = """\n'
+        "Some text.\n"
+        "[not a real table]\n"
+        "More text.\n"
+        '"""\n'
+        'version = "0.2.0"\n'
+    )
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
+def test_read_declared_version_rejects_invalid_toml() -> None:
+    """Text that is not valid TOML at all must fail closed with a clear
+    message, not raise an unrelated parser exception."""
+    module = _module()
+    with pytest.raises(ValueError, match="not valid TOML"):
+        module.read_declared_version("[project\nversion = \n")
+
+
 def test_extract_changelog_section_returns_only_the_matching_version_body() -> None:
     """Only the body between the matching heading and the next heading is returned."""
     module = _module()

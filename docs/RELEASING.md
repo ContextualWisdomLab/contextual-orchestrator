@@ -36,15 +36,22 @@ that separate system.
    through the normal PR process (review, required checks, no exceptions).
 2. `CHANGELOG.md` has a `## [X.Y.Z]` section (an `- Unreleased` or dated
    suffix is fine) with real, non-empty content describing what changed.
-3. Either no git tag `vX.Y.Z` exists yet, or one does but points at the exact
-   commit you're dispatching — in which case the workflow safely resumes
-   instead of re-tagging: if that tag has no GitHub Release published yet,
-   it creates one; if the Release also already exists (e.g. a prior run's
-   asset-upload step failed after `gh release create` itself succeeded), it
-   still attempts the best-effort SBOM asset attach rather than treating the
-   run as nothing left to do — see step 4 below. A tag pointing at any
-   *other* commit is rejected outright: a tag is never reused or moved onto
-   a different commit — bump the version again if you need to re-release.
+3. Either no git tag `vX.Y.Z` exists yet, or one does and points at a commit
+   that is an ancestor of `main`'s current tip (the commit you're
+   dispatching, or an earlier one `main` has since advanced past) — in
+   which case the workflow safely resumes using **the tag's own target
+   commit**, never the commit you happen to be dispatching against: if that
+   tag has no GitHub Release published yet, it creates one; if the Release
+   also already exists (e.g. a prior run's asset-upload step failed after
+   `gh release create` itself succeeded), it still attempts the best-effort
+   SBOM asset attach rather than treating the run as nothing left to do —
+   see step 4 below. This is exactly the "tag pushed, then the run failed
+   before creating the Release, and more commits merged to `main` before
+   you retried" scenario — it stays recoverable no matter how far `main`
+   has advanced since the tag was pushed. A tag pointing at a commit that is
+   **not** an ancestor of `main`'s current tip (a genuinely different or
+   stray tag) is rejected outright: a tag is never reused or moved onto a
+   different commit — bump the version again if you need to re-release.
 4. `main` is currently green — its own required checks (Tests, Security,
    Fuzz, and the org-central Strix/OpenCode/security-scan/OSV/Scorecard
    checks from `ContextualWisdomLab/.github`) are passing. The release
@@ -75,47 +82,58 @@ that separate system.
    repository-controlled code; `publish` holds the write token and does
    nothing but tag and publish. In order:
    - **`verify`** (read-only):
-     - fails closed if the dispatched commit is not `main`'s current tip (a
-       race with a concurrent merge);
-     - fails closed unless every one of this repository's own known
-       push-triggered checks (Tests' two jobs, Fuzz's two jobs, Security's
-       two jobs — see `RELEASE_EXPECTED_PUSH_CHECKS` in `release.yml`) has
-       actually registered as a check-run for this exact commit *and* every
-       check GitHub reports for it is complete with a successful, skipped,
-       or neutral conclusion (a push-triggered workflow — Security, Fuzz,
-       ... — not yet registered, still running, or having failed on this
-       commit);
-     - fails closed if the input version does not match `pyproject.toml`'s
-       `[project]` table;
-     - resolves any existing `vX.Y.Z` tag via the commit API: fails closed
-       only if it points at a *different* commit; a tag at this commit
-       proceeds as a resume (fresh publish, tag-only resume, or full
-       release-and-asset resume — see step 3 above). A failed tag or
-       Release lookup is treated as "absent" only on a *confirmed* 404 /
+     - first resolves any existing `vX.Y.Z` tag via the commit API and
+       decides `TARGET_SHA` — the exact commit every later gate evaluates
+       against. No tag yet: `TARGET_SHA` is the dispatched commit itself
+       (a fresh publish). A tag that exists and is an ancestor of `main`'s
+       current tip: `TARGET_SHA` is the *tag's own target commit* (a
+       resume — see step 3 above), regardless of how far `main` has since
+       advanced. A tag that exists and is **not** an ancestor of `main`'s
+       current tip fails closed outright (a genuine conflict). A failed tag
+       or Release lookup is treated as "absent" only on a *confirmed* 404 /
        "release not found"; any other lookup failure (rate limit, auth,
-       network, 5xx) fails this step closed instead of guessing — re-dispatch
-       once the transient failure clears;
-     - runs the full test suite fresh (`uv run --locked --extra api --extra
-       db --extra queue --group dev python -m pytest -q`);
-     - renders release notes from `CHANGELOG.md`'s matching section
-       (`scripts/ci/release_notes.py`, tested in
+       network, 5xx) fails this step closed instead of guessing —
+       re-dispatch once the transient failure clears;
+     - checks out `TARGET_SHA` so every subsequent step in this job reads
+       *that* commit's tree, never a possibly-newer `main` tip;
+     - for a **fresh publish only**, fails closed if `TARGET_SHA` is not
+       `main`'s current tip (a race with a concurrent merge) — a resume
+       skips this comparison entirely, since `main` having advanced past
+       the tag's target commit is exactly the situation a resume exists to
+       handle;
+     - fails closed (via the shared `scripts/ci/release_checks_gate.sh`)
+       unless every one of this repository's own known push-triggered
+       checks (Tests' two jobs, Fuzz's two jobs, Security's two jobs — see
+       `RELEASE_EXPECTED_PUSH_CHECKS` in `release.yml`) has actually
+       registered as a check-run for `TARGET_SHA` *and* every check GitHub
+       reports for it is complete with a successful, skipped, or neutral
+       conclusion;
+     - fails closed if the input version does not match `TARGET_SHA`'s
+       `pyproject.toml` `[project]` table;
+     - runs the full test suite fresh, on `TARGET_SHA`'s tree (`uv run
+       --locked --extra api --extra db --extra queue --group dev python -m
+       pytest -q`);
+     - renders release notes from `TARGET_SHA`'s `CHANGELOG.md` matching
+       section (`scripts/ci/release_notes.py`, tested in
        `tests/test_release_notes.py`);
      - best-effort looks up and downloads the CycloneDX SBOM from the
-       matching successful `security.yml` run for this commit, if one exists
-       (a missing SBOM, or a failed lookup, warns — it never blocks the
-       release);
+       matching successful `security.yml` run for `TARGET_SHA`, if one
+       exists (a missing SBOM, or a failed lookup, warns — it never blocks
+       the release);
      - uploads the rendered notes and any SBOM for `publish` to pick up.
    - **`publish`** (write-scoped, only after `verify` succeeds):
-     - re-verifies `main`'s tip has not advanced, and every check for this
-       commit is still complete and green, while `verify` was testing and
-       rendering notes (a second, authoritative recheck of both, right
-       before anything is created — see "Known limitations" below for the
-       small residual window this still leaves);
+     - for a **fresh publish only**, re-verifies `main`'s tip has not
+       advanced while `verify` was testing and rendering notes (a resume
+       skips this — the tagged commit is already immutable, so there is
+       nothing for a live main-tip comparison to protect against); either
+       way, re-verifies (via the same shared script) that every check for
+       `TARGET_SHA` is still complete and green — a second, authoritative
+       recheck right before anything is created (see "Known limitations"
+       below for the small residual window a fresh publish still leaves);
      - creates and pushes an annotated tag `vX.Y.Z` — skipped when resuming
-       a run whose tag already exists at this commit;
+       a run whose tag already exists;
      - creates the GitHub Release using the notes `verify` produced —
-       skipped when resuming a run whose Release already exists at this
-       commit;
+       skipped when resuming a run whose Release already exists;
      - attempts the best-effort SBOM asset attach, whether the Release was
        just created or already existed — a failure here warns and never
        blocks (re-dispatch to retry the attach).
@@ -133,6 +151,12 @@ that separate system.
   now bump to the published tag instead of a vendored source SHA.
 
 ## Known limitations
+
+**This section describes a fresh publish only.** A resume of a tag-only
+interrupted publication evaluates every gate against the tag's own target
+commit, which is already immutable once pushed — there is no live
+`main`-tip comparison to race for a resume, so the window below does not
+apply to it.
 
 **A small, accepted check-then-act window remains before the tag/Release are
 actually created.** `publish`'s recheck of `main`'s tip and of every check

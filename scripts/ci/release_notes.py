@@ -13,38 +13,39 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
 from pathlib import Path
 
-_PROJECT_TABLE_HEADER_PATTERN = re.compile(r"(?m)^\[project\]\s*$")
-_TABLE_HEADER_PATTERN = re.compile(r"(?m)^\[")
-_VERSION_FIELD_PATTERN = re.compile(r'(?m)^version\s*=\s*"([^"]+)"\s*$')
 _HEADING_PATTERN = re.compile(r"(?m)^## \[(?P<version>[^\]]+)\][^\n]*$")
 
 
 def read_declared_version(pyproject_text: str) -> str:
     """Return the `[project]` table's `version` declared in *pyproject_text*.
 
-    Only a `version = "..."` line that appears within the `[project]`
-    table's own body is honored -- the search is bounded to the span between
-    the `[project]` header and the next `[...]` table header (or end of
-    file), so a same-named `version` key under an unrelated table (e.g.
-    `[tool.some_tool]`) declared earlier in the file is never mistaken for
-    the project's real version. Raises ``ValueError`` when there is no
-    `[project]` table, or it has no `version = "..."` line, rather than
+    Parses *pyproject_text* as real TOML (stdlib `tomllib`, available since
+    this repository's CI/workflow toolchain is pinned to Python 3.12) rather
+    than scanning for a `version = "..."` line with a regex. A regex cannot
+    correctly distinguish a `[project]` table header followed by a trailing
+    comment, a single-quoted or comment-suffixed version value, or a
+    multiline string value that happens to contain a line starting with
+    `[`, from a genuine table boundary or version field -- a real parser
+    handles all of those the same way a TOML-consuming tool would. Raises
+    ``ValueError`` when *pyproject_text* is not valid TOML, there is no
+    `[project]` table, or it has no string `version` field, rather than
     guessing a version from a tag, a changelog heading, or any other
     inferred source.
     """
-    header_match = _PROJECT_TABLE_HEADER_PATTERN.search(pyproject_text)
-    if header_match is None:
+    try:
+        document = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"pyproject.toml is not valid TOML: {exc}") from exc
+    project_table = document.get("project")
+    if not isinstance(project_table, dict):
         raise ValueError("pyproject.toml has no [project] table")
-    body_start = header_match.end()
-    next_header_match = _TABLE_HEADER_PATTERN.search(pyproject_text, body_start)
-    body_end = next_header_match.start() if next_header_match else len(pyproject_text)
-    project_body = pyproject_text[body_start:body_end]
-    match = _VERSION_FIELD_PATTERN.search(project_body)
-    if match is None:
+    version = project_table.get("version")
+    if not isinstance(version, str) or not version:
         raise ValueError("pyproject.toml [project] table has no version field")
-    return match.group(1)
+    return version
 
 
 def extract_changelog_section(changelog_text: str, version: str) -> str:
