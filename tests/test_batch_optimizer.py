@@ -75,7 +75,13 @@ TASKS = [{"prompt": "task one"}, {"prompt": "task two"}, {"prompt": "task three"
 def test_batch_route_persists_runs_with_usage() -> None:
     client = _CountingClient()
     orchestrator = _orch(client)
-    records = orchestrator.batch_route([t["prompt"] for t in TASKS])
+    # This regression measures the worker Batch API usage contract only.  The
+    # full CI environment installs fast-mlsirm, whose optional model-judge call
+    # is a separate spend source; allowing it into this fixture would make the
+    # aggregate usage source correctly mixed/unavailable and stop testing the
+    # worker provenance this case is named for.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        records = orchestrator.batch_route([t["prompt"] for t in TASKS])
 
     assert len(records) == 3
     assert client.batch_calls == 1 and client.chat_calls == 0  # one batch, zero serial calls
