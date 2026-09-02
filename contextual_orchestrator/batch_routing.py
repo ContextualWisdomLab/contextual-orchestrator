@@ -876,18 +876,39 @@ class _DaemonWorkerPool:
         not need to, interrupt a worker already inside ``fn(*args)``: that
         worker is a daemon thread and is simply abandoned, not joined, when
         ``wait=False``.
+
+        Admission is closed *first*, atomically, under ``_workers_lock`` --
+        before anything else (draining the queue or queuing stop sentinels)
+        happens. ``submit()`` checks the same flag under the same lock, so
+        the two methods can never interleave: a ``submit()`` that acquires
+        the lock after this closes admission observes the closed pool and
+        raises immediately (see ``submit``'s docstring) instead of racing
+        the cancellation drain below, and a ``submit()`` already holding the
+        lock is guaranteed to finish enqueuing before this method can
+        proceed -- so its item is still present in the queue when the drain
+        below runs and is correctly cancelled. Either way no submission can
+        land *between* the drain and admission closing, which is what let a
+        racing ``submit()`` slip past ``cancel_futures=True`` before this
+        fix (ContextualWisdomLab/contextual-orchestrator#971).
+
+        Idempotent: a repeated call observes ``self._shutdown`` already set
+        and skips re-draining the queue and re-queuing sentinels (both of
+        which are only correct to do once), while still joining the
+        already-captured worker list when ``wait=True``.
         """
-        if cancel_futures:
-            while True:
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    break
         with self._workers_lock:
+            first_shutdown = not self._shutdown
             self._shutdown = True
             workers = list(self._workers)
-        for _ in workers:
-            self._queue.put(None)
+        if first_shutdown:
+            if cancel_futures:
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+            for _ in workers:
+                self._queue.put(None)
         if wait:
             for worker in workers:
                 worker.join()
