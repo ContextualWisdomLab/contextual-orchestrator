@@ -29,7 +29,7 @@ def _append_once(path: str, marker: str, snippet: str) -> None:
 
 
 def materialize_red() -> None:
-    """Add durable executable regressions for three demonstrated review misses."""
+    """Add durable executable regressions for demonstrated external-review misses."""
     _append_once(
         "tests/test_batch_job_registry.py",
         "def test_recovered_provider_embedding_restores_persisted_request_context() -> None:",
@@ -175,6 +175,37 @@ def test_batch_terminal_failure_fails_over_without_restoring_endpoint_health() -
         thread.join(timeout=5)
 ''',
     )
+    _append_once(
+        "tests/test_model_discovery.py",
+        "def test_discovery_default_has_independent_finite_network_deadline() -> None:",
+        r'''
+def test_discovery_default_has_independent_finite_network_deadline() -> None:
+    """Catalog I/O is bounded independently from unbounded model inference."""
+    from contextual_orchestrator import model_discovery
+
+    assert model_discovery.DISCOVERY_TIMEOUT_SECONDS == 15.0
+''',
+    )
+    _append_once(
+        "tests/test_provider_bootstrap.py",
+        "def test_bootstrap_first_pass_preserves_provider_failure_domain_diversity() -> None:",
+        r'''
+def test_bootstrap_first_pass_preserves_provider_failure_domain_diversity() -> None:
+    """Available provider alternatives occupy independent bootstrap failure domains."""
+    cheapest = _model("openai", "OPENAI_API_KEY", "gpt-cheapest", 0.01)
+    same_provider = _model("openai", "OPENAI_API_KEY", "gpt-second", 0.02)
+    independent = _model("openrouter", "OPENROUTER_API_KEY", "qwen-independent", 0.50)
+
+    selected = provider_bootstrap.select_model_group_diverse_models(
+        [same_provider, independent, cheapest], limit=2
+    )
+
+    assert [(item.provider_name, item.model_id) for item in selected] == [
+        ("openai", "gpt-cheapest"),
+        ("openrouter", "qwen-independent"),
+    ]
+''',
+    )
 
 
 def apply_green() -> None:
@@ -253,21 +284,123 @@ def apply_green() -> None:
         "                        orchestrator._record_success(embedding_agent.id)\n"
         "                        break\n",
     )
+    _replace_once(
+        "contextual_orchestrator/model_discovery.py",
+        "DISCOVERY_TIMEOUT_SECONDS: float | None = None\n"
+        "_LOGGER = logging.getLogger(__name__)\n"
+        "# One retry for a provider's primary model-list fetch, reusing the same\n"
+        "# transient-vs-terminal classification completion calls already trust\n"
+        "# (is_transient_error). Discovery has no default wall-clock deadline: a slow\n"
+        "# provider catalog must not be mistaken for an unavailable provider.\n",
+        "DISCOVERY_TIMEOUT_SECONDS: float = 15.0\n"
+        "_LOGGER = logging.getLogger(__name__)\n"
+        "# One retry for a provider's primary model-list fetch, reusing the same\n"
+        "# transient-vs-terminal classification completion calls already trust\n"
+        "# (is_transient_error). Catalog and policy metadata I/O retains its independent\n"
+        "# finite control-plane deadline; this does not impose a model-generation timeout.\n",
+    )
+    _replace_once(
+        "contextual_orchestrator/provider_bootstrap.py",
+        "    \"\"\"Choose a bounded compatible pool with one first-pass endpoint per model group.\"\"\"\n"
+        "    if limit < 1:\n"
+        "        raise ValueError(\"provider bootstrap model limit must be positive\")\n"
+        "    unique: dict[tuple[str, str, str], DiscoveredModel] = {}\n"
+        "    for model in discovered:\n"
+        "        if not is_chat_serving_candidate(model):\n"
+        "            continue\n"
+        "        unique[(model.provider_name, model.credential_name, model.model_id)] = model\n"
+        "    ordered = sorted(unique.values(), key=_known_cost_sort_key)\n"
+        "    selected: list[DiscoveredModel] = []\n"
+        "    seen_model_groups: set[str] = set()\n"
+        "    for model in ordered:\n"
+        "        model_group = model_group_name_for(model)\n"
+        "        if model_group in seen_model_groups:\n"
+        "            continue\n"
+        "        selected.append(model)\n"
+        "        seen_model_groups.add(model_group)\n"
+        "        if len(selected) >= limit:\n"
+        "            return selected\n"
+        "    selected_keys = {\n"
+        "        (item.provider_name, item.credential_name, item.model_id)\n"
+        "        for item in selected\n"
+        "    }\n"
+        "    for model in ordered:\n"
+        "        key = (model.provider_name, model.credential_name, model.model_id)\n"
+        "        if key in selected_keys:\n"
+        "            continue\n"
+        "        selected.append(model)\n"
+        "        if len(selected) >= limit:\n"
+        "            break\n"
+        "    return selected\n",
+        "    \"\"\"Choose a bounded pool diversified by provider and exact model group.\"\"\"\n"
+        "    if limit < 1:\n"
+        "        raise ValueError(\"provider bootstrap model limit must be positive\")\n"
+        "    unique: dict[tuple[str, str, str], DiscoveredModel] = {}\n"
+        "    for model in discovered:\n"
+        "        if not is_chat_serving_candidate(model):\n"
+        "            continue\n"
+        "        unique[(model.provider_name, model.credential_name, model.model_id)] = model\n"
+        "    ordered = sorted(unique.values(), key=_known_cost_sort_key)\n"
+        "    selected: list[DiscoveredModel] = []\n"
+        "    selected_keys: set[tuple[str, str, str]] = set()\n"
+        "    seen_model_groups: set[str] = set()\n"
+        "    seen_providers: set[str] = set()\n"
+        "\n"
+        "    def select(model: DiscoveredModel) -> None:\n"
+        "        key = (model.provider_name, model.credential_name, model.model_id)\n"
+        "        selected.append(model)\n"
+        "        selected_keys.add(key)\n"
+        "        seen_model_groups.add(model_group_name_for(model))\n"
+        "        seen_providers.add(model.provider_name)\n"
+        "\n"
+        "    # First preserve independent provider failure domains while also avoiding\n"
+        "    # duplicate exact-model groups. Cost order decides within each new domain.\n"
+        "    for model in ordered:\n"
+        "        if model.provider_name in seen_providers:\n"
+        "            continue\n"
+        "        if model_group_name_for(model) in seen_model_groups:\n"
+        "            continue\n"
+        "        select(model)\n"
+        "        if len(selected) >= limit:\n"
+        "            return selected\n"
+        "\n"
+        "    # Then maximize exact-model-group diversity across already represented\n"
+        "    # providers before filling any remaining capacity by ordinary cost order.\n"
+        "    for model in ordered:\n"
+        "        key = (model.provider_name, model.credential_name, model.model_id)\n"
+        "        if key in selected_keys or model_group_name_for(model) in seen_model_groups:\n"
+        "            continue\n"
+        "        select(model)\n"
+        "        if len(selected) >= limit:\n"
+        "            return selected\n"
+        "    for model in ordered:\n"
+        "        key = (model.provider_name, model.credential_name, model.model_id)\n"
+        "        if key in selected_keys:\n"
+        "            continue\n"
+        "        select(model)\n"
+        "        if len(selected) >= limit:\n"
+        "            break\n"
+        "    return selected\n",
+    )
 
     baseline = Path("docs/product-technical-gap-baseline.md")
     text = baseline.read_text(encoding="utf-8")
-    marker = "## 2026-09-02 — recovered privacy authority and terminal batch health"
+    marker = "## 2026-09-02 — recovered privacy, discovery, and failure-domain authority"
     if marker not in text:
         text = text.rstrip() + (
             "\n\n" + marker + "\n\n"
             "PR #971 now treats persisted `zdr_only` as execution authority that must be "
             "re-entered at the provider I/O boundary after restart. Durable provider "
             "embedding batches reject mixed privacy identities before any runner call. "
-            "The HTTP batch-embedding failover path also classifies terminal "
+            "The HTTP batch-embedding failover path classifies terminal "
             "`failed`/`cancelled`/`rejected` documents as endpoint failure evidence and "
             "never clears circuit state for them; accepted non-terminal submissions remain "
-            "responsiveness evidence. Executable restart, mixed-policy, terminal-health, "
-            "and endpoint-race provenance regressions are required on the exact head.\n"
+            "responsiveness evidence. Provider catalog/control-plane I/O restores its "
+            "independent 15-second default deadline without imposing a generation timeout, "
+            "and bootstrap selection reserves independent provider failure domains before "
+            "adding same-provider model-group capacity. Executable restart, mixed-policy, "
+            "terminal-health, discovery-deadline, provider-diversity, and endpoint-race "
+            "provenance regressions are required on the exact head.\n"
         )
         baseline.write_text(text, encoding="utf-8")
 
@@ -276,8 +409,9 @@ def apply_green() -> None:
     entry = (
         "- Restore persisted ZDR execution scope after provider-batch restart, reject "
         "mixed privacy identity batches before provider I/O, preserve endpoint-race "
-        "terminal failure provenance, and keep terminal failed embedding batches from "
-        "restoring endpoint health.\n"
+        "terminal failure provenance, prevent terminal failed embedding batches from "
+        "restoring endpoint health, restore the independent provider-discovery network "
+        "deadline, and preserve provider failure-domain diversity during bootstrap.\n"
     )
     if entry not in text:
         if "## [Unreleased]\n" in text:
