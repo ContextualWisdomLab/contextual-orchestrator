@@ -7104,8 +7104,27 @@ def build_server(
                                         single_agent=True,
                                     )
                                 evidence = result.pop("_candidate_routing", None)
-                                if evidence is not None:
-                                    result.setdefault("orchestration", {})["routing"] = evidence
+                                # Only republish gateway-computed evidence,
+                                # and never assume the provider's own
+                                # "orchestration" field (if any) is a
+                                # mapping -- both are untrusted provider
+                                # response content (#983 Devin findings:
+                                # "Provider fields forge routing evidence"
+                                # and "Provider metadata crashes tool
+                                # responses"). Without an active candidate
+                                # control, proxy_completion() never sets
+                                # `_candidate_routing` itself, so observing
+                                # one here can only mean it arrived
+                                # already-present on the provider's raw
+                                # response body.
+                                if evidence is not None and orchestrator._has_active_candidate_controls(
+                                    request_routing
+                                ):
+                                    orchestration = result.get("orchestration")
+                                    if not isinstance(orchestration, dict):
+                                        orchestration = {}
+                                        result["orchestration"] = orchestration
+                                    orchestration["routing"] = evidence
                                 return result
 
                             proxied = self._run(proxy_tool_request)

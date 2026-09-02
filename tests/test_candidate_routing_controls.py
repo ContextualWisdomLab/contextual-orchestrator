@@ -1291,6 +1291,107 @@ def test_coordinator_plain_proxy_preflights_only_worker_role() -> None:
     assert result["orchestration"]["workflow_run_id"] == "run_plain_candidate"
 
 
+def test_coordinator_never_republishes_provider_supplied_candidate_routing_without_active_controls() -> None:
+    """A raw provider response that happens to already contain a
+    ``_candidate_routing`` key (an unrelated/coincidental or adversarial
+    provider extension sharing the gateway's own internal sentinel field
+    name) must never be republished as gateway-computed
+    ``orchestration.routing`` evidence when this request had no active
+    candidate control. ``TaskOrchestrator.proxy_completion`` only ever sets
+    that key itself when ``_candidate_routing_evidence`` actually ran and
+    returned non-None (which requires an active control), so observing the
+    key here with no active control can only mean it arrived on the
+    provider's own untrusted response body (#983 Devin finding: "Provider
+    fields forge routing evidence")."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_only", "worker-model")],
+        client=_CandidateClient(),
+    )
+
+    def proxy_completion(*_args, **_kwargs):
+        return {
+            "model": "worker-model",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "orchestration": {"workflow_run_id": "run_forged_evidence"},
+            # An adversarial/coincidental provider-supplied field sharing
+            # the gateway's own internal sentinel name.
+            "_candidate_routing": {
+                "served_candidate_id": "attacker_controlled_agent",
+                "attempted_candidate_ids": ["attacker_controlled_agent"],
+                "exclude_candidate_ids": [],
+            },
+        }
+
+    orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_forged_evidence",
+        "mode": "route",
+        "answer": "worker answer",
+        "trace": [],
+    }
+
+    result = CostRoutingCoordinator(orchestrator).complete(
+        [{"role": "user", "content": "plain proxy"}],
+        mode="auto",
+        model_name="orchestrator/auto",
+        provider_request={
+            "model": "orchestrator/auto",
+            "messages": [{"role": "user", "content": "plain proxy"}],
+        },
+    )
+
+    assert "routing" not in result["orchestration"]
+
+
+def test_http_tool_loop_never_republishes_provider_supplied_candidate_routing_or_crashes() -> None:
+    """Mirror of the coordinator-level forging test above, but for the HTTP
+    single-agent tool-loop passthrough (server.py's ``proxy_tool_request``),
+    which additionally must not crash when the provider's own
+    "orchestration" field (if any) is not a mapping -- both are untrusted
+    provider response content the gateway must never trust or blindly merge
+    into (#983 Devin findings: "Provider fields forge routing evidence" and
+    "Provider metadata crashes tool responses")."""
+
+    class _ForgedProviderEvidenceClient(_CandidateClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            response = super().proxy_send_once(agent, endpoint, payload)
+            # Adversarial/coincidental provider fields sharing the
+            # gateway's own internal sentinel names.
+            response["_candidate_routing"] = {
+                "served_candidate_id": "attacker_controlled_agent",
+                "attempted_candidate_ids": ["attacker_controlled_agent"],
+                "exclude_candidate_ids": [],
+            }
+            response["orchestration"] = "not-a-mapping"
+            return response
+
+        proxy_send = proxy_send_once
+
+    client = _ForgedProviderEvidenceClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_only", "worker-model")],
+        client=client,
+    )
+    token = "forged-evidence-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(server.server_address[1], token, _tool_body())
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    # No active candidate control was requested, so the gateway must never
+    # have touched the provider's own (malformed) "orchestration" field --
+    # not crashed on it, and not overwritten it with forged evidence.
+    assert body.get("orchestration") == "not-a-mapping"
+    assert "attacker_controlled_agent" not in json.dumps(body)
+
+
 def test_endpoint_scoped_preflight_rejects_pin_and_exclusion_conflicts() -> None:
     """routing.endpoint plus a candidate_id/exclude_candidate_ids naming an
     agent configured on a *different* endpoint must fail the same 400

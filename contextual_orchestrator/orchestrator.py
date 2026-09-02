@@ -4139,6 +4139,46 @@ class TaskOrchestrator:
             attempted.append(agent_id)
 
     @staticmethod
+    def _has_active_candidate_controls(routing: Any) -> bool:
+        """Return whether a raw routing mapping requests an active candidate control.
+
+        Uses key *presence* for ``candidate_id`` (so an explicitly malformed
+        ``candidate_id: None`` is not indistinguishable from an absent key)
+        and *presence plus non-empty* for ``exclude_candidate_ids`` (an
+        explicit empty list/tuple is the one genuine no-op; any other
+        present value -- including a malformed non-list/tuple -- counts as
+        active so a caller earlier in the same request, still validating,
+        does not silently drop it). This mirrors
+        ``candidate_routing_policy``'s own no-op condition and the
+        equivalent check in ``CostRoutingCoordinator.complete`` (#983
+        CodeRabbit finding: direct Python API callers can lose or bypass
+        routing validation) -- a malformed shape only ever reaches a caller
+        of *this* method after ``candidate_routing_policy`` has already
+        validated it without raising, so the "malformed still counts"
+        branch is unreachable there in practice, but sharing one predicate
+        keeps every caller's notion of "active" identical by construction
+        instead of by convention.
+
+        This is the single source of truth every caller must use to decide,
+        from a request's raw routing mapping alone and without opening a
+        ``candidate_routing_policy`` scope, whether gateway-computed
+        candidate routing evidence may legitimately be present on this
+        response. A caller must never trust a ``_candidate_routing`` or
+        ``orchestration`` field that arrived already present on a raw
+        provider response when this predicate is ``False`` -- the gateway
+        only ever populates those fields itself when it is ``True`` (#983
+        Devin finding: "Provider fields forge routing evidence").
+        """
+        if not isinstance(routing, Mapping):
+            return False
+        if "candidate_id" in routing:
+            return True
+        if "exclude_candidate_ids" not in routing:
+            return False
+        excluded = routing.get("exclude_candidate_ids")
+        return not (isinstance(excluded, (list, tuple)) and not excluded)
+
+    @staticmethod
     def _candidate_routing_evidence(result: Mapping[str, Any]) -> dict[str, Any] | None:
         pinned = _REQUEST_CANDIDATE_ID.get()
         excluded = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())

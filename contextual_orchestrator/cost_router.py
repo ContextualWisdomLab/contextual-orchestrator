@@ -572,24 +572,22 @@ class CostRoutingCoordinator:
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
         routing_controls = hints if isinstance(hints, dict) else {}
-        # Detect an active candidate control by key *presence*, not
-        # truthiness: an explicitly malformed value (candidate_id=None,
-        # exclude_candidate_ids=None or a non-list/tuple) must still force
-        # the sync path below so TaskOrchestrator.candidate_routing_policy's
-        # real validation gets a chance to reject it, rather than silently
-        # falling through the batch branch's early return and dropping the
+        # TaskOrchestrator._has_active_candidate_controls is the single
+        # source of truth: it detects an active control by key *presence*,
+        # not truthiness, so an explicitly malformed value (candidate_id=
+        # None, exclude_candidate_ids=None or a non-list/tuple) still
+        # forces the sync path below, giving candidate_routing_policy's
+        # real validation a chance to reject it instead of silently falling
+        # through the batch branch's early return and dropping the
         # malformed control entirely. An explicit empty exclude_candidate_ids
-        # list/tuple is the one genuine no-op -- it is not a request for any
-        # candidate behavior -- so it alone stays excluded from this check
-        # (#983 Devin/CodeRabbit finding: direct Python API callers can lose
-        # or bypass routing validation).
-        excluded_control = routing_controls.get("exclude_candidate_ids")
-        excluded_is_explicit_empty = (
-            isinstance(excluded_control, (list, tuple)) and not excluded_control
-        )
-        has_candidate_controls = "candidate_id" in routing_controls or (
-            "exclude_candidate_ids" in routing_controls
-            and not excluded_is_explicit_empty
+        # list/tuple is the one genuine no-op (#983 Devin/CodeRabbit
+        # finding: direct Python API callers can lose or bypass routing
+        # validation). The same predicate also gates whether this method's
+        # own provider-response evidence handling below may trust a
+        # `_candidate_routing` field (#983 Devin finding: "Provider fields
+        # forge routing evidence").
+        has_candidate_controls = self.orchestrator._has_active_candidate_controls(
+            routing_controls
         )
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         try:
@@ -666,7 +664,15 @@ class CostRoutingCoordinator:
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
             routing_evidence = provider_response.pop("_candidate_routing", None)
-            if routing_evidence is not None:
+            # Only republish gateway-computed evidence: the raw provider
+            # response is untrusted (#983 Devin finding: "Provider fields
+            # forge routing evidence"). Without an active candidate control
+            # on this request, proxy_completion() never sets
+            # `_candidate_routing` itself, so a `_candidate_routing` field
+            # observed here with no active control can only have arrived
+            # already-present on the provider's own response body -- never
+            # trust it as gateway evidence in that case.
+            if has_candidate_controls and routing_evidence is not None:
                 lineage["routing"] = routing_evidence
             race_records = list(race_context["records"])
             records = list(race_records)
