@@ -7343,7 +7343,15 @@ def build_server(
                         last_embedding_error = RuntimeError(
                             f"embedding member ended with {document.get('status', 'unknown')}"
                         )
-                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        # Route a non-completed/embedding-less sync result through the
+                        # same failure recorder as a raised exception (above): a bare
+                        # ``observe_failure`` skips the circuit breaker and the
+                        # ``embedding_endpoint_failed`` analytics event, so a member
+                        # that keeps returning an incomplete document would never be
+                        # quarantined.
+                        orchestrator._record_embedding_failure(
+                            embedding_agent, "/v1/embeddings", last_embedding_error
+                        )
                         document = None
                     if document is None:
                         raise RequestError(
