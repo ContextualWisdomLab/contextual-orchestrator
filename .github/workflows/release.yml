@@ -1,0 +1,128 @@
+name: Release
+
+# Publishes a canonical, immutable GitHub Release so downstream consumers can
+# pin a versioned tag instead of vendoring this repository's source SHA (see
+# docs/planning/adrs/0127-canonical-immutable-release.md). This is a
+# deliberate, maintainer-dispatched action only -- it never runs on push,
+# schedule, or as a side effect of merging to main. It never re-implements
+# GitHub branch-protection governance: it verifies the released commit really
+# is protected main's current, untampered tip, then re-runs this repository's
+# own primary regression gate fresh before cutting anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, matching pyproject.toml exactly (e.g. 0.2.0, no leading v)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish canonical immutable release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify this commit is protected main's current, untampered tip
+        run: |
+          set -euo pipefail
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Dispatched commit ${GITHUB_SHA} is not protected main's current tip (${remote_head}); a merge landed after this run started. Re-dispatch against the fresh tip." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      - name: Verify the requested version matches pyproject.toml
+        run: |
+          set -euo pipefail
+          declared="$(python -c 'import re,sys; text=open("pyproject.toml", encoding="utf-8").read(); m=re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"\s*$", text); sys.exit(1) if not m else print(m.group(1))')"
+          if [ "${declared}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::pyproject.toml declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
+            exit 1
+          fi
+
+      - name: Verify tag v${{ inputs.version }} does not already exist
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag v${RELEASE_VERSION} already exists locally; a release is never re-published or moved onto a new commit." >&2
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag v${RELEASE_VERSION} already exists on origin; a release is never re-published or moved onto a new commit." >&2
+            exit 1
+          fi
+
+      - name: Run the full required test suite fresh on this exact commit
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+
+      - name: Render release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python -m scripts.ci.release_notes \
+            --pyproject pyproject.toml \
+            --changelog CHANGELOG.md \
+            --version "${RELEASE_VERSION}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --commit-sha "${GITHUB_SHA}" \
+            --output release-notes.md
+
+      - name: Create the annotated release tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
+          git push origin "refs/tags/v${RELEASE_VERSION}"
+
+      - name: Fetch the CycloneDX SBOM for this commit, best-effort
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${GITHUB_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "${run_id}" ]; then
+            gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download || echo "::warning::Security workflow run ${run_id} has no cyclonedx-sbom artifact; publishing without it."
+          else
+            echo "::warning::No successful Security workflow run found for commit ${GITHUB_SHA}; publishing without an SBOM asset."
+          fi
+
+      - name: Publish the GitHub Release
+        run: |
+          set -euo pipefail
+          assets=()
+          if [ -f "sbom-download/cyclonedx-sbom.json" ]; then
+            assets+=("sbom-download/cyclonedx-sbom.json")
+          fi
+          gh release create "v${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "v${RELEASE_VERSION}" \
+            --notes-file release-notes.md \
+            "${assets[@]}"
