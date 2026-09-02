@@ -165,46 +165,70 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
 
 
 def test_model_group_mutations_refresh_audit_events() -> None:
-    """Saving or deleting a model group must refresh the shared Audit tab.
-
-    Regression test: `recent_audit_events` is only exposed on `/admin/state`
-    (there is no scoped audit-events endpoint), but `refreshModelGroups()`
-    only re-fetches `/api/v1/model_groups`. Before this fix, a save/delete
-    left the Audit tab showing stale data (or "no audit events") until a
-    full page reload. The fix adds a lightweight `refreshAuditEvents()`
-    helper — re-fetches `/admin/state` and applies only the audit slice —
-    rather than reusing the heavier `load()` (which also re-triggers
-    `simulate()` and every readiness/commercial endpoint), and wires it into
-    both the save and delete handlers.
-    """
+    """Model-group mutations refresh the shared Audit view."""
     assert "async function refreshAuditEvents()" in ADMIN_HTML
+    assert "async function refreshModelGroupViews()" in ADMIN_HTML
     assert 'state.recent_audit_events = payload.recent_audit_events || [];' in ADMIN_HTML
     assert "renderAudit();" in ADMIN_HTML
+    assert 'apiFetch("/admin/state")' in ADMIN_HTML
+    assert "await refreshModelGroupViews();" in ADMIN_HTML
+    assert "async function deleteModelGroup(groupName)" in ADMIN_HTML
+    assert "audit_refresh_warning" in ADMIN_TRANSLATIONS["en"]
+    assert "model_groups_refresh_warning" in ADMIN_TRANSLATIONS["ko"]
 
-    # refreshAuditEvents must not silently duplicate the heavier full-state
-    # reload path (simulate() + every readiness/commercial endpoint) — it is
-    # a scoped re-fetch of /admin/state only.
-    refresh_audit_fn = ADMIN_HTML.split("async function refreshAuditEvents()", 1)[1].split(
-        "\n    }", 1
-    )[0]
-    assert 'apiFetch("/admin/state")' in refresh_audit_fn
-    assert "simulate()" not in refresh_audit_fn
-    assert "refreshReadiness()" not in refresh_audit_fn
+    def source_between(start_marker: str, end_marker: str) -> str:
+        start_index = ADMIN_HTML.index(start_marker)
+        end_index = ADMIN_HTML.index(end_marker, start_index)
+        return ADMIN_HTML[start_index:end_index].strip()
 
-    # saveModelGroup: success path refreshes both the group list and audit
-    # events, and marks the feedback text as a success state.
-    save_fn = ADMIN_HTML.split("async function saveModelGroup(event)", 1)[1].split(
-        "\n    }", 1
-    )[0]
-    assert "await refreshModelGroups();" in save_fn
-    assert "await refreshAuditEvents();" in save_fn
-    assert 'els.modelGroupFeedback.style.color = "var(--green)";' in save_fn
-
-    # Delete handler: the .then chain refreshes groups then audit events,
-    # and both the success and error branches set a distinct feedback color.
-    assert "return refreshModelGroups().then(refreshAuditEvents);" in ADMIN_HTML
-    assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--red)";') == 2
-    assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--green)";') == 2
+    node_script = "\n".join(
+        [
+            'import assert from "node:assert/strict";',
+            f"const refreshModelGroups = eval({json.dumps(source_between('async function refreshModelGroups()', '    function showModelGroupRefreshWarning'))});",
+            f"const refreshAuditEvents = eval({json.dumps(source_between('async function refreshAuditEvents()', '    async function refreshModelGroupViews'))});",
+            f"const refreshModelGroupViews = eval({json.dumps(source_between('async function refreshModelGroupViews()', '    async function saveModelGroup'))});",
+            f"const saveModelGroup = eval({json.dumps(source_between('async function saveModelGroup(event)', '    async function deleteModelGroup'))});",
+            f"const deleteModelGroup = eval({json.dumps(source_between('async function deleteModelGroup(groupName)', '    els.modelGroups.addEventListener'))});",
+            "let queuedResponses = [];",
+            "const calls = [];",
+            "const renderEvents = [];",
+            'const state = {modelGroups: [], agents: [], recent_audit_events: []};',
+            'const els = {modelGroupName: {value: "release-group"}, modelGroupMembers: {selectedOptions: [{value: "agent-one"}]}, modelGroupFeedback: {textContent: "", style: {}}};',
+            'const messages = {group_saved: "Group saved.", group_deleted: "Group deleted.", audit_refresh_warning: "Audit refresh warning.", model_groups_refresh_warning: "Groups refresh warning."};',
+            "function t(key) { return messages[key] || key; }",
+            "function renderModelGroups() { renderEvents.push(\"groups\"); }",
+            "function renderAudit() { renderEvents.push(\"audit\"); }",
+            "function makeResponse(ok, status, payload, rejectJson = false) { return {ok, status, async json() { if (rejectJson) throw new Error(\"malformed response\"); return payload; }}; }",
+            "function setScenario(...responses) { queuedResponses = responses.slice(); calls.length = 0; renderEvents.length = 0; els.modelGroupFeedback.textContent = \"\"; els.modelGroupFeedback.style = {}; }",
+            "globalThis.fetch = async function(url, options = {}) { calls.push({url, method: options.method || \"GET\"}); const next = queuedResponses.shift(); assert.ok(next, \"handler requested an unexpected response\"); if (next instanceof Error) throw next; return next; };",
+            "globalThis.apiFetch = async function(url, options) { return globalThis.fetch(url, options); };",
+            "setScenario(makeResponse(true, 201, {group_name: \"release_group\"}), makeResponse(true, 200, {items: []}), makeResponse(false, 503, {error: {message: \"temporarily unavailable\"}}));",
+            "await saveModelGroup({preventDefault() {}});",
+            "assert.match(els.modelGroupFeedback.textContent, /Group saved\\./);",
+            "assert.match(els.modelGroupFeedback.textContent, /Audit refresh warning\\./);",
+            "assert.equal(els.modelGroupFeedback.style.color, \"var(--amber)\");",
+            "assert.deepEqual(calls.map(({url, method}) => [url, method]), [[\"/api/v1/model_groups\", \"POST\"], [\"/api/v1/model_groups\", \"GET\"], [\"/admin/state\", \"GET\"]]);",
+            "setScenario(makeResponse(true, 201, {group_name: \"release_group\"}), makeResponse(true, 200, {items: []}), new Error(\"connection reset\"));",
+            "await saveModelGroup({preventDefault() {}});",
+            "assert.match(els.modelGroupFeedback.textContent, /Group saved\\./);",
+            "assert.match(els.modelGroupFeedback.textContent, /Audit refresh warning\\./);",
+            "assert.equal(els.modelGroupFeedback.style.color, \"var(--amber)\");",
+            "setScenario(makeResponse(true, 200, {deleted: true}), makeResponse(true, 200, {items: []}), makeResponse(true, 200, null, true));",
+            "await deleteModelGroup(\"release-group\");",
+            "assert.match(els.modelGroupFeedback.textContent, /Group deleted\\./);",
+            "assert.match(els.modelGroupFeedback.textContent, /Audit refresh warning\\./);",
+            "assert.equal(els.modelGroupFeedback.style.color, \"var(--amber)\");",
+            "assert.deepEqual(calls.map(({url, method}) => [url, method]), [[\"/api/v1/model_groups/release-group\", \"DELETE\"], [\"/api/v1/model_groups\", \"GET\"], [\"/admin/state\", \"GET\"]]);",
+        ]
+    )
+    completed = subprocess.run(
+        [shutil.which("node") or "node", "--input-type=module"],
+        input=node_script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
