@@ -51,7 +51,6 @@ jobs:
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
-    timeout-minutes: 55
     permissions:
       contents: write # required for reviewed branch fixes; scoped to this job
       pull-requests: write
@@ -68,29 +67,35 @@ jobs:
       NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
     steps:
       - name: Checkout repository
+        timeout-minutes: 5
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           persist-credentials: true # the agent needs to push fixes/branches
 
       - name: Set up Python
+        timeout-minutes: 5
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Set up Node for the OpenCode CLI
+        timeout-minutes: 5
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Install pinned runtime dependencies
+        timeout-minutes: 10
         run: python -m pip install --require-hashes -r requirements.lock
 
       - name: Install OpenCode CLI
+        timeout-minutes: 10
         run: |
           npm ci --ignore-scripts
           node scripts/ci/install_locked_opencode.mjs
 
       - name: Generate ephemeral loopback gateway token
+        timeout-minutes: 1
         run: |
           gateway_token=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
           echo "::add-mask::$gateway_token"
@@ -106,17 +111,24 @@ jobs:
             --auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN \
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
-          for _attempt in $(seq 1 30); do
+          gateway_pid=$!
+          while :; do
             if curl -fsS -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
               http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "gateway ready"
               exit 0
             fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              wait "$gateway_pid" || true
+              echo "::error::gateway exited before becoming healthy"
+              tail -50 /tmp/gateway.log
+              exit 1
+            fi
             sleep 2
           done
-          echo "::error::gateway did not become healthy"; tail -50 /tmp/gateway.log; exit 1
 
       - name: Point OpenCode at the local gateway
+        timeout-minutes: 1
         run: |
           set -euo pipefail
           umask 077
@@ -142,6 +154,7 @@ jobs:
           JSON
 
       - name: Build trusted same-repository PR allowlist
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -157,5 +170,6 @@ jobs:
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
+        timeout-minutes: 5
         if: failure()
         run: tail -100 /tmp/gateway.log

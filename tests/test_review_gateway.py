@@ -108,7 +108,7 @@ def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch
     """Evidence-only catalog rows are never review upstreams."""
     discovered = [
         _discovered(
-            "openrouter",
+            "bytez",
             "router-review",
             "OPENROUTER_API_KEY",
             evidence_only=True,

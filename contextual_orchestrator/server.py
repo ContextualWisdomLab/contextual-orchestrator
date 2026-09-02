@@ -2330,6 +2330,8 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
+    if "provider" in body and not isinstance(body["provider"], dict):
+        raise RequestError(400, "invalid_provider", "provider must be an object")
     if "model" in body:
         model = body["model"]
         if not isinstance(model, str):
@@ -4973,6 +4975,28 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     return model
 
 
+# Terminal-failure batch document statuses that must never be treated as a
+# healthy completion for endpoint-health purposes. Mirrors the vocabulary
+# ``CostRoutingCoordinator.embeddings_batch_document`` (cost_router.py) uses
+# to stop polling a batch job: "failed"/"cancelled"/"rejected" are terminal
+# outcomes with no embeddings and no further transitions, distinct from
+# "completed" (success) and from in-flight statuses such as "queued",
+# "validating", or "running" (still eligible to become "completed" later).
+_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES = frozenset({"failed", "cancelled", "rejected"})
+
+
+def _available_embedding_agents(orchestrator: Any, model_name: str) -> list[Any]:
+    """Map temporary embedding quarantine to the public availability contract."""
+    try:
+        return orchestrator._capability_agents("embedding", model_name)
+    except RuntimeError as exc:
+        raise RequestError(
+            503,
+            "embeddings_unavailable",
+            "all enabled embedding-capable model group members are temporarily unavailable",
+        ) from exc
+
+
 def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
     """OpenAI ``encoding_format`` — omit/null/empty, ``float``, or ``base64``.
 
@@ -7229,8 +7253,8 @@ def build_server(
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
+                    embedding_agents = _available_embedding_agents(
+                        orchestrator,
                         TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
                     )
                     embedding_agents = coordinator._cost_ordered_capability_candidates(
@@ -7286,8 +7310,14 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    embedding_deadline = time.monotonic() + float(
-                        orchestrator.client.timeout
+                    # A ``None`` client timeout (the default since #971's
+                    # removal of fixed inference deadlines) means "no
+                    # wall-clock deadline" rather than "zero" -- keep the
+                    # failover loop below waiting on every candidate instead
+                    # of raising out of float(None) or exiting immediately.
+                    client_timeout = orchestrator.client.timeout
+                    embedding_deadline = time.monotonic() + (
+                        float(client_timeout) if client_timeout else float("inf")
                     )
                     document = None
                     last_embedding_error: Exception | None = None
@@ -7309,18 +7339,29 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/embeddings", exc
+                            )
                             continue
-                        if document.get("status") == "completed":
+                        if document.get("status") == "completed" and document.get("embeddings") is not None:
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                            orchestrator._record_success(embedding_agent.id)
                             break
                         last_embedding_error = RuntimeError(
                             f"embedding member ended with {document.get('status', 'unknown')}"
                         )
-                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        # Route a non-completed/embedding-less sync result through the
+                        # same failure recorder as a raised exception (above): a bare
+                        # ``observe_failure`` skips the circuit breaker and the
+                        # ``embedding_endpoint_failed`` analytics event, so a member
+                        # that keeps returning an incomplete document would never be
+                        # quarantined.
+                        orchestrator._record_embedding_failure(
+                            embedding_agent, "/v1/embeddings", last_embedding_error
+                        )
                         document = None
                     if document is None:
                         raise RequestError(
@@ -7371,8 +7412,8 @@ def build_server(
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
+                    embedding_agents = _available_embedding_agents(
+                        orchestrator,
                         TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
                     )
                     embedding_agents = coordinator._cost_ordered_capability_candidates(
@@ -7412,13 +7453,32 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
-                            continue
-                        if document.get("status") == "completed":
-                            orchestrator._group_router.observe_success(
-                                embedding_agent.id,
-                                time.perf_counter() - attempt_started_at,
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", exc
                             )
+                            continue
+                        if document.get("status") in _TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES:
+                            # complete_embeddings_batch returned normally, but the
+                            # document itself is a terminal failure (no exception
+                            # was raised). Treat it exactly like a raised exception
+                            # for failover purposes: route it through the same
+                            # shared failure recorder used above so the endpoint's
+                            # circuit is not falsely cleared by observe_success
+                            # below, then try the next candidate instead of
+                            # breaking out with a failed document.
+                            last_embedding_error = RuntimeError(
+                                f"embedding batch member ended with {document.get('status')}"
+                            )
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", last_embedding_error
+                            )
+                            document = None
+                            continue
+                        orchestrator._group_router.observe_success(
+                            embedding_agent.id,
+                            time.perf_counter() - attempt_started_at,
+                        )
+                        orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(

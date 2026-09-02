@@ -177,6 +177,29 @@ nothing about the retry can turn a paid model free. Motivated by the
 `orchestrator/free` review-sidecar reliability gap in
 `ContextualWisdomLab/.github` PR #1433.
 
+## Amendment (2026-08-31): OpenRouter is no longer `evidence_only`
+
+This ADR's Context section characterized OpenRouter's `evidence_only=True`
+(commit `952996ec`) as settled, deliberate ZDR-privacy hardening "that stays
+untouched." That characterization was false; it was reversed on direct
+review this pass: ZDR eligibility is a route/model-level property
+(`is_zdr_model`, exact feed matching), never grounds to block an entire
+provider account from serving. OpenRouter's `ProviderModelSource` entry no
+longer sets `evidence_only=True`.
+
+This directly closes the gap this ADR's Context section itself identified
+("only OpenRouter's own API ever reports real pricing... and OpenRouter...
+never serves inference... `orchestrator/free` was therefore structurally
+empty in practice"): OpenRouter can now serve like every other discovered
+provider, independent of and in addition to this ADR's Models.dev join for
+the other five sources. The provider-neutral ZDR-evidence-application
+contract (OpenRouter's feed also crediting matching rows from *other*
+providers, insisted on during PR #901's review) is unchanged; what changed
+is that OpenRouter's own rows are no longer the one arbitrary exception to
+it. See `docs/product-technical-gap-baseline.md`'s 2026-08-31 entry for the
+full mechanism, the request-time ZDR-pinning enforcement this required, and
+its stated scope limits.
+
 ## References
 
 Models.dev. (2026). *Models.dev API*. https://models.dev/api.json

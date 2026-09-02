@@ -22,6 +22,20 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "node scripts/ci/install_locked_opencode.mjs" in workflow
     assert "python -m pip install --require-hashes -r requirements.lock" in workflow
+    assert "while :; do" in workflow
+    assert "gateway_pid=$!" in workflow
+    assert 'kill -0 "$gateway_pid"' in workflow
+    assert "gateway exited before becoming healthy" in workflow
+    loop_header = workflow.split("  loop:\n", 1)[1].split("    steps:\n", 1)[0]
+    gateway_step = workflow.split(
+        "      - name: Start the contextual-orchestrator gateway with auto-discovery\n", 1
+    )[1].split("      - name:", 1)[0]
+    maintenance_step = workflow.split(
+        "      - name: Run the hourly loop agent\n", 1
+    )[1].split("      - name:", 1)[0]
+    assert "timeout-minutes" not in loop_header
+    assert "timeout-minutes" not in gateway_step
+    assert "timeout-minutes" not in maintenance_step
     assert "--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow
     assert "--auth-token=" not in workflow
     assert "--auth-token " not in workflow

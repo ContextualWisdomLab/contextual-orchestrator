@@ -290,8 +290,9 @@ is read from a **KV config store**, never `os.getenv`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe that returns
   only service identity and process status; it never discloses worker topology,
   backend names, usage volume, or upstream readiness. Admins can use
-  `GET /api/v1/provider_readiness/latest?refresh=true` for one bounded,
-  non-retrying chat probe per enabled worker.
+  `GET /api/v1/provider_readiness/latest?refresh=true` for one explicitly
+  cancellable, non-retrying chat probe per enabled worker. Concurrent refreshes
+  return `refresh_in_progress` instead of blocking behind a slow provider.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,

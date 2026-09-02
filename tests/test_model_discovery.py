@@ -5,7 +5,11 @@ from __future__ import annotations
 import io
 import json
 import logging
+import subprocess
 import sys
+import textwrap
+import threading
+import time
 import urllib.error
 import urllib.parse
 from contextlib import contextmanager
@@ -28,6 +32,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
+    PROVIDER_DISCOVERY_DEADLINE_SECONDS,
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ModelUnitPrice,
@@ -41,6 +46,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
+    _openrouter_free_model_endpoints,
     _price_per_1k,
     _parse_openai_compatible,
     _positive_int_metadata,
@@ -52,6 +58,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     free_discovered_models,
     general_free_serving_candidates,
     is_routable_discovered_model,
+    model_group_name_for,
     openrouter_paid_inference_available,
     refresh_price_book,
     _response_contains_parallel_probe_tool_calls,
@@ -827,7 +834,7 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
     assert {"input:text", "output:embeddings"} <= set(
-        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+        agent_from_discovered(embedding).tags
     )
 
 
@@ -865,6 +872,161 @@ def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -
 
     assert [model.model_id for model in discovered] == ["free/model"]
     endpoint_fetch.assert_not_called()
+
+
+def test_openrouter_free_model_endpoints_hang_does_not_block_process_exit() -> None:
+    """A hung per-model endpoint fetch must not prevent interpreter shutdown.
+
+    Regression for a CodeRabbit finding (re-confirming the #971 "shared
+    metadata fetches bypass discovery deadline" class of bug from a
+    different angle, verified with a local repro before this fix landed):
+    ``_openrouter_free_model_endpoints`` used to fan its per-model fetch out
+    across a ``concurrent.futures.ThreadPoolExecutor``. That executor's
+    worker threads register with an interpreter-exit hook
+    (``concurrent.futures.thread``'s own ``atexit`` handler) that
+    unconditionally joins every still-running worker at shutdown --
+    regardless of whether the thread that *created* the executor is itself
+    ``daemon=True``. A single hung fetch therefore blocked process shutdown
+    even from inside this module's already-daemonized, already-bounded
+    per-provider discovery thread. The fetch fan-out now uses plain
+    ``threading.Thread(daemon=True)`` workers, which carry no such
+    registration, so a hung fetch is abandoned like every other stalled
+    discovery-time network call in this module and the process can still
+    exit.
+
+    Verified end-to-end in a real, separate interpreter (an in-process
+    thread-introspection assertion cannot distinguish "still hanging in the
+    background" from "would actually block this process's shutdown" --
+    the whole point of the finding): a helper script imports the real
+    function, patches ``_fetch_json`` to hang forever, runs the function on
+    its own daemon thread exactly as ``_discover_provider_models_bounded``
+    does, then lets the script's ``__main__`` fall through to a normal,
+    unforced exit. RED-before/GREEN-after against the pre-fix
+    ``ThreadPoolExecutor`` version: the same script hung for the full
+    outer-`timeout`-command bound and was killed (exit 124); it exits
+    cleanly, well under that bound, with this fix.
+    """
+    script = textwrap.dedent(
+        """
+        import sys
+        import threading
+        from unittest.mock import patch
+
+        sys.path.insert(0, %(repo_root)r)
+        from contextual_orchestrator.model_discovery import _openrouter_free_model_endpoints
+
+        never_set = threading.Event()
+
+        def hung_fetch_json(url, *, api_key="", auth_scheme="Bearer", timeout=None):
+            never_set.wait()  # Hangs forever -- nothing ever sets this event.
+            raise AssertionError("unreachable: the stalled fetch must never return")
+
+        payload = {
+            "data": [
+                {"id": "free/model-a", "pricing": {"prompt": "0", "completion": "0"}},
+                {"id": "free/model-b", "pricing": {"prompt": "0", "completion": "0"}},
+            ]
+        }
+
+        def outer_daemon_work():
+            with patch(
+                "contextual_orchestrator.model_discovery._fetch_json",
+                side_effect=hung_fetch_json,
+            ):
+                _openrouter_free_model_endpoints(payload, api_key="k", timeout=None)
+
+        worker = threading.Thread(target=outer_daemon_work, daemon=True)
+        worker.start()
+        worker.join(timeout=0.5)
+        assert worker.is_alive()
+        # No explicit sys.exit()/os._exit(): a genuinely non-blocking fix
+        # must let normal interpreter shutdown proceed on its own.
+        """
+    ) % {"repo_root": str(Path(__file__).resolve().parents[1])}
+
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 0, result.stderr
+    assert elapsed < 5.0, f"process took {elapsed:.1f}s to exit with a hung endpoint fetch outstanding"
+
+
+def test_openrouter_free_model_endpoints_caps_concurrent_thread_creation() -> None:
+    """A large free-model catalog must not allocate one OS thread per model.
+
+    Regression for a Devin Review finding: the per-model endpoint fetch fan-out
+    used to build one ``threading.Thread`` object per free model and start all
+    of them immediately, gating only *work* (not thread creation itself) behind
+    an 8-slot semaphore. A catalog of hundreds or thousands of free models would
+    therefore still allocate and start that many native OS threads at once --
+    each with real kernel/stack overhead -- before any semaphore-bounded
+    concurrency limit ever applied, risking memory exhaustion or stalling
+    discovery before a single fetch could even begin. The fan-out now uses a
+    fixed pool of at most 8 daemon worker threads pulling model IDs from a
+    queue, so the live thread count stays bounded regardless of catalog size.
+    """
+    model_count = 40
+    payload = {
+        "data": [
+            {"id": f"free/model-{i}", "pricing": {"prompt": "0", "completion": "0"}}
+            for i in range(model_count)
+        ]
+    }
+    release = threading.Event()
+    entered = threading.Event()
+    concurrent_entries = 0
+    max_concurrent_entries = 0
+    entries_lock = threading.Lock()
+
+    def blocking_fetch_json(url, *, api_key="", auth_scheme="Bearer", timeout=None):
+        nonlocal concurrent_entries, max_concurrent_entries
+        with entries_lock:
+            concurrent_entries += 1
+            max_concurrent_entries = max(max_concurrent_entries, concurrent_entries)
+        entered.set()
+        release.wait(timeout=5)
+        with entries_lock:
+            concurrent_entries -= 1
+        return {"data": []}
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        side_effect=blocking_fetch_json,
+    ):
+        runner = threading.Thread(
+            target=_openrouter_free_model_endpoints,
+            args=(payload,),
+            kwargs={"api_key": "k", "timeout": None},
+            daemon=True,
+        )
+        runner.start()
+        assert entered.wait(timeout=5), "no fetch ever started"
+        # Give every worker that will ever start a chance to do so before
+        # sampling -- the whole point is proving a ceiling holds, not a
+        # transient snapshot.
+        time.sleep(0.2)
+        live_worker_threads = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name.startswith("openrouter-endpoints")
+        ]
+        release.set()
+        runner.join(timeout=5)
+        assert not runner.is_alive()
+
+    assert len(live_worker_threads) <= 8, (
+        f"{len(live_worker_threads)} live 'openrouter-endpoints' threads for "
+        f"{model_count} models -- expected a fixed pool of at most 8"
+    )
+    assert max_concurrent_entries <= 8
+
+
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     """A provider parameter alone cannot make an image-only model a synthesizer."""
     register_credential("OPENROUTER_API_KEY", "sk-router")
@@ -957,7 +1119,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+    assert agent_from_discovered(discovered[0]).group_name == "model_vendor_free_model_7959c29fc9"
 
 
 def _nim_vision_model() -> DiscoveredModel:
@@ -1429,7 +1591,30 @@ def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inferenc
     assert discovered[0].input_modalities == ("text", "image")
     assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
     assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
-    assert agent_from_discovered(discovered[0]).group_name == ""
+    assert agent_from_discovered(discovered[0]).group_name == "model_provider_example_free_681f6a3471"
+
+
+def test_model_group_name_preserves_distinct_exact_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai",
+        "vendor/model-a",
+        "OPENAI_API_KEY",
+        "https://api.openai.com/v1",
+        "Bearer",
+    )
+    second = replace(first, model_id="vendor/model_a")
+
+    assert model_group_name_for(first) != model_group_name_for(second)
+
+
+def test_model_group_name_preserves_case_sensitive_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer"
+    )
+
+    assert model_group_name_for(first) != model_group_name_for(
+        replace(first, model_id="vendor/model")
+    )
 
 
 def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
@@ -1984,6 +2169,257 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
+def test_provider_discovery_deadline_default_is_bounded_and_independent() -> None:
+    """The discovery deadline is a finite default, distinct from other timeouts.
+
+    #971's design boundary keeps model *inference* (``ModelClient.timeout``)
+    and the per-HTTP-call discovery socket timeout (``DISCOVERY_TIMEOUT_SECONDS``)
+    unbounded by default. The separate per-provider discovery deadline this
+    finding requires must not silently inherit that -- it needs its own
+    finite bound so a stalled provider is ever actually abandoned.
+    """
+    assert PROVIDER_DISCOVERY_DEADLINE_SECONDS is not None
+    assert 0 < PROVIDER_DISCOVERY_DEADLINE_SECONDS < float("inf")
+
+
+def test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete() -> None:
+    """One provider's catalog fetch hanging forever must not starve the rest.
+
+    Regression for the #971 review finding: "model discovery must not allow
+    one stalled provider catalog request to block discovery of all later
+    healthy providers forever; this requires a separately bounded/cancellable
+    discovery mechanism, not a model-inference timeout." Before this fix,
+    ``discover_all_models``'s per-provider loop called
+    ``discover_provider_models`` directly and in-line -- nothing bounded or
+    cancelled that call, so a hang there blocked every later source forever
+    (this test would time out the whole suite without the fix). Patches
+    ``discover_provider_models`` itself, not just the HTTP layer, with a call
+    that blocks on an ``Event`` nothing ever sets -- proving the new bound
+    catches a hang the per-request socket ``timeout=`` kwarg could never
+    catch, since this mock does not even look at it.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    never_set = threading.Event()
+
+    def fake_discover_provider_models(source, *, timeout=None, ca_bundle=None, models_dev_metadata=None):
+        if source.provider_name == "openai":
+            never_set.wait()  # Hangs forever -- nothing ever sets this event.
+            raise AssertionError("unreachable: the stalled provider must never return")
+        return [
+            DiscoveredModel(
+                provider_name=source.provider_name,
+                model_id="meta/llama-3.3",
+                credential_name=source.credential_name,
+                chat_base_url=source.chat_base_url,
+                auth_scheme=source.auth_scheme,
+                capabilities=("chat",),
+            )
+        ]
+
+    started = time.monotonic()
+    with patch(
+        "contextual_orchestrator.model_discovery.discover_provider_models",
+        side_effect=fake_discover_provider_models,
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE, OPENROUTER_SOURCE),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    # Generous bound for CI jitter -- what matters is that this is nowhere
+    # near "forever" and is driven by the 0.2s deadline, not the test runner.
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled provider"
+    assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
+    assert len(errors) == 1
+    assert errors[0].provider_name == "openai"
+    assert errors[0].error_code == "discovery_timeout"
+
+
+def test_discover_all_models_discovery_deadline_none_opts_into_unbounded_wait() -> None:
+    """An explicit ``discovery_deadline=None`` bypasses the bounding thread entirely.
+
+    Covers :func:`_discover_provider_models_bounded`'s unbounded branch: a
+    caller that explicitly wants the pre-#971-fix unbounded wait back (no
+    daemon thread, no join deadline) can still get it by passing
+    ``discovery_deadline=None``, and ordinary discovery still succeeds.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE,),
+            discovery_deadline=None,
+        )
+
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
+
+
+def test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch() -> None:
+    """A hung shared Models.dev metadata fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline" (Devin bug id
+    ``BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002``): before this
+    fix, ``discover_all_models`` called ``_fetch_models_dev_metadata`` inline
+    *before* the per-provider loop even started, wholly outside
+    ``discovery_deadline`` -- this test would hang the whole suite without
+    the fix. Patches ``_fetch_models_dev_metadata`` itself with a call that
+    blocks on an ``Event`` nothing ever sets, mirroring
+    ``test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete``'s
+    style. Also proves the timeout fallback is threaded through as an
+    already-fetched ``None`` (not the ``_NOT_FETCHED`` sentinel): the
+    per-provider catalog fetch below must not itself retry the same stalled
+    fetch a second time.
+    """
+    models_dev_source = replace(OPENAI_SOURCE, models_dev_provider_id="openai")
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    never_set = threading.Event()
+
+    def fake_fetch_models_dev_metadata(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
+            side_effect=fake_fetch_models_dev_metadata,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urlopen,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (models_dev_source,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled Models.dev fetch"
+    # The stalled shared fetch degrades to the same "no evidence" fallback
+    # (None) _fetch_models_dev_metadata already returns for an ordinary
+    # failure -- _merge_models_dev_metadata passes rows through unchanged --
+    # rather than blocking; the provider's own catalog discovery still
+    # succeeds untouched.
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
+
+
+def test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch() -> None:
+    """A hung shared OpenRouter ZDR evidence fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline": before this fix, ``discover_all_models`` called
+    ``_openrouter_zdr_model_ids`` inline *after* the per-provider loop
+    finished, wholly outside ``discovery_deadline`` -- this test would hang
+    the whole suite without the fix.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    never_set = threading.Event()
+
+    def fake_openrouter_zdr_model_ids(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+            side_effect=fake_openrouter_zdr_model_ids,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urlopen,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter ZDR fetch"
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
+    # The stalled fetch degrades to the same empty-set fallback
+    # _openrouter_zdr_model_ids already returns for an ordinary failure --
+    # never marks a model ZDR-capable on missing/timed-out evidence.
+    assert discovered[0].zdr_capable is False
+
+
+def test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch() -> None:
+    """A hung shared OpenRouter credits fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline": before this fix, ``discover_all_models`` called
+    ``openrouter_paid_inference_available`` inline *after* the per-provider
+    loop finished (only once an OpenRouter credential is registered), wholly
+    outside ``discovery_deadline`` -- this test would hang the whole suite
+    without the fix.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    never_set = threading.Event()
+
+    def fake_openrouter_paid_inference_available(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def fake_discover_provider_models(source, *, timeout=None, ca_bundle=None, models_dev_metadata=None):
+        return [
+            DiscoveredModel(
+                provider_name=source.provider_name,
+                model_id="paid/model",
+                credential_name=source.credential_name,
+                chat_base_url=source.chat_base_url,
+                auth_scheme=source.auth_scheme,
+                capabilities=("chat",),
+                is_free=False,
+            )
+        ]
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+            side_effect=fake_openrouter_paid_inference_available,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.discover_provider_models",
+            side_effect=fake_discover_provider_models,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (OPENROUTER_SOURCE,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter credits fetch"
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["paid/model"]
+    # The stalled fetch degrades to the same "could not determine" fallback
+    # (None) openrouter_paid_inference_available already returns for an
+    # ordinary failure -- apply_openrouter_spend_admission's fail-closed rule
+    # never admits spend for a paid row without positive evidence.
+    assert discovered[0].spend_admitted is False
+
+
 def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
@@ -2320,7 +2756,7 @@ def test_discover_provider_models_retries_transient_failure_then_succeeds() -> N
         discovered = discover_provider_models(OPENAI_SOURCE)
 
     assert len(attempt_timeouts) == 2
-    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    assert attempt_timeouts == [None, None]
     mock_sleep.assert_called_once()
     assert [model.model_id for model in discovered] == ["gpt-test"]
 
@@ -2417,7 +2853,7 @@ def test_agent_id_for_is_two_word_snake_case() -> None:
         chat_base_url="https://openrouter.ai/api/v1",
         auth_scheme="Bearer",
     )
-    assert agent_id_for(discovered) == "openrouter_meta_llama_3_3_70b"
+    assert agent_id_for(discovered).startswith("openrouter_meta_llama_3_3_70b_")
 
 
 def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None:
@@ -2429,7 +2865,7 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
         auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     agent = agent_from_discovered(discovered, priority=3)
-    assert agent.id == "bytez_0_hero_matter_0_1_slim_7b_c"
+    assert agent.id.startswith("bytez_0_hero_matter_0_1_slim_7b_c_")
     assert agent.disabled is True
     assert agent.auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert agent.credential_key == "BYTEZ_API_KEY"
@@ -2438,11 +2874,12 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
 
 
 def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    """Any row explicitly marked evidence_only stays unroutable, regardless of provider."""
     discovered = DiscoveredModel(
-        provider_name="openrouter",
+        provider_name="example_evidence_provider",
         model_id="provider/evidence-model",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="EXAMPLE_EVIDENCE_PROVIDER_API_KEY",
+        chat_base_url="https://example-evidence-provider.example/v1",
         auth_scheme="Bearer",
         evidence_only=True,
     )
@@ -2649,22 +3086,22 @@ def test_sync_discovered_agents_adds_and_updates_idempotently() -> None:
     agent_v1 = agent_from_discovered(discovered, priority=0)
 
     result = orchestrator.sync_discovered_agents([agent_v1])
-    assert result == {"added": ["openrouter_meta_llama_3_3"], "updated": []}
-    assert {a.id for a in orchestrator.candidates} == {"seed_agent", "openrouter_meta_llama_3_3"}
+    assert result == {"added": [agent_v1.id], "updated": []}
+    assert {a.id for a in orchestrator.candidates} == {"seed_agent", agent_v1.id}
 
     agent_v2 = agent_from_discovered(discovered, priority=7)
     result = orchestrator.sync_discovered_agents([agent_v2])
-    assert result == {"added": [], "updated": ["openrouter_meta_llama_3_3"]}
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    assert result == {"added": [], "updated": [agent_v1.id]}
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.priority == 7
     # No duplicate rows were appended on the update pass.
     assert len(orchestrator.candidates) == 2
 
     orchestrator.set_model_group(
-        "shared_reasoning_model", ["openrouter_meta_llama_3_3"]
+        "shared_reasoning_model", [agent_v1.id]
     )
     orchestrator.sync_discovered_agents([agent_v1])
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.group_name == "shared_reasoning_model"
 
 
@@ -2705,7 +3142,72 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
     first.sync_discovered_agents([agent])
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
-    assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+    assert any(a.id == agent.id for a in second.candidates)
+
+
+def test_durable_legacy_discovered_agent_adopts_generated_group_and_id(tmp_path) -> None:
+    db_path = str(tmp_path / "legacy-pool.db")
+    discovered = DiscoveredModel(
+        "openrouter", "Vendor/Model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    legacy = replace(incoming, id="openrouter_vendor_model", group_name="")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    restarted = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    result = restarted.sync_discovered_agents([incoming])
+    stored = next(agent for agent in restarted.candidates if agent.id == legacy.id)
+
+    assert result == {"added": [], "updated": [legacy.id]}
+    assert stored.group_name == incoming.group_name
+    assert all(agent.id != incoming.id for agent in restarted.candidates)
+    restarted.close()
+
+
+def test_legacy_operator_agent_is_not_duplicated_or_overwritten() -> None:
+    discovered = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY",
+        "https://api.openai.com/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    operator = replace(
+        incoming,
+        id="openai_vendor_model",
+        tags=("operator-tag",),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([operator], allow_empty_agents=True)
+
+    assert orchestrator.sync_discovered_agents([incoming]) == {"added": [], "updated": []}
+    assert orchestrator.candidates == [operator]
+
+
+def test_exact_model_id_collisions_persist_as_distinct_discovered_agents(tmp_path) -> None:
+    base = DiscoveredModel(
+        "openrouter", "vendor/model-a", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    models = [
+        base,
+        replace(base, model_id="vendor/model_a"),
+        replace(base, model_id="Vendor/Model"),
+        replace(base, model_id="vendor/model"),
+    ]
+    agents = [agent_from_discovered(model) for model in models]
+    orchestrator = TaskOrchestrator(
+        [], agents_db=str(tmp_path / "collisions.db"), allow_empty_agents=True
+    )
+
+    orchestrator.sync_discovered_agents(agents)
+
+    assert len({agent.id for agent in orchestrator.candidates}) == len(models)
+    assert {agent.model for agent in orchestrator.candidates} == {
+        model.model_id for model in models
+    }
+    orchestrator.close()
 
 
 _MODEL_DISCOVERY_LOGGER_NAME = "contextual_orchestrator.model_discovery"

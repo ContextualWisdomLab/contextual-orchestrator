@@ -61,6 +61,13 @@ _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
 _BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
+# The durable provider-embedding claim lease is an internal locking/heartbeat
+# interval (how long one worker holds a job claim before it must renew), not
+# a caller-facing request deadline. It must stay a fixed, positive default
+# independent of ``ModelClient.timeout`` -- deriving it from that (optional,
+# now ``None``-by-default) client timeout meant a durable job registry raised
+# at coordinator construction whenever the caller opted into "no deadline".
+_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0
 
 
 class BatchModelSelectionError(RuntimeError):
@@ -232,16 +239,26 @@ class CostRoutingCoordinator:
 
     def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
         client = getattr(self.orchestrator, "client", None)
-        client_timeout = float(getattr(client, "timeout", 0))
+        # ``client.timeout`` is ``None`` when the client has no fixed
+        # wall-clock deadline (the default since #971's removal of fixed
+        # inference timeouts); treat that the same as an absent/zero
+        # attribute rather than raising out of ``float(None)``.
+        client_timeout = float(getattr(client, "timeout", None) or 0)
+        # The claim lease is an internal durability heartbeat, independent of
+        # the caller's request deadline: a durable registry always needs a
+        # positive lease, falling back to a fixed default rather than the
+        # (possibly absent) client timeout. Execution stays genuinely
+        # unbounded (``None``) when the caller configured no deadline --
+        # ``ProviderEmbeddingBatchBackend`` no longer substitutes the
+        # registry's storage retention window for that.
+        claim_lease_seconds = (
+            client_timeout if client_timeout > 0 else _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+        ) if self.job_registry.durable else None
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
-            claim_lease_seconds=(
-                client_timeout
-                if self.job_registry.durable and client_timeout > 0
-                else None
-            ),
+            claim_lease_seconds=claim_lease_seconds,
             execution_timeout_seconds=client_timeout if client_timeout > 0 else None,
         )
 
@@ -256,32 +273,60 @@ class CostRoutingCoordinator:
             if first.agent_id is not None
             else self.orchestrator.select_capability_agent("embedding", first.model)
         )
+        # ``first.agent_id`` may be a route pinned at submission time under
+        # an active ``zdr_only`` policy (see ``_resolve_embedding_target``)
+        # and later replayed by ``ProviderEmbeddingBatchBackend`` after a
+        # process restart recovers a durably queued job -- an arbitrarily
+        # long gap during which an operator could have removed the agent's
+        # ZDR tag or repointed it to a non-ZDR route. Re-validate the
+        # request's own recorded privacy scope against the agent's *current*
+        # tags here, at the point of execution, rather than trusting the
+        # pinned id blindly; the ambient ``request_policy`` contextvar used
+        # at submission time is not (and cannot be) in effect on this
+        # worker thread.
+        if first.zdr_only and "privacy:zdr" not in agent.tags:
+            raise RuntimeError(
+                f"embedding agent {agent.id!r} no longer satisfies zdr_only; "
+                "refusing to execute a recovered privacy-scoped batch"
+            )
         if any(
-            request.model != first.model or request.agent_id != first.agent_id
+            request.model != first.model
+            or request.agent_id != first.agent_id
+            or request.zdr_only != first.zdr_only
             for request in requests
         ):
-            raise RuntimeError("provider embedding batch must retain one selected route")
+            raise RuntimeError(
+                "provider embedding batch must retain one selected route and privacy policy"
+            )
         max_tokens, _max_chars, max_inputs = self._embedding_request_limits()
         vectors: List[List[float]] = []
         prompt_tokens = 0
         shard: List[EmbeddingBatchRequest] = []
         shard_tokens = 0
-        for request in requests:
-            request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
-            if shard and (
-                len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
-            ):
+        # Re-establish the ambient ``request_policy`` scope for the actual
+        # client call(s) below. It is not in effect on this worker thread
+        # (see the recovery comment above) but the client's OpenRouter ZDR
+        # pin (``_pin_openrouter_zdr``) reads it, not ``first.zdr_only``
+        # directly -- without this, a recovered ``zdr_only`` batch's request
+        # would silently omit ``provider.zdr`` even though the tag check
+        # above already re-validated the route.
+        with self.orchestrator.request_policy(first.zdr_only):
+            for request in requests:
+                request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
+                if shard and (
+                    len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
+                ):
+                    shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
+                    vectors.extend(shard_vectors)
+                    prompt_tokens += shard_usage
+                    shard = []
+                    shard_tokens = 0
+                shard.append(request)
+                shard_tokens += request_tokens
+            if shard:
                 shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
                 vectors.extend(shard_vectors)
                 prompt_tokens += shard_usage
-                shard = []
-                shard_tokens = 0
-            shard.append(request)
-            shard_tokens += request_tokens
-        if shard:
-            shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
-            vectors.extend(shard_vectors)
-            prompt_tokens += shard_usage
         return vectors, prompt_tokens
 
     def _refresh_embedding_backend(self) -> None:
@@ -1317,7 +1362,12 @@ class CostRoutingCoordinator:
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
         self._refresh_embedding_backend()
-        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
+        resolved_model, resolved_agent_id, resolved_provider = self._resolve_embedding_target(
+            model, zdr_only, agent_id
+        )
+        provider_routing = (
+            {"zdr": True} if zdr_only and resolved_provider == "openrouter" else None
+        )
         backend = self._embedding_backend_for_route(resolved_model, resolved_agent_id)
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
@@ -1326,6 +1376,7 @@ class CostRoutingCoordinator:
             attribution=shared_attribution,
             zdr_only=zdr_only,
             agent_id=resolved_agent_id,
+            provider_routing=provider_routing,
         )
         reserve = getattr(backend, "reserve", None)
         start = getattr(backend, "start", None)
@@ -1346,7 +1397,7 @@ class CostRoutingCoordinator:
 
     def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, Optional[str], Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice.
 
         An explicit caller-supplied ``agent_id`` always wins, and an explicit
@@ -1373,16 +1424,16 @@ class CostRoutingCoordinator:
             and not zdr_only
             and not unspecified_model
         ):
-            return model, None
+            return model, None, None
         selection_model = None if unspecified_model else model
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
             chosen = self._cheapest_capability_candidate(candidates)
-            return chosen.model, chosen.id
+            return chosen.model, chosen.id, _resolved_provider_name(chosen)
         for candidate in candidates:
             if candidate.id == agent_id:
-                return candidate.model, candidate.id
+                return candidate.model, candidate.id, _resolved_provider_name(candidate)
         raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
@@ -1393,6 +1444,7 @@ class CostRoutingCoordinator:
         attribution: Dict[str, Any],
         zdr_only: bool,
         agent_id: Optional[str],
+        provider_routing: Optional[Dict[str, Any]],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars, max_inputs = self._embedding_request_limits()
@@ -1417,6 +1469,7 @@ class CostRoutingCoordinator:
                         token_count=token_count,
                         zdr_only=zdr_only,
                         agent_id=agent_id,
+                        provider_routing=provider_routing,
                     )
                 )
         return requests, part_counts, {
@@ -1893,6 +1946,31 @@ def _provider_from_base_url(base_url: str) -> str:
     except Exception:
         return ""
     return host
+
+
+def _resolved_provider_name(agent: Any) -> str:
+    """Return a canonical provider name for one selected agent snapshot.
+
+    ``base_url`` is what actually decides an outbound HTTP destination;
+    ``provider_name`` is a free-text label unvalidated at ``ModelAgent``
+    construction, so it can be empty *or* nonempty-but-wrong (a typo, a
+    stale copy-paste). Trusting a nonempty ``provider_name`` unconditionally
+    — the previous ``agent.provider_name or ...`` short-circuit — let an
+    agent whose ``base_url`` is OpenRouter's own endpoint report a different
+    provider identity, which made ``submit_embeddings_batch``'s ZDR pin
+    (``provider_routing = {"zdr": True} if resolved_provider == "openrouter"
+    ...``) silently skip OpenRouter requests under an active ``zdr_only``
+    scope. The exact destination hostname is checked first and is
+    authoritative whenever it is OpenRouter's, mirroring
+    ``orchestrator._resolved_openrouter_provider`` so both ZDR-pin choke
+    points (the embedding-batch path here and the chat/streaming/raw/batch
+    JSONL path there) share one normalization rule (CodeRabbit review on
+    #953, discussion_r3898471887 / discussion_r3898659143).
+    """
+    host = _provider_from_base_url(agent.base_url)
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
 
 
 def _positive_int(value: Any, default: int) -> int:

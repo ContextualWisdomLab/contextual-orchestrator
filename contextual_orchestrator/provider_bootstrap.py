@@ -35,6 +35,8 @@ from .model_discovery import (
     discover_all_models,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
+    legacy_agent_id_for,
+    model_group_name_for,
     refresh_price_book,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator
@@ -69,7 +71,14 @@ class ProviderBootstrapError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderBootstrapReport:
-    """Secret-free evidence emitted after one provider bootstrap run."""
+    """Secret-free evidence emitted after one provider bootstrap run.
+
+    When a durable agent pool is requested, ``selected_agent_ids`` uses the
+    resolved persisted identities and therefore names the same agents as
+    ``enabled_agent_ids``. This keeps legacy-ID migration from exposing two
+    identifier generations for one selected endpoint. Ephemeral runs have no
+    persisted identities, so ``selected_agent_ids`` uses the generated IDs.
+    """
 
     registered_credentials: tuple[str, ...]
     discovered_model_count: int
@@ -219,10 +228,10 @@ def _known_cost_sort_key(
     return (1, float("inf"), model.provider_name, model.model_id)
 
 
-def select_provider_diverse_models(
+def select_model_group_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded compatible pool while preserving provider diversity."""
+    """Choose a bounded compatible pool with one first-pass endpoint per model group."""
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
@@ -232,12 +241,13 @@ def select_provider_diverse_models(
         unique[(model.provider_name, model.credential_name, model.model_id)] = model
     ordered = sorted(unique.values(), key=_known_cost_sort_key)
     selected: list[DiscoveredModel] = []
-    seen_providers: set[str] = set()
+    seen_model_groups: set[str] = set()
     for model in ordered:
-        if model.provider_name in seen_providers:
+        model_group = model_group_name_for(model)
+        if model_group in seen_model_groups:
             continue
         selected.append(model)
-        seen_providers.add(model.provider_name)
+        seen_model_groups.add(model_group)
         if len(selected) >= limit:
             return selected
     selected_keys = {
@@ -270,13 +280,44 @@ def _synchronize_durable_agent_pool(
     """Activate exactly the selected discovered models in one durable agent pool."""
     agents = [_active_agent_from_discovered(model) for model in selected]
     bootstrap = TaskOrchestrator(
-        agents,
+        [],
         agents_db=agents_db,
         allow_empty_agents=True,
     )
     try:
+        protected_ids = {
+            candidate.id
+            for candidate in bootstrap.candidates
+            if "discovered" not in candidate.tags
+        }
+        if any(
+            {agent.id, legacy_agent_id_for(model)} & protected_ids
+            for agent, model in zip(agents, selected, strict=True)
+        ):
+            raise ProviderBootstrapError(
+                "selected discovered models conflict with operator-managed agent identities"
+            )
         selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
+        selected_ids = set()
+        for agent in agents:
+            matches = [
+                candidate
+                for candidate in bootstrap.candidates
+                if "discovered" in candidate.tags
+                if candidate.provider_name == agent.provider_name
+                and candidate.credential_name == agent.credential_name
+                and candidate.model == agent.model
+            ]
+            if not matches:
+                continue
+            selected_ids.add(
+                next((item.id for item in matches if item.id == agent.id), matches[-1].id)
+            )
+        if len(selected_ids) != len(agents):
+            raise ProviderBootstrapError(
+                "selected discovered models conflict with operator-managed agent identities"
+            )
 
         for candidate in list(bootstrap.candidates):
             if candidate.id in selected_ids:
@@ -285,8 +326,8 @@ def _synchronize_durable_agent_pool(
                 if not candidate.disabled:
                     bootstrap.remove_agent("default", candidate.id)
 
-        for agent in agents:
-            bootstrap.patch_agent("default", agent.id, {"status": "active"})
+        for agent_id in selected_ids:
+            bootstrap.patch_agent("default", agent_id, {"status": "active"})
 
         # The patch loop above raises KeyError if any selected agent is missing from
         # the pool, so the enabled set equals selected_ids by construction here.
@@ -323,16 +364,17 @@ def bootstrap_provider_runtime(
 
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(discovered, price_book)
-    # select_provider_diverse_models returns at least one model for a non-empty
+    # select_model_group_diverse_models returns at least one model for a non-empty
     # input with a positive limit and raises ValueError for a non-positive one,
     # so the selection here is never empty.
-    selected = select_provider_diverse_models(eligible, limit=model_limit)
-    selected_ids = tuple(agent_id_for(model) for model in selected)
+    selected = select_model_group_diverse_models(eligible, limit=model_limit)
+    generated_selected_ids = tuple(agent_id_for(model) for model in selected)
     enabled_ids = (
         _synchronize_durable_agent_pool(agents_db, selected)
         if agents_db
         else ()
     )
+    selected_ids = enabled_ids if agents_db else generated_selected_ids
 
     return ProviderBootstrapReport(
         registered_credentials=registered,

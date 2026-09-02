@@ -33,6 +33,17 @@ logger = logging.getLogger(__name__)
 # they are percent-encoded below before request assembly.
 _OPENROUTER_UPTIME_ORIGIN = "https://openrouter.ai/api/v1"
 
+# #971 removes the *inference* client's fixed wall-clock deadline (a user is
+# actively waiting on a model completion, which can legitimately run long).
+# This collector's HTTP GET is unrelated background telemetry on a single
+# dedicated sweep thread: it polls every openrouter member sequentially in
+# one loop, and ``stop()`` cannot interrupt a call already blocked inside
+# ``urlopen`` (Python threads are not forcibly cancellable). Leaving this
+# fetch unbounded means one unresponsive endpoint hangs the sweep thread
+# forever -- leaking it and indefinitely starving every later member of an
+# uptime update -- so it keeps its own fixed, independent bound instead.
+_UPTIME_FETCH_TIMEOUT_SECONDS = 10.0
+
 
 class OpenRouterUptimeCollector:
     """Periodically fold measured upstream availability into prior ledgers."""
@@ -145,7 +156,9 @@ class OpenRouterUptimeCollector:
         request = urllib.request.Request(url, method="GET")
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; model_id is percent-encoded before interpolation and never reaches the scheme/authority.
-            with urllib.request.urlopen(request, timeout=10.0) as response:
+            with urllib.request.urlopen(
+                request, timeout=_UPTIME_FETCH_TIMEOUT_SECONDS
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
                 uptimes = [

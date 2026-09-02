@@ -28,6 +28,7 @@ from .model_discovery import (
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
@@ -626,7 +627,7 @@ def _discover_models_command(argv: list[str]) -> None:
             if not model.evidence_only
         ]
         bootstrap = TaskOrchestrator(
-            discovered_agents,
+            [],
             agents_db=args.agents_db,
             allow_empty_agents=True,
         )
@@ -634,7 +635,21 @@ def _discover_models_command(argv: list[str]) -> None:
             bootstrap.sync_discovered_agents(discovered_agents)
             if args.enable_cheapest:
                 for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                    agent_id = agent_id_for(model)
+                    incoming = agent_from_discovered(model)
+                    matches = [
+                        candidate
+                        for candidate in bootstrap.candidates
+                        if "discovered" in candidate.tags
+                        and candidate.provider_name == incoming.provider_name
+                        and candidate.credential_name == incoming.credential_name
+                        and candidate.model == incoming.model
+                    ]
+                    if not matches:
+                        continue
+                    agent_id = next(
+                        (candidate.id for candidate in matches if candidate.id == incoming.id),
+                        matches[-1].id,
+                    )
                     bootstrap.patch_agent("default", agent_id, {"status": "active"})
                     enabled_agent_ids.append(agent_id)
         finally:
@@ -759,14 +774,32 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             or "embedding" in model.capabilities
             or (
                 agent_id_for(model) in failed_configured_gateway_probe_ids
-                and agent_id_for(model) in existing_by_id
+                # A failed probe is only ever recorded under the new
+                # fingerprinted id, but a persisted agent from before
+                # model-group fingerprinting may still be keyed by its
+                # legacy id (see ``existing`` below); accept either so a
+                # failed legacy-id endpoint reaches the disable path
+                # instead of being silently dropped and left enabled.
+                and (
+                    agent_id_for(model) in existing_by_id
+                    or legacy_agent_id_for(model) in existing_by_id
+                )
             )
         )
     ]
-    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models}
+    # Include the legacy id form too: an already-persisted agent matched via
+    # the legacy_agent_id_for fallback below keeps its existing (pre-model-
+    # group) id rather than adopting the new hash-suffixed one, so a candidate
+    # that is genuinely one of the freshly-discovered chat models can still
+    # be persisted under either id.
+    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models} | {
+        legacy_agent_id_for(model) for model in chat_models
+    }
     agents = []
     for model in runtime_models:
-        existing = existing_by_id.get(agent_id_for(model))
+        existing = existing_by_id.get(agent_id_for(model)) or existing_by_id.get(
+            legacy_agent_id_for(model)
+        )
         embedding_routable = "embedding" in model.capabilities and model.spend_admitted
         spend_routable = is_routable_discovered_model(model) or embedding_routable
         structured_routable = agent_id_for(model) not in failed_configured_gateway_probe_ids
@@ -822,6 +855,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     existing,
                     disabled=not routable or preserve_disabled,
                     tags=tuple(dict.fromkeys(tags)),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
                 )
             )
         elif existing is not None and any(tag in existing.tags for tag in ("spend:blocked", "structured:blocked")):
@@ -846,6 +880,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                             "structured:blocked:preserve-disabled",
                         }
                     ),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
+                )
+            )
+        elif existing is not None and not existing.group_name:
+            agents.append(
+                replace(
+                    existing,
+                    group_name=agent_from_discovered(model).group_name,
                 )
             )
         elif existing is not None and limits_changed:

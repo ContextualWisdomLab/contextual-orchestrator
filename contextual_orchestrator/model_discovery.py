@@ -14,18 +14,20 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
-from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import logging
 import math
+import queue
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, NoReturn, Sequence, TypeVar
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -33,6 +35,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
+from .conventions import legacy_discovered_agent_id
 from .credentials import get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
@@ -46,16 +49,36 @@ from .orchestrator import (
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
+DISCOVERY_TIMEOUT_SECONDS: float | None = None
+# Bounded, cancellable wall-clock budget for one provider's *entire* catalog
+# discovery attempt (`discover_provider_models`, including every fetch and
+# retry it makes internally) inside `discover_all_models`'s per-provider
+# loop -- AND for the shared Models.dev / OpenRouter ZDR / OpenRouter
+# credits metadata fetches `discover_all_models` makes outside that loop
+# (`_fetch_models_dev_metadata`, `_openrouter_zdr_model_ids`,
+# `openrouter_paid_inference_available`). This is a wholly separate concern
+# from `DISCOVERY_TIMEOUT_SECONDS` (the per-HTTP-call socket timeout passed
+# *into* each fetch, which stays unbounded by default so a slow-but-live
+# catalog response is not mistaken for an unavailable provider) and from
+# `ModelClient.timeout` (the caller's model-*inference* deadline, which #971
+# deliberately defaults to no elapsed-time limit). Provider catalog listing
+# at bootstrap/discovery time is a different concern from serving a
+# completion: one stalled request -- even one whose hang the per-call socket
+# timeout cannot bound, e.g. a connection accepted but never answered, or in
+# tests a mock that blocks forever -- must never block the rest of discovery
+# forever. Every one of these calls runs on its own daemon thread (see
+# `_run_bounded_by_deadline`) and stops waiting once this deadline elapses;
+# the abandoned thread cannot block interpreter shutdown (daemon) and its
+# eventual result, if any, is simply discarded. Pass `discovery_deadline=None`
+# explicitly to opt back into unbounded waiting for all of these calls.
+PROVIDER_DISCOVERY_DEADLINE_SECONDS: float = 30.0
 _LOGGER = logging.getLogger(__name__)
-DISCOVERY_TIMEOUT_SECONDS = 15.0
-# One bounded retry for a provider's primary model-list fetch, reusing the same
+# One retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
-# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
-# the added worst case small and predictable for CI callers with their own
-# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# (is_transient_error). Discovery has no default wall-clock deadline: a slow
+# provider catalog must not be mistaken for an unavailable provider.
 # Non-transient failures (auth/config errors, malformed responses) are never
 # retried — a retry cannot fix those and would only waste the time budget.
-_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
 _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
@@ -531,7 +554,7 @@ def _positive_int_metadata(value: object) -> int | None:
     return None
 
 
-def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float | None) -> Any:
     """Fetch JSON, sending any credential only to the original trusted HTTPS host.
 
     Plain ``urllib`` follows a 3xx redirect by copying the original request's
@@ -582,8 +605,8 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     return json.loads(raw.decode("utf-8"))
 
 
-def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
-    """Fetch the shared Models.dev catalog with a small bounded retry.
+def _fetch_models_dev_metadata(*, timeout: float | None) -> Any | None:
+    """Fetch the shared Models.dev catalog with a small retry count.
 
     Every ``models_dev_provider_id``-joined source (``opencode_zen``,
     ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
@@ -597,7 +620,7 @@ def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
 
     Returns ``None`` -- the existing "no evidence" fail-closed signal
     :func:`_merge_models_dev_metadata` already handles -- only once every
-    bounded attempt has failed; a successful attempt returns immediately
+    attempt has failed; a successful attempt returns immediately
     without spending the rest of the retry budget.
     """
     for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
@@ -614,7 +637,7 @@ def _fetch_configured_gateway_json(
     *,
     api_key: str,
     auth_scheme: str,
-    timeout: float,
+    timeout: float | None,
     ca_bundle: str | None = None,
 ) -> Any:
     """Fetch an operator URL through the gateway's pinned hardened transport."""
@@ -630,7 +653,7 @@ def _fetch_configured_gateway_json(
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
         ca_bundle=ca_bundle,
-        timeout=max(1, math.ceil(timeout)),
+        timeout=None if timeout is None else max(1, math.ceil(timeout)),
         allowed_provider_hosts={parsed.hostname},
     )
     agent = ModelAgent(
@@ -692,7 +715,7 @@ def _open_trusted_discovery_request(
 
 
 def _fetch_json_same_host_https(
-    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
+    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float | None
 ) -> Any:
     """Fetch JSON while rejecting redirects outside the original trusted HTTPS host."""
     if not url.startswith("https://"):
@@ -1199,9 +1222,37 @@ def _merge_openrouter_provider_privacy(
 
 
 def _openrouter_free_model_endpoints(
-    payload: Any, *, api_key: str, timeout: float
+    payload: Any, *, api_key: str, timeout: float | None
 ) -> dict[str, Any]:
-    """Fetch endpoint/provider mappings only for explicitly zero-price models."""
+    """Fetch endpoint/provider mappings only for explicitly zero-price models.
+
+    Fans the per-model fetch out across raw ``daemon=True`` threads, never
+    :class:`concurrent.futures.ThreadPoolExecutor` -- verified (a local
+    repro, mirroring this PR's other timeout regressions): a
+    ``ThreadPoolExecutor``'s worker threads register with an
+    interpreter-exit hook (``concurrent.futures.thread``'s own
+    ``atexit`` handler) that unconditionally joins every still-running
+    worker at shutdown, *regardless of the daemon status of whatever thread
+    created the executor*. A single model whose endpoint fetch hangs
+    (``timeout=None``'s unbounded socket read, or any hang a finite
+    per-call ``timeout`` misses) would therefore block process shutdown
+    even though every enclosing caller here (:func:`discover_provider_models`
+    for this OpenRouter source, bounded in turn by
+    :func:`_discover_provider_models_bounded`) already runs on its own
+    ``daemon=True`` thread. Plain ``threading.Thread(daemon=True)`` workers
+    carry none of that registration, so a hung fetch is abandoned exactly
+    like every other stalled discovery-time network call in this module:
+    the thread is silently discarded at interpreter exit, and shutdown is
+    never blocked on it. Concurrency is bounded by a *fixed pool of at most
+    8 daemon workers* pulling model IDs from a queue, rather than one
+    ``threading.Thread`` object per model gated only by a semaphore around
+    its work: the latter still allocates and starts one native OS thread
+    per model up front (real kernel/stack overhead each) before the
+    semaphore ever limits anything, so a catalog of hundreds or thousands
+    of free models could exhaust memory or stall discovery before a single
+    fetch even began. A fixed pool keeps the live thread count bounded
+    regardless of catalog size.
+    """
     rows = payload.get("data") if isinstance(payload, dict) else None
     model_ids = [
         row["id"]
@@ -1211,22 +1262,56 @@ def _openrouter_free_model_endpoints(
         and isinstance(row.get("pricing"), dict)
         and _pricing_is_free(row.get("pricing"))
     ]
+    if not model_ids:
+        return {}
 
-    def fetch(model_id: str) -> tuple[str, Any]:
+    def fetch(model_id: str) -> Any:
         author, separator, slug = model_id.partition("/")
         if not separator or not author or not slug:
-            return model_id, None
+            return None
         try:
-            return model_id, _fetch_json(
+            return _fetch_json(
                 f"https://openrouter.ai/api/v1/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints",
                 api_key=api_key,
                 timeout=timeout,
             ).get("data")
         except (AttributeError, urllib.error.URLError, TimeoutError, ValueError, OSError):
-            return model_id, None
+            return None
 
-    with ThreadPoolExecutor(max_workers=min(8, len(model_ids) or 1)) as executor:
-        return dict(executor.map(fetch, model_ids))
+    results: dict[str, Any] = {}
+    results_lock = threading.Lock()
+    work_queue: queue.Queue[str] = queue.Queue()
+    for model_id in model_ids:
+        work_queue.put(model_id)
+
+    def run() -> None:
+        while True:
+            try:
+                model_id = work_queue.get_nowait()
+            except queue.Empty:
+                return
+            value = fetch(model_id)
+            with results_lock:
+                results[model_id] = value
+
+    worker_count = min(8, len(model_ids))
+    workers = [
+        threading.Thread(target=run, name="openrouter-endpoints", daemon=True)
+        for _ in range(worker_count)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        # No join timeout: this whole call already executes inside an
+        # already-bounded, already-daemonized caller (see the docstring
+        # above), so blocking this thread forever on an abandoned peer is
+        # the same accepted tradeoff already documented for
+        # `_run_bounded_by_deadline` -- the daemon property is what matters
+        # for shutdown, not how long this particular thread blocks. A
+        # worker stuck on one hung fetch simply never drains the rest of
+        # the queue; the other workers keep making progress independently.
+        worker.join()
+    return results
 
 
 def _privacy_policy_urls(
@@ -1457,7 +1542,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
     return _deduplicate_discovered_models(discovered)
 
 
-def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
+def _openrouter_zdr_model_ids(*, timeout: float | None) -> set[str]:
     """Read public OpenRouter ZDR evidence for discovered provider models."""
     api_key = get_credential("OPENROUTER_API_KEY") or ""
     try:
@@ -1510,7 +1595,7 @@ def _apply_discovered_model_evidence(
 def discover_provider_models(
     source: ProviderModelSource,
     *,
-    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    timeout: float | None = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
     models_dev_metadata: Any = _NOT_FETCHED,
 ) -> list[DiscoveredModel]:
@@ -1523,8 +1608,8 @@ def discover_provider_models(
     preserves this function's existing lazy, per-call fetch-on-demand
     behavior for every other caller, tests included.
 
-    The primary model-list fetch gets one bounded retry (short fixed delay,
-    shortened timeout) when the failure is transient (5xx/timeout/connection
+    The primary model-list fetch gets one count-bounded retry (short fixed
+    delay) when the failure is transient (5xx/timeout/connection
     reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
     — a single provider's momentary blip no longer has to zero out that
     provider's entire contribution for this discovery pass. A non-transient
@@ -1561,7 +1646,7 @@ def discover_provider_models(
         "auth_scheme": source.auth_scheme,
         **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
     }
-    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    attempt_timeouts = (timeout, timeout)
     payload: Any = None
     last_exc: Exception | None = None
     for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
@@ -1652,21 +1737,145 @@ def discover_provider_models(
     return result
 
 
+_BoundedT = TypeVar("_BoundedT")
+
+
+def _run_bounded_by_deadline(
+    fn: Callable[[], _BoundedT],
+    *,
+    discovery_deadline: float | None,
+    on_timeout: Callable[[], _BoundedT],
+    thread_name: str,
+) -> _BoundedT:
+    """Run ``fn`` on its own daemon thread, abandoning it at ``discovery_deadline``.
+
+    The shared bounded/cancellable primitive behind every network call this
+    module makes at discovery time: the whole-attempt bound around one
+    provider's :func:`discover_provider_models` call
+    (:func:`_discover_provider_models_bounded`), and the shared Models.dev /
+    OpenRouter ZDR / OpenRouter credits metadata fetches in
+    :func:`discover_all_models` that used to run outside any bound at all
+    (#971 review finding: "shared metadata fetches bypass discovery
+    deadline" -- Models.dev ran before the per-provider loop, the OpenRouter
+    ZDR and credits calls ran after it, none of them under
+    ``discovery_deadline``).
+
+    Runs ``fn`` on its own daemon thread and stops waiting once
+    ``discovery_deadline`` elapses instead of blocking forever -- catching a
+    hang the per-request socket ``timeout`` cannot, e.g. a connection
+    accepted but never answered, a redirect loop, or (in tests) a mock that
+    never returns. The thread is daemonized specifically so an abandoned,
+    still-hung attempt cannot block interpreter shutdown; its result, if it
+    ever arrives, is simply discarded -- Python threads cannot be forcibly
+    killed, so "cancellable" here means "the caller stops waiting on it".
+    ``on_timeout`` is called instead of returning that discarded result, and
+    lets each caller keep its own already fail-closed "could not get an
+    answer" outcome (raising :class:`ProviderDiscoveryError` for the
+    per-provider loop; returning the wrapped function's own no-evidence
+    fallback -- ``None``, ``set()`` -- for the shared metadata fetches, the
+    exact value each already returns for an ordinary fetch failure) rather
+    than this helper inventing a new one. ``discovery_deadline=None`` opts
+    back into the unbounded wait every one of these calls used before #971.
+
+    Known, accepted tradeoff (same as the pre-existing OpenRouter uptime
+    sweep thread this pattern was copied from): "abandon" only ever means
+    the *caller* stops waiting, not that the daemon thread or its underlying
+    socket actually stops running. Repeated discovery refreshes against a
+    dependency that stalls every time can accumulate abandoned threads and
+    open connections until each one's underlying call eventually returns,
+    errors, or the interpreter exits; daemon threads keep this from blocking
+    shutdown, but do not reclaim resources any sooner.
+    """
+    if discovery_deadline is None:
+        return fn()
+    results: list[_BoundedT] = []
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(fn())
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
+            failures.append(exc)
+
+    worker = threading.Thread(target=run, name=thread_name, daemon=True)
+    worker.start()
+    worker.join(timeout=discovery_deadline)
+    if worker.is_alive():
+        # Still running past the deadline; abandon it rather than block the
+        # rest of discovery (or first-boot bootstrap) forever.
+        return on_timeout()
+    if failures:
+        raise failures[0]
+    return results[0] if results else on_timeout()
+
+
+def _discover_provider_models_bounded(
+    source: ProviderModelSource,
+    *,
+    timeout: float | None,
+    ca_bundle: str | None,
+    models_dev_metadata: Any,
+    discovery_deadline: float | None,
+) -> list[DiscoveredModel]:
+    """Run one provider's :func:`discover_provider_models` under a wall-clock bound.
+
+    A thin, provider-specific instantiation of :func:`_run_bounded_by_deadline`:
+    on timeout, raises :class:`ProviderDiscoveryError` with error code
+    ``"discovery_timeout"`` (rather than returning a fallback value) so
+    :func:`discover_all_models`'s per-provider loop records it as a normal
+    per-provider discovery failure and moves on to the next source.
+    """
+
+    def _on_timeout() -> NoReturn:
+        raise ProviderDiscoveryError(source.provider_name, "discovery_timeout")
+
+    return _run_bounded_by_deadline(
+        lambda: discover_provider_models(
+            source,
+            timeout=timeout,
+            ca_bundle=ca_bundle,
+            models_dev_metadata=models_dev_metadata,
+        ),
+        discovery_deadline=discovery_deadline,
+        on_timeout=_on_timeout,
+        thread_name=f"discover-provider-{source.provider_name}",
+    )
+
+
 def discover_all_models(
     sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
     *,
-    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    timeout: float | None = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
+    discovery_deadline: float | None = PROVIDER_DISCOVERY_DEADLINE_SECONDS,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
     """Discover models across every provider with a registered credential.
 
     One provider's failure never blocks the others: errors are collected and
-    returned alongside whatever models were successfully discovered.
+    returned alongside whatever models were successfully discovered. This
+    now includes a provider whose catalog fetch simply never returns --
+    ``discovery_deadline`` (default :data:`PROVIDER_DISCOVERY_DEADLINE_SECONDS`,
+    a bounded, cancellable budget wholly separate from any model-inference
+    deadline; see :func:`_run_bounded_by_deadline`) bounds each provider's
+    *entire* discovery attempt so one stalled source can no longer block
+    discovery of every later, healthy provider forever.
+
+    The same bound also covers the three *shared* metadata fetches below
+    that run outside the per-provider loop -- ``_fetch_models_dev_metadata``
+    (before the loop), ``_openrouter_zdr_model_ids`` and
+    ``openrouter_paid_inference_available`` (after it). Each of these
+    already has an established, fail-closed "no evidence" fallback for an
+    ordinary fetch failure (``None``, ``set()``, ``None`` respectively); on
+    a timeout this function abandons the stalled fetch and uses that exact
+    same fallback rather than waiting forever, so first-boot pool
+    bootstrapping can no longer hang on a stalled Models.dev, OpenRouter ZDR,
+    or OpenRouter credits endpoint (#971 review finding: "shared metadata
+    fetches bypass discovery deadline").
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
     source declares ``models_dev_provider_id``, fetch it here exactly once
-    (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
+    (:func:`_fetch_models_dev_metadata`, with its own small retry count) and
     hand every source the identical parsed payload, instead of each source
     independently repeating the fetch inside :func:`discover_provider_models`.
     """
@@ -1677,15 +1886,24 @@ def discover_all_models(
         source.models_dev_provider_id and get_credential(source.credential_name)
         for source in sources
     ):
-        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
+        # Timeout fallback mirrors _fetch_models_dev_metadata's own
+        # ordinary-failure return: None, which _merge_models_dev_metadata
+        # already treats as "no evidence" and passes rows through unchanged.
+        models_dev_metadata = _run_bounded_by_deadline(
+            lambda: _fetch_models_dev_metadata(timeout=timeout),
+            discovery_deadline=discovery_deadline,
+            on_timeout=lambda: None,
+            thread_name="discover-models-dev-metadata",
+        )
     for source in sources:
         try:
             discovered.extend(
-                discover_provider_models(
+                _discover_provider_models_bounded(
                     source,
                     timeout=timeout,
                     ca_bundle=ca_bundle,
                     models_dev_metadata=models_dev_metadata,
+                    discovery_deadline=discovery_deadline,
                 )
             )
         except ProviderDiscoveryError as exc:
@@ -1693,18 +1911,44 @@ def discover_all_models(
     # OpenRouter's authenticated catalog supplies routable account-model rows;
     # its public ZDR endpoint adds route-specific privacy evidence without
     # turning the whole provider account into either ZDR-only or non-serving.
+    # Request-time ZDR enforcement for OpenRouter specifically is a runtime
+    # concern (see ModelClient's `provider: {"zdr": true}` pin), not a
+    # discovery-time exclusion: OpenRouter can multiplex a model across several
+    # backing providers, so a stale discovery-time snapshot cannot by itself
+    # guarantee which provider serves a given request.
+    #
+    # Timeout fallback mirrors _openrouter_zdr_model_ids's own
+    # ordinary-failure return: an empty set, which _apply_discovered_model_evidence
+    # already treats as "no evidence" and leaves every row's zdr_capable
+    # unchanged -- never marks a model ZDR-capable on missing/timed-out
+    # evidence, preserving the fail-closed posture.
     routed = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
-        _openrouter_zdr_model_ids(timeout=timeout),
+        _run_bounded_by_deadline(
+            lambda: _openrouter_zdr_model_ids(timeout=timeout),
+            discovery_deadline=discovery_deadline,
+            on_timeout=set,
+            thread_name="discover-openrouter-zdr-model-ids",
+        ),
     )
     if any(
         source.provider_name == "openrouter"
         and get_credential(source.credential_name)
         for source in sources
     ):
+        # Timeout fallback mirrors openrouter_paid_inference_available's own
+        # ordinary-failure return: None ("could not determine"), which
+        # apply_openrouter_spend_admission already treats as fail-closed --
+        # a paid (non-free) OpenRouter row is not spend_admitted unless
+        # paid_available is True, never on missing/timed-out evidence.
         routed = apply_openrouter_spend_admission(
             routed,
-            openrouter_paid_inference_available(timeout=timeout),
+            _run_bounded_by_deadline(
+                lambda: openrouter_paid_inference_available(timeout=timeout),
+                discovery_deadline=discovery_deadline,
+                on_timeout=lambda: None,
+                thread_name="discover-openrouter-paid-inference",
+            ),
         )
     if _LOGGER.isEnabledFor(logging.INFO):
         _LOGGER.info(
@@ -1717,7 +1961,7 @@ def discover_all_models(
 
 
 def openrouter_paid_inference_available(
-    *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+    *, timeout: float | None = DISCOVERY_TIMEOUT_SECONDS
 ) -> bool | None:
     """Return whether OpenRouter attests a strictly positive credit balance."""
     api_key = get_credential("OPENROUTER_API_KEY")
@@ -1777,7 +2021,19 @@ def _slug(value: str) -> str:
 
 def agent_id_for(discovered: DiscoveredModel) -> str:
     """Two-or-more-word snake_case id, matching this repo's naming convention."""
-    return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
+    fingerprint = hashlib.sha256(discovered.model_id.encode("utf-8")).hexdigest()[:10]
+    return f"{discovered.provider_name}_{_slug(discovered.model_id)}_{fingerprint}"
+
+
+def legacy_agent_id_for(discovered: DiscoveredModel) -> str:
+    """Return the pre-fingerprint identifier used by durable discovered agents."""
+    return legacy_discovered_agent_id(discovered.provider_name, discovered.model_id)
+
+
+def model_group_name_for(discovered: DiscoveredModel) -> str:
+    """Use the provider-declared exact model identity as the logical group."""
+    fingerprint = hashlib.sha256(discovered.model_id.encode("utf-8")).hexdigest()[:10]
+    return f"model_{_slug(discovered.model_id)}_{fingerprint}"
 
 
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
@@ -1816,6 +2072,10 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     return (
         not discovered.evidence_only
         and discovered.spend_admitted
+        and not (
+            discovered.provider_name == "openrouter"
+            and discovered.model_id.casefold() == "openrouter/free"
+        )
         and is_discovered_chat_candidate(discovered)
     )
 
@@ -1838,6 +2098,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
+        group_name=model_group_name_for(discovered),
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
@@ -2149,16 +2410,35 @@ def select_bootstrap_discovered_agents(
     price_book: "PriceBook",
     limit: int,
 ) -> list[DiscoveredModel]:
-    """Build a deterministic, price-honest, provider-diverse initial pool.
+    """Build a deterministic, price-honest, provider- and model-group-diverse pool.
 
     Candidates retain the known-price-first ordering of
     :func:`select_top_n_cheapest_discovered_agents` (queried here with no
     effective cap so it returns the full ranked, deduplicated, routable
-    field), but the first pass takes at most one model from each
-    independently discovered provider account. Remaining capacity is filled
-    in the same deterministic cost order. No vendor or endpoint name is used
-    to infer a shared family or collapse credential state. Duplicate serving
-    identities never consume capacity twice.
+    field). Three ordered passes, each strictly preferred over the next:
+
+    1. At most one endpoint per *provider* and per model group. This is the
+       pass that actually delivers "provider-diverse" (not only
+       "model-group-diverse"): admitting several cheap, distinctly-named
+       models from a single provider before any other viable provider gets
+       a turn would build a pool that looks diverse by model identity while
+       remaining one provider's outage away from total failure -- exactly
+       the gap this pass closes. It does not reorder by price on its own;
+       it only *defers* a candidate whose provider already has a selected
+       endpoint, so a same-provider model is still preferred the moment no
+       untried provider remains.
+    2. Once every provider with a viable candidate has contributed (or
+       capacity ran out), fill remaining slots from the deferred candidates
+       that still introduce a new model group, still in cost order.
+    3. Any capacity still open (more slots than distinct model groups) is
+       filled from the remaining deterministic cost order, duplicate
+       endpoints included, exactly as before this pass existed.
+
+    No vendor or endpoint name is used to infer a shared family or collapse
+    credential state -- provider identity is `DiscoveredModel.provider_name`
+    exactly as reported by discovery (e.g. `nvidia_nim` and `nvidia_nim_sub`
+    remain independent). Duplicate serving identities never consume
+    capacity twice.
     """
     if limit <= 0:
         return []
@@ -2170,16 +2450,30 @@ def select_bootstrap_discovered_agents(
 
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
+    model_groups: set[str] = set()
     providers: set[str] = set()
 
     for model in ranked:
-        if model.provider_name in providers:
+        model_group = model_group_name_for(model)
+        if model_group in model_groups or model.provider_name in providers:
             deferred.append(model)
             continue
+        model_groups.add(model_group)
         providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
             return selected
 
-    selected.extend(deferred[: limit - len(selected)])
+    still_deferred: list[DiscoveredModel] = []
+    for model in deferred:
+        model_group = model_group_name_for(model)
+        if model_group in model_groups:
+            still_deferred.append(model)
+            continue
+        model_groups.add(model_group)
+        selected.append(model)
+        if len(selected) == limit:
+            return selected
+
+    selected.extend(still_deferred[: limit - len(selected)])
     return selected

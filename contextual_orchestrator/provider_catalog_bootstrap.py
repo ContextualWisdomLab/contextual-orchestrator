@@ -45,7 +45,7 @@ from .provider_bootstrap import (
     collect_provider_credentials,
     is_chat_serving_candidate,
     register_provider_credentials_atomically,
-    select_provider_diverse_models,
+    select_model_group_diverse_models,
     serving_tags_for_discovered,
 )
 from .provider_catalog_store import (
@@ -622,7 +622,7 @@ def bootstrap_provider_catalog_runtime(
 
         price_book = PriceBook(InMemoryConfigStore())
         priced_count = refresh_price_book(list(usable_models), price_book)
-        selected = select_provider_diverse_models(
+        selected = select_model_group_diverse_models(
             usable_models,
             limit=model_limit,
         )
@@ -630,12 +630,13 @@ def bootstrap_provider_catalog_runtime(
             raise ProviderBootstrapError(
                 "provider bootstrap selected no persisted chat-compatible model"
             )
-        selected_ids = tuple(agent_id_for(model) for model in selected)
+        generated_selected_ids = tuple(agent_id_for(model) for model in selected)
         enabled_ids = (
             _synchronize_durable_agent_pool(agents_db, selected)
             if agents_db
             else ()
         )
+        selected_ids = enabled_ids if agents_db else generated_selected_ids
         durable_registered_credentials = tuple(
             name for name in registered if get_credential(name) is not None
         )

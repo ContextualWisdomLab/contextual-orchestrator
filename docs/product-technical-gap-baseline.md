@@ -1,5 +1,891 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: main-merge conflict resolution, remaining ThreadPoolExecutor shutdown-blocks, and a verified false positive
+
+Observation time: 2026-09-02 Asia/Seoul, later the same day as the entries
+below. Closes out the rest of today's #971 session: the branch's actual
+`main`-merge conflict (a real divergence, not the shallow-clone false alarm
+noted in an earlier pass), the two remaining `ThreadPoolExecutor`-atexit-join
+instances of the root cause already fixed twice below (this file's own
+"unbounded per-model OS thread allocation" and "shared discovery metadata
+fetches" entries), a raw-`Future` regression that root-cause fix itself
+introduced, a shutdown-contract hardening on the new `_DaemonWorkerPool`
+primitive, and an external self-fix proposal traced and confirmed non-causal
+before being left unapplied. Every claim below is independently re-verified
+against `git log`/`git show` on the actual branch history and current-head
+source rather than restated from a hand-off.
+
+### Merge-conflict resolution: `main` -> branch, `mergeable_state` `dirty` -> `blocked`
+
+GitHub's `mergeable_state` for #971 was genuinely `dirty` -- confirmed by a
+real trial merge, not the shallow-clone false alarm noted in an earlier pass
+this same day. Root cause: `main`'s `0db4e5a7` ("fix(review): remove
+heuristic candidate cap and ranking") dropped the `max_agents` parameter from
+`review_gateway.py`'s `build_review_orchestrator`/CLI entirely as part of
+moving admission to evidence-only (no cap, no ranking), while this branch's
+own `tests/test_review_gateway.py` still carried tests written against the
+pre-removal API and threaded `max_agents=` through several fixtures
+(`test_build_review_orchestrator_routes_to_cheapest_selected_agent`,
+`test_build_review_orchestrator_uses_model_group_diversity`,
+`test_build_review_orchestrator_rejects_invalid_agent_limit`,
+`test_main_rejects_invalid_agent_limit_without_traceback`) -- both sides had
+independently rewritten the same test file since the PR's base diverged.
+
+Resolved via the standard recipe: `git fetch origin main`, `git merge
+origin/main` (merge commit `d9320266`, merging `main` at `464da471` into the
+branch at `41aaeff9`), with `git status` reporting exactly one conflicted
+path, `tests/test_review_gateway.py`. Before resolving, verified the
+diversity-selection logic the branch-only tests nominally exercised is
+separately and currently covered elsewhere:
+`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_prefers_model_group_diversity`
+and `::test_bootstrap_selector_spans_multiple_providers_before_repeating_one`,
+plus `tests/test_model_discovery_boundaries.py`'s provider-name assertions on
+`select_bootstrap_discovered_agents`, all still exist and pass at current
+head and exercise the same selector the dropped
+`test_build_review_orchestrator_uses_model_group_diversity` only wrapped in
+an HTTP-gateway fixture around. With that confirmed, resolved the conflict by
+taking `main`'s version of the file (its evidence-only-admission test suite,
+no `max_agents` anywhere) rather than reintroducing a parameter `main` had
+deliberately removed -- dropping the two `#971`-branch-only tests that had
+gone stale against `main`'s evolved API instead of trying to keep both APIs
+alive. Verified with the targeted suite (`tests/test_review_gateway.py`,
+`tests/test_discovery_bootstrap_selection.py`,
+`tests/test_model_discovery_boundaries.py`,
+`tests/test_endpoint_race_callback_settlement.py`,
+`tests/test_daemon_worker_pool_shutdown.py`: 53 passed, 0 failed), then
+pushed. GitHub's `mergeable_state` for #971 now reads `blocked` (checks-only;
+re-confirmed live at time of writing, head `558c8470`), not `dirty`.
+
+### Remaining `ThreadPoolExecutor`-atexit-join instances of the same root cause
+
+The `ThreadPoolExecutor`-registers-an-atexit-join gotcha already fixed twice
+in the entries below (OpenRouter free-endpoint fetch; shared discovery
+metadata fetches) recurred in two more call sites found by further Devin
+Review passes on this same branch, both fixed with the identical
+daemon-thread/bare-`Future` pattern:
+
+- **`endpoint_race.race_first_valid`** (`endpoint_race.py`, commit
+  `9b28bd22`) fanned its equivalent-endpoint race attempts out across a
+  `ThreadPoolExecutor`. Combined with this org's default no-deadline
+  `ModelClient.timeout=None`, a losing race participant stuck in an
+  uncancellable provider call that never returns could hang process shutdown
+  forever, even though the winner had already answered the caller and
+  `race_first_valid` had already returned. Fixed by driving each attempt from
+  a raw `threading.Thread(daemon=True)` built on a bare
+  `concurrent.futures.Future` (the documented low-level primitive
+  `ThreadPoolExecutor` itself is built on): `set_running_or_notify_cancel()`
+  preserves the existing "cancelled before it started never calls the
+  provider" duplicate-cost guarantee, and `wait()`/`future.cancel()`/
+  `future.result()`/`future.exception()` behave identically to the prior
+  executor-backed futures. All 22 pre-existing tests in
+  `tests/test_endpoint_race.py` and
+  `tests/test_endpoint_race_terminal_provenance.py` pass unmodified. New
+  regression
+  `tests/test_endpoint_race_process_exit.py::test_uncancellable_loser_never_returning_does_not_block_process_exit`
+  (a subprocess test: one attempt blocks on an `Event` nothing ever sets, the
+  fast attempt wins, script falls through to a normal unforced exit) hung the
+  full 15s bound and was killed (RED) against the pre-fix code, and exits in
+  well under 5s (GREEN) with the fix. Full suite at that commit: 3430 passed,
+  6 failed (same named pre-existing sandbox gaps as the entries below), 2
+  skipped.
+- **`ProviderEmbeddingBatchBackend`** (`batch_routing.py`, commit `59b2fc87`)
+  drove its durable, pollable job queue through a `ThreadPoolExecutor` at
+  every construction site (crash recovery in `__init__`, and `start()`);
+  `cost_router.py`'s `_provider_embedding_backend()` passes
+  `execution_timeout_seconds=None` by default, and even a finite value there
+  is only a cooperative check made after a runner returns, never a preemptive
+  cancellation of an in-flight call -- so a hung provider-embedding runner
+  could block that join, and therefore process shutdown, forever, even after
+  `close()` had already been called. Fixed with a new `_DaemonWorkerPool`
+  primitive: a fixed-size pool of `threading.Thread(daemon=True)` workers
+  pulling `(fn, args)` off a `queue.Queue`, exposing the exact
+  `submit()`/`shutdown(wait=, cancel_futures=)` surface `ThreadPoolExecutor`
+  has (including the surface a pre-existing test double reaches into
+  directly). The pool stays fixed-size (matching `max_concurrency`), workers
+  spawn lazily on `submit()`, and every durability/claim/recovery/publish
+  code path (`_run_job`, `_run_claimed_job`, `_execution_deadline`,
+  `_fail_expired_job`, `_publish_terminal`, reserve/start/cancel/poll/wait)
+  is unchanged. New regression
+  `tests/test_provider_embedding_batch_backend_process_exit.py::test_hung_provider_embedding_runner_does_not_block_process_exit_after_close`
+  (subprocess test, same shape as above) is RED against the pre-fix code and
+  GREEN with the fix. `tests/test_provider_embedding_batch_backend.py` (24
+  tests) passes unmodified; the broader affected 18-file suite: 294 passed, 4
+  pre-existing/out-of-scope failures. Full suite: 3433 passed, 6 failed, 2
+  skipped -- matches the branch's known baseline exactly, no regressions.
+
+### Regression from the `endpoint_race.py` raw-`Future` refactor: unsettled `Future` on a raising callback
+
+`race_first_valid`'s raw-`Future` rewrite above (`9b28bd22`) called the
+caller-supplied `on_attempt_complete` observer callback and then
+unconditionally called `future.set_result(value)` on the success path -- but
+if the callback itself raised, that exception propagated up through the
+worker thread and the `Future` was left permanently `RUNNING`, so `wait()`/
+`future.result()` on an unbounded (`deadline_seconds=None`) race could hang
+forever, silently reintroducing the exact class of bug the `ThreadPoolExecutor`
+removal had just fixed (`ThreadPoolExecutor` used to settle a `Future` with a
+raised worker-callback's exception automatically; the bare-`Future` rewrite
+had to reimplement that contract explicitly and initially missed the
+success-path case). Fixed in commit `a3afc800`: both the failure-path and
+success-path callback invocations are now wrapped in `try`/`except
+BaseException`, and any callback exception settles the `Future` via
+`future.set_exception(...)` on whichever path it occurred, so an observer
+failure can never strand a `Future` mid-race. Regression coverage added in
+`tests/test_endpoint_race_callback_settlement.py` (commit `83582ad7`)
+exercises callback failures after both a successful and a failed provider
+attempt, with `deadline_seconds=None`. Traced/documented in
+`CHANGELOG.d/endpoint-race-callback-settlement.md` (commit `742b5d52`).
+
+### Hardening: `_DaemonWorkerPool.submit()` now fails closed after `shutdown()`
+
+A further Devin Review pass on the new `_DaemonWorkerPool` (added above in
+`59b2fc87`) found an Info-severity gap: `shutdown()` set no closed flag, so a
+concurrent direct `submit()` could enqueue real work behind the shutdown
+sentinels every worker exits on -- work no worker would ever pick up again.
+Stock `ThreadPoolExecutor.submit()` raises `RuntimeError` once `shutdown()`
+has run; `_DaemonWorkerPool` did not replicate that fail-fast contract.
+Traced every current call site: `ProviderEmbeddingBatchBackend` only calls
+`submit()` from `__init__` (before any external reference to `self` exists)
+and from `start()`, and both `start()` and `close()` already serialize
+through the backend's own `_executor_lock` with `start()` checking
+`self._closed` first -- so today's actual production risk was narrow -- but
+a standalone primitive should not depend on every future caller reproducing
+that locking discipline. Fixed in commit `18a76eb5`: a `self._shutdown` flag,
+set under the pool's existing `_workers_lock` inside `shutdown()` and checked
+under the same lock at the top of `submit()` (which now also enqueues under
+that lock, not before acquiring it), so the check and the
+enqueue/shutdown transition can never interleave; `submit()` now raises
+`RuntimeError("cannot schedule new work after shutdown")` instead of
+silently queuing behind the sentinels. New regression
+`tests/test_provider_embedding_batch_backend.py::test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work`
+and a follow-on standalone regression `tests/test_daemon_worker_pool_shutdown.py`
+(commit `02389e2f`) both pass; the broader 14-file affected suite: 210
+passed, the same 4 pre-existing tokenizer-unavailable ZDR failures.
+Traced/documented in `CHANGELOG.d/provider-embedding-daemon-worker-pool.md`
+(commit `558c8470`).
+
+### False-positive analysis preserved as evidence: a proposed `provider_routing` equality guard is non-causal
+
+A separately, concurrently pushed self-fix workflow on this same branch
+(`.github/workflows/source-fix-971-live-review-quality.yml` +
+`scripts/ci/pr971_live_review_quality_repair.py`) proposed two repairs: (1)
+bounding the OpenRouter free-endpoint worker fetch to eight daemon workers --
+already independently correct and already landed in production (commit
+`0d774450`, this file's "unbounded per-model OS thread allocation" entry
+below), so this half was fully superseded before the workflow could ever run;
+and (2) adding `or request.provider_routing != first.provider_routing` to
+`_run_provider_embeddings`'s (`cost_router.py`) existing
+`model`/`agent_id`/`zdr_only` homogeneity guard, on the theory that equal
+`model`/`agent_id`/`zdr_only` fields could still coalesce two requests
+carrying different persisted `provider_routing` metadata into one batch.
+
+Traced before applying anything: `EmbeddingBatchRequest.provider_routing`
+(`batch_routing.py`) is read in exactly one place in the whole codebase,
+`EmbeddingBatchRequest.to_jsonl_line()`, which serializes it into the OpenAI
+Batch API JSONL request body (`body["provider"] = dict(self.provider_routing)`)
+for the separate JSONL-batch-submission path. `_run_provider_embeddings`
+never calls `to_jsonl_line()` and never reads `provider_routing` anywhere in
+its body -- confirmed by reading the function in full: its homogeneity check
+and its downstream `_run_embedding_shard`/client calls only ever reference
+`model`, `agent_id`, and `zdr_only`. The proposed guard was therefore
+non-causal for the execution path it targeted: no request routed through
+`_run_provider_embeddings` can have its provider behavior affected by
+`provider_routing` at all, matching or mismatching. **Not applied** -- kept
+as verified false-positive evidence rather than blindly implementing an
+external suggestion. The stale workflow and its helper script were removed
+directly (commits `0247eca9`, `d388564c`) per this branch's standing "no
+purpose-complete self-modifying/source-fix workflows" rule, since the
+worker-bound half could never re-apply against the new head (its
+`replace_once` target text no longer exists there) and the `provider_routing`
+half was confirmed to fix nothing real.
+
+### Verification
+
+Directly re-run in this session against current head `558c8470`:
+`tests/test_review_gateway.py`, `tests/test_discovery_bootstrap_selection.py`,
+`tests/test_model_discovery_boundaries.py`,
+`tests/test_endpoint_race_callback_settlement.py`, and
+`tests/test_daemon_worker_pool_shutdown.py` together -- 53 passed, 0 failed.
+Each individual fix above additionally carries its own RED-before/GREEN-after
+subprocess or in-process regression and its own contemporaneous full-suite
+run (3430-3433 passed, 6 failed -- the same named pre-existing/out-of-scope
+sandbox gaps throughout this file's 2026-09-02 entries: tokenizer-unavailable
+`test_batch_embeddings.py` ZDR tests, the unavailable `fast_mlsirm` module,
+and one `usage_source` spend-analytics assertion -- 2 skipped), recorded in
+each commit message and reproduced here rather than re-typed from memory.
+`git fetch origin fix/model-group-timeout-openrouter` immediately before
+writing this entry showed head unchanged at `558c8470`; the PR's live
+`mergeable_state` was `blocked` at the same check.
+
+### Remaining open work carried forward
+
+1. **Bootstrap admission's hand-authored diversity/tie-break heuristics**
+   (`model_discovery.py`'s `select_bootstrap_discovered_agents`:
+   representative request weights, lexical tie-breakers,
+   provider/model-group pass ordering, incomplete/equal-evidence fallbacks)
+   still need a research-/evidence-backed decision model, or a documented
+   fail-closed replacement when evidence cannot uniquely justify a decision
+   -- not a repair by changing constants, weights, quotas, or tie-break
+   strings.
+2. **The hourly OpenCode workflow's `cancel-in-progress: false` concurrency
+   gap**: a single wedged run can occupy the `opencode-hourly-loop`
+   concurrency group for up to GitHub's implicit ~360-minute hosted-runner
+   ceiling, serializing every later hourly trigger behind it rather than
+   running it. This needs a durable/resumable contextual-orchestrator-owned
+   execution/checkpoint/re-dispatch boundary preserving exact-head identity
+   across external runner termination -- not a leaf-authored elapsed-time
+   cutoff, which would violate this org's `timeout=null` model-inference
+   policy. A related but narrower fix has already been opened separately as
+   PR #1027 ("fix(ci): remove elapsed-time job cap on the hourly loop; pin
+   model to orchestrator/free", head `ad9c23c2`, open/draft as of this
+   entry): it removes the `loop` job's `timeout-minutes` cap entirely and
+   pins `orchestrator/auto` -> `orchestrator/free`, but its own description
+   explicitly does not attempt the checkpointing/resumability piece, which
+   remains open.
+3. **Legacy bootstrap identifier-generation mixing**: bootstrap reporting can
+   expose a fingerprinted `selected_agent_ids` identity while
+   `enabled_agent_ids` retains the migrated legacy persisted identity for the
+   same endpoint. Consumer semantics need one identity-consistent contract,
+   or explicitly typed generated-vs-persisted identifiers.
+
+These are large-scope architectural items, deliberately left untouched by
+today's session rather than patched narrowly.
+
+## 2026-09-02 PR #971: unbounded per-model OS thread allocation in OpenRouter free-endpoint discovery
+
+Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the
+"unbounded provider discovery and single-provider bootstrap concentration"
+fix recorded below: that fix's own `_openrouter_free_model_endpoints`
+rewrite (raw `threading.Thread(daemon=True)` workers instead of a
+`ThreadPoolExecutor`, to avoid blocking interpreter shutdown) left a
+separate, distinct gap, independently reported by a Devin Review comment on
+PR #971 and independently re-verified against current-head code before any
+change was made.
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/model_discovery.py`)
+
+> Free-model discovery creates unbounded threads
+>
+> When OpenRouter lists many free models, `workers` allocates one thread per
+> row. Large catalogs can exhaust memory or prevent provider discovery from
+> starting.
+
+### Root cause
+
+`_openrouter_free_model_endpoints` built one `threading.Thread` object per
+free model up front (`workers = [threading.Thread(...) for model_id in
+model_ids]`) and started every one of them immediately. A
+`threading.Semaphore(min(8, len(model_ids) or 1))` bounded how many of those
+threads could do real fetch *work* concurrently, but did nothing to bound
+how many native OS threads were *created and started* in the first place --
+each with real kernel/stack allocation overhead. A catalog of hundreds or
+thousands of free models (OpenRouter's actual free-tier catalog size is not
+contractually bounded) would therefore still allocate and start that many
+threads at once, before the semaphore ever limited anything, risking memory
+exhaustion or stalling discovery before a single fetch could begin -- exactly
+the finding.
+
+### Fix
+
+Replaced the one-thread-per-model construction with a fixed pool of at most
+8 daemon worker threads that each pull model IDs from a `queue.Queue` until
+it is empty, so the live thread count for this fetch stays bounded (`<= 8`)
+regardless of catalog size. The already-established daemon-only,
+abandon-on-hang behavior (no `ThreadPoolExecutor`, no interpreter-shutdown
+block) is unchanged; each worker still simply stops draining the queue if
+its current fetch hangs, while the other workers keep making independent
+progress.
+
+### Verification
+
+New regression `test_openrouter_free_model_endpoints_caps_concurrent_thread_creation`
+in `tests/test_model_discovery.py`: submits 40 free models with a
+fetch that blocks on a shared `threading.Event`, samples
+`threading.enumerate()` for live `openrouter-endpoints`-named threads while
+every fetch that will ever start is blocked, and asserts the count is `<= 8`
+(not 40). RED confirmed against the pre-fix one-thread-per-model
+implementation (40 live threads observed for 40 models); GREEN after the
+fixed-pool fix (`<= 8`). The pre-existing hang-safety regression
+(`test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`)
+continues to pass unchanged. Full suite: 3384 passed, 7 failed (all
+pre-existing/out-of-scope: 4x missing native `_token_packer` extension in
+`test_batch_embeddings.py`, the still-in-progress terminal-embedding-failover
+finding tracked separately, missing `fast_mlsirm` module, and the
+tokenizer-mismatch `test_spend_analytics.py` sandbox artifact), 2 skipped.
+`interrogate -f 100 contextual_orchestrator/model_discovery.py`: 100%.
+
+## 2026-09-02 PR #971: terminal-failure batch embedding documents restored endpoint health
+
+Observation time: 2026-09-02 Asia/Seoul. Closes the remaining still-open
+review blocker carried in PR #971's own description ("terminal
+failed/cancelled/rejected batch documents must not clear endpoint circuit
+failures, and incomplete synchronous documents must be recorded through the
+shared embedding-failure path before failover"): the synchronous-document
+half of that sentence was already fixed (see the "synchronous `/v1/embeddings`
+member result ... bypassed `orchestrator._record_embedding_failure`" entry in
+`CHANGELOG.md`'s `## [0.2.0] - Unreleased`); this entry is the terminal-batch
+half. Independently re-verified against current-head code before any change
+was made (never trusted as stated) -- confirmed genuinely still broken, not
+already fixed or stale.
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/server.py`)
+
+> Failed embedding jobs restore endpoint health
+>
+> When a batch returns a terminal failure, `observe_success` records success
+> and clears its circuit. Later requests keep selecting the failed endpoint.
+
+### Root cause
+
+The `/v1/batch/embeddings` HTTP handler's member-failover loop (the `for
+embedding_agent in embedding_agents:` loop calling
+`coordinator.complete_embeddings_batch(...)`) recorded success
+unconditionally on any call that returned without raising:
+
+```python
+except Exception as exc:
+    last_embedding_error = exc
+    orchestrator._record_embedding_failure(embedding_agent, "/v1/batch/embeddings", exc)
+    continue
+orchestrator._group_router.observe_success(embedding_agent.id, ...)
+orchestrator._record_success(embedding_agent.id)
+break
+...
+is_complete = document.get("status") == "completed"  # only decides the HTTP status code
+```
+
+`complete_embeddings_batch` submits the batch and returns whatever document
+`CostRoutingCoordinator.embeddings_batch_document` produces for it -- which
+can be a **terminal-failure document** (`status` of `"failed"`,
+`"cancelled"`, or `"rejected"` -- the exact set
+`embeddings_batch_document` itself checks to stop emitting a polling
+cadence) returned *normally*, with no exception raised. The bug was
+ordering, not a missing check: `observe_success`/`_record_success` ran and
+the loop `break`-ed *before* the terminal-status check the same function
+already computed one line later (`is_complete`) -- that check only ever
+gated the HTTP response code (200 vs 202), never success recording or
+failover. So a genuinely failed batch member still marked its endpoint
+healthy and cleared its circuit breaker; later requests kept selecting that
+broken endpoint instead of failing over to a healthy one. The sibling
+synchronous `/v1/embeddings` handler in the same file does not have this
+bug: it already gates success recording on
+`document.get("status") == "completed" and document.get("embeddings") is
+not None` and routes anything else through `_record_embedding_failure`
+before continuing -- confirmed the only other `observe_success`/
+`_record_success` call site in `server.py`, so this was the one remaining
+instance of the pattern in this file.
+
+### Fix
+
+`contextual_orchestrator/server.py`, `/v1/batch/embeddings` handler:
+
+- Added a module-level `_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES =
+  frozenset({"failed", "cancelled", "rejected"})`, matching
+  `CostRoutingCoordinator.embeddings_batch_document`'s own terminal-status
+  vocabulary (`cost_router.py`).
+- The loop now checks `document.get("status")` against that set
+  immediately after a successful (non-raising) call and before recording
+  any success: a terminal-failure document builds a synthetic
+  `RuntimeError(f"embedding batch member ended with {document.get('status')}")`,
+  routes it through the same shared `orchestrator._record_embedding_failure`
+  recorder an exception would use, discards the document, and `continue`s
+  to the next candidate agent -- the same failover shape a raised exception
+  already got. Only a document whose status is *not* a terminal failure
+  (`"completed"`, or an in-flight status such as `"queued"`, `"validating"`,
+  `"running"`) still records success and `break`s.
+- No other file changed; `model_discovery.py` and the rest of
+  `cost_router.py` are out of scope for this fix (separate in-flight work on
+  this branch).
+
+### Verification
+
+RED-before/GREEN-after. A pre-existing test in
+`tests/test_pr971_review_quality_regressions.py` --
+`test_terminal_embedding_batch_document_fails_over_before_marking_health`
+(mocks `coordinator.complete_embeddings_batch` to return a `status: "failed"`
+document for the first, higher-priority agent and a non-terminal
+`status: "validating"` document for the second, then posts to
+`/v1/batch/embeddings`) -- failed pre-fix (asserted `attempted == [first.id,
+second.id]`; pre-fix code `break`-ed after the first agent's false success,
+so only `[first.id]` was ever attempted and the response carried the failed
+`batch_id`) and passes post-fix (both agents attempted, 202 response carries
+the second agent's `"accepted-batch"` id). Directly confirmed with an
+additional ad hoc spy harness (not committed) around
+`orchestrator._group_router.observe_success`, `orchestrator._record_success`,
+and `orchestrator._record_embedding_failure` for the same scenario:
+post-fix, `observe_success`/`_record_success` are called only with the
+second (healthy) agent's id, and `_record_embedding_failure` is called
+exactly once with the first (failed) agent's id and a `RuntimeError`
+("embedding batch member ended with failed") -- i.e. the failed endpoint's
+circuit is never falsely cleared, and it is routed through the same
+recorder an exception would use. Full suite and `interrogate --fail-under
+100` confirmed green apart from named pre-existing sandbox-only failures
+unrelated to this change.
+
+## 2026-09-02 PR #971: recovered ZDR embedding batch bypassed request-policy enforcement
+
+Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the
+"recovered ZDR batch not re-validated" fix recorded in the
+"embedding recovery/deadline and legacy-id quarantine review" entry below:
+that fix's own re-validation left a gap, independently reported by a Devin
+Review security-level comment on PR #971 and independently re-verified
+against current-head code before any change was made (never trusted as
+stated).
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/cost_router.py`)
+
+> Recovered embeddings bypass ZDR enforcement
+>
+> Recovered `zdr_only` jobs never restore `request_policy`, so OpenRouter
+> omits `provider.zdr`. Mixed privacy identities can also execute under the
+> first request's policy.
+
+### Root cause
+
+`_run_provider_embeddings` is the replay entry point
+`ProviderEmbeddingBatchBackend` calls when a durably-queued embedding job is
+recovered after a process restart and executed on a background worker
+thread. The earlier fix (see "embedding recovery/deadline and legacy-id
+quarantine review" below) added a check that the resolved agent still
+carries the `privacy:zdr` tag, but that check is necessary and not
+sufficient:
+
+1. **The `request_policy` contextvar was never restored.** OpenRouter's
+   enforcing `provider.zdr: true` request field is applied by
+   `_pin_openrouter_zdr` (`orchestrator.py`), which branches on the
+   `_REQUEST_ZDR_ONLY` contextvar set by `TaskOrchestrator.request_policy(...)`
+   -- not on the request's own `zdr_only` field. The submission-time
+   `request_policy(zdr_only)` scope used by every synchronous call site
+   (`cost_router.py` lines ~636, ~770, ~1038, ~1417) is a `ContextVar`,
+   which does not cross the thread boundary `ProviderEmbeddingBatchBackend`
+   replays a recovered job across. `_run_provider_embeddings` called
+   `self._run_embedding_shard(agent, shard)` -> `self.orchestrator.client.embed`
+   /`embed_with_usage` -> `_send_raw` -> `_pin_openrouter_zdr` with no
+   `request_policy` scope active on that thread at all, so the pin's branch
+   condition was always false for a recovered batch regardless of
+   `first.zdr_only` -- the actual HTTP request to OpenRouter silently
+   omitted `provider.zdr`, even though the tag check already re-validated
+   the agent and the code's own comment believed privacy safety was
+   handled.
+2. **No per-request `zdr_only` homogeneity check.** The batch's existing
+   consistency check only asserted every request shared `model` and
+   `agent_id`:
+   `EmbeddingBatchRequest` carries `zdr_only` per request (`batch_routing.py`),
+   but nothing compared it across the batch. A batch mixing
+   `zdr_only=True` and `zdr_only=False` requests under the same
+   `agent_id` executed entirely under `first`'s policy -- either
+   over-restricting a non-ZDR request or, the real risk, silently
+   under-restricting a ZDR request that was not first in the list.
+
+### Fix
+
+`_run_provider_embeddings` (`contextual_orchestrator/cost_router.py`):
+
+- Wraps the sharded `_run_embedding_shard` execution loop in
+  `with self.orchestrator.request_policy(first.zdr_only): ...` -- the same
+  context-manager pattern already used at every other client call site in
+  this file -- so the OpenRouter ZDR pin is correctly re-armed for a
+  recovered batch's actual client call(s), not just checked-and-trusted at
+  the tag level.
+- Extends the existing route-homogeneity check to also require every
+  request in the batch share `first.zdr_only`, alongside the pre-existing
+  `model`/`agent_id` check, raising the same `RuntimeError` (fail closed,
+  same style as the adjacent tag-mismatch check) when they diverge, instead
+  of silently running the whole batch under `first`'s policy.
+
+Both changes are additive and scoped to `_run_provider_embeddings`; no
+other call site or the batch-submission path changed.
+
+### Why this is fail-closed and ZDR-first
+
+This repo's stated policy is ZDR-first: every LLM path routes through the
+`orchestrator/free` pool and privacy-scoped requests must be provably
+zero-retention, not merely assumed so. Before this fix, a *recovered*
+`zdr_only` request could silently execute without the provider-side
+enforcement its caller explicitly requested -- a privacy guarantee that
+looked re-validated (the tag check ran and passed) while the request that
+actually left the process carried no enforcement of it. Both parts of the
+fix restore the same fail-closed shape used everywhere else in this file:
+mismatched privacy identity now raises before any request is sent, and a
+matching identity now genuinely carries its enforcement through to the
+provider, rather than being asserted once and then dropped on the
+replay path.
+
+### Verification
+
+RED-before/GREEN-after, both already present in
+`tests/test_pr971_review_quality_regressions.py` (added ahead of this fix
+landing) and confirmed to fail against pre-fix code, pass against the fix:
+
+- `test_recovered_zdr_batch_reenters_request_privacy_scope` -- monkeypatches
+  `orchestrator.request_policy` to record every `zdr_only` value it is
+  entered with, runs a recovered single-request ZDR batch through
+  `_run_provider_embeddings`, and asserts `request_policy` was entered with
+  `True` exactly once. Failed pre-fix (`entries == []`, the scope was never
+  entered); passes post-fix.
+- `test_provider_embedding_batch_rejects_mixed_privacy_identity` -- builds
+  a two-request batch sharing `model`/`agent_id` but differing
+  `zdr_only`, and asserts `_run_provider_embeddings` raises `RuntimeError`
+  matching `"privacy policy"`. Pre-fix, the batch executed without raising;
+  post-fix it fails closed.
+
+## 2026-09-02 PR #971: unbounded provider discovery and single-provider bootstrap concentration
+
+Observation time: 2026-09-02 Asia/Seoul. This closes the two remaining
+unaddressed items from PR #971's review-blocker list, both independently
+verified against current-head code rather than trusted as stated.
+
+### Summary
+
+- **Model discovery had no separately bounded/cancellable per-provider
+  deadline.** `discover_all_models` (`contextual_orchestrator/model_discovery.py`)
+  ran a plain sequential `for source in sources: discover_provider_models(...)`
+  loop with no thread, no `asyncio.wait_for`, and no join timeout around any
+  individual provider's call -- confirmed genuinely unbounded, not merely
+  a stale claim. `DISCOVERY_TIMEOUT_SECONDS` (the per-HTTP-call socket
+  timeout passed *into* each fetch) defaults to `None` per #971's own
+  no-inference-deadline design boundary, and even set to a finite value it
+  only bounds one socket read at a time inside a provider's multi-fetch
+  discovery attempt -- it cannot bound a hang that ignores that parameter
+  entirely (confirmed with a mock discovery call blocking on an `Event`
+  nothing ever sets). A stalled provider therefore blocked discovery of
+  every later, healthy provider forever. Fixed: `discover_all_models` now
+  runs each provider's discovery on its own daemon thread and stops
+  waiting once a new, separately configured
+  `PROVIDER_DISCOVERY_DEADLINE_SECONDS` (default 30.0s) elapses, recording
+  a `ProviderDiscoveryError(error_code="discovery_timeout")` for that
+  provider and continuing to the next one; the abandoned thread is
+  daemonized so it cannot block interpreter shutdown, and its eventual
+  result (if any) is discarded. This constant is independent of both
+  `DISCOVERY_TIMEOUT_SECONDS` and `ModelClient.timeout` -- it is never
+  reused or repurposed from either -- and an explicit
+  `discovery_deadline=None` still opts back into the pre-fix unbounded
+  wait. RED-before/GREEN-after:
+  `tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`
+  (mocked `discover_provider_models` hangs forever for one source; asserted
+  the second source's model still arrives and the whole call returns in
+  well under 5s) hung the test process indefinitely against the pre-fix
+  sequential loop (had to be killed by an outer `timeout`) and passes in
+  under 2s with the fix.
+- **Bootstrap diversity was model-group-diverse only, not genuinely
+  provider-diverse, despite claiming otherwise.** This repo's own
+  `CLAUDE.md` and `tests/test_discovery_bootstrap_selection.py`'s title/
+  assertions ("missing provider-diverse bootstrap selector") both describe
+  `select_bootstrap_discovered_agents` as layering provider-diverse
+  selection on top of cheapest-price ranking. The actual first pass
+  (`model_discovery.py`) admitted at most one endpoint per **model group**
+  (the provider-declared exact model identity) and never checked
+  `provider_name` at all, so several cheap, distinctly-named models from
+  one provider could -- and, in the existing
+  `test_bootstrap_selector_prefers_model_group_diversity` fixture, did --
+  fill most or all of a bootstrap pool before a genuinely independent,
+  viable alternative provider was ever tried: an apparently diverse pool
+  (distinct model names) that was actually concentrated on one provider's
+  continued availability. `contextual_orchestrator/provider_bootstrap.py`'s
+  separate `select_model_group_diverse_models` was deliberately left
+  unchanged: it never claims provider diversity (its own name and
+  docstring say "model group" only), and its own test suite has an
+  explicit, deliberate price-honesty-over-diversity contract (an
+  unknown-priced model must never outrank a same-provider model with a
+  known price) that a blanket provider constraint would have broken --
+  exactly the "unless evidence/contract explicitly chooses otherwise" case
+  the review finding itself carved out. Fixed (`select_bootstrap_discovered_agents`
+  only): a new first pass now admits at most one endpoint per provider
+  *and* per model group; once every viable provider has contributed once
+  (or capacity runs out), a second pass fills remaining slots from
+  still-untried model groups regardless of provider; a final pass, as
+  before, falls back to duplicate model-group endpoints only once real
+  diversity is exhausted. Two downstream tests that had pinned the old,
+  single-provider-concentrated outcome as correct
+  (`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_prefers_model_group_diversity`,
+  `tests/test_review_gateway.py::test_build_review_orchestrator_uses_model_group_diversity`)
+  were updated to the corrected, genuinely cross-provider expectation.
+  RED-before/GREEN-after: the new
+  `test_bootstrap_selector_spans_multiple_providers_before_repeating_one`
+  (three individually-cheaper same-provider models plus one pricier
+  independent-provider model, pool size 2) failed against the pre-fix
+  algorithm with the pool collapsed onto the single cheaper provider
+  (`{'openrouter'} == {'openai', 'openrouter'}`) and passes with the fix.
+- While landing the above, a concurrently-pushed, staged (not-yet-applied)
+  self-modifying repair workflow was discovered on the same branch --
+  `.github/workflows/source-fix-971-review-quality.yml` and
+  `scripts/ci/source_fix_971_review_quality.py`, added by a parallel
+  session targeting these same two findings. Its proposed fix was weaker
+  and, for the second finding, targeted the wrong function: it would have
+  (a) simply set the pre-existing `DISCOVERY_TIMEOUT_SECONDS` to a fixed
+  15.0s per-HTTP-call socket timeout -- not a separately bounded/
+  cancellable per-provider mechanism, so it would not have caught a hang
+  that ignores that parameter (verified: this branch's own new
+  `test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`
+  mocks exactly that and would still fail against a mere socket-timeout
+  fix); and (b) added provider-diversity logic to
+  `provider_bootstrap.py`'s `select_model_group_diverse_models` -- the
+  function this repo's own tests deliberately keep price-honesty-over-
+  diversity for -- without updating its existing
+  `test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free`
+  contract, which its own proposed algorithm would have broken. Since its
+  own "revalidate exact unchanged writer head" step (queued run
+  `33618086791` on `170103c0`) fails closed the moment the branch head
+  moves, the ordinary commits above were pushed immediately to win that
+  race safely, and the now-fully-superseded temp workflow/script were
+  then deleted per the branch's standing "no purpose-complete self-
+  modifying/source-fix workflows" rule (it could never successfully run
+  again against the new head regardless) -- restoring `interrogate` to
+  100% (the deleted script's undocumented `main()` had briefly dropped it
+  to 99.9% after the merge that brought the staged files in).
+
+## 2026-09-02 PR #971: shared discovery metadata fetches bypassed the discovery deadline
+
+Observation time: 2026-09-02 Asia/Seoul. Closes a Devin Review finding
+(bug id `BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002`,
+`contextual_orchestrator/model_discovery.py` line 52) raised against this same
+branch after the per-provider `PROVIDER_DISCOVERY_DEADLINE_SECONDS` bound
+above landed, independently verified against current-head code rather than
+trusted as stated. A related CodeRabbit finding on the same file, surfaced
+while this fix was in progress, is folded into the same entry below.
+
+### Finding and root cause
+
+`discover_all_models`'s per-provider `discovery_deadline` bound
+(`_discover_provider_models_bounded`, documented in the section above) covers
+only `discover_provider_models` inside the per-provider loop. Three *shared*
+metadata fetches the same function makes outside that loop were confirmed
+still wholly unbounded, each receiving only `timeout` (the per-HTTP-call
+socket timeout, `None`/unbounded by #971's own design default):
+
+- `_fetch_models_dev_metadata(timeout=timeout)` -- called once, *before* the
+  per-provider loop starts, whenever any registered source declares
+  `models_dev_provider_id` (`opencode_zen`, `nvidia_nim`, `nvidia_nim_sub`,
+  `openai`).
+- `_openrouter_zdr_model_ids(timeout=timeout)` -- called unconditionally
+  *after* the per-provider loop finishes.
+- `openrouter_paid_inference_available(timeout=timeout)` -- called *after*
+  the loop, only once an `OPENROUTER_API_KEY` credential is registered.
+
+None of these three ran on the bounded daemon thread the per-provider loop
+already used; a connection accepted but never answered (or any other hang
+the per-request socket timeout cannot catch -- the same class of bug the
+per-provider fix above already addressed) on any one of them could block
+`discover_all_models`, and therefore first-boot pool bootstrapping,
+indefinitely regardless of `discovery_deadline`.
+
+### Fix
+
+Reuses the exact mechanism already reviewed favorably for the per-provider
+bound rather than inventing a second one: `_discover_provider_models_bounded`
+is generalized into a shared primitive, `_run_bounded_by_deadline` (runs the
+wrapped call on its own daemon thread, `worker.join(timeout=discovery_deadline)`,
+abandons a still-alive worker past the deadline -- Python threads cannot be
+forcibly killed, so "cancellable" means "the caller stops waiting"). All four
+call sites -- the per-provider attempt plus the three shared fetches -- now
+go through this one helper under the same `discovery_deadline` parameter
+`discover_all_models` already accepted and threaded through; an explicit
+`discovery_deadline=None` still opts every one of them back into the pre-fix
+unbounded wait.
+
+### Fail-closed reasoning for each timeout fallback
+
+The per-provider path keeps its existing behavior (raises
+`ProviderDiscoveryError(error_code="discovery_timeout")`, recorded in the
+caller's `errors` list). Each shared fetch has no such per-provider error
+list to append to; on timeout, `_run_bounded_by_deadline`'s `on_timeout`
+callback returns the *exact same fallback value the wrapped function already
+returns for an ordinary fetch failure* -- never a new, more permissive value
+-- so the fail-closed posture already established for a network error is
+identical for a network hang. Traced downstream for each:
+
+- `_fetch_models_dev_metadata` ordinary-failure return is `None`.
+  `_merge_models_dev_metadata` (`model_discovery.py`) treats non-dict
+  metadata as "no evidence" and returns the provider's own catalog payload
+  unenriched (no cost/modality enrichment, not "verified free" or "verified
+  priced") -- confirmed by reading the function: `provider_row =
+  metadata.get(provider) if isinstance(metadata, dict) else None`, then
+  `if not isinstance(rows, list) or not isinstance(models, dict): return
+  payload`. On timeout, the bounded wrapper returns `None` -- not the
+  `_NOT_FETCHED` sentinel -- so `discover_provider_models` treats the
+  metadata as "already fetched, unavailable" and does not re-attempt the
+  same stalled fetch a second time inside the (separately bounded)
+  per-provider thread; the provider's own catalog listing still completes.
+- `_openrouter_zdr_model_ids` ordinary-failure return is an empty `set()`.
+  `_apply_discovered_model_evidence` short-circuits on an empty set
+  (`if not zdr_model_ids: return discovered`) and leaves every row's
+  `zdr_capable` exactly as `discover_provider_models` already set it --
+  never *adds* ZDR-capable status on missing/timed-out evidence, only ever
+  on a positive, exact model-id match. On timeout, the bounded wrapper
+  returns `set()`.
+- `openrouter_paid_inference_available` ordinary-failure/"could not
+  determine" return is `None`. `apply_openrouter_spend_admission`'s existing
+  rule is `spend_admitted = provider != "openrouter" or is_free or
+  paid_available is True` -- a paid (non-free) OpenRouter row is
+  `spend_admitted=False` for anything other than `paid_available is True`,
+  so `None` (timeout) and `False` (attested no credit) are both already
+  fail-closed today; the timeout fallback changes nothing about that
+  contract. On timeout, the bounded wrapper returns `None`.
+
+### Verification
+
+RED-before/GREEN-after, one regression test per shared fetch plus the
+existing per-provider one, all mocking the target function itself (not the
+transport layer) to block on a `threading.Event` nothing ever sets, mirroring
+`test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`'s
+style:
+`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch`,
+`::test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch`,
+`::test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch`.
+Each hung the test process indefinitely against the pre-fix code (verified by
+temporarily reverting the fix and killing the hung run with an outer
+`timeout` -- exit 143 on all three) and passes in well under 5s with the fix.
+`tests/test_model_discovery.py`, `tests/test_discovery_bootstrap_selection.py`,
+`tests/test_review_gateway.py`, and every other test file importing
+`model_discovery` (`test_auto_discovery_server.py`,
+`test_chat_model_capability_isolation.py`, `test_ci_gateway_bootstrap.py`,
+`test_discover_models_cli.py`, `test_model_discovery_boundaries.py`,
+`test_openrouter_free_canary.py`, `test_privacy_policy_analysis.py`,
+`test_provider_bootstrap*.py`, `test_provider_catalog_*.py`) pass unchanged.
+`interrogate` remains 100%.
+
+### Related CodeRabbit finding: a hung endpoint fetch could block process exit
+
+`_openrouter_free_model_endpoints` (called from `discover_provider_models`'s
+OpenRouter branch, itself already inside the per-provider bounded thread
+above) fanned its per-model endpoint fetch out across a
+`concurrent.futures.ThreadPoolExecutor`. Verified with a local repro before
+changing anything: even wrapping the whole call in an already-`daemon=True`
+outer thread does not stop a still-hung `ThreadPoolExecutor` worker from
+blocking process shutdown -- `concurrent.futures.thread` registers its own
+interpreter-exit hook that unconditionally joins every still-running worker
+it created, independent of the daemon status of whichever thread constructed
+the executor. A bare script reproducing this (one daemon thread, one
+`ThreadPoolExecutor` with a permanently blocked worker, then a normal,
+unforced fall-through to script exit) hung for a bounded outer `timeout`
+command's full 10s and was killed (exit 124) against the pre-fix code, and
+exited cleanly in well under 1s once the fetch fan-out was rewritten to use
+plain `threading.Thread(daemon=True)` workers (concurrency capped at 8 via a
+semaphore, matching the prior `max_workers`) instead of a `ThreadPoolExecutor`
+-- daemon threads carry no such exit-blocking registration, so a hung fetch
+is abandoned exactly like every other stalled discovery-time network call in
+this module. This is a distinct failure mode from the discovery-deadline
+finding above (it is not about `discover_all_models`'s *caller* waiting too
+long -- that was already bounded by the outer per-provider thread -- it is
+about the *process* being unable to exit at all while an abandoned
+`ThreadPoolExecutor` worker is still running), so it is documented here
+rather than folded silently into the fix above.
+Verified:
+`tests/test_model_discovery.py::test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`
+(spawns a real, separate interpreter, since an in-process thread-introspection
+assertion cannot distinguish "still hanging in the background" from "would
+actually block this process's shutdown" -- the whole point of the finding);
+RED-before (killed by the test's own bound against the reverted,
+`ThreadPoolExecutor`-based code) / GREEN-after (exits well under the bound).
+
+### Note on a concurrently-pushed, broader automated repair
+
+The branch owner pushed `.github/workflows/source-fix-971-live-review-quality.yml`
+and `tests/test_pr971_review_quality_regressions.py` directly (not through
+this session) while this fix was in progress, targeting this same finding
+plus three unrelated Devin Review findings (durably recovered `zdr_only`
+embedding work not re-entering request-policy scope; coalesced
+provider-embedding batches able to mix privacy/routing identity; terminal
+failed/cancelled provider batch documents recorded as endpoint success).
+This branch's `cost_router.py` fix (commit `e3fa6d9b`, see the "recovered ZDR
+embedding batch bypassed request-policy enforcement" section above) landed
+independently, ahead of the workflow's own repair step, and fixed the first
+two of those three (both are the same `_run_provider_embeddings` gap:
+missing `request_policy` re-entry and missing per-request `zdr_only`
+homogeneity) -- confirmed by re-running
+`tests/test_pr971_review_quality_regressions.py` after that commit landed:
+`test_recovered_zdr_batch_reenters_request_privacy_scope` and
+`test_provider_embedding_batch_rejects_mixed_privacy_identity` are both now
+GREEN. Only the third (terminal failed/cancelled provider batch documents
+recorded as endpoint success,
+`test_terminal_embedding_batch_document_fails_over_before_marking_health`)
+remains unfixed as of this entry -- untouched by this fix, in `server.py`.
+This workflow's own regression file was verified test-by-test against the
+fix in this section:
+`test_discover_all_models_bounds_every_shared_metadata_fetch` (the
+discovery-deadline finding this section fixes) passes against this fix --
+confirming it is genuinely superseded for that one finding -- but, as of
+this entry, the workflow's repair step has *not* fully served its purpose
+for the remaining `server.py` finding, so it was deliberately left in
+place rather than deleted, per this branch's own precedent's "delete only
+once fully superseded" rule; its `model_discovery.py` `replace_once` steps
+target the pre-fix literal source text this section replaces, so if ever
+dispatched against this fix's head those specific steps will now fail closed
+(`SystemExit`, no partial write survives past the failing step) rather than
+silently reapplying a weaker, duplicate bound -- consistent with the
+workflow's own "exact writer head" / "smallest causal GREEN repair" design
+intent, not a bypass of it.
+
+## 2026-09-02 PR #971: embedding recovery/deadline and legacy-id quarantine review
+
+Observation time: 2026-09-02 Asia/Seoul.
+
+### Summary
+
+Bot-reported (CodeRabbit/Devin) findings on PR #971 were independently
+verified against the actual current-head code (never trusted as ground
+truth) and, where confirmed real, fixed with a RED-before/GREEN-after
+regression test:
+
+- **Docstring coverage** (CodeRabbit: "48.87%, threshold 80%"): not
+  reproducible against this repo's own gate. `interrogate` (pinned
+  `requirements-opencode-review-ci.txt`, config in `pyproject.toml`:
+  `fail-under = 100`, `exclude = ["tests"]`) reports **100.0%** for the
+  entire `contextual_orchestrator` package, including every file this PR's
+  diff touches. Even scored with every `ignore-*` flag off (the strictest
+  reading short of including `tests/`), coverage is 81.7% -- still above an
+  80% bar. CodeRabbit's own "38 files" count matches this diff's combined
+  source *and* test `.py` files, which strongly indicates its check scores
+  test functions too; this repo deliberately excludes `tests/` from the
+  docstring gate and does not conventionally docstring pytest test
+  functions, which would explain the low externally-reported number. No
+  docstring changes were needed.
+- **Default-timeout embeddings OverflowError, failed legacy-id gateway
+  probe never disabling, recovered ZDR batch not re-validated, incomplete
+  sync embedding results evading the circuit breaker, durable claim-lease
+  crash + unbounded-execution-timeout substitution, and the OpenRouter
+  uptime collector's unbounded background fetch**: all confirmed real
+  against current-head code and fixed; see the dated `CHANGELOG.md`
+  entries under PR #971 for the exact mechanism, fix, and regression test
+  per item.
+- The branch's self-modifying one-shot repair workflows
+  (`.github/workflows/source-fix-971-exact-head-review.yml`,
+  `.github/workflows/source-fix-971-runtime-context-green.yml`,
+  `scripts/source_fix_971_runtime_context_green.py`) were deleted per the
+  standing "no purpose-complete self-modifying/source-fix workflows" rule,
+  after the source/test fixes above landed as ordinary commits.
+
+## 2026-09-02 PR #971: no-heuristics `ModelClient` default retry correction
+
+Observation time: 2026-09-02 Asia/Seoul.
+
+### Summary
+
+- A fresh audit of PR #971 (`fix/model-group-timeout-openrouter`) found that
+  `ModelClient` still defaulted `max_retries` to a hand-picked `2` with no
+  cited standard, paper, or the org's own research (Fugu, Conductor,
+  TRINITY) establishing that number.
+- RED regression commit `c1dcff6e903a7cfd7dab4584d628a5fbf57cf789`
+  (`tests/test_no_heuristic_default_transport_retry.py`) asserted a default
+  `ModelClient` must allocate zero automatic retries, independent of
+  provider/model/reasoning identity; it failed against the `max_retries=2`
+  default (`2 == 0`), confirming the RED state before the fix.
+- Fix applied: `ModelClient.__init__`'s `max_retries` default is now `0`
+  (`contextual_orchestrator/orchestrator.py`). `docs/adr/0001-tool-execution-fallback-policy.md`
+  gained a 2026-09-02 amendment recording that RFC 9110 and NIST SP 800-204
+  constrain *when* retry/circuit-breaking is safe but name no specific
+  numeric allocation, so the allocation is no longer library-authored;
+  explicit nonzero retry budgets remain caller-owned configuration. The RED
+  regression test now passes, and the focused provider/transport regression
+  suites (`tests/test_provider_gateway_resilience.py`,
+  `tests/test_provider_integration.py`, `tests/test_provider_error_taxonomy.py`,
+  `tests/test_no_heuristic_default_transport_retry.py`) were re-run green.
+- The PR's own one-shot repair machinery
+  (`.github/workflows/source-fix-971-default-retry-policy.yml` and its
+  trigger/script) sat `queued` for 100+ minutes under org-wide Actions
+  capacity congestion and was completed manually instead of waiting further;
+  the now-superseded queued run was cancelled and the one-shot machinery
+  removed from the branch per the standing self-removal convention.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -143,7 +1029,7 @@ design was not actually serving as a useful signal.
 
 **Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
 `PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
-(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+(`https://api.bytez.com/models/v2/list/models?task=chat`), prefix-free `Authorization: <token>` header, and
 response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
 every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
 is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
@@ -463,9 +1349,9 @@ completion finishes within any particular bound — the gateway preflight's
 separate curl timeout (originally 30s) was itself later found to be too
 tight for real reasoning-model latency and raised to 120s in
 `ContextualWisdomLab/.github#1440` (see that entry above); the two timeouts
-are independent and this entry originally conflated them. Per owner review
-on that PR, source correctness alone does not establish
-operational acceptance: the fix also carries a RED→GREEN parity test
+are independent and this entry originally conflated them. Source correctness
+alone does not establish operational acceptance: the fix also carries a
+RED→GREEN parity test
 (`test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe`,
 confirmed to fail on the pre-fix `16` literal and pass once synchronized) and
 a negative control
@@ -2661,22 +3547,139 @@ failed after the verdict was already correctly published and enforced —
 a downstream status-publish step, not the review pipeline itself; not yet
 investigated.
 
-**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+**Superseded timeout diagnosis** (traced via `.github#1276`'s
 `noema-review` run, flagged by the user as "still not working" after the
 above fixes landed): `TaskOrchestrator._invoke()`
 (`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
-call/retry/failover loop) has no overall wall-clock deadline. Each
-attempt is capped at `ModelClient.timeout = 90s`, but a hanging (not
-erroring) candidate plus one same-agent retry can chain past 90s +
-backoff + 90s = 180s+ before any response — well past
-`contextual_orchestrator_review_sidecar.sh`'s 120s outer
-`curl --max-time` bound on its own gateway-preflight self-check, so the
-sidecar sees exactly "0 bytes received after 120002ms" even though
-nothing is truly hung, just still working through an unbounded internal
-retry chain. Reproduced once (`.github` run `33312258611`, job
-`99259327051`); org-wide evidence since the pingora/Strix fixes landed
-shows this is now occasional, not the dominant failure mode (most
-`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
-is an overall deadline on `_invoke`'s candidate/retry loop, not another
-timeout increase on the sidecar's client side — deferred rather than
-rushed into this heavily-tested core file without dedicated validation.
+call/retry/failover loop) could run longer than the sidecar's former
+120-second client ceiling. That did not prove an internal hang; it proved
+the outer limit could terminate a healthy slow model. The former proposal
+to add an overall `_invoke` deadline is withdrawn. PR #971 removes fixed
+wall-clock limits from inference, discovery, OpenRouter ZDR lookup, and
+local readiness paths; only operator cancellation or a superseded PR head
+may terminate that work.
+
+## 2026-08-31 OpenRouter is a normal, routable provider again
+
+Supersedes the 2026-08-30 entry above's characterization of `evidence_only=True`
+on `openrouter` (commit `952996ec`) as settled ZDR hardening: that
+characterization was false, as the entry above now records. On direct review
+this pass, "ZDR eligibility is grounds to block a whole provider account"
+turns out to be backwards -- ZDR is a route/model-level property, never a
+provider-account-level one. `PROVIDER_MODEL_SOURCES`'s `openrouter` entry no
+longer sets `evidence_only=True`. Concretely this fixes two bugs at once:
+
+1. **`orchestrator/free` structural emptiness (ADR 0041's own finding).**
+   OpenRouter is the one provider source with genuinely reliable native
+   pricing/`is_free` evidence; excluding it from serving regardless of that
+   evidence directly caused the "structurally empty in practice" state ADR
+   0041 documented. OpenRouter can now serve like any other discovered
+   provider.
+2. **A backwards ZDR-evidence exclusion.** `_apply_discovered_model_evidence`
+   computed `zdr_capable=not model.evidence_only and matches(...)`, which
+   meant OpenRouter's own rows could never be marked ZDR-capable even when
+   they exactly matched OpenRouter's own declared ZDR feed
+   (`https://openrouter.ai/api/v1/endpoints/zdr`). That exclusion is gone;
+   OpenRouter's own matching rows are now credited exactly like every other
+   provider's.
+
+**What is preserved, not removed**: the underlying reason a "provider-neutral,
+not OpenRouter-only" evidence-application contract was insisted on during
+PR #901's review (matching model ids from OpenRouter's feed onto *other*
+providers' discovered rows, not just OpenRouter's own) is completely
+untouched -- `_apply_discovered_model_evidence` still applies evidence to
+every provider's rows identically; OpenRouter's own rows simply stop being
+the one arbitrary exception to that rule.
+
+**The genuine technical risk this raises, and how it is closed**: OpenRouter
+can multiplex one model id across several backing providers, so a
+discovery-time ZDR feed snapshot proves a route *was* attested when fetched,
+not which provider serves a *later* request. Client-side endpoint tracking
+to predict this would only be as reliable as the last snapshot. Instead,
+`ModelClient` now applies OpenRouter's own documented request-time
+enforcement -- `"provider": {"zdr": true}` in the request body
+(https://openrouter.ai/docs/features/provider-routing) -- via
+`_pin_openrouter_zdr`, called from every wire-level transport an OpenRouter
+agent can reach under an active `zdr_only` request scope: `_send` (the
+`route`/`conduct` chat path), `_stream_send` (SSE streaming), and
+`_send_raw` (the tools/structured-output passthrough path both
+`proxy_send` and `proxy_send_once` funnel through), plus `proxy_send_bytes`
+(binary speech responses whose request body is still JSON). This is OpenRouter's own
+server-side enforcement for the request being sent right now, not a
+client-side prediction — strictly stronger than what discovery-time
+filtering could ever guarantee.
+
+**The asynchronous Batch API path is pinned too**: `_batch_run` (JSONL file
+upload then a separate `/batches` job) does not go through the three
+transport functions above, but it independently calls `_pin_openrouter_zdr`
+on each request body it serializes into the uploaded JSONL, so a `zdr_only`
+batch request against OpenRouter gets the same `"provider": {"zdr": true}`
+enforcement as the synchronous paths.
+
+Embedding Batch JSONL follows the same contract. After `zdr_only` resolves an
+attested OpenRouter embedding agent, `CostRoutingCoordinator` records the
+provider-routing pin on each `EmbeddingBatchRequest`; its JSONL body emits
+`"provider": {"zdr": true}` without exposing the internal `zdr_only` field.
+
+Verified: `tests/test_orchestrator_client_boundaries.py` adds direct unit
+coverage of `_pin_openrouter_zdr` (no-op outside `zdr_only`, no-op for
+non-OpenRouter agents, adds/merges the pin correctly) plus wiring-verification
+tests on `_send`/`_stream_send`/`_send_raw`/`_batch_run` that capture the actual
+outgoing JSON body. `tests/test_model_discovery.py`,
+`tests/test_auto_discovery_server.py`, and `tests/test_review_gateway.py`
+were updated where they asserted the old, now-reversed
+`openrouter` + `evidence_only=True` behavior; the general `evidence_only`
+mechanism itself (for any future provider that might legitimately need it)
+is untouched and still tested, just no longer applied to OpenRouter by
+default. Full suite green; `interrogate` 100% on the touched modules.
+
+### GAP RESOLVED ON PR HEAD — 2026-08-31: model groups, free discovery, and measured capacity
+
+[PR #971](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/971)
+implementation parent `a36770179a695b3825a0fc2ca45eace09b5e3b8f` implements the
+requested provider-neutral contract. The live PR head must be read from GitHub
+because this baseline commit necessarily advances it.
+
+- Routing identity is an exact `model_group`; provider-family grouping is not
+  part of the serving contract. Collision-resistant group ids preserve model
+  punctuation rather than conflating distinct upstream model names.
+- Authenticated OpenRouter discovery admits concrete zero-price models and
+  excludes the aggregate `openrouter/free` router from serving candidates.
+  ZDR evidence is evaluated per discovered model rather than disabling the
+  entire OpenRouter account.
+- Discovery, ZDR lookup, provider policy/credit reads, inference, and racing
+  default to no fixed wall-clock timeout.
+- The measured group ledger reports observed peak RPM and TPM from real
+  completed requests; missing token usage remains missing rather than being
+  invented.
+- Bytez's discovery parser and `Key` authentication path are implemented. The
+  observed Bytez HTTP 500 remains upstream/account evidence, not proof that the
+  provider should be silently excluded.
+
+Verification on the current PR working tree:
+local full suite `2913 passed, 1 skipped`; the no-fixed-timeout revert-focused
+suite passed `15 passed, 1 skipped`. Hosted Security, unit, fuzz, OpenCode,
+Noema, and Strix checks for exact head
+`39c80927f89c1f1f955f42af0b9d1f14b1527b70` are queued, so earlier-head hosted
+success is not current-head merge evidence. Therefore this remains verified
+PR-head behavior, not yet protected-main or deployed evidence. Central
+`.github` PR #1546 merged as `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`,
+delivering the shared no-timeout, independent-Noema, stacked-PR, and exact-head
+review fixes; a fresh central scheduler run has been dispatched for this PR and
+is waiting for a GitHub-hosted runner.
+
+## 2026-09-02 canonical immutable release + resumable long-running execution — cross-repo consumer evidence (keyverse#132, EgressWeave#235)
+
+**Observed gap (owner-lane, `contextual-orchestrator`).** Fresh consumer evidence surfaced on PR #971 (`ContextualWisdomLab/keyverse#132`, migrating its hourly model-backed workflow to `orchestrator/free`): this repository has no GitHub `latest` release endpoint (`/releases/latest` returns 404), so a consumer that wants a durable, pinnable contract has no choice but to vendor/pin a raw source revision (currently `464da4715b495b5eaaa593eba3796e2d976ee0c9`). That violates the org-wide CWL boundary convention documented in `ContextualWisdomLab/.github`'s `docs/CWL-MASTER-CONTEXT.md` §7 (this repository has no local copy of that doc): a consumer must consume a released API/client/schema contract, not a mutable sibling source commit. `CLAUDE.md`'s own commands section already documents "Semantic Versioning where the repository publishes a release" as the intended model; today nothing publishes one.
+
+**Observed gap (owner-lane, runtime).** The same comment reports Keyverse inherits `OPENCODE_RUN_TIMEOUT_SECONDS=2100` and that `EgressWeave#235` independently hit a 45-minute Actions job timeout around the same gateway-backed OpenCode pattern. Both are consumer-side leaf wall-clock wrappers reappearing around the org's `timeout=null` model-inference contract (this repository's own `docs/planning/adrs/0032-model-group-cost-aware-discovery.md`: "Model inference has no fixed wall-clock timeout") because this repository has never supplied the owner-side alternative: a way for a long-running (hours-scale) `orchestrator/free` request to survive a host/runner-level execution boundary without being misclassified as a model failure, and a way for an interrupted maintenance execution to resume/re-dispatch from a checkpoint instead of restarting or serializing the hourly lane forever. Every leaf keeps re-inventing its own timeout because the owner has not yet drawn the line between "the model is slow" (never a failure) and "the execution environment ended" (an infrastructure/admin/user-cancellation event with its own terminal state).
+
+**Why this is owner-lane, not per-consumer.** Per the org-wide CWL boundary convention (`ContextualWisdomLab/.github`'s `docs/CWL-MASTER-CONTEXT.md` §7): a boundary gap common to multiple consumers is fixed at the canonical owner, never duplicated/worked around per leaf. Two independent consumers (Keyverse, EgressWeave) hitting the identical class of gap in the same window is exactly the "genuine common demand" signal that rules out excluding this as consumer-specific.
+
+**Scoped action items (tracked here, not yet started as of this entry).**
+1. *Canonical immutable release.* Publish a tagged, versioned GitHub Release for `contextual-orchestrator` (SemVer, per `CLAUDE.md`'s already-stated intent) with an immutable client/API/schema surface consumers can pin via `/releases/latest` instead of a source SHA. No paid/provider-specific fallback should be required to consume it.
+2. *Resumable long-running execution.* A dedicated ADR (this is architecturally significant, not a leaf fix) defining: explicit, distinguishable terminal states for user cancellation, provider termination, audited admin timeout, and infrastructure/runner loss; and a checkpoint/exact-head re-dispatch mechanism so an interrupted maintenance execution resumes rather than restarting from zero or blocking the hourly lane indefinitely. Must preserve the existing `timeout=null` inference contract — this is explicitly not a return to a sidecar-wide fixed deadline.
+
+**Owner RED/GREEN acceptance (as stated by the repository owner).** A long-lived `orchestrator/free` request survives beyond the former leaf timeout without synthetic model failure; explicit user cancellation/provider termination/audited admin timeout/infrastructure loss remain distinguishable; an interrupted maintenance execution can resume/re-dispatch with exact-head/checkpoint identity; the resulting released API/client/schema is immutable enough for consumers to pin without vendoring this repository's source.
+
+**Relationship to already-tracked items above.** This extends, with concrete cross-repo evidence, the "hourly-loop durable/resumable execution boundary" item already deferred out of PR #971 (the narrower job-timeout piece of that item is tracked separately in PR #1027). The immutable-release item is new to this baseline.

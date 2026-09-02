@@ -833,7 +833,9 @@ def test_virtual_embedding_model_binds_concrete_tokenizer_before_accounting() ->
         "contextual-orchestrator", False, None
     )
 
-    assert resolved == ("text-embedding-3-small", "remote_embedding")
+    assert resolved == (
+        "text-embedding-3-small", "remote_embedding", "provider.synthetic.invalid"
+    )
 
 
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
@@ -1188,12 +1190,13 @@ def test_non_zdr_embedding_batch_preserves_explicit_model_outside_the_pool() -> 
     )
     coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
 
-    resolved_model, resolved_agent_id = coordinator._resolve_embedding_target(
+    resolved_model, resolved_agent_id, resolved_provider = coordinator._resolve_embedding_target(
         "unconfigured-upstream-model", zdr_only=False, agent_id=None
     )
 
     assert resolved_model == "unconfigured-upstream-model"
     assert resolved_agent_id is None
+    assert resolved_provider is None
 
 
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
