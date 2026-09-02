@@ -57,6 +57,13 @@ from .rater_observation import (
     RaterInvocation,
     RaterObservationError,
 )
+from .dynamic_item_generation import (
+    DYNAMIC_ITEM_GENERATION_CONTRACT_V1,
+    DynamicItemGenerationError,
+    DynamicItemGenerationInvocation,
+    GenerationConfigurationIdentity,
+    GenerationStatus,
+)
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
@@ -169,6 +176,12 @@ __all__ = [
     "RaterConfigurationIdentity",
     "RaterInvocation",
     "RaterObservationError",
+    # provider-neutral dynamic item-generation context
+    "DYNAMIC_ITEM_GENERATION_CONTRACT_V1",
+    "DynamicItemGenerationError",
+    "DynamicItemGenerationInvocation",
+    "GenerationConfigurationIdentity",
+    "GenerationStatus",
     # compatibility CEFR profile boundary
     "CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1",
     "FAST_MLSIRM_SCORING_SCHEMA_VERSION",
