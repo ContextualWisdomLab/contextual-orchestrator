@@ -305,7 +305,22 @@ def test_conflicting_duplicate_prices_are_withheld_as_ambiguous() -> None:
 
 
 def test_bootstrap_selector_prefers_model_group_diversity() -> None:
-    """The initial pool must span exact model identities before duplicate endpoints."""
+    """The initial pool must span exact model identities before duplicate endpoints.
+
+    Regression for the #971 review finding: "bootstrap diversity must retain
+    enough independently failing provider paths to avoid constructing an
+    apparently diverse exact-model pool entirely from one provider when
+    alternatives exist." Before the fix, this selector's first pass admitted
+    at most one endpoint per *model group* only -- never checking provider
+    identity -- so ``router_cheapest`` and ``router_second`` (two distinct,
+    genuinely different model groups, but both ``openrouter``) filled two of
+    the three slots before ``openai`` -- an independent, viable third
+    provider -- ever got a turn, even though it was cheaper than
+    ``nim_duplicate``. The pool looked diverse (three distinct model-group
+    names) while actually depending on ``openrouter`` staying up for 2/3 of
+    its capacity. The fixed selector spends its first pass on distinct
+    *providers* before doubling up on any one of them.
+    """
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -331,7 +346,54 @@ def test_bootstrap_selector_prefers_model_group_diversity() -> None:
         3,
     )
 
-    assert selected == [router_cheapest, router_second, nim_model]
+    # nim_duplicate (0.03) beats openai_model (1.0) on price alone, but
+    # nim_duplicate shares router_second's model group ("shared-model") --
+    # admitting it would not add a new independently-failing path, only a
+    # pricier duplicate of a model already covered. openai_model is both a
+    # new provider and a new model group, so it is preferred instead.
+    assert selected == [router_cheapest, nim_duplicate, openai_model]
+    assert {model.provider_name for model in selected} == {
+        "openrouter",
+        "nvidia_nim",
+        "openai",
+    }
+
+
+def test_bootstrap_selector_spans_multiple_providers_before_repeating_one() -> None:
+    """A cheaper same-provider model must not crowd out a viable alternative provider.
+
+    Regression for the #971 review finding: "bootstrap diversity must retain
+    enough independently failing provider paths to avoid constructing an
+    apparently diverse exact-model pool entirely from one provider when
+    alternatives exist." Three ``openrouter`` models are each individually
+    cheaper than the sole ``openai`` model, so a purely price-ranked,
+    model-group-only-diverse selector (the pre-fix behavior) fills every
+    slot from ``openrouter`` alone -- a pool that is one ``openrouter``
+    outage away from serving nothing, despite ``openai`` being a genuinely
+    viable, independently-failing alternative.
+    """
+    price_book = PriceBook(InMemoryConfigStore())
+    router_a = _model("openrouter", "router-a")
+    router_b = _model("openrouter", "router-b")
+    router_c = _model("openrouter", "router-c")
+    openai_model = _model("openai", "openai-only")
+    _set_price(price_book, router_a, 0.01)
+    _set_price(price_book, router_b, 0.02)
+    _set_price(price_book, router_c, 0.03)
+    _set_price(price_book, openai_model, 0.5)
+
+    selected = model_discovery.select_bootstrap_discovered_agents(
+        [router_a, router_b, router_c, openai_model],
+        price_book,
+        2,
+    )
+
+    providers = {model.provider_name for model in selected}
+    assert len(selected) == 2
+    assert providers == {"openrouter", "openai"}, (
+        f"bootstrap pool of size 2 used only {providers}, "
+        "collapsing onto one provider despite a viable alternative"
+    )
 
 
 def test_bootstrap_selector_keeps_nim_primary_and_sub_credential_accounts_independent() -> None:
@@ -366,6 +428,29 @@ def test_bootstrap_selector_keeps_nim_primary_and_sub_credential_accounts_indepe
     )
 
     assert selected == [nim_primary, nim_sub]
+
+
+def test_bootstrap_selector_falls_back_to_duplicate_model_group_when_capacity_remains() -> None:
+    """Genuine duplicate model-group endpoints still fill leftover capacity.
+
+    Once every provider has contributed and every distinct model group is
+    exhausted, a still-open slot falls back to a second endpoint for a model
+    group already selected (a real failover path for that one model, not a
+    new independently-failing provider) rather than leaving capacity idle.
+    """
+    price_book = PriceBook(InMemoryConfigStore())
+    router_shared = _model("openrouter", "shared-model")
+    nim_shared = _model("nvidia_nim", "shared-model")
+    _set_price(price_book, router_shared, 0.01)
+    _set_price(price_book, nim_shared, 0.02)
+
+    selected = model_discovery.select_bootstrap_discovered_agents(
+        [nim_shared, router_shared],
+        price_book,
+        2,
+    )
+
+    assert selected == [router_shared, nim_shared]
 
 
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:

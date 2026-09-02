@@ -89,7 +89,21 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
 
 
 def test_build_review_orchestrator_uses_model_group_diversity(monkeypatch):
-    """Different concrete models are not displaced by provider grouping."""
+    """Different concrete models are not displaced by provider grouping.
+
+    Updated for the #971 review finding ("bootstrap diversity must retain
+    enough independently failing provider paths ... unless evidence/contract
+    explicitly chooses otherwise"): the shared
+    ``select_bootstrap_discovered_agents`` selector this gateway calls now
+    spends its first pass on distinct *providers* before doubling up on any
+    one of them, so a two-agent review pool built from two cheap
+    ``openrouter`` models and one pricier, independent ``openai`` model
+    picks the independent provider over the second ``openrouter`` model --
+    a review pool that is not entirely dependent on one provider staying up
+    when a genuinely independent alternative was available. This gateway
+    has no diversity policy of its own; it inherits whatever the shared
+    selector decides.
+    """
     discovered = [
         _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
         _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),
@@ -104,7 +118,7 @@ def test_build_review_orchestrator_uses_model_group_diversity(monkeypatch):
 
     assert [agent.model for agent in orchestrator.agents] == [
         "cheap_first",
-        "cheap_second",
+        "independent_review",
     ]
 
 
