@@ -36,22 +36,17 @@ that separate system.
    through the normal PR process (review, required checks, no exceptions).
 2. `CHANGELOG.md` has a `## [X.Y.Z]` section (an `- Unreleased` or dated
    suffix is fine) with real, non-empty content describing what changed.
-3. Either no git tag `vX.Y.Z` exists yet, or one does and points at a commit
-   that is an ancestor of `main`'s current tip (the commit you're
-   dispatching, or an earlier one `main` has since advanced past) — in
-   which case the workflow safely resumes using **the tag's own target
-   commit**, never the commit you happen to be dispatching against: if that
-   tag has no GitHub Release published yet, it creates one; if the Release
-   also already exists (e.g. a prior run's asset-upload step failed after
-   `gh release create` itself succeeded), it still attempts the best-effort
-   SBOM asset attach rather than treating the run as nothing left to do —
-   see step 4 below. This is exactly the "tag pushed, then the run failed
-   before creating the Release, and more commits merged to `main` before
-   you retried" scenario — it stays recoverable no matter how far `main`
-   has advanced since the tag was pushed. A tag pointing at a commit that is
-   **not** an ancestor of `main`'s current tip (a genuinely different or
-   stray tag) is rejected outright: a tag is never reused or moved onto a
-   different commit — bump the version again if you need to re-release.
+3. Either no exact tag ref `refs/tags/vX.Y.Z` exists yet, or one does and
+   resolves to a commit that is an ancestor of `main`'s current tip (the
+   commit you're dispatching, or an earlier one `main` has since advanced
+   past) — in which case the workflow safely resumes using **the tag's own
+   target commit**, never a same-named branch and never the commit you happen
+   to be dispatching against. If that tag has no GitHub Release published
+   yet, the workflow creates one; if the Release already exists after a
+   previously interrupted publication, the workflow verifies or restores
+   the mandatory release assets without moving the tag. A tag that resolves
+   to a commit that is **not** an ancestor of `main`'s current tip is rejected
+   outright: bump the version rather than reusing or moving an immutable tag.
 4. `main` is currently green — its own required checks (Tests, Security,
    Fuzz, and the org-central Strix/OpenCode/security-scan/OSV/Scorecard
    checks from `ContextualWisdomLab/.github`) are passing. The release
@@ -65,10 +60,15 @@ that separate system.
    - **If you dispatch moments after a merge lands**, the gate can fail
      with "expected push-triggered check(s) ... have not registered yet" —
      GitHub has not finished creating this new tip's Tests/Security/Fuzz
-     check-run entries yet. This is expected and safe: wait a few moments
-     for those workflows to actually start, then re-dispatch. It is
-     distinct from a genuine pending/failed check, which the same gate
-     reports as "not both complete and green" instead.
+     check-run entries yet. This is expected and safe: wait for those
+     workflows to actually start, then re-dispatch. It is distinct from a
+     genuine pending/failed check, which the same gate reports as "not both
+     complete and green" instead.
+5. The exact commit has a successful `security.yml` run exposing the
+   `cyclonedx-sbom` artifact and a non-empty `cyclonedx-sbom.json`. The
+   canonical release path treats this SBOM as required supply-chain evidence,
+   not optional decoration; lookup, download, empty-file, upload, or
+   post-upload verification failure fails the run closed.
 
 ## Cutting a release
 
@@ -80,65 +80,60 @@ that separate system.
 4. Dispatch. The workflow is two jobs, least-privilege: `verify` runs with no
    write permission and no persisted git credential while it executes any
    repository-controlled code; `publish` holds the write token and does
-   nothing but tag and publish. In order:
+   nothing but verify final publication inputs, tag, and publish. In order:
    - **`verify`** (read-only):
-     - first resolves any existing `vX.Y.Z` tag via the commit API and
-       decides `TARGET_SHA` — the exact commit every later gate evaluates
-       against. No tag yet: `TARGET_SHA` is the dispatched commit itself
-       (a fresh publish). A tag that exists and is an ancestor of `main`'s
-       current tip: `TARGET_SHA` is the *tag's own target commit* (a
-       resume — see step 3 above), regardless of how far `main` has since
-       advanced. A tag that exists and is **not** an ancestor of `main`'s
-       current tip fails closed outright (a genuine conflict). A failed tag
-       or Release lookup is treated as "absent" only on a *confirmed* 404 /
-       "release not found"; any other lookup failure (rate limit, auth,
-       network, 5xx) fails this step closed instead of guessing —
-       re-dispatch once the transient failure clears;
-     - checks out `TARGET_SHA` so every subsequent step in this job reads
-       *that* commit's tree, never a possibly-newer `main` tip;
+     - queries `repos/$REPO/git/ref/tags/vX.Y.Z`, not the generic commits
+       endpoint, so a same-named branch cannot impersonate a release tag.
+       A lightweight tag resolves directly to its commit; an annotated tag
+       is peeled through the tag-object API and must resolve to a commit;
+     - decides `TARGET_SHA`, the exact commit every later gate evaluates
+       against. No tag yet: `TARGET_SHA` is the dispatched commit itself (a
+       fresh publish). A tag that exists and is an ancestor of `main`'s
+       current tip: `TARGET_SHA` is the *tag's own target commit* (a resume),
+       regardless of how far `main` has advanced. A tag that is not an
+       ancestor of `main` fails closed. A failed tag or Release lookup is
+       treated as "absent" only on a *confirmed* 404 / "release not found";
+       rate-limit, auth, network, or 5xx errors fail closed instead of being
+       guessed away;
+     - checks out `TARGET_SHA` so every subsequent step reads *that* commit's
+       tree, never a possibly-newer `main` tip;
      - for a **fresh publish only**, fails closed if `TARGET_SHA` is not
-       `main`'s current tip (a race with a concurrent merge) — a resume
-       skips this comparison entirely, since `main` having advanced past
-       the tag's target commit is exactly the situation a resume exists to
-       handle;
-     - fails closed (via the shared `scripts/ci/release_checks_gate.sh`)
-       unless every one of this repository's own known push-triggered
-       checks (Tests' two jobs, Fuzz's two jobs, Security's two jobs — see
-       `RELEASE_EXPECTED_PUSH_CHECKS` in `release.yml`) has actually
-       registered as a check-run for `TARGET_SHA` *and* every check GitHub
-       reports for it is complete with a successful, skipped, or neutral
-       conclusion;
+       `main`'s current tip. A resume skips this comparison because `main`
+       having advanced past the tag is precisely the recoverable case;
+     - fails closed (via `scripts/ci/release_checks_gate.sh`) unless all
+       repository-owned expected push checks have registered for
+       `TARGET_SHA` and every check GitHub reports for it is terminal-green,
+       skipped, or neutral;
      - fails closed if the input version does not match `TARGET_SHA`'s
        `pyproject.toml` `[project]` table;
-     - runs the full test suite fresh, on `TARGET_SHA`'s tree (`uv run
-       --locked --extra api --extra db --extra queue --group dev python -m
-       pytest -q`);
+     - runs the full test suite fresh on `TARGET_SHA` (`uv run --locked
+       --extra api --extra db --extra queue --group dev python -m pytest -q`);
      - renders release notes from `TARGET_SHA`'s `CHANGELOG.md` matching
-       section (`scripts/ci/release_notes.py`, tested in
-       `tests/test_release_notes.py`);
-     - best-effort looks up and downloads the CycloneDX SBOM from the
-       matching successful `security.yml` run for `TARGET_SHA`, if one
-       exists (a missing SBOM, or a failed lookup, warns — it never blocks
-       the release);
-     - uploads the rendered notes and any SBOM for `publish` to pick up.
+       section (`scripts/ci/release_notes.py`);
+     - requires a successful exact-commit `security.yml` run, downloads its
+       `cyclonedx-sbom` artifact, and rejects a missing or empty
+       `sbom-download/cyclonedx-sbom.json`;
+     - uploads both the rendered notes and SBOM for `publish`; a missing file
+       is an error, not an ignored artifact condition.
    - **`publish`** (write-scoped, only after `verify` succeeds):
-     - for a **fresh publish only**, re-verifies `main`'s tip has not
-       advanced while `verify` was testing and rendering notes (a resume
-       skips this — the tagged commit is already immutable, so there is
-       nothing for a live main-tip comparison to protect against); either
-       way, re-verifies (via the same shared script) that every check for
-       `TARGET_SHA` is still complete and green — a second, authoritative
-       recheck right before anything is created (see "Known limitations"
-       below for the small residual window a fresh publish still leaves);
-     - creates and pushes an annotated tag `vX.Y.Z` — skipped when resuming
-       a run whose tag already exists;
-     - creates the GitHub Release using the notes `verify` produced —
-       skipped when resuming a run whose Release already exists;
-     - attempts the best-effort SBOM asset attach, whether the Release was
-       just created or already existed — a failure here warns and never
-       blocks (re-dispatch to retry the attach).
-5. Confirm at
-   <https://github.com/ContextualWisdomLab/contextual-orchestrator/releases/latest>.
+     - for a **fresh publish only**, re-verifies `main`'s tip has not advanced
+       while `verify` was testing; for both fresh and resumed publication,
+       re-verifies every check for `TARGET_SHA` immediately before mutation;
+     - verifies the downloaded release notes and SBOM are non-empty;
+     - creates and pushes annotated tag `vX.Y.Z` only when it does not already
+       exist;
+     - verifies `refs/tags/vX.Y.Z` really exists on `origin`, its remote Git
+       object matches the fetched local tag object, and the tag peels to
+       `TARGET_SHA`. GitHub Release creation never gets a chance to synthesize
+       an implicit tag from a branch/default branch;
+     - creates the GitHub Release using the verified notes unless resuming an
+       already-created Release;
+     - verifies `cyclonedx-sbom.json` is attached. If it is missing, uploads
+       it and then re-reads the Release assets. Upload or verification failure
+       fails the workflow closed; re-dispatch resumes without moving the tag.
+5. Confirm both the versioned Release and its `cyclonedx-sbom.json` asset at
+   `.../releases/tag/vX.Y.Z`. Use `/releases/latest` only to discover the
+   newest version, never as an immutable consumer pin.
 
 ## After a release
 
@@ -148,7 +143,7 @@ that separate system.
 - Downstream consumers with an open handoff on this gap
   (`ContextualWisdomLab/keyverse#132`, `ContextualWisdomLab/bandscope#881`,
   the Wardnet consumer-owner handoff on `contextual-orchestrator#971`) can
-  now bump to the published tag instead of a vendored source SHA.
+  bump to the published tag instead of a vendored source SHA.
 
 ## Known limitations
 
@@ -160,27 +155,21 @@ apply to it.
 
 **A small, accepted check-then-act window remains before the tag/Release are
 actually created.** `publish`'s recheck of `main`'s tip and of every check
-for that commit is the very first thing it does, back-to-back, before
-anything else — but GitHub exposes no atomic "create this tag only if branch
-`X` is still at commit `Y`" API, so there is no way to make that window
-literally zero. In practice it is small (a same-org artifact download plus
-the `git tag`/`git push` themselves, on the order of seconds), this is a
-manual, maintainer-triggered dispatch rather than a high-frequency automated
-path, and the only realistic outcome if the window is ever actually hit is
-releasing a commit that genuinely *was* `main`'s verified, all-checks-green
-tip moments earlier — not a wrong, unreviewed, or malicious commit, and not
-one that skipped this workflow's own fresh test run. See
-`docs/planning/adrs/0129-canonical-immutable-release.md`'s "Known
-limitations" section for the full reasoning.
+for that commit runs before publication, but GitHub exposes no atomic
+"create this tag only if branch X is still at commit Y" API. The workflow
+therefore minimizes the window, rejects a stale fresh publish, and verifies
+the exact remote tag identity before creating the GitHub Release. If a
+concurrent merge lands after the final tip check but before the tag push, the
+released commit can have been `main`'s verified tip moments earlier rather
+than the newest tip. Cut a new patch/minor release from the intended current
+tip; never move or overwrite the earlier immutable tag.
 
-If you ever discover a release published a commit that was immediately
-superseded by another merge: **do not** retroactively move, delete, or
-retag the published release (see Rollback below — tags here are immutable
-once published, and this is not the "genuine publishing mistake caught
-immediately" case that section's narrow deletion exception covers). Instead,
-just cut a new patch (or minor) release from the actual intended tip through
-the normal dispatch process above; the superseded release stays as an
-accurate record of what `main`'s tip briefly was.
+A Release object can also exist temporarily without its required SBOM when
+`gh release create` succeeds and a later asset upload fails. That state is
+**not** a successful canonical release run: the workflow fails closed and a
+re-dispatch resumes at the same immutable tag/Release until the mandatory
+asset is present and verified. Consumers should use a version as release-ready
+only after the release workflow itself has completed successfully.
 
 ## Rollback
 
