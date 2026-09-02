@@ -12,10 +12,6 @@ from contextual_orchestrator.credentials import (
     get_credential,
     set_backend,
 )
-from contextual_orchestrator.chat_capability import (
-    is_chat_compatible_model_id,
-    is_general_chat_agent_model_id,
-)
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
 
@@ -34,29 +30,38 @@ def _discovered(
     provider: str,
     model: str,
     credential: str,
-    price: float,
     *,
+    is_free: bool = True,
     evidence_only: bool = False,
+    capabilities: tuple[str, ...] = ("chat",),
+    input_modalities: tuple[str, ...] = ("text",),
+    output_modalities: tuple[str, ...] = ("text",),
 ) -> DiscoveredModel:
-    """Build one deterministic discovered chat candidate for the tests."""
+    """Build one explicitly evidenced discovered candidate for the tests."""
     return DiscoveredModel(
         provider_name=provider,
         model_id=model,
         credential_name=credential,
         chat_base_url=f"https://{provider}.example/v1",
         auth_scheme="Bearer",
-        prompt_price_per_1k=price,
-        completion_price_per_1k=price,
+        prompt_price_per_1k=0.0 if is_free else 1.0,
+        completion_price_per_1k=0.0 if is_free else 1.0,
+        is_free=is_free,
         evidence_only=evidence_only,
+        capabilities=capabilities,
+        input_modalities=input_modalities,
+        output_modalities=output_modalities,
     )
 
 
-def test_build_review_orchestrator_registers_all_provider_credentials(monkeypatch):
-    """The bootstrap registers every configured provider key before discovery."""
+def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sources(
+    monkeypatch,
+):
+    """Registration is global while free-pool admission is source constrained."""
     discovered = [
-        _discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01),
-        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY", 0.02),
-        _discovered("nvidia_nim", "nim-review", "NVIDIA_NIM_API_KEY", 0.03),
+        _discovered("openai", "gpt-review", "OPENAI_API_KEY"),
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        _discovered("nvidia_nim", "nim-review", "NVIDIA_NIM_API_KEY"),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
     environment = {
@@ -64,122 +69,96 @@ def test_build_review_orchestrator_registers_all_provider_credentials(monkeypatc
         for name in review_gateway.REVIEW_CREDENTIAL_NAMES
     }
 
-    orchestrator = review_gateway.build_review_orchestrator(environment, max_agents=2)
+    orchestrator = review_gateway.build_review_orchestrator(environment)
 
-    assert len(orchestrator.agents) == 2
+    assert {agent.credential_key for agent in orchestrator.agents} == {
+        "OPENROUTER_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+    }
     assert all(not agent.disabled for agent in orchestrator.agents)
-    assert all(agent.tags == ("review",) for agent in orchestrator.agents)
-    assert all(get_credential(name) == environment[name] for name in review_gateway.REVIEW_CREDENTIAL_NAMES)
+    assert all("cost:free" in agent.tags for agent in orchestrator.agents)
+    assert all("input:text" in agent.tags for agent in orchestrator.agents)
+    assert all("output:text" in agent.tags for agent in orchestrator.agents)
+    assert {agent.priority for agent in orchestrator.agents} == {0}
+    assert all(
+        get_credential(name) == environment[name]
+        for name in review_gateway.REVIEW_CREDENTIAL_NAMES
+    )
 
 
-def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch):
-    """Cost-ranked discovery remains the routing order after agent construction."""
+def test_build_review_orchestrator_rejects_paid_rows(monkeypatch):
+    """Provider eligibility cannot override explicit nonzero pricing evidence."""
     discovered = [
-        _discovered("openai", "expensive_review", "OPENAI_API_KEY", 2.0),
-        _discovered("openrouter", "cheap_review", "OPENROUTER_API_KEY", 0.01),
+        _discovered(
+            "openrouter",
+            "paid-review",
+            "OPENROUTER_API_KEY",
+            is_free=False,
+        )
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENAI_API_KEY": "openai-secret", "OPENROUTER_API_KEY": "router-secret"},
-        max_agents=2,
-    )
-
-    assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
-
-
-def test_build_review_orchestrator_uses_model_group_diversity(monkeypatch):
-    """Different concrete models are not displaced by provider grouping.
-
-    Updated for the #971 review finding ("bootstrap diversity must retain
-    enough independently failing provider paths ... unless evidence/contract
-    explicitly chooses otherwise"): the shared
-    ``select_bootstrap_discovered_agents`` selector this gateway calls now
-    spends its first pass on distinct *providers* before doubling up on any
-    one of them, so a two-agent review pool built from two cheap
-    ``openrouter`` models and one pricier, independent ``openai`` model
-    picks the independent provider over the second ``openrouter`` model --
-    a review pool that is not entirely dependent on one provider staying up
-    when a genuinely independent alternative was available. This gateway
-    has no diversity policy of its own; it inherits whatever the shared
-    selector decides.
-    """
-    discovered = [
-        _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
-        _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),
-        _discovered("openai", "independent_review", "OPENAI_API_KEY", 1.0),
-    ]
-    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
-
-    orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENAI_API_KEY": "openai-secret", "OPENROUTER_API_KEY": "router-secret"},
-        max_agents=2,
-    )
-
-    assert [agent.model for agent in orchestrator.agents] == [
-        "cheap_first",
-        "independent_review",
-    ]
+    with pytest.raises(NotConfigured, match="eligible zero-cost"):
+        review_gateway.build_review_orchestrator(
+            {"OPENROUTER_API_KEY": "router-secret"}
+        )
 
 
 def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch):
-    """A row explicitly marked evidence_only is never a review upstream."""
+    """Evidence-only catalog rows are never review upstreams."""
     discovered = [
         _discovered(
             "bytez",
             "router-review",
-            "BYTEZ_API_KEY",
-            0.01,
+            "OPENROUTER_API_KEY",
             evidence_only=True,
         )
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    with pytest.raises(NotConfigured, match="general chat models"):
-        review_gateway.build_review_orchestrator({"BYTEZ_API_KEY": "router-secret"})
+    with pytest.raises(NotConfigured, match="eligible zero-cost"):
+        review_gateway.build_review_orchestrator(
+            {"OPENROUTER_API_KEY": "router-secret"}
+        )
 
 
-def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):
-    """Embedding and image catalog rows never enter the review-agent pool."""
+def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch):
+    """Structured capability evidence, not the credential source, governs chat fitness."""
     discovered = [
-        _discovered("openai", "text-embedding-3-large", "OPENAI_API_KEY", 0.001),
-        _discovered("openai", "gpt-review", "OPENAI_API_KEY", 2.0),
+        _discovered(
+            "openrouter",
+            "embedding-model",
+            "OPENROUTER_API_KEY",
+            capabilities=("embeddings",),
+            output_modalities=("embedding",),
+        ),
+        _discovered("openrouter", "review-model", "OPENROUTER_API_KEY"),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
     orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENAI_API_KEY": "openai-secret"}, max_agents=1
+        {"OPENROUTER_API_KEY": "router-secret"}
     )
 
-    assert [agent.model for agent in orchestrator.agents] == ["gpt-review"]
+    assert [agent.model for agent in orchestrator.agents] == ["review-model"]
 
 
-def test_build_review_orchestrator_fails_closed_without_general_chat_models(monkeypatch):
-    """A catalog containing only endpoint-specific models cannot start review."""
-    discovered = [_discovered("openai", "text-embedding-3-large", "OPENAI_API_KEY", 0.001)]
+def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypatch):
+    """Blind review selection must reuse the general-free modality boundary."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            "vision-review-model",
+            "OPENROUTER_API_KEY",
+            input_modalities=("text", "image"),
+        )
+    ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    with pytest.raises(NotConfigured, match="general chat models"):
-        review_gateway.build_review_orchestrator({"OPENAI_API_KEY": "openai-secret"})
-
-
-@pytest.mark.parametrize(
-    ("model_id", "chat_compatible", "general_agent"),
-    [
-        ("text-embedding-3-large", False, False),
-        ("gpt-image-1", False, False),
-        ("gpt-review", True, True),
-        ("nvidia/llama-3.1-nemoguard-8b-content-safety", True, False),
-        (None, False, False),
-        ("", False, False),
-    ],
-)
-def test_chat_capability_boundary_is_explicit(
-    model_id, chat_compatible: bool, general_agent: bool
-) -> None:
-    """The gateway rejects endpoint-only and specialized role identifiers."""
-    assert is_chat_compatible_model_id(model_id) is chat_compatible
-    assert is_general_chat_agent_model_id(model_id) is general_agent
+    with pytest.raises(NotConfigured, match="eligible zero-cost"):
+        review_gateway.build_review_orchestrator(
+            {"OPENROUTER_API_KEY": "router-secret"}
+        )
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():
@@ -196,35 +175,20 @@ def test_build_review_orchestrator_does_not_count_auth_as_provider_credential():
         )
 
 
-def test_build_review_orchestrator_rejects_invalid_agent_limit():
-    """The sidecar refuses an invalid routing-pool bound before using credentials."""
-    with pytest.raises(ValueError, match="max_agents"):
-        review_gateway.build_review_orchestrator({}, max_agents=0)
-
-
 def test_build_review_orchestrator_fails_closed_without_discovered_models(monkeypatch):
     """A configured key without a usable model list cannot start the sidecar."""
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: ([], []))
     with pytest.raises(NotConfigured, match="no provider models"):
-        review_gateway.build_review_orchestrator({"OPENAI_API_KEY": "openai-secret"})
-
-
-def test_build_review_orchestrator_fails_closed_when_selection_is_empty(monkeypatch):
-    """A discovery result must still produce at least one selected candidate."""
-    monkeypatch.setattr(
-        review_gateway,
-        "discover_all_models",
-        lambda: ([_discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01)], []),
-    )
-    monkeypatch.setattr(review_gateway, "select_bootstrap_discovered_agents", lambda *args: [])
-
-    with pytest.raises(NotConfigured, match="selected no provider models"):
-        review_gateway.build_review_orchestrator({"OPENAI_API_KEY": "openai-secret"})
+        review_gateway.build_review_orchestrator(
+            {"OPENROUTER_API_KEY": "router-secret"}
+        )
 
 
 def test_main_starts_authenticated_gateway(monkeypatch):
     """The CLI passes the generated local token into the protected server."""
-    discovered = [_discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01)]
+    discovered = [
+        _discovered("openrouter", "review-model", "OPENROUTER_API_KEY")
+    ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
     captured: dict[str, object] = {}
 
@@ -234,7 +198,7 @@ def test_main_starts_authenticated_gateway(monkeypatch):
         captured.update(kwargs)
 
     monkeypatch.setattr(review_gateway, "serve", fake_serve)
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
     monkeypatch.setattr(sys, "argv", ["review_gateway", "--port", "18181"])
 
@@ -248,6 +212,36 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
 
+def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
+    """CLI deployments can explicitly constrain the bootstrap provider array."""
+    discovered = [
+        _discovered("bytez", "bytez-review", "BYTEZ_API_KEY"),
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    captured: dict[str, object] = {}
+
+    def fake_serve(orchestrator, **kwargs):
+        """Capture the CLI-selected serving pool without binding a port."""
+        captured["orchestrator"] = orchestrator
+        captured.update(kwargs)
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
+    monkeypatch.setenv("BYTEZ_API_KEY", "bytez-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--credential-name", "BYTEZ_API_KEY"],
+    )
+
+    review_gateway.main()
+
+    orchestrator = captured["orchestrator"]
+    assert [agent.credential_key for agent in orchestrator.agents] == ["BYTEZ_API_KEY"]
+
+
 def test_main_requires_authentication(monkeypatch):
     """The sidecar never starts an unauthenticated inference endpoint."""
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", raising=False)
@@ -257,10 +251,29 @@ def test_main_requires_authentication(monkeypatch):
         review_gateway.main()
 
 
-def test_main_rejects_invalid_agent_limit_without_traceback(monkeypatch, capsys):
-    """Argparse reports an invalid routing-pool bound as a CLI usage error."""
-    monkeypatch.setattr(sys, "argv", ["review_gateway", "--max-agents", "0"])
-    with pytest.raises(SystemExit) as exc_info:
-        review_gateway.main()
-    assert exc_info.value.code == 2
-    assert "--max-agents must be a positive integer" in capsys.readouterr().err
+def test_build_review_orchestrator_admits_every_evidence_eligible_candidate(monkeypatch):
+    """Review admission cannot evict eligible models through an arbitrary pool cap."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            f"review-model-{index:02d}",
+            "OPENROUTER_API_KEY",
+        )
+        for index in range(13)
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert {agent.model for agent in orchestrator.agents} == {
+        model.model_id for model in discovered
+    }
+    assert len(orchestrator.agents) == len(discovered)
+    assert {agent.priority for agent in orchestrator.agents} == {0}
+
+
+def test_review_gateway_cli_has_no_decision_affecting_model_cap():
+    """The trusted sidecar exposes no hand-tuned candidate-count admission control."""
+    assert "--max-agents" not in review_gateway._build_parser().format_help()

@@ -261,7 +261,7 @@ def test_generic_media_catalog_rows_stay_out_of_bootstrap_and_review_chat_pool(
         lambda: (discovered, []),
     )
     review_orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENAI_API_KEY": "review-secret"}, max_agents=10
+        {"NVIDIA_NIM_API_KEY": "review-secret"}
     )
     assert [agent.model for agent in review_orchestrator.agents] == [
         "text-free-model"
