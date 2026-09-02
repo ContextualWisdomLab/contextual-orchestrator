@@ -1,5 +1,44 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: embedding recovery/deadline and legacy-id quarantine review
+
+Observation time: 2026-09-02 Asia/Seoul.
+
+### Summary
+
+Bot-reported (CodeRabbit/Devin) findings on PR #971 were independently
+verified against the actual current-head code (never trusted as ground
+truth) and, where confirmed real, fixed with a RED-before/GREEN-after
+regression test:
+
+- **Docstring coverage** (CodeRabbit: "48.87%, threshold 80%"): not
+  reproducible against this repo's own gate. `interrogate` (pinned
+  `requirements-opencode-review-ci.txt`, config in `pyproject.toml`:
+  `fail-under = 100`, `exclude = ["tests"]`) reports **100.0%** for the
+  entire `contextual_orchestrator` package, including every file this PR's
+  diff touches. Even scored with every `ignore-*` flag off (the strictest
+  reading short of including `tests/`), coverage is 81.7% -- still above an
+  80% bar. CodeRabbit's own "38 files" count matches this diff's combined
+  source *and* test `.py` files, which strongly indicates its check scores
+  test functions too; this repo deliberately excludes `tests/` from the
+  docstring gate and does not conventionally docstring pytest test
+  functions, which would explain the low externally-reported number. No
+  docstring changes were needed.
+- **Default-timeout embeddings OverflowError, failed legacy-id gateway
+  probe never disabling, recovered ZDR batch not re-validated, incomplete
+  sync embedding results evading the circuit breaker, durable claim-lease
+  crash + unbounded-execution-timeout substitution, and the OpenRouter
+  uptime collector's unbounded background fetch**: all confirmed real
+  against current-head code and fixed; see the dated `CHANGELOG.md`
+  entries under PR #971 for the exact mechanism, fix, and regression test
+  per item.
+- The branch's self-modifying one-shot repair workflows
+  (`.github/workflows/source-fix-971-exact-head-review.yml`,
+  `.github/workflows/source-fix-971-runtime-context-green.yml`,
+  `scripts/source_fix_971_runtime_context_green.py`) were deleted per the
+  standing "no purpose-complete self-modifying/source-fix workflows" rule,
+  after the source/test fixes above landed as ordinary commits.
+
 ## 2026-09-02 PR #971: no-heuristics `ModelClient` default retry correction
 
 Observation time: 2026-09-02 Asia/Seoul.

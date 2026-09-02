@@ -879,6 +879,61 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (`tests/test_no_heuristic_default_transport_retry.py`). Explicit nonzero
   retry budgets remain caller-owned configuration, never a library-authored
   default (ADR 0001 amendment, 2026-09-02).
+- (2026-09-02, PR #971) A default (no configured deadline) synchronous
+  `/v1/embeddings` request against a provider-backed member returned 503:
+  `embedding_deadline` collapsed to `+inf`, and `ProviderEmbeddingBatchBackend.wait`
+  passed that straight into `threading.Event.wait(timeout=...)`, which raises
+  `OverflowError` for a non-finite timeout on CPython -- directly contradicting
+  #971's own no-implicit-deadline policy. `wait()` now translates a non-finite
+  timeout to `None` (block indefinitely) instead
+  (`tests/test_provider_embedding_batch_backend.py::test_provider_batch_wait_survives_infinite_deadline`).
+- (2026-09-02, PR #971) A failed configured-gateway structured-chat probe
+  recorded the failing model only under its new fingerprinted id
+  (`agent_id_for`); a persisted agent kept under its pre-fingerprint legacy
+  id (`legacy_agent_id_for`) was silently dropped from `runtime_models` and
+  never reached the disable path, leaving a failed legacy endpoint enabled
+  indefinitely. `_auto_discover_runtime_agents` now accepts either id form
+  when checking for an existing persisted agent
+  (`tests/test_auto_discovery_server.py::test_failed_gateway_probe_disables_legacy_id_persisted_agent`).
+- (2026-09-02, PR #971) A privacy-scoped (`zdr_only=True`) embedding batch's
+  pinned `agent_id` was replayed verbatim by `ProviderEmbeddingBatchBackend`
+  after a process restart recovers a durably queued job, with no
+  re-validation that the agent still carried the `privacy:zdr` tag -- an
+  operator could remove ZDR support or repoint the agent between submission
+  and a resumed execution and the batch would still run. `_run_provider_embeddings`
+  now re-checks the request's own recorded `zdr_only` against the resolved
+  agent's current tags at execution time and fails closed if they no longer
+  match
+  (`tests/test_provider_embedding_batch_backend.py::test_recovered_privacy_scoped_embedding_batch_revalidates_current_agent_tags`).
+- (2026-09-02, PR #971) A synchronous `/v1/embeddings` member result that
+  came back without raising but was not `completed` (or had no embeddings)
+  bypassed `orchestrator._record_embedding_failure`, so the circuit breaker
+  never opened and no `embedding_endpoint_failed` analytics event was
+  recorded for that failure mode -- a repeatedly incomplete member was
+  retried forever instead of being quarantined like a raised exception. It
+  now routes through the same failure recorder
+  (`tests/test_embeddings_model_pool_http_honesty.py::test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_evidence`).
+- (2026-09-02, PR #971) `CostRoutingCoordinator` derived the durable
+  provider-embedding claim lease from `ModelClient.timeout`, so a durable
+  (Valkey-backed) job registry raised `ValueError: durable provider backend
+  claim lease must be positive` at startup whenever the client had no
+  configured deadline (the default since #971) -- a crash directly caused by
+  conflating an internal locking heartbeat with the caller's request
+  deadline. The claim lease now falls back to a fixed, positive default
+  independent of `ModelClient.timeout`. Separately, `execution_timeout_seconds=None`
+  previously fell back to the job registry's storage retention window (7
+  days), silently expiring an intentionally unbounded embedding job; it now
+  stays genuinely unbounded (`+inf` deadline)
+  (`tests/test_provider_embedding_batch_backend.py::test_durable_provider_embedding_backend_survives_unbounded_client_timeout`,
+  `::test_unbounded_execution_timeout_never_substitutes_registry_retention`).
+- (2026-09-02, PR #971) `OpenRouterUptimeCollector._fetch_uptime` adopted
+  #971's inference no-fixed-deadline policy (`timeout=None`) even though it
+  is unrelated background telemetry polled sequentially on one dedicated
+  sweep thread that `stop()` cannot interrupt mid-request: one unresponsive
+  OpenRouter endpoint would hang that thread forever, leaking it and
+  indefinitely starving every later member of an uptime update. The fetch
+  now keeps its own fixed, independent bound
+  (`tests/test_openrouter_uptime.py::test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint`).
 
 ### Added
 
