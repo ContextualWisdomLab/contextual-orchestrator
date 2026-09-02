@@ -21,7 +21,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   API-version mechanism (a header, e.g. Anthropic's `anthropic-version`, or
   a query parameter, e.g. Azure OpenAI's `api-version`) applied
   automatically to every outgoing request for a provider that declares one,
-  with no caller-side configuration. See ADR 0126.
+  with no caller-side configuration. See ADR 0127.
 
 ### Deprecated
 

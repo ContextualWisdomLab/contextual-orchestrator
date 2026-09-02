@@ -17,7 +17,7 @@ header's value per provider without a per-provider branch in
 The registry ships empty: no provider configured in this repo today
 requires a declared version, so an unregistered ``provider_name`` is a
 silent, correct no-op (the omitted argument's own default). See
-``docs/planning/adrs/0126-openai-chat-responses-shape-translation.md`` for
+``docs/planning/adrs/0127-openai-chat-responses-shape-translation.md`` for
 why Azure OpenAI and native Anthropic are not populated here yet even
 though they motivated this mechanism.
 """

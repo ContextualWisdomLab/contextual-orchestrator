@@ -1078,7 +1078,7 @@ def _local_provider_slot(
 
 
 # Backward-compatible aliases: the shape-translation implementation moved to
-# chat_responses_shape.py (ADR 0126), but these two private names are kept
+# chat_responses_shape.py (ADR 0127), but these two private names are kept
 # bound here because existing tests import them straight from this module.
 _responses_to_chat_payload = responses_request_to_chat_request
 _chat_to_responses_payload = chat_response_to_responses_response
@@ -1688,7 +1688,7 @@ class ModelClient:
         if not agent_supports_chat_completions(agent.tags):
             # This method only ever speaks Chat Completions shape (see the
             # payload built below). An agent proven api:responses_only
-            # (ADR 0126) cannot accept that shape, and unlike
+            # (ADR 0127) cannot accept that shape, and unlike
             # ModelClient._proxy_send this internal helper -- used by
             # route_once/triage/planner/conduct's worker calls, not just the
             # public passthrough endpoints -- has no translation branch of
