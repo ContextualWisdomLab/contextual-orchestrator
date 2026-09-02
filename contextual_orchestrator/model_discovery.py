@@ -14,7 +14,6 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import logging
@@ -27,7 +26,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, NoReturn, Sequence, TypeVar
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -53,22 +52,24 @@ DISCOVERY_TIMEOUT_SECONDS: float | None = None
 # Bounded, cancellable wall-clock budget for one provider's *entire* catalog
 # discovery attempt (`discover_provider_models`, including every fetch and
 # retry it makes internally) inside `discover_all_models`'s per-provider
-# loop. This is a wholly separate concern from `DISCOVERY_TIMEOUT_SECONDS`
-# (the per-HTTP-call socket timeout passed *into* each fetch, which stays
-# unbounded by default so a slow-but-live catalog response is not mistaken
-# for an unavailable provider) and from `ModelClient.timeout` (the caller's
-# model-*inference* deadline, which #971 deliberately defaults to no
-# elapsed-time limit). Provider catalog listing at bootstrap/discovery time
-# is a different concern from serving a completion: one stalled provider's
-# list request -- even one whose hang the per-call socket timeout cannot
-# bound, e.g. a connection accepted but never answered, or in tests a mock
-# that blocks forever -- must never block discovery of every later,
-# healthy provider forever. `discover_all_models` runs each provider's
-# discovery on its own daemon thread and stops waiting once this deadline
-# elapses, recording a `ProviderDiscoveryError` and moving on to the next
-# provider; the abandoned thread cannot block interpreter shutdown (daemon)
-# and its eventual result, if any, is simply discarded. Pass
-# `discovery_deadline=None` explicitly to opt back into unbounded waiting.
+# loop -- AND for the shared Models.dev / OpenRouter ZDR / OpenRouter
+# credits metadata fetches `discover_all_models` makes outside that loop
+# (`_fetch_models_dev_metadata`, `_openrouter_zdr_model_ids`,
+# `openrouter_paid_inference_available`). This is a wholly separate concern
+# from `DISCOVERY_TIMEOUT_SECONDS` (the per-HTTP-call socket timeout passed
+# *into* each fetch, which stays unbounded by default so a slow-but-live
+# catalog response is not mistaken for an unavailable provider) and from
+# `ModelClient.timeout` (the caller's model-*inference* deadline, which #971
+# deliberately defaults to no elapsed-time limit). Provider catalog listing
+# at bootstrap/discovery time is a different concern from serving a
+# completion: one stalled request -- even one whose hang the per-call socket
+# timeout cannot bound, e.g. a connection accepted but never answered, or in
+# tests a mock that blocks forever -- must never block the rest of discovery
+# forever. Every one of these calls runs on its own daemon thread (see
+# `_run_bounded_by_deadline`) and stops waiting once this deadline elapses;
+# the abandoned thread cannot block interpreter shutdown (daemon) and its
+# eventual result, if any, is simply discarded. Pass `discovery_deadline=None`
+# explicitly to opt back into unbounded waiting for all of these calls.
 PROVIDER_DISCOVERY_DEADLINE_SECONDS: float = 30.0
 _LOGGER = logging.getLogger(__name__)
 # One retry for a provider's primary model-list fetch, reusing the same
@@ -1222,7 +1223,28 @@ def _merge_openrouter_provider_privacy(
 def _openrouter_free_model_endpoints(
     payload: Any, *, api_key: str, timeout: float | None
 ) -> dict[str, Any]:
-    """Fetch endpoint/provider mappings only for explicitly zero-price models."""
+    """Fetch endpoint/provider mappings only for explicitly zero-price models.
+
+    Fans the per-model fetch out across raw ``daemon=True`` threads, never
+    :class:`concurrent.futures.ThreadPoolExecutor` -- verified (a local
+    repro, mirroring this PR's other timeout regressions): a
+    ``ThreadPoolExecutor``'s worker threads register with an
+    interpreter-exit hook (``concurrent.futures.thread``'s own
+    ``atexit`` handler) that unconditionally joins every still-running
+    worker at shutdown, *regardless of the daemon status of whatever thread
+    created the executor*. A single model whose endpoint fetch hangs
+    (``timeout=None``'s unbounded socket read, or any hang a finite
+    per-call ``timeout`` misses) would therefore block process shutdown
+    even though every enclosing caller here (:func:`discover_provider_models`
+    for this OpenRouter source, bounded in turn by
+    :func:`_discover_provider_models_bounded`) already runs on its own
+    ``daemon=True`` thread. Plain ``threading.Thread(daemon=True)`` workers
+    carry none of that registration, so a hung fetch is abandoned exactly
+    like every other stalled discovery-time network call in this module:
+    the thread is silently discarded at interpreter exit, and shutdown is
+    never blocked on it. ``max_workers``-equivalent concurrency (at most 8
+    fetches in flight at a time) is preserved via a bounding semaphore.
+    """
     rows = payload.get("data") if isinstance(payload, dict) else None
     model_ids = [
         row["id"]
@@ -1233,21 +1255,49 @@ def _openrouter_free_model_endpoints(
         and _pricing_is_free(row.get("pricing"))
     ]
 
-    def fetch(model_id: str) -> tuple[str, Any]:
+    def fetch(model_id: str) -> Any:
         author, separator, slug = model_id.partition("/")
         if not separator or not author or not slug:
-            return model_id, None
+            return None
         try:
-            return model_id, _fetch_json(
+            return _fetch_json(
                 f"https://openrouter.ai/api/v1/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints",
                 api_key=api_key,
                 timeout=timeout,
             ).get("data")
         except (AttributeError, urllib.error.URLError, TimeoutError, ValueError, OSError):
-            return model_id, None
+            return None
 
-    with ThreadPoolExecutor(max_workers=min(8, len(model_ids) or 1)) as executor:
-        return dict(executor.map(fetch, model_ids))
+    results: dict[str, Any] = {}
+    results_lock = threading.Lock()
+    concurrency_limit = threading.Semaphore(min(8, len(model_ids) or 1))
+
+    def run(model_id: str) -> None:
+        with concurrency_limit:
+            value = fetch(model_id)
+        with results_lock:
+            results[model_id] = value
+
+    workers = [
+        threading.Thread(
+            target=run,
+            args=(model_id,),
+            name=f"openrouter-endpoints-{model_id}",
+            daemon=True,
+        )
+        for model_id in model_ids
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        # No join timeout: this whole call already executes inside an
+        # already-bounded, already-daemonized caller (see the docstring
+        # above), so blocking this thread forever on an abandoned peer is
+        # the same accepted tradeoff already documented for
+        # `_run_bounded_by_deadline` -- the daemon property is what matters
+        # for shutdown, not how long this particular thread blocks.
+        worker.join()
+    return results
 
 
 def _privacy_policy_urls(
@@ -1673,6 +1723,78 @@ def discover_provider_models(
     return result
 
 
+_BoundedT = TypeVar("_BoundedT")
+
+
+def _run_bounded_by_deadline(
+    fn: Callable[[], _BoundedT],
+    *,
+    discovery_deadline: float | None,
+    on_timeout: Callable[[], _BoundedT],
+    thread_name: str,
+) -> _BoundedT:
+    """Run ``fn`` on its own daemon thread, abandoning it at ``discovery_deadline``.
+
+    The shared bounded/cancellable primitive behind every network call this
+    module makes at discovery time: the whole-attempt bound around one
+    provider's :func:`discover_provider_models` call
+    (:func:`_discover_provider_models_bounded`), and the shared Models.dev /
+    OpenRouter ZDR / OpenRouter credits metadata fetches in
+    :func:`discover_all_models` that used to run outside any bound at all
+    (#971 review finding: "shared metadata fetches bypass discovery
+    deadline" -- Models.dev ran before the per-provider loop, the OpenRouter
+    ZDR and credits calls ran after it, none of them under
+    ``discovery_deadline``).
+
+    Runs ``fn`` on its own daemon thread and stops waiting once
+    ``discovery_deadline`` elapses instead of blocking forever -- catching a
+    hang the per-request socket ``timeout`` cannot, e.g. a connection
+    accepted but never answered, a redirect loop, or (in tests) a mock that
+    never returns. The thread is daemonized specifically so an abandoned,
+    still-hung attempt cannot block interpreter shutdown; its result, if it
+    ever arrives, is simply discarded -- Python threads cannot be forcibly
+    killed, so "cancellable" here means "the caller stops waiting on it".
+    ``on_timeout`` is called instead of returning that discarded result, and
+    lets each caller keep its own already fail-closed "could not get an
+    answer" outcome (raising :class:`ProviderDiscoveryError` for the
+    per-provider loop; returning the wrapped function's own no-evidence
+    fallback -- ``None``, ``set()`` -- for the shared metadata fetches, the
+    exact value each already returns for an ordinary fetch failure) rather
+    than this helper inventing a new one. ``discovery_deadline=None`` opts
+    back into the unbounded wait every one of these calls used before #971.
+
+    Known, accepted tradeoff (same as the pre-existing OpenRouter uptime
+    sweep thread this pattern was copied from): "abandon" only ever means
+    the *caller* stops waiting, not that the daemon thread or its underlying
+    socket actually stops running. Repeated discovery refreshes against a
+    dependency that stalls every time can accumulate abandoned threads and
+    open connections until each one's underlying call eventually returns,
+    errors, or the interpreter exits; daemon threads keep this from blocking
+    shutdown, but do not reclaim resources any sooner.
+    """
+    if discovery_deadline is None:
+        return fn()
+    results: list[_BoundedT] = []
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(fn())
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
+            failures.append(exc)
+
+    worker = threading.Thread(target=run, name=thread_name, daemon=True)
+    worker.start()
+    worker.join(timeout=discovery_deadline)
+    if worker.is_alive():
+        # Still running past the deadline; abandon it rather than block the
+        # rest of discovery (or first-boot bootstrap) forever.
+        return on_timeout()
+    if failures:
+        raise failures[0]
+    return results[0] if results else on_timeout()
+
+
 def _discover_provider_models_bounded(
     source: ProviderModelSource,
     *,
@@ -1683,58 +1805,27 @@ def _discover_provider_models_bounded(
 ) -> list[DiscoveredModel]:
     """Run one provider's :func:`discover_provider_models` under a wall-clock bound.
 
-    Runs the call on its own daemon thread and stops waiting once
-    ``discovery_deadline`` elapses, raising :class:`ProviderDiscoveryError`
-    with error code ``"discovery_timeout"`` instead of blocking forever. This
-    bounds the whole per-provider attempt -- every internal fetch and retry
-    :func:`discover_provider_models` makes -- not just one HTTP call, so it
-    catches a hang the per-request socket timeout does not: a connection
-    accepted but never answered, a redirect loop, or (in tests) a mock that
-    never returns. The thread is daemonized specifically so an abandoned,
-    still-hung attempt cannot block interpreter shutdown; its result, if it
-    ever arrives, is simply discarded -- Python threads cannot be forcibly
-    killed, so "cancellable" here means "the caller stops waiting on it",
-    the same abandon-on-deadline approach already used for the OpenRouter
-    uptime sweep thread. ``discovery_deadline=None`` opts back into the
-    unbounded wait ``discover_all_models`` used before this bound existed.
+    A thin, provider-specific instantiation of :func:`_run_bounded_by_deadline`:
+    on timeout, raises :class:`ProviderDiscoveryError` with error code
+    ``"discovery_timeout"`` (rather than returning a fallback value) so
+    :func:`discover_all_models`'s per-provider loop records it as a normal
+    per-provider discovery failure and moves on to the next source.
     """
-    if discovery_deadline is None:
-        return discover_provider_models(
+
+    def _on_timeout() -> NoReturn:
+        raise ProviderDiscoveryError(source.provider_name, "discovery_timeout")
+
+    return _run_bounded_by_deadline(
+        lambda: discover_provider_models(
             source,
             timeout=timeout,
             ca_bundle=ca_bundle,
             models_dev_metadata=models_dev_metadata,
-        )
-    results: list[list[DiscoveredModel]] = []
-    failures: list[BaseException] = []
-
-    def run() -> None:
-        try:
-            results.append(
-                discover_provider_models(
-                    source,
-                    timeout=timeout,
-                    ca_bundle=ca_bundle,
-                    models_dev_metadata=models_dev_metadata,
-                )
-            )
-        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
-            failures.append(exc)
-
-    worker = threading.Thread(
-        target=run,
-        name=f"discover-provider-{source.provider_name}",
-        daemon=True,
+        ),
+        discovery_deadline=discovery_deadline,
+        on_timeout=_on_timeout,
+        thread_name=f"discover-provider-{source.provider_name}",
     )
-    worker.start()
-    worker.join(timeout=discovery_deadline)
-    if worker.is_alive():
-        # The provider's catalog fetch is still running; abandon it rather
-        # than starve every source later in `discover_all_models`'s loop.
-        raise ProviderDiscoveryError(source.provider_name, "discovery_timeout")
-    if failures:
-        raise failures[0]
-    return results[0] if results else []
 
 
 def discover_all_models(
@@ -1750,10 +1841,22 @@ def discover_all_models(
     returned alongside whatever models were successfully discovered. This
     now includes a provider whose catalog fetch simply never returns --
     ``discovery_deadline`` (default :data:`PROVIDER_DISCOVERY_DEADLINE_SECONDS`,
-    a bounded, cancellable, per-provider budget wholly separate from any
-    model-inference deadline; see :func:`_discover_provider_models_bounded`)
-    bounds each provider's *entire* discovery attempt so one stalled source
-    can no longer block discovery of every later, healthy provider forever.
+    a bounded, cancellable budget wholly separate from any model-inference
+    deadline; see :func:`_run_bounded_by_deadline`) bounds each provider's
+    *entire* discovery attempt so one stalled source can no longer block
+    discovery of every later, healthy provider forever.
+
+    The same bound also covers the three *shared* metadata fetches below
+    that run outside the per-provider loop -- ``_fetch_models_dev_metadata``
+    (before the loop), ``_openrouter_zdr_model_ids`` and
+    ``openrouter_paid_inference_available`` (after it). Each of these
+    already has an established, fail-closed "no evidence" fallback for an
+    ordinary fetch failure (``None``, ``set()``, ``None`` respectively); on
+    a timeout this function abandons the stalled fetch and uses that exact
+    same fallback rather than waiting forever, so first-boot pool
+    bootstrapping can no longer hang on a stalled Models.dev, OpenRouter ZDR,
+    or OpenRouter credits endpoint (#971 review finding: "shared metadata
+    fetches bypass discovery deadline").
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
@@ -1769,7 +1872,15 @@ def discover_all_models(
         source.models_dev_provider_id and get_credential(source.credential_name)
         for source in sources
     ):
-        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
+        # Timeout fallback mirrors _fetch_models_dev_metadata's own
+        # ordinary-failure return: None, which _merge_models_dev_metadata
+        # already treats as "no evidence" and passes rows through unchanged.
+        models_dev_metadata = _run_bounded_by_deadline(
+            lambda: _fetch_models_dev_metadata(timeout=timeout),
+            discovery_deadline=discovery_deadline,
+            on_timeout=lambda: None,
+            thread_name="discover-models-dev-metadata",
+        )
     for source in sources:
         try:
             discovered.extend(
@@ -1791,18 +1902,39 @@ def discover_all_models(
     # discovery-time exclusion: OpenRouter can multiplex a model across several
     # backing providers, so a stale discovery-time snapshot cannot by itself
     # guarantee which provider serves a given request.
+    #
+    # Timeout fallback mirrors _openrouter_zdr_model_ids's own
+    # ordinary-failure return: an empty set, which _apply_discovered_model_evidence
+    # already treats as "no evidence" and leaves every row's zdr_capable
+    # unchanged -- never marks a model ZDR-capable on missing/timed-out
+    # evidence, preserving the fail-closed posture.
     routed = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
-        _openrouter_zdr_model_ids(timeout=timeout),
+        _run_bounded_by_deadline(
+            lambda: _openrouter_zdr_model_ids(timeout=timeout),
+            discovery_deadline=discovery_deadline,
+            on_timeout=set,
+            thread_name="discover-openrouter-zdr-model-ids",
+        ),
     )
     if any(
         source.provider_name == "openrouter"
         and get_credential(source.credential_name)
         for source in sources
     ):
+        # Timeout fallback mirrors openrouter_paid_inference_available's own
+        # ordinary-failure return: None ("could not determine"), which
+        # apply_openrouter_spend_admission already treats as fail-closed --
+        # a paid (non-free) OpenRouter row is not spend_admitted unless
+        # paid_available is True, never on missing/timed-out evidence.
         routed = apply_openrouter_spend_admission(
             routed,
-            openrouter_paid_inference_available(timeout=timeout),
+            _run_bounded_by_deadline(
+                lambda: openrouter_paid_inference_available(timeout=timeout),
+                discovery_deadline=discovery_deadline,
+                on_timeout=lambda: None,
+                thread_name="discover-openrouter-paid-inference",
+            ),
         )
     if _LOGGER.isEnabledFor(logging.INFO):
         _LOGGER.info(

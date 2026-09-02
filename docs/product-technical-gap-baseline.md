@@ -212,6 +212,188 @@ verified against current-head code rather than trusted as stated.
   100% (the deleted script's undocumented `main()` had briefly dropped it
   to 99.9% after the merge that brought the staged files in).
 
+## 2026-09-02 PR #971: shared discovery metadata fetches bypassed the discovery deadline
+
+Observation time: 2026-09-02 Asia/Seoul. Closes a Devin Review finding
+(bug id `BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002`,
+`contextual_orchestrator/model_discovery.py` line 52) raised against this same
+branch after the per-provider `PROVIDER_DISCOVERY_DEADLINE_SECONDS` bound
+above landed, independently verified against current-head code rather than
+trusted as stated. A related CodeRabbit finding on the same file, surfaced
+while this fix was in progress, is folded into the same entry below.
+
+### Finding and root cause
+
+`discover_all_models`'s per-provider `discovery_deadline` bound
+(`_discover_provider_models_bounded`, documented in the section above) covers
+only `discover_provider_models` inside the per-provider loop. Three *shared*
+metadata fetches the same function makes outside that loop were confirmed
+still wholly unbounded, each receiving only `timeout` (the per-HTTP-call
+socket timeout, `None`/unbounded by #971's own design default):
+
+- `_fetch_models_dev_metadata(timeout=timeout)` -- called once, *before* the
+  per-provider loop starts, whenever any registered source declares
+  `models_dev_provider_id` (`opencode_zen`, `nvidia_nim`, `nvidia_nim_sub`,
+  `openai`).
+- `_openrouter_zdr_model_ids(timeout=timeout)` -- called unconditionally
+  *after* the per-provider loop finishes.
+- `openrouter_paid_inference_available(timeout=timeout)` -- called *after*
+  the loop, only once an `OPENROUTER_API_KEY` credential is registered.
+
+None of these three ran on the bounded daemon thread the per-provider loop
+already used; a connection accepted but never answered (or any other hang
+the per-request socket timeout cannot catch -- the same class of bug the
+per-provider fix above already addressed) on any one of them could block
+`discover_all_models`, and therefore first-boot pool bootstrapping,
+indefinitely regardless of `discovery_deadline`.
+
+### Fix
+
+Reuses the exact mechanism already reviewed favorably for the per-provider
+bound rather than inventing a second one: `_discover_provider_models_bounded`
+is generalized into a shared primitive, `_run_bounded_by_deadline` (runs the
+wrapped call on its own daemon thread, `worker.join(timeout=discovery_deadline)`,
+abandons a still-alive worker past the deadline -- Python threads cannot be
+forcibly killed, so "cancellable" means "the caller stops waiting"). All four
+call sites -- the per-provider attempt plus the three shared fetches -- now
+go through this one helper under the same `discovery_deadline` parameter
+`discover_all_models` already accepted and threaded through; an explicit
+`discovery_deadline=None` still opts every one of them back into the pre-fix
+unbounded wait.
+
+### Fail-closed reasoning for each timeout fallback
+
+The per-provider path keeps its existing behavior (raises
+`ProviderDiscoveryError(error_code="discovery_timeout")`, recorded in the
+caller's `errors` list). Each shared fetch has no such per-provider error
+list to append to; on timeout, `_run_bounded_by_deadline`'s `on_timeout`
+callback returns the *exact same fallback value the wrapped function already
+returns for an ordinary fetch failure* -- never a new, more permissive value
+-- so the fail-closed posture already established for a network error is
+identical for a network hang. Traced downstream for each:
+
+- `_fetch_models_dev_metadata` ordinary-failure return is `None`.
+  `_merge_models_dev_metadata` (`model_discovery.py`) treats non-dict
+  metadata as "no evidence" and returns the provider's own catalog payload
+  unenriched (no cost/modality enrichment, not "verified free" or "verified
+  priced") -- confirmed by reading the function: `provider_row =
+  metadata.get(provider) if isinstance(metadata, dict) else None`, then
+  `if not isinstance(rows, list) or not isinstance(models, dict): return
+  payload`. On timeout, the bounded wrapper returns `None` -- not the
+  `_NOT_FETCHED` sentinel -- so `discover_provider_models` treats the
+  metadata as "already fetched, unavailable" and does not re-attempt the
+  same stalled fetch a second time inside the (separately bounded)
+  per-provider thread; the provider's own catalog listing still completes.
+- `_openrouter_zdr_model_ids` ordinary-failure return is an empty `set()`.
+  `_apply_discovered_model_evidence` short-circuits on an empty set
+  (`if not zdr_model_ids: return discovered`) and leaves every row's
+  `zdr_capable` exactly as `discover_provider_models` already set it --
+  never *adds* ZDR-capable status on missing/timed-out evidence, only ever
+  on a positive, exact model-id match. On timeout, the bounded wrapper
+  returns `set()`.
+- `openrouter_paid_inference_available` ordinary-failure/"could not
+  determine" return is `None`. `apply_openrouter_spend_admission`'s existing
+  rule is `spend_admitted = provider != "openrouter" or is_free or
+  paid_available is True` -- a paid (non-free) OpenRouter row is
+  `spend_admitted=False` for anything other than `paid_available is True`,
+  so `None` (timeout) and `False` (attested no credit) are both already
+  fail-closed today; the timeout fallback changes nothing about that
+  contract. On timeout, the bounded wrapper returns `None`.
+
+### Verification
+
+RED-before/GREEN-after, one regression test per shared fetch plus the
+existing per-provider one, all mocking the target function itself (not the
+transport layer) to block on a `threading.Event` nothing ever sets, mirroring
+`test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`'s
+style:
+`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch`,
+`::test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch`,
+`::test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch`.
+Each hung the test process indefinitely against the pre-fix code (verified by
+temporarily reverting the fix and killing the hung run with an outer
+`timeout` -- exit 143 on all three) and passes in well under 5s with the fix.
+`tests/test_model_discovery.py`, `tests/test_discovery_bootstrap_selection.py`,
+`tests/test_review_gateway.py`, and every other test file importing
+`model_discovery` (`test_auto_discovery_server.py`,
+`test_chat_model_capability_isolation.py`, `test_ci_gateway_bootstrap.py`,
+`test_discover_models_cli.py`, `test_model_discovery_boundaries.py`,
+`test_openrouter_free_canary.py`, `test_privacy_policy_analysis.py`,
+`test_provider_bootstrap*.py`, `test_provider_catalog_*.py`) pass unchanged.
+`interrogate` remains 100%.
+
+### Related CodeRabbit finding: a hung endpoint fetch could block process exit
+
+`_openrouter_free_model_endpoints` (called from `discover_provider_models`'s
+OpenRouter branch, itself already inside the per-provider bounded thread
+above) fanned its per-model endpoint fetch out across a
+`concurrent.futures.ThreadPoolExecutor`. Verified with a local repro before
+changing anything: even wrapping the whole call in an already-`daemon=True`
+outer thread does not stop a still-hung `ThreadPoolExecutor` worker from
+blocking process shutdown -- `concurrent.futures.thread` registers its own
+interpreter-exit hook that unconditionally joins every still-running worker
+it created, independent of the daemon status of whichever thread constructed
+the executor. A bare script reproducing this (one daemon thread, one
+`ThreadPoolExecutor` with a permanently blocked worker, then a normal,
+unforced fall-through to script exit) hung for a bounded outer `timeout`
+command's full 10s and was killed (exit 124) against the pre-fix code, and
+exited cleanly in well under 1s once the fetch fan-out was rewritten to use
+plain `threading.Thread(daemon=True)` workers (concurrency capped at 8 via a
+semaphore, matching the prior `max_workers`) instead of a `ThreadPoolExecutor`
+-- daemon threads carry no such exit-blocking registration, so a hung fetch
+is abandoned exactly like every other stalled discovery-time network call in
+this module. This is a distinct failure mode from the discovery-deadline
+finding above (it is not about `discover_all_models`'s *caller* waiting too
+long -- that was already bounded by the outer per-provider thread -- it is
+about the *process* being unable to exit at all while an abandoned
+`ThreadPoolExecutor` worker is still running), so it is documented here
+rather than folded silently into the fix above.
+Verified:
+`tests/test_model_discovery.py::test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`
+(spawns a real, separate interpreter, since an in-process thread-introspection
+assertion cannot distinguish "still hanging in the background" from "would
+actually block this process's shutdown" -- the whole point of the finding);
+RED-before (killed by the test's own bound against the reverted,
+`ThreadPoolExecutor`-based code) / GREEN-after (exits well under the bound).
+
+### Note on a concurrently-pushed, broader automated repair
+
+The branch owner pushed `.github/workflows/source-fix-971-live-review-quality.yml`
+and `tests/test_pr971_review_quality_regressions.py` directly (not through
+this session) while this fix was in progress, targeting this same finding
+plus three unrelated Devin Review findings (durably recovered `zdr_only`
+embedding work not re-entering request-policy scope; coalesced
+provider-embedding batches able to mix privacy/routing identity; terminal
+failed/cancelled provider batch documents recorded as endpoint success).
+This branch's `cost_router.py` fix (commit `e3fa6d9b`, see the "recovered ZDR
+embedding batch bypassed request-policy enforcement" section above) landed
+independently, ahead of the workflow's own repair step, and fixed the first
+two of those three (both are the same `_run_provider_embeddings` gap:
+missing `request_policy` re-entry and missing per-request `zdr_only`
+homogeneity) -- confirmed by re-running
+`tests/test_pr971_review_quality_regressions.py` after that commit landed:
+`test_recovered_zdr_batch_reenters_request_privacy_scope` and
+`test_provider_embedding_batch_rejects_mixed_privacy_identity` are both now
+GREEN. Only the third (terminal failed/cancelled provider batch documents
+recorded as endpoint success,
+`test_terminal_embedding_batch_document_fails_over_before_marking_health`)
+remains unfixed as of this entry -- untouched by this fix, in `server.py`.
+This workflow's own regression file was verified test-by-test against the
+fix in this section:
+`test_discover_all_models_bounds_every_shared_metadata_fetch` (the
+discovery-deadline finding this section fixes) passes against this fix --
+confirming it is genuinely superseded for that one finding -- but, as of
+this entry, the workflow's repair step has *not* fully served its purpose
+for the remaining `server.py` finding, so it was deliberately left in
+place rather than deleted, per this branch's own precedent's "delete only
+once fully superseded" rule; its `model_discovery.py` `replace_once` steps
+target the pre-fix literal source text this section replaces, so if ever
+dispatched against this fix's head those specific steps will now fail closed
+(`SystemExit`, no partial write survives past the failing step) rather than
+silently reapplying a weaker, duplicate bound -- consistent with the
+workflow's own "exact writer head" / "smallest causal GREEN repair" design
+intent, not a bypass of it.
+
 ## 2026-09-02 PR #971: embedding recovery/deadline and legacy-id quarantine review
 
 Observation time: 2026-09-02 Asia/Seoul.

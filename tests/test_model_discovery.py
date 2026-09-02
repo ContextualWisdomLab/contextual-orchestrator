@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.error
@@ -44,6 +46,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
+    _openrouter_free_model_endpoints,
     _price_per_1k,
     _parse_openai_compatible,
     _positive_int_metadata,
@@ -869,6 +872,91 @@ def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -
 
     assert [model.model_id for model in discovered] == ["free/model"]
     endpoint_fetch.assert_not_called()
+
+
+def test_openrouter_free_model_endpoints_hang_does_not_block_process_exit() -> None:
+    """A hung per-model endpoint fetch must not prevent interpreter shutdown.
+
+    Regression for a CodeRabbit finding (re-confirming the #971 "shared
+    metadata fetches bypass discovery deadline" class of bug from a
+    different angle, verified with a local repro before this fix landed):
+    ``_openrouter_free_model_endpoints`` used to fan its per-model fetch out
+    across a ``concurrent.futures.ThreadPoolExecutor``. That executor's
+    worker threads register with an interpreter-exit hook
+    (``concurrent.futures.thread``'s own ``atexit`` handler) that
+    unconditionally joins every still-running worker at shutdown --
+    regardless of whether the thread that *created* the executor is itself
+    ``daemon=True``. A single hung fetch therefore blocked process shutdown
+    even from inside this module's already-daemonized, already-bounded
+    per-provider discovery thread. The fetch fan-out now uses plain
+    ``threading.Thread(daemon=True)`` workers, which carry no such
+    registration, so a hung fetch is abandoned like every other stalled
+    discovery-time network call in this module and the process can still
+    exit.
+
+    Verified end-to-end in a real, separate interpreter (an in-process
+    thread-introspection assertion cannot distinguish "still hanging in the
+    background" from "would actually block this process's shutdown" --
+    the whole point of the finding): a helper script imports the real
+    function, patches ``_fetch_json`` to hang forever, runs the function on
+    its own daemon thread exactly as ``_discover_provider_models_bounded``
+    does, then lets the script's ``__main__`` fall through to a normal,
+    unforced exit. RED-before/GREEN-after against the pre-fix
+    ``ThreadPoolExecutor`` version: the same script hung for the full
+    outer-`timeout`-command bound and was killed (exit 124); it exits
+    cleanly, well under that bound, with this fix.
+    """
+    script = textwrap.dedent(
+        """
+        import sys
+        import threading
+        from unittest.mock import patch
+
+        sys.path.insert(0, %(repo_root)r)
+        from contextual_orchestrator.model_discovery import _openrouter_free_model_endpoints
+
+        never_set = threading.Event()
+
+        def hung_fetch_json(url, *, api_key="", auth_scheme="Bearer", timeout=None):
+            never_set.wait()  # Hangs forever -- nothing ever sets this event.
+            raise AssertionError("unreachable: the stalled fetch must never return")
+
+        payload = {
+            "data": [
+                {"id": "free/model-a", "pricing": {"prompt": "0", "completion": "0"}},
+                {"id": "free/model-b", "pricing": {"prompt": "0", "completion": "0"}},
+            ]
+        }
+
+        def outer_daemon_work():
+            with patch(
+                "contextual_orchestrator.model_discovery._fetch_json",
+                side_effect=hung_fetch_json,
+            ):
+                _openrouter_free_model_endpoints(payload, api_key="k", timeout=None)
+
+        worker = threading.Thread(target=outer_daemon_work, daemon=True)
+        worker.start()
+        worker.join(timeout=0.5)
+        assert worker.is_alive()
+        # No explicit sys.exit()/os._exit(): a genuinely non-blocking fix
+        # must let normal interpreter shutdown proceed on its own.
+        """
+    ) % {"repo_root": str(Path(__file__).resolve().parents[1])}
+
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 0, result.stderr
+    assert elapsed < 5.0, f"process took {elapsed:.1f}s to exit with a hung endpoint fetch outstanding"
+
+
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     """A provider parameter alone cannot make an image-only model a synthesizer."""
     register_credential("OPENROUTER_API_KEY", "sk-router")
@@ -2103,6 +2191,163 @@ def test_discover_all_models_discovery_deadline_none_opts_into_unbounded_wait() 
 
     assert errors == []
     assert [m.model_id for m in discovered] == ["gpt-review"]
+
+
+def test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch() -> None:
+    """A hung shared Models.dev metadata fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline" (Devin bug id
+    ``BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002``): before this
+    fix, ``discover_all_models`` called ``_fetch_models_dev_metadata`` inline
+    *before* the per-provider loop even started, wholly outside
+    ``discovery_deadline`` -- this test would hang the whole suite without
+    the fix. Patches ``_fetch_models_dev_metadata`` itself with a call that
+    blocks on an ``Event`` nothing ever sets, mirroring
+    ``test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete``'s
+    style. Also proves the timeout fallback is threaded through as an
+    already-fetched ``None`` (not the ``_NOT_FETCHED`` sentinel): the
+    per-provider catalog fetch below must not itself retry the same stalled
+    fetch a second time.
+    """
+    models_dev_source = replace(OPENAI_SOURCE, models_dev_provider_id="openai")
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    never_set = threading.Event()
+
+    def fake_fetch_models_dev_metadata(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
+            side_effect=fake_fetch_models_dev_metadata,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urlopen,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (models_dev_source,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled Models.dev fetch"
+    # The stalled shared fetch degrades to the same "no evidence" fallback
+    # (None) _fetch_models_dev_metadata already returns for an ordinary
+    # failure -- _merge_models_dev_metadata passes rows through unchanged --
+    # rather than blocking; the provider's own catalog discovery still
+    # succeeds untouched.
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
+
+
+def test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch() -> None:
+    """A hung shared OpenRouter ZDR evidence fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline": before this fix, ``discover_all_models`` called
+    ``_openrouter_zdr_model_ids`` inline *after* the per-provider loop
+    finished, wholly outside ``discovery_deadline`` -- this test would hang
+    the whole suite without the fix.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    never_set = threading.Event()
+
+    def fake_openrouter_zdr_model_ids(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+            side_effect=fake_openrouter_zdr_model_ids,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urlopen,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter ZDR fetch"
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
+    # The stalled fetch degrades to the same empty-set fallback
+    # _openrouter_zdr_model_ids already returns for an ordinary failure --
+    # never marks a model ZDR-capable on missing/timed-out evidence.
+    assert discovered[0].zdr_capable is False
+
+
+def test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch() -> None:
+    """A hung shared OpenRouter credits fetch must not block discovery forever.
+
+    Regression for the #971 review finding "shared metadata fetches bypass
+    discovery deadline": before this fix, ``discover_all_models`` called
+    ``openrouter_paid_inference_available`` inline *after* the per-provider
+    loop finished (only once an OpenRouter credential is registered), wholly
+    outside ``discovery_deadline`` -- this test would hang the whole suite
+    without the fix.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    never_set = threading.Event()
+
+    def fake_openrouter_paid_inference_available(*, timeout=None):
+        never_set.wait()  # Hangs forever -- nothing ever sets this event.
+        raise AssertionError("unreachable: the stalled fetch must never return")
+
+    def fake_discover_provider_models(source, *, timeout=None, ca_bundle=None, models_dev_metadata=None):
+        return [
+            DiscoveredModel(
+                provider_name=source.provider_name,
+                model_id="paid/model",
+                credential_name=source.credential_name,
+                chat_base_url=source.chat_base_url,
+                auth_scheme=source.auth_scheme,
+                capabilities=("chat",),
+                is_free=False,
+            )
+        ]
+
+    started = time.monotonic()
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+            side_effect=fake_openrouter_paid_inference_available,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.discover_provider_models",
+            side_effect=fake_discover_provider_models,
+        ),
+    ):
+        discovered, errors = discover_all_models(
+            (OPENROUTER_SOURCE,),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter credits fetch"
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["paid/model"]
+    # The stalled fetch degrades to the same "could not determine" fallback
+    # (None) openrouter_paid_inference_available already returns for an
+    # ordinary failure -- apply_openrouter_spend_admission's fail-closed rule
+    # never admits spend for a paid row without positive evidence.
+    assert discovered[0].spend_admitted is False
 
 
 def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:

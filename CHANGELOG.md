@@ -992,6 +992,55 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `RuntimeError` style otherwise (Devin Review on #971)
   (`tests/test_pr971_review_quality_regressions.py::test_recovered_zdr_batch_reenters_request_privacy_scope`,
   `::test_provider_embedding_batch_rejects_mixed_privacy_identity`).
+- (2026-09-02, PR #971) The per-provider `discovery_deadline` bound added
+  above covered only `discover_provider_models` inside `discover_all_models`'s
+  per-provider loop. Three *shared* metadata fetches the same function makes
+  outside that loop stayed unbounded: `_fetch_models_dev_metadata` (runs once,
+  before the loop, whenever any registered source declares
+  `models_dev_provider_id`), and `_openrouter_zdr_model_ids` /
+  `openrouter_paid_inference_available` (run after the loop; the latter only
+  once an OpenRouter credential is registered) -- each received only
+  `timeout` (the per-socket-read timeout, `None`/unbounded by default), so a
+  stalled Models.dev, OpenRouter ZDR, or OpenRouter credits endpoint could
+  block `discover_all_models` -- and therefore first-boot pool bootstrapping
+  -- indefinitely (Devin Review, bug id
+  `BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002`). The
+  per-provider bound is now a shared primitive, `_run_bounded_by_deadline`
+  (same mechanism as before: a daemon thread plus
+  `worker.join(timeout=discovery_deadline)`; `_discover_provider_models_bounded`
+  is a thin instantiation of it), and all three shared fetches run through
+  it under the same `discovery_deadline`. On timeout each returns the exact
+  fallback value it already returns for an ordinary fetch failure, so the
+  fail-closed posture is unchanged, never weakened: `_fetch_models_dev_metadata`
+  returns `None` (`_merge_models_dev_metadata` already treats `None` as "no
+  evidence" and passes provider rows through unenriched, so the affected
+  provider's own catalog listing still succeeds); `_openrouter_zdr_model_ids`
+  returns an empty `set()` (`_apply_discovered_model_evidence` already
+  short-circuits on an empty set and never marks a model ZDR-capable without
+  positive evidence); and `openrouter_paid_inference_available` returns
+  `None` (`apply_openrouter_spend_admission`'s existing fail-closed rule
+  already denies `spend_admitted` for a paid, non-free OpenRouter row unless
+  `paid_available is True`). `discovery_deadline=None` continues to opt
+  every one of these calls back into the pre-#971 unbounded wait
+  (`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch`,
+  `::test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch`,
+  `::test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch`).
+- (2026-09-02, PR #971) `_openrouter_free_model_endpoints` fanned its
+  per-model endpoint fetch out across a
+  `concurrent.futures.ThreadPoolExecutor`. That executor's worker threads
+  register with an interpreter-exit hook (`concurrent.futures.thread`'s own
+  `atexit` handler) that unconditionally joins every still-running worker at
+  shutdown, regardless of whether the thread that *created* the executor is
+  itself `daemon=True` -- verified with a local repro: a hung fetch blocked
+  process shutdown even from inside this module's already-daemonized,
+  already-bounded per-provider discovery thread (CodeRabbit, re-confirming
+  the shared-metadata-deadline finding above from a different angle). The
+  fetch fan-out now uses plain `threading.Thread(daemon=True)` workers
+  (concurrency-capped at 8 in flight via a semaphore, matching the prior
+  `max_workers`), which carry no such registration, so a hung fetch is
+  abandoned like every other stalled discovery-time network call in this
+  module and the process can still exit
+  (`tests/test_model_discovery.py::test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`).
 
 ### Added
 
