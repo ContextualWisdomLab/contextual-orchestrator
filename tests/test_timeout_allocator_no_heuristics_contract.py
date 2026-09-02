@@ -1,9 +1,9 @@
-"""Contract tests for ADR 0125's no-heuristics timeout-measurement design."""
+"""Contract tests for ADR 0127's no-heuristics timeout-measurement design."""
 
 from pathlib import Path
 
 
-ADR = Path("docs/planning/adrs/0125-evidence-based-per-model-timeout-allocator.md")
+ADR = Path("docs/planning/adrs/0127-evidence-based-per-model-timeout-allocator.md")
 
 
 def test_timeout_design_has_no_fixed_sample_or_fallback_decision_rules() -> None:

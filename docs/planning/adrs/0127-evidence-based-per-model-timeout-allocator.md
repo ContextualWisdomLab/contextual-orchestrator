@@ -1,4 +1,4 @@
-# ADR 0125: Per-Model Latency Measurement Without Heuristic Timeout Allocation
+# ADR 0127: Per-Model Latency Measurement Without Heuristic Timeout Allocation
 
 - Status: Proposed
 - Date: 2026-09-02
