@@ -108,6 +108,7 @@ def race_first_valid(
         max_workers=min(max_concurrency, len(attempts)),
         thread_name_prefix="equivalent_endpoint_race",
     )
+
     def execute(attempt: EndpointAttempt[T]) -> T:
         try:
             value = attempt.call()
@@ -132,8 +133,10 @@ def race_first_valid(
     def cancel_loser(future: Future[T], attempt: EndpointAttempt[T]) -> str:
         if future in cancellation_outcomes:
             return cancellation_outcomes[future]
-        if future.done():
-            outcome = "completed"
+        if future.cancelled():
+            outcome = "queued_cancelled"
+        elif future.done():
+            outcome = "failed" if future.exception() is not None else "completed"
         elif future.cancel():
             outcome = "queued_cancelled"
         elif (
