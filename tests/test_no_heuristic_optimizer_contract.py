@@ -40,31 +40,29 @@ def test_unique_pareto_dominant_candidate_is_mathematically_identified() -> None
     }
 
 
-def test_optimizer_requires_quality_measurement_provenance() -> None:
-    with pytest.raises(ValueError, match="quality_evidence_kind"):
+def test_optimizer_without_executable_evaluation_contract_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="validated evaluation adapter"):
         optimize_orchestration([], [], lambda _task, _answer: 1.0)
 
 
-def test_optimizer_accepts_deterministic_ground_truth_and_preserves_no_rank_order() -> None:
-    report = optimize_orchestration(
-        [],
-        [],
-        lambda _task, _answer: 1.0,
-        quality_evidence_kind="deterministic_ground_truth",
-    )
-    assert report["results"] == []
-    assert report["recommended"] is None
-    assert report["result_order"] == "candidate_input_order_provenance_only"
+def test_fast_mlsirm_string_label_cannot_fake_executable_provenance() -> None:
+    with pytest.raises(RuntimeError, match="fast-mlsirm-backed"):
+        optimize_orchestration(
+            [],
+            [],
+            lambda _task, _answer: 1.0,
+            quality_evidence_kind="fast_mlsirm",
+        )
 
 
-def test_optimizer_accepts_fast_mlsirm_quality_evidence_kind() -> None:
-    report = optimize_orchestration(
-        [],
-        [],
-        lambda _task, _answer: 1.0,
-        quality_evidence_kind="fast_mlsirm",
-    )
-    assert report["quality_evidence_kind"] == "fast_mlsirm"
+def test_deterministic_label_alone_cannot_authorize_sampling_or_aggregation() -> None:
+    with pytest.raises(RuntimeError, match="validated evaluation adapter"):
+        optimize_orchestration(
+            [],
+            [],
+            lambda _task, _answer: 1.0,
+            quality_evidence_kind="deterministic_ground_truth",
+        )
 
 
 def test_ad_hoc_evolutionary_search_fails_closed() -> None:
