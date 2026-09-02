@@ -3,7 +3,9 @@
 The module is an Anti-Corruption Layer between provider-specific structured
 outputs and the published language owned by ``fast-mlsirm``. It preserves
 criterion observations, abstentions, uncertainty, review signals, and opaque
-evidence references while structurally rejecting scores and decisions.
+evidence references while structurally rejecting scores and decisions. Every
+operational observation is bound to the exact immutable criterion meaning used
+for the exact run and item.
 """
 
 from __future__ import annotations
@@ -13,6 +15,11 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from .evaluation_criterion_binding import (
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
 
 GOVERNED_RATER_OBSERVATION_CONTRACT_V1 = "cwl_governed_rater_observation/v1"
 GOVERNED_RATER_UPSTREAM_REVISION = "38487df3f5f84b475e07b39cf13c893293e542e7"
@@ -66,8 +73,11 @@ _INVOCATION_FIELDS = frozenset(
         "contract_id",
         "invocation_ref",
         "configuration",
+        "evaluation_run_snapshot_ref",
+        "item_instance_ref",
         "task_revision_ref",
         "rubric_revision_ref",
+        "criterion_set",
         "response_evidence_ref",
         "observations",
     }
@@ -78,11 +88,13 @@ class RaterObservationError(ValueError):
     """Raised when data cannot cross the governed observation boundary."""
 
     def __init__(self, code: str, message: str) -> None:
+        """Retain a stable machine-readable rejection code."""
         self.code = code
         super().__init__(message)
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one object while rejecting duplicate textual members."""
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -119,8 +131,11 @@ def _json_depth_is_bounded(value: str) -> bool:
 
 
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
+    """Require one string-keyed mapping."""
     if not isinstance(value, Mapping):
-        raise RaterObservationError("invalid_object", f"{field_name} must be an object")
+        raise RaterObservationError(
+            "invalid_object", f"{field_name} must be an object"
+        )
     if any(type(key) is not str for key in value):
         raise RaterObservationError(
             "invalid_object_key", f"{field_name} keys must be strings"
@@ -129,6 +144,7 @@ def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
 
 
 def _reference(value: Any, field_name: str) -> str:
+    """Validate one exact bounded opaque reference."""
     if type(value) is not str:
         raise RaterObservationError(
             "invalid_reference", f"{field_name} must be a string"
@@ -144,9 +160,11 @@ def _reference(value: Any, field_name: str) -> str:
             "invalid_reference",
             f"{field_name} must be a bounded non-empty reference",
         )
-    if any(unicodedata.category(character) == "Cc" for character in value):
+    if any(
+        unicodedata.category(character) in {"Cc", "Cs"} for character in value
+    ):
         raise RaterObservationError(
-            "invalid_reference", f"{field_name} must not contain control characters"
+            "invalid_reference", f"{field_name} must not contain controls or surrogates"
         )
     return value
 
@@ -158,6 +176,7 @@ def _reference_tuple(
     maximum: int,
     allow_empty: bool,
 ) -> tuple[str, ...]:
+    """Copy one bounded unique reference collection."""
     if not isinstance(value, (list, tuple)):
         raise RaterObservationError(
             "invalid_references", f"{field_name} must be an array"
@@ -179,6 +198,7 @@ def _reference_tuple(
 def _reject_unknown_fields(
     payload: Mapping[str, Any], allowed: frozenset[str], field_name: str
 ) -> None:
+    """Reject decision authority and unknown transport fields."""
     unknown = set(payload) - allowed
     if unknown.intersection(_PROHIBITED_DECISION_FIELDS):
         raise RaterObservationError(
@@ -190,6 +210,14 @@ def _reject_unknown_fields(
             "unknown_field",
             f"{field_name} contains unsupported fields: {sorted(unknown)}",
         )
+
+
+def _criterion_set(value: Any) -> CriterionSetExecutionBinding:
+    """Parse a criterion set and translate its errors into this ACL."""
+    try:
+        return CriterionSetExecutionBinding.from_mapping(value)
+    except EvaluationCriterionBindingError as exc:
+        raise RaterObservationError(exc.code, str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -205,14 +233,15 @@ class RaterConfigurationIdentity:
     modality_channel_ref: str
 
     def __post_init__(self) -> None:
+        """Retain exact configuration identity without input normalization."""
         for field_name in _CONFIGURATION_FIELDS:
             object.__setattr__(
                 self, field_name, _reference(getattr(self, field_name), field_name)
             )
 
     @classmethod
-    def from_mapping(cls, value: Any) -> RaterConfigurationIdentity:
-        """Translate provider-neutral configuration data into the domain value object."""
+    def from_mapping(cls, value: Any) -> "RaterConfigurationIdentity":
+        """Translate provider-neutral configuration data into the domain value."""
         payload = _mapping(value, "configuration")
         _reject_unknown_fields(payload, _CONFIGURATION_FIELDS, "configuration")
         missing = _CONFIGURATION_FIELDS - set(payload)
@@ -251,6 +280,7 @@ class CriterionObservation:
     reason_ref: str | None
 
     def __post_init__(self) -> None:
+        """Validate observed and abstained criterion states."""
         object.__setattr__(
             self, "criterion_ref", _reference(self.criterion_ref, "criterion_ref")
         )
@@ -304,7 +334,7 @@ class CriterionObservation:
     @classmethod
     def from_mapping(
         cls, value: Any, *, criterion_ref: str | None = None
-    ) -> CriterionObservation:
+    ) -> "CriterionObservation":
         """Translate one untrusted structured observation into the domain entity."""
         payload = _mapping(value, "observation")
         allowed = _OBSERVATION_FIELDS
@@ -343,23 +373,37 @@ class CriterionObservation:
 
 @dataclass(frozen=True)
 class RaterInvocation:
-    """Aggregate root for exactly one execution of one rater configuration."""
+    """Aggregate root for one rater execution against one frozen criterion set."""
 
     invocation_ref: str
     configuration: RaterConfigurationIdentity
+    evaluation_run_snapshot_ref: str
+    item_instance_ref: str
     task_revision_ref: str
     rubric_revision_ref: str
+    criterion_set: CriterionSetExecutionBinding
     response_evidence_ref: str
     observations: tuple[CriterionObservation, ...]
     contract_id: str = GOVERNED_RATER_OBSERVATION_CONTRACT_V1
 
     def __post_init__(self) -> None:
+        """Enforce exact run, item, criterion, rubric, and category binding."""
         if self.contract_id != GOVERNED_RATER_OBSERVATION_CONTRACT_V1:
             raise RaterObservationError(
                 "contract_incompatible", "unsupported governed-rater contract"
             )
+        if type(self.configuration) is not RaterConfigurationIdentity:
+            raise RaterObservationError(
+                "invalid_configuration", "configuration has the wrong domain type"
+            )
+        if type(self.criterion_set) is not CriterionSetExecutionBinding:
+            raise RaterObservationError(
+                "invalid_criterion_set", "criterion_set has the wrong domain type"
+            )
         for field_name in (
             "invocation_ref",
+            "evaluation_run_snapshot_ref",
+            "item_instance_ref",
             "task_revision_ref",
             "rubric_revision_ref",
             "response_evidence_ref",
@@ -367,9 +411,10 @@ class RaterInvocation:
             object.__setattr__(
                 self, field_name, _reference(getattr(self, field_name), field_name)
             )
-        if type(self.configuration) is not RaterConfigurationIdentity:
+        if self.rubric_revision_ref != self.criterion_set.rubric_revision_ref:
             raise RaterObservationError(
-                "invalid_configuration", "configuration has the wrong domain type"
+                "criterion_set_rubric_mismatch",
+                "invocation rubric must match the frozen criterion-set rubric",
             )
         if (
             not isinstance(self.observations, (list, tuple))
@@ -385,16 +430,30 @@ class RaterInvocation:
             raise RaterObservationError(
                 "invalid_observation", "observations contain the wrong domain type"
             )
-        criterion_refs = [item.criterion_ref for item in observations]
-        if len(set(criterion_refs)) != len(criterion_refs):
+        observed_refs = tuple(item.criterion_ref for item in observations)
+        if len(set(observed_refs)) != len(observed_refs):
             raise RaterObservationError(
                 "duplicate_criterion",
                 "an invocation has at most one observation per criterion",
             )
+        if set(observed_refs) != set(self.criterion_set.criterion_refs):
+            raise RaterObservationError(
+                "criterion_coverage_mismatch",
+                "observations must cover every bound criterion exactly once",
+            )
+        for observation in observations:
+            if observation.status != "observed":
+                continue
+            criterion = self.criterion_set.criterion(observation.criterion_ref)
+            if observation.category_anchor_ref not in criterion.category_refs:
+                raise RaterObservationError(
+                    "category_not_admitted",
+                    "observed category is not admitted by the bound criterion",
+                )
         object.__setattr__(self, "observations", observations)
 
     @classmethod
-    def from_json(cls, value: str) -> RaterInvocation:
+    def from_json(cls, value: str) -> "RaterInvocation":
         """Decode raw JSON while rejecting duplicate members at every depth."""
         if type(value) is not str:
             raise RaterObservationError(
@@ -415,7 +474,7 @@ class RaterInvocation:
         return cls.from_mapping(payload)
 
     @classmethod
-    def from_mapping(cls, value: Any) -> RaterInvocation:
+    def from_mapping(cls, value: Any) -> "RaterInvocation":
         """Apply the Anti-Corruption Layer to an untrusted invocation envelope."""
         payload = _mapping(value, "invocation")
         _reject_unknown_fields(payload, _INVOCATION_FIELDS, "invocation")
@@ -425,21 +484,24 @@ class RaterInvocation:
                 "missing_field",
                 f"invocation is missing required fields: {sorted(missing)}",
             )
-        raw_observations = payload["observations"]
-        raw_observations = _mapping(raw_observations, "observations")
+        raw_observations = _mapping(payload["observations"], "observations")
         if not raw_observations or len(raw_observations) > MAX_RATER_OBSERVATIONS:
             raise RaterObservationError(
                 "invalid_observations",
                 f"observations must contain 1..{MAX_RATER_OBSERVATIONS} criteria",
             )
+        criterion_set = _criterion_set(payload["criterion_set"])
         return cls(
             contract_id=payload["contract_id"],
             invocation_ref=payload["invocation_ref"],
             configuration=RaterConfigurationIdentity.from_mapping(
                 payload["configuration"]
             ),
+            evaluation_run_snapshot_ref=payload["evaluation_run_snapshot_ref"],
+            item_instance_ref=payload["item_instance_ref"],
             task_revision_ref=payload["task_revision_ref"],
             rubric_revision_ref=payload["rubric_revision_ref"],
+            criterion_set=criterion_set,
             response_evidence_ref=payload["response_evidence_ref"],
             observations=tuple(
                 CriterionObservation.from_mapping(item, criterion_ref=criterion_ref)
@@ -448,15 +510,19 @@ class RaterInvocation:
         )
 
     def to_payload(self) -> dict[str, Any]:
-        """Return the exact domain-neutral published-language envelope."""
+        """Return a detached provider-neutral invocation snapshot."""
         return {
             "contract_id": self.contract_id,
             "invocation_ref": self.invocation_ref,
             "configuration": self.configuration.to_payload(),
+            "evaluation_run_snapshot_ref": self.evaluation_run_snapshot_ref,
+            "item_instance_ref": self.item_instance_ref,
             "task_revision_ref": self.task_revision_ref,
             "rubric_revision_ref": self.rubric_revision_ref,
+            "criterion_set": self.criterion_set.to_payload(),
             "response_evidence_ref": self.response_evidence_ref,
             "observations": {
-                item.criterion_ref: item.to_payload() for item in self.observations
+                observation.criterion_ref: observation.to_payload()
+                for observation in self.observations
             },
         }
