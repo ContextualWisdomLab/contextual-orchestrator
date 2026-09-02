@@ -26,6 +26,8 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
         "group_saved": "Group saved. Send requests with this group name to use measured routing.",
         "group_deleted": "Group deleted. Its provider models remain available.",
+        "audit_refresh_warning": "The change was saved, but the Audit view could not be refreshed. Reload to see the latest event.",
+        "model_groups_refresh_warning": "The change was saved, but the model group list could not be refreshed. Reload to see the latest groups.",
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
@@ -287,6 +289,8 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
         "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
+        "audit_refresh_warning": "변경 사항은 저장했지만 감사 화면을 새로 고치지 못했습니다. 최신 이벤트를 보려면 새로 고침하세요.",
+        "model_groups_refresh_warning": "변경 사항은 저장했지만 모델 그룹 목록을 새로 고치지 못했습니다. 최신 그룹을 보려면 새로 고침하세요.",
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
@@ -1187,15 +1191,42 @@ Summarize this research thread and verify claims.</textarea>
     }
 
     async function refreshAuditEvents() {
-      // recent_audit_events is only exposed on /admin/state, not a scoped
-      // endpoint, so this re-fetches the full state but only applies the
-      // audit slice — avoids the heavier full load() (readiness/simulate
-      // calls) for a plain model-group save/delete.
-      const response = await apiFetch("/admin/state");
-      if (!response.ok) return;
-      const payload = await response.json();
-      state.recent_audit_events = payload.recent_audit_events || [];
-      renderAudit();
+      try {
+        const response = await apiFetch("/admin/state");
+        if (!response.ok) {
+          throw new Error("Audit state request failed with HTTP " + response.status);
+        }
+        const payload = await response.json();
+        state.recent_audit_events = payload.recent_audit_events || [];
+        renderAudit();
+        return true;
+      } catch (error) {
+        console.warn("Could not refresh audit events after model-group mutation", error);
+        return false;
+      }
+    }
+
+    function showModelGroupRefreshWarning(message) {
+      const current = els.modelGroupFeedback.textContent.trim();
+      els.modelGroupFeedback.textContent = [current, message].filter(Boolean).join(" ");
+      els.modelGroupFeedback.style.color = "var(--amber)";
+    }
+
+    async function refreshModelGroupViews() {
+      let modelGroupsRefreshed = true;
+      try {
+        await refreshModelGroups();
+      } catch (error) {
+        modelGroupsRefreshed = false;
+        console.warn("Could not refresh model groups after mutation", error);
+      }
+      const auditRefreshed = await refreshAuditEvents();
+      if (!modelGroupsRefreshed) {
+        showModelGroupRefreshWarning(t("model_groups_refresh_warning"));
+      }
+      if (!auditRefreshed) {
+        showModelGroupRefreshWarning(t("audit_refresh_warning"));
+      }
     }
 
     async function saveModelGroup(event) {
@@ -1203,7 +1234,10 @@ Summarize this research thread and verify claims.</textarea>
       const groupName = els.modelGroupName.value.trim();
       const memberIds = Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value);
       const exists = state.modelGroups.some(group => group.group_name === groupName.replaceAll("-", "_").toLowerCase());
-      const response = await fetch(exists ? `/api/v1/model_groups/${encodeURIComponent(groupName)}` : "/api/v1/model_groups", {
+      const endpoint = exists
+        ? "/api/v1/model_groups/" + encodeURIComponent(groupName)
+        : "/api/v1/model_groups";
+      const response = await fetch(endpoint, {
         method: exists ? "PATCH" : "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
@@ -1212,8 +1246,7 @@ Summarize this research thread and verify claims.</textarea>
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
       els.modelGroupFeedback.style.color = "var(--green)";
-      await refreshModelGroups();
-      await refreshAuditEvents();
+      await refreshModelGroupViews();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1764,20 +1797,23 @@ Summarize this research thread and verify claims.</textarea>
       els.modelGroupFeedback.textContent = error.message;
       els.modelGroupFeedback.style.color = "var(--red)";
     }));
+    async function deleteModelGroup(groupName) {
+      const endpoint = "/api/v1/model_groups/" + encodeURIComponent(groupName);
+      const response = await fetch(endpoint, {method: "DELETE"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not delete model group");
+      els.modelGroupFeedback.textContent = t("group_deleted");
+      els.modelGroupFeedback.style.color = "var(--green)";
+      await refreshModelGroupViews();
+    }
+
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
       if (!name) return;
-      fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
-        .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
-        .then(() => {
-          els.modelGroupFeedback.textContent = t("group_deleted");
-          els.modelGroupFeedback.style.color = "var(--green)";
-          return refreshModelGroups().then(refreshAuditEvents);
-        })
-        .catch(error => {
-          els.modelGroupFeedback.textContent = error.message;
-          els.modelGroupFeedback.style.color = "var(--red)";
-        });
+      deleteModelGroup(name).catch(error => {
+        els.modelGroupFeedback.textContent = error.message;
+        els.modelGroupFeedback.style.color = "var(--red)";
+      });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
