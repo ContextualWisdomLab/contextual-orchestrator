@@ -1,0 +1,90 @@
+name: Source fix PR971 default retry policy
+
+on:
+  push:
+    branches:
+      - fix/model-group-timeout-openrouter
+    paths:
+      - .github/source-fix-971-default-retry-policy.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+          python -m pip install --disable-pip-version-check --no-deps -e .
+
+      - name: Prove default-retry regression is RED
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q tests/test_no_heuristic_default_transport_retry.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::No-heuristic default retry regression was unexpectedly GREEN before repair."
+            exit 1
+          fi
+          echo "Default retry regression reproduced the unproven allocation."
+
+      - name: Apply exact guarded owner repair
+        run: python scripts/source_fix_971_default_retry_policy.py
+
+      - name: Verify focused transport contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_no_heuristic_default_transport_retry.py \
+            tests/test_provider_gateway_resilience.py \
+            tests/test_provider_integration.py \
+            tests/test_provider_error_taxonomy.py
+          git diff --check
+
+      - name: Remove completed one-shot machinery
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-971-default-retry-policy.yml \
+            .github/source-fix-971-default-retry-policy.trigger \
+            scripts/source_fix_971_default_retry_policy.py
+          git diff --check
+
+      - name: Commit verified owner repair
+        env:
+          EXPECTED_TRIGGER_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/model-group-timeout-openrouter
+          remote_head="$(git rev-parse origin/fix/model-group-timeout-openrouter)"
+          if [ "$remote_head" != "$EXPECTED_TRIGGER_HEAD" ]; then
+            echo "::error::Canonical branch moved; refusing to overwrite or guess a merge."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::error::Source fix produced no publishable delta."
+            exit 1
+          fi
+          git commit -m "fix(routing): fail closed on default transport retry allocation"
+          git push origin HEAD:fix/model-group-timeout-openrouter
