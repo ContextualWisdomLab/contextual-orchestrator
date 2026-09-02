@@ -32,14 +32,27 @@ jobs:
             echo '::error::NIM output-token allocation regression was not RED before production repair'
             exit 1
           fi
+          if uv run pytest -q tests/test_nim_benchmark_no_heuristic_candidates.py; then
+            echo '::error::NIM candidate-admission/name-tie regressions were not RED before production repair'
+            exit 1
+          fi
       - name: Apply exact-text production repair
-        run: uv run python -m scripts.ci.repair_pr1000_nim_evidence_thresholds
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.ci.repair_pr1000_nim_evidence_thresholds
+          uv run python -m scripts.ci.repair_pr1000_nim_candidate_admission
       - name: Verify focused repaired contract
         shell: bash
         run: |
           set -euo pipefail
           uv run pytest -q \
             tests/test_nim_benchmark_no_heuristic_tokens.py \
+            tests/test_nim_benchmark_no_heuristic_candidates.py \
+            tests/test_nim_benchmark_release_acceptance.py::test_complete_request_plan_rejects_invalid_counts \
+            tests/test_nim_benchmark_release_acceptance.py::test_complete_request_plan_covers_a_127_model_catalog \
+            tests/test_nim_benchmark_release_acceptance.py::test_buyer_facing_request_plan_matches_internal_plan \
+            tests/test_nim_benchmark_release_acceptance.py::test_one_request_short_fails_after_catalog_before_any_probe \
             tests/test_nim_benchmark_release_acceptance.py::test_smoke_manifest_cannot_authorize_production_routing
           git diff --check
       - name: Remove one-shot repair artifacts, reconcile concurrent head, and push
@@ -49,7 +62,8 @@ jobs:
           rm -f \
             .github/workflows/source-fix-1000-nim-evidence-thresholds.yml \
             .github/source-fix-1000-nim-evidence-thresholds.trigger \
-            scripts/ci/repair_pr1000_nim_evidence_thresholds.py
+            scripts/ci/repair_pr1000_nim_evidence_thresholds.py \
+            scripts/ci/repair_pr1000_nim_candidate_admission.py
           git add -A
           git diff --cached --check
           if git diff --cached --quiet; then
@@ -58,13 +72,18 @@ jobs:
           fi
           git config user.name 'opencode-agent[bot]'
           git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
-          git commit -m 'fix(nim): retire heuristic benchmark thresholds'
+          git commit -m 'fix(nim): retire heuristic benchmark decisions'
           git fetch --no-tags origin fix/no-heuristic-batch-routing
           remote_head="$(git rev-parse FETCH_HEAD)"
           if [ "$remote_head" != "$(git rev-parse HEAD)" ] && ! git merge-base --is-ancestor "$remote_head" HEAD; then
             git merge --no-edit "$remote_head"
             uv run pytest -q \
               tests/test_nim_benchmark_no_heuristic_tokens.py \
+              tests/test_nim_benchmark_no_heuristic_candidates.py \
+              tests/test_nim_benchmark_release_acceptance.py::test_complete_request_plan_rejects_invalid_counts \
+              tests/test_nim_benchmark_release_acceptance.py::test_complete_request_plan_covers_a_127_model_catalog \
+              tests/test_nim_benchmark_release_acceptance.py::test_buyer_facing_request_plan_matches_internal_plan \
+              tests/test_nim_benchmark_release_acceptance.py::test_one_request_short_fails_after_catalog_before_any_probe \
               tests/test_nim_benchmark_release_acceptance.py::test_smoke_manifest_cannot_authorize_production_routing
             git diff --check
           fi
