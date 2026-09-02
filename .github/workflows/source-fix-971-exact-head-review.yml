@@ -17,13 +17,14 @@ concurrency:
 jobs:
   repair:
     runs-on: ubuntu-slim
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
           persist-credentials: true
+          token: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
 
       - name: Revalidate exact remote head
         shell: bash
