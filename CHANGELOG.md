@@ -934,6 +934,43 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   indefinitely starving every later member of an uptime update. The fetch
   now keeps its own fixed, independent bound
   (`tests/test_openrouter_uptime.py::test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint`).
+- (2026-09-02, PR #971) `discover_all_models`'s per-provider loop
+  (`model_discovery.py`) called `discover_provider_models` directly and
+  in-line, with no separate bound or cancellation mechanism -- a stalled
+  provider catalog request (a connection accepted but never answered, or
+  in tests a mock that never returns) blocked discovery of every later,
+  healthy provider forever, regardless of `DISCOVERY_TIMEOUT_SECONDS`
+  (which only bounds one socket read at a time and stays `None` by
+  default). Each provider's discovery attempt now runs on its own daemon
+  thread bounded by a new, separately configured
+  `PROVIDER_DISCOVERY_DEADLINE_SECONDS` (default 30.0s, independent of
+  both `DISCOVERY_TIMEOUT_SECONDS` and `ModelClient.timeout` -- neither is
+  reused or repurposed): once the deadline elapses the caller stops
+  waiting, records a `ProviderDiscoveryError(error_code="discovery_timeout")`
+  for that provider, and moves on; the abandoned thread is daemonized so
+  it cannot block interpreter shutdown
+  (`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`).
+- (2026-09-02, PR #971) `select_bootstrap_discovered_agents`'s first pass
+  admitted at most one endpoint per model group (the provider-declared
+  exact model identity) but never checked provider identity, so several
+  cheap, distinctly-named models from one provider could fill most or all
+  of a bootstrap pool before a genuinely independent alternative provider
+  was ever tried -- an apparently diverse pool (distinct model names) that
+  was actually one provider's outage away from total failure, contrary to
+  this repo's own documented "provider-diverse selection" claim for this
+  function. The first pass now admits at most one endpoint per provider
+  *and* per model group; once every viable provider has contributed once
+  (or capacity runs out), a second pass fills remaining slots from
+  still-untried model groups regardless of provider, and a final pass
+  falls back to duplicate model-group endpoints only once real diversity
+  is exhausted. `contextual_orchestrator/provider_bootstrap.py`'s separate,
+  honestly-named `select_model_group_diverse_models` (which never claimed
+  provider diversity, and whose own tests deliberately rank a known
+  same-provider price ahead of diversity) was left unchanged
+  (`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_spans_multiple_providers_before_repeating_one`,
+  `::test_bootstrap_selector_prefers_model_group_diversity`,
+  `::test_bootstrap_selector_falls_back_to_duplicate_model_group_when_capacity_remains`,
+  `tests/test_review_gateway.py::test_build_review_orchestrator_uses_model_group_diversity`).
 
 ### Added
 

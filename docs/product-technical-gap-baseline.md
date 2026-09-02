@@ -1,5 +1,83 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: unbounded provider discovery and single-provider bootstrap concentration
+
+Observation time: 2026-09-02 Asia/Seoul. This closes the two remaining
+unaddressed items from PR #971's review-blocker list, both independently
+verified against current-head code rather than trusted as stated.
+
+### Summary
+
+- **Model discovery had no separately bounded/cancellable per-provider
+  deadline.** `discover_all_models` (`contextual_orchestrator/model_discovery.py`)
+  ran a plain sequential `for source in sources: discover_provider_models(...)`
+  loop with no thread, no `asyncio.wait_for`, and no join timeout around any
+  individual provider's call -- confirmed genuinely unbounded, not merely
+  a stale claim. `DISCOVERY_TIMEOUT_SECONDS` (the per-HTTP-call socket
+  timeout passed *into* each fetch) defaults to `None` per #971's own
+  no-inference-deadline design boundary, and even set to a finite value it
+  only bounds one socket read at a time inside a provider's multi-fetch
+  discovery attempt -- it cannot bound a hang that ignores that parameter
+  entirely (confirmed with a mock discovery call blocking on an `Event`
+  nothing ever sets). A stalled provider therefore blocked discovery of
+  every later, healthy provider forever. Fixed: `discover_all_models` now
+  runs each provider's discovery on its own daemon thread and stops
+  waiting once a new, separately configured
+  `PROVIDER_DISCOVERY_DEADLINE_SECONDS` (default 30.0s) elapses, recording
+  a `ProviderDiscoveryError(error_code="discovery_timeout")` for that
+  provider and continuing to the next one; the abandoned thread is
+  daemonized so it cannot block interpreter shutdown, and its eventual
+  result (if any) is discarded. This constant is independent of both
+  `DISCOVERY_TIMEOUT_SECONDS` and `ModelClient.timeout` -- it is never
+  reused or repurposed from either -- and an explicit
+  `discovery_deadline=None` still opts back into the pre-fix unbounded
+  wait. RED-before/GREEN-after:
+  `tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`
+  (mocked `discover_provider_models` hangs forever for one source; asserted
+  the second source's model still arrives and the whole call returns in
+  well under 5s) hung the test process indefinitely against the pre-fix
+  sequential loop (had to be killed by an outer `timeout`) and passes in
+  under 2s with the fix.
+- **Bootstrap diversity was model-group-diverse only, not genuinely
+  provider-diverse, despite claiming otherwise.** This repo's own
+  `CLAUDE.md` and `tests/test_discovery_bootstrap_selection.py`'s title/
+  assertions ("missing provider-diverse bootstrap selector") both describe
+  `select_bootstrap_discovered_agents` as layering provider-diverse
+  selection on top of cheapest-price ranking. The actual first pass
+  (`model_discovery.py`) admitted at most one endpoint per **model group**
+  (the provider-declared exact model identity) and never checked
+  `provider_name` at all, so several cheap, distinctly-named models from
+  one provider could -- and, in the existing
+  `test_bootstrap_selector_prefers_model_group_diversity` fixture, did --
+  fill most or all of a bootstrap pool before a genuinely independent,
+  viable alternative provider was ever tried: an apparently diverse pool
+  (distinct model names) that was actually concentrated on one provider's
+  continued availability. `contextual_orchestrator/provider_bootstrap.py`'s
+  separate `select_model_group_diverse_models` was deliberately left
+  unchanged: it never claims provider diversity (its own name and
+  docstring say "model group" only), and its own test suite has an
+  explicit, deliberate price-honesty-over-diversity contract (an
+  unknown-priced model must never outrank a same-provider model with a
+  known price) that a blanket provider constraint would have broken --
+  exactly the "unless evidence/contract explicitly chooses otherwise" case
+  the review finding itself carved out. Fixed (`select_bootstrap_discovered_agents`
+  only): a new first pass now admits at most one endpoint per provider
+  *and* per model group; once every viable provider has contributed once
+  (or capacity runs out), a second pass fills remaining slots from
+  still-untried model groups regardless of provider; a final pass, as
+  before, falls back to duplicate model-group endpoints only once real
+  diversity is exhausted. Two downstream tests that had pinned the old,
+  single-provider-concentrated outcome as correct
+  (`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_prefers_model_group_diversity`,
+  `tests/test_review_gateway.py::test_build_review_orchestrator_uses_model_group_diversity`)
+  were updated to the corrected, genuinely cross-provider expectation.
+  RED-before/GREEN-after: the new
+  `test_bootstrap_selector_spans_multiple_providers_before_repeating_one`
+  (three individually-cheaper same-provider models plus one pricier
+  independent-provider model, pool size 2) failed against the pre-fix
+  algorithm with the pool collapsed onto the single cheaper provider
+  (`{'openrouter'} == {'openai', 'openrouter'}`) and passes with the fix.
+
 ## 2026-09-02 PR #971: embedding recovery/deadline and legacy-id quarantine review
 
 Observation time: 2026-09-02 Asia/Seoul.
