@@ -15,20 +15,35 @@ import re
 import sys
 from pathlib import Path
 
+_PROJECT_TABLE_HEADER_PATTERN = re.compile(r"(?m)^\[project\]\s*$")
+_TABLE_HEADER_PATTERN = re.compile(r"(?m)^\[")
 _VERSION_FIELD_PATTERN = re.compile(r'(?m)^version\s*=\s*"([^"]+)"\s*$')
 _HEADING_PATTERN = re.compile(r"(?m)^## \[(?P<version>[^\]]+)\][^\n]*$")
 
 
 def read_declared_version(pyproject_text: str) -> str:
-    """Return the `[project]` `version` declared in *pyproject_text*.
+    """Return the `[project]` table's `version` declared in *pyproject_text*.
 
-    Raises ``ValueError`` when no `version = "..."` line is present, rather
-    than guessing a version from a tag, a changelog heading, or any other
+    Only a `version = "..."` line that appears within the `[project]`
+    table's own body is honored -- the search is bounded to the span between
+    the `[project]` header and the next `[...]` table header (or end of
+    file), so a same-named `version` key under an unrelated table (e.g.
+    `[tool.some_tool]`) declared earlier in the file is never mistaken for
+    the project's real version. Raises ``ValueError`` when there is no
+    `[project]` table, or it has no `version = "..."` line, rather than
+    guessing a version from a tag, a changelog heading, or any other
     inferred source.
     """
-    match = _VERSION_FIELD_PATTERN.search(pyproject_text)
+    header_match = _PROJECT_TABLE_HEADER_PATTERN.search(pyproject_text)
+    if header_match is None:
+        raise ValueError("pyproject.toml has no [project] table")
+    body_start = header_match.end()
+    next_header_match = _TABLE_HEADER_PATTERN.search(pyproject_text, body_start)
+    body_end = next_header_match.start() if next_header_match else len(pyproject_text)
+    project_body = pyproject_text[body_start:body_end]
+    match = _VERSION_FIELD_PATTERN.search(project_body)
     if match is None:
-        raise ValueError("pyproject.toml has no version field")
+        raise ValueError("pyproject.toml [project] table has no version field")
     return match.group(1)
 
 

@@ -57,6 +57,44 @@ def test_read_declared_version_rejects_a_missing_version_field() -> None:
         module.read_declared_version("[project]\nname = \"x\"\n")
 
 
+def test_read_declared_version_rejects_a_missing_project_table() -> None:
+    """A pyproject with no `[project]` table at all must fail closed too."""
+    module = _module()
+    with pytest.raises(ValueError, match=r"\[project\]"):
+        module.read_declared_version('[tool.other]\nversion = "9.9.9"\n')
+
+
+def test_read_declared_version_ignores_a_same_named_key_in_an_earlier_table() -> None:
+    """A `version` key under an unrelated table must never be mistaken for
+    `[project]`'s real version, even when it textually precedes it."""
+    module = _module()
+    pyproject = (
+        '[tool.some_tool]\n'
+        'version = "9.9.9"\n'
+        '\n'
+        '[project]\n'
+        'name = "contextual-orchestrator"\n'
+        'version = "0.2.0"\n'
+        'description = "x"\n'
+    )
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
+def test_read_declared_version_ignores_a_same_named_key_in_a_later_table() -> None:
+    """A `version` key in a table declared after `[project]` must not leak in
+    either, once the `[project]` table's own body has ended."""
+    module = _module()
+    pyproject = (
+        '[project]\n'
+        'name = "x"\n'
+        'version = "0.2.0"\n'
+        '\n'
+        '[tool.other]\n'
+        'version = "7.7.7"\n'
+    )
+    assert module.read_declared_version(pyproject) == "0.2.0"
+
+
 def test_extract_changelog_section_returns_only_the_matching_version_body() -> None:
     """Only the body between the matching heading and the next heading is returned."""
     module = _module()
@@ -78,7 +116,7 @@ def test_extract_changelog_section_matches_a_dated_heading_too() -> None:
 def test_extract_changelog_section_rejects_a_missing_version() -> None:
     """A version with no CHANGELOG section must fail closed, not publish empty notes."""
     module = _module()
-    with pytest.raises(ValueError, match="0.9.9"):
+    with pytest.raises(ValueError, match=r"0\.9\.9"):
         module.extract_changelog_section(_CHANGELOG, "0.9.9")
 
 
