@@ -1,5 +1,5 @@
 ---
-id: "0042"
+id: "0130"
 title: "Add OpenCode Go as a second, subscription-gated provider source"
 status: proposed
 proposed_date: "2026-09-02"

@@ -458,7 +458,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     # paid subscription/entitlement independent of Zen access, so treating it
     # as a distinct account boundary -- mirroring nvidia_nim/nvidia_nim_sub --
     # keeps per-account bootstrap/diagnostic accounting correct and lets a
-    # deployment register Zen without Go (or vice versa). See ADR 0042.
+    # deployment register Zen without Go (or vice versa). See ADR 0130.
     ProviderModelSource(
         provider_name="opencode_go",
         credential_name="OPENCODE_GO_API_KEY",

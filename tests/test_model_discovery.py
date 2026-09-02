@@ -1451,7 +1451,7 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
 
 
 def test_opencode_go_is_a_distinct_credential_and_endpoint_from_zen() -> None:
-    """ADR 0042: Go is a second, subscription-gated catalog, not an alias for Zen."""
+    """ADR 0130: Go is a second, subscription-gated catalog, not an alias for Zen."""
     zen = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
     go = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
 

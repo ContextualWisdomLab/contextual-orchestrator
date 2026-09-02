@@ -297,7 +297,7 @@ box, all resolved through `get_credential` (never fabricated, never read from
 OpenCode Go is a second, subscription-gated catalog served from the same
 OpenCode Zen console/gateway (`https://opencode.ai/zen/go/v1/models`, vs.
 Zen's own `https://opencode.ai/zen/v1/models`) — see
-`docs/planning/adrs/0042-opencode-go-provider-discovery.md`. It uses the same
+`docs/planning/adrs/0130-opencode-go-provider-discovery.md`. It uses the same
 API-key *format* as Zen but is registered under its own KV credential name
 because Go access requires its own paid subscription independent of Zen
 access; register `OPENCODE_ZEN_API_KEY`, `OPENCODE_GO_API_KEY`, both, or
