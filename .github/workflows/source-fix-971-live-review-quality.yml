@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr-971-live-review-quality-repair
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
@@ -85,8 +85,14 @@ jobs:
 
       - name: Remove temporary repair machinery and publish
         shell: bash
+        env:
+          PUBLISH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${PUBLISH_TOKEN:-}" ]; then
+            echo "::error::A workflow-starting publication credential is required; github.token must not publish a commit that removes a workflow and then stand in for successor evidence." >&2
+            exit 1
+          fi
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
           rm .github/workflows/source-fix-971-live-review-quality.yml
@@ -102,4 +108,5 @@ jobs:
           git commit -m "fix(review): enforce embedding privacy health and discovery bounds"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
+          git remote set-url origin "https://x-access-token:${PUBLISH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:${GITHUB_REF_NAME}"
