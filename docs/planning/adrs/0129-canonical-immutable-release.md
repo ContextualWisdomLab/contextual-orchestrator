@@ -165,7 +165,13 @@ Before any tag or Release is created, the release job:
 2. Re-fetches protected `main`'s current tip via `gh api repos/$REPO/commits/
    main --jq .sha` and fails closed if it does not exactly equal the checked-
    out commit — guards against a stale dispatch racing a concurrent merge, or
-   a detached/rewritten ref. This needs only `contents: read`.
+   a detached/rewritten ref. This needs only `contents: read`. Immediately
+   after, fails closed unless every check GitHub reports for that exact
+   commit (via `commits/$SHA/check-runs`, excluding this release run's own
+   checks) is complete with an acceptable conclusion — guards against
+   dispatching while a push-triggered workflow on the new `main` tip is
+   still in flight or has failed (see the Non-goals note on this and "Known
+   limitations" below). Needs `checks: read`.
 3. Parses `pyproject.toml`'s `version = "..."` and fails closed unless it is
    byte-for-byte equal to the `version` input. A release never redefines what
    version a commit is; the version bump is a normal, already-reviewed PR
@@ -235,12 +241,23 @@ add release-specific assurance.
   input.
 - **A release cut on every merge to `main`.** Explicitly rejected — see
   Trigger above.
-- **Re-deriving required-check names dynamically from the GitHub ruleset
+- **Re-deriving required-check *names* dynamically from the GitHub ruleset
   API** (as `release_authority_snapshot.py` does for its PR-scoped
-  evidence). This ADR's gate does not need the exhaustive required-check
-  inventory — it needs "is this commit really `main`'s tip" (step 2) plus a
-  fresh regression run (step 5), both of which are simpler and do not need
-  the `administration: read` permission the rulesets endpoint requires.
+  evidence). A later Devin finding on this PR ("Unchecked main checks
+  permit releases") showed the gate still needed *some* check-state
+  verification: the checks that gated the PR's merge ran against the PR's
+  own head SHA, not necessarily against the resulting `main`-tip commit
+  (squash/rebase merges mint a new SHA), and separate push-triggered
+  workflows (Security, Fuzz, ...) that run again on that new tip commit can
+  still be in flight, or have failed, at the moment of a manual dispatch.
+  The gate now queries `commits/$SHA/check-runs` and fails closed unless
+  every check GitHub reports for that exact commit is complete with an
+  acceptable conclusion (see "Known limitations" below) — deliberately
+  *not* the ruleset-derived required-check-name lookup, which stays
+  out of scope: checking everything reported for the commit is strictly
+  more conservative than checking only a derived "required" subset, and
+  needs only `checks: read`, not the `administration: read` the rulesets
+  endpoint requires.
 
 ## Research grounding
 
@@ -267,6 +284,66 @@ this mechanism implements, not an academic literature review:
   clients via `.../releases/tag/vX.Y.Z` (the immutable pin) and
   `.../releases/latest` (a mutable discovery alias, not a pin — see
   `docs/RELEASING.md`).
+
+## Known limitations
+
+### Residual check-then-act window before the tag/Release are created
+
+Devin flagged this gate's re-verification (main's tip, then every check for
+that commit — both re-checked a second time as `publish`'s first two steps,
+immediately before anything is created) as still leaving a race: if `main`
+advances, or a check regresses, in the moments between that recheck and the
+actual `git push origin refs/tags/...` / `gh release create`, the workflow
+would still publish the commit that *was* the verified, all-green tip
+moments earlier.
+
+This is real, and it is also an inherent limitation of any check-then-act
+sequence against an API with no atomic "create this tag only if branch `X`
+is still at commit `Y`" primitive — GitHub does not expose one. No amount of
+re-ordering removes the window entirely; it can only be shrunk. This ADR
+accepts the remaining window as bounded and low-risk, for concrete reasons,
+rather than adding more speculative complexity to chase it toward zero:
+
+- **The window is already close to minimal.** `publish`'s very first
+  fallible actions after checkout are exactly these two rechecks, run
+  back-to-back, with nothing repository-controlled or otherwise slow
+  between them and the checks. The only steps between the last recheck and
+  the actual tag push are downloading the small notes/SBOM artifact
+  `verify` already produced (a same-org GitHub Actions artifact fetch, not
+  arbitrary code) and the `git tag`/`git push` themselves — on the order of
+  a few seconds, not minutes.
+- **The trigger is `workflow_dispatch` only, run by a maintainer, rarely.**
+  This is not a high-frequency automated path (contrast a bot that dispatches
+  releases on every merge, which this ADR's Trigger section explicitly
+  rejects) — the exposure is one narrow window per manual release, not a
+  continuously-open one.
+- **The impact if it is ever actually hit is small and self-describing.** A
+  commit landing in this exact window is, by construction, one that *was*
+  `main`'s genuine, all-checks-green tip only seconds earlier — never a
+  wrong, unreviewed, or malicious commit, and never one that skipped this
+  workflow's own fresh test-suite run (that ran against the commit actually
+  being published). The realistic failure mode is "released a version that
+  was immediately superseded by an unrelated merge," not "released a broken
+  or untrusted artifact."
+- **A real GitHub-side atomic primitive does not exist to close this.**
+  There is no API call that both verifies a ref's current SHA and creates a
+  tag/Release in one atomic, all-or-nothing operation; closing this
+  completely would require either GitHub adding one, or building a
+  bespoke distributed-locking layer around a `workflow_dispatch` action a
+  human already gates by hand — complexity disproportionate to a
+  maintainer-triggered, seconds-wide window with a low-severity failure
+  mode.
+
+**If a maintainer ever discovers a release published a commit that was
+immediately superseded:** do not retroactively move, delete, or retag the
+published release — this repository's own release mechanism treats tags as
+immutable once published (see `docs/RELEASING.md`'s Rollback section), and
+an already-superseded tag is not the kind of "genuine publishing mistake
+caught immediately" that section's narrow `gh release delete` exception is
+for. Instead, cut a new patch (or minor, if warranted) release from the
+actual intended tip through the normal dispatch process above; the
+superseded release simply becomes an accurate historical record of what
+`main`'s tip briefly was.
 
 ## Consequences
 

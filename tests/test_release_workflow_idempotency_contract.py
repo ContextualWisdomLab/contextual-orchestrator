@@ -1,22 +1,30 @@
 """Idempotent-retry and least-privilege contract for the release workflow.
 
-Covers the design that resolves three related Devin/CodeRabbit findings on
+Covers the design that resolves four related Devin/CodeRabbit findings on
 `.github/workflows/release.yml`, kept in one file because they share a root
-cause -- the tag is pushed before the fallible SBOM/GitHub-Release steps,
-so any failure after that push must be safely retryable without ever moving
-the tag or double-publishing:
+cause -- the tag (and, now, the Release object itself) is created before the
+fallible SBOM-asset step, so any failure after that must be safely
+retryable without ever moving the tag or double-publishing:
 
-- The tag/release resume-vs-reject branching: an already-existing tag that
-  points at this exact commit with no published GitHub Release yet is a
-  safe resume; a tag pointing at any other commit, or a tag whose release
-  already exists, is rejected rather than silently accepted or overwritten.
+- The tag resume-vs-reject branching: an already-existing tag that points
+  at this exact commit is a safe resume; a tag pointing at any other commit
+  is rejected rather than silently accepted or overwritten.
+- The Release resume-vs-create branching (`release_resume`, a Devin
+  follow-up finding distinct from the tag one above): a GitHub Release that
+  already exists for this exact commit is *also* a safe resume -- `gh
+  release create` can publish the Release object and then fail partway
+  through uploading its assets, so "the Release already exists" must not be
+  treated as "nothing left to do." `publish` always attempts the
+  best-effort SBOM asset attach afterward, whether the Release was just
+  created or already existed.
 - `actions: read` is granted at the `verify` job's scope (needed for the
   best-effort SBOM lookup) and nowhere else.
 - The two-job least-privilege split: `verify` (read-only, no persisted git
   credential) executes all repository-controlled code -- the fresh test
   suite and note rendering -- before `publish` (the only job holding
-  `contents: write`) ever runs, and `publish`'s first action is an
-  authoritative main-tip re-check immediately before it creates anything.
+  `contents: write`) ever runs, and `publish`'s first actions are an
+  authoritative main-tip re-check and a checks-green re-check, immediately
+  before it creates anything.
 
 Uses plain text/index assertions on the same raw YAML text convention as
 `tests/test_release_workflow_contract.py` (see that file's docstring for the
@@ -72,31 +80,38 @@ def _tag_state_step(workflow: str) -> str:
     return verify_block[step_start:next_step_start]
 
 
-# --- Tag resume-vs-reject branching (Devin finding 3) -----------------------
+# --- Tag/Release resume-vs-reject branching (Devin findings 3 and the
+# --- follow-up "Failed asset upload strands releases") ----------------------
 
 
 def test_tag_state_step_exists_with_a_stable_output() -> None:
-    """The resume decision is exposed as a step output the `publish` job
-    can gate on, not just an internal variable."""
+    """The resume decisions are exposed as step outputs the `publish` job
+    can gate on, not just internal variables. Two separate flags -- whether
+    the tag itself is safe to skip re-creating, and whether the GitHub
+    Release object is safe to skip re-creating -- because a Devin follow-up
+    finding showed those are not the same question (see the
+    `release_resume`-specific tests below)."""
     workflow = _workflow_text()
     verify_block = _job_block(workflow, "verify")
     assert 'id: tag_state' in verify_block
     assert 'echo "tag_resume=false" >> "${GITHUB_OUTPUT}"' in verify_block
     assert 'echo "tag_resume=true" >> "${GITHUB_OUTPUT}"' in verify_block
+    assert 'echo "release_resume=false" >> "${GITHUB_OUTPUT}"' in verify_block
+    assert 'echo "release_resume=true" >> "${GITHUB_OUTPUT}"' in verify_block
     assert "outputs:" in verify_block
     assert "tag_resume: ${{ steps.tag_state.outputs.tag_resume }}" in verify_block
+    assert "release_resume: ${{ steps.tag_state.outputs.release_resume }}" in verify_block
 
 
 def test_absent_tag_is_a_fresh_publish_checked_before_any_reject_branch() -> None:
     """No tag at all must short-circuit straight to `tag_resume=false`,
-    before the points-elsewhere/already-published reject logic ever runs
-    (that logic requires a tag to exist, so it must come after)."""
+    before the points-elsewhere reject branch or the tag_resume=true branch
+    (which requires a tag to exist) ever run."""
     step = _tag_state_step(_workflow_text())
     fresh_index = step.index('echo "tag_resume=false"')
     points_elsewhere_index = step.index("a release tag is never moved onto a different commit")
-    already_published_index = step.index("there is nothing left to resume")
-    resume_index = step.index('echo "tag_resume=true"')
-    assert fresh_index < points_elsewhere_index < already_published_index < resume_index
+    tag_resume_true_index = step.index('echo "tag_resume=true"')
+    assert fresh_index < points_elsewhere_index < tag_resume_true_index
 
 
 def test_tag_pointing_at_a_different_commit_is_rejected_not_moved() -> None:
@@ -112,27 +127,47 @@ def test_tag_pointing_at_a_different_commit_is_rejected_not_moved() -> None:
     assert "exit 1" in following
 
 
-def test_tag_matching_commit_with_existing_release_is_rejected_as_nothing_to_resume() -> None:
-    """A tag at the right commit whose GitHub Release already exists must
-    also reject -- retries are for incomplete publications, not to
-    re-publish a release that already exists."""
+def test_tag_matching_commit_sets_tag_resume_before_branching_on_release_existence() -> None:
+    """Once the tag is confirmed to point at this exact commit, `tag_resume`
+    is set unconditionally -- only whether the GitHub Release itself
+    already exists (`release_resume`) still needs its own branch."""
+    step = _tag_state_step(_workflow_text())
+    mismatch_index = step.index('${tag_commit}" != "${GITHUB_SHA}')
+    tag_resume_true_index = step.index('echo "tag_resume=true"')
+    release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
+    assert mismatch_index < tag_resume_true_index < release_view_index
+
+
+def test_tag_matching_commit_with_existing_release_resumes_to_attach_missing_assets() -> None:
+    """A tag at the right commit whose GitHub Release already exists is a
+    safe resume too, not a reject: `gh release create` can publish the
+    Release object and then fail partway through uploading assets, so the
+    tag and the Release can both already exist while the SBOM asset is
+    still missing. The earlier "nothing left to resume" rejection stranded
+    that release forever (Devin's follow-up finding) -- `publish` must
+    still get a chance to attempt the best-effort asset attach."""
     step = _tag_state_step(_workflow_text())
     assert 'gh release view "v${RELEASE_VERSION}"' in step
     release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
-    following = step[release_view_index : release_view_index + 400]
-    assert "::error::" in following
-    assert "exit 1" in following
-    assert "already has a published GitHub Release" in following
+    # Bounded to the "release already exists" branch itself (up to its
+    # `else`), not an arbitrary character count -- the branch's own
+    # explanatory comment is long enough to overflow a fixed window.
+    else_index = step.index("\n          else\n", release_view_index)
+    branch = step[release_view_index:else_index]
+    assert "::error::" not in branch
+    assert "exit 1" not in branch
+    assert 'echo "release_resume=true" >> "${GITHUB_OUTPUT}"' in branch
 
 
 def test_tag_matching_commit_with_no_release_yet_resumes_without_retagging() -> None:
-    """Only the narrow safe case -- same commit, no release published yet --
-    sets `tag_resume=true`, and this must be the last branch reached (after
-    both reject checks have already passed)."""
+    """The narrow case -- same commit, no release published yet -- sets
+    `release_resume=false` (still resuming the tag, but the Release itself
+    must still be created), and this branch is reached only after the
+    release-exists check has already run."""
     step = _tag_state_step(_workflow_text())
-    resume_notice_index = step.index("resuming publication instead of re-tagging")
-    resume_output_index = step.index('echo "tag_resume=true"')
     release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
+    resume_notice_index = step.index("resuming publication instead of re-tagging", release_view_index)
+    resume_output_index = step.index('echo "release_resume=false" >> "${GITHUB_OUTPUT}"', release_view_index)
     assert release_view_index < resume_notice_index < resume_output_index
 
 
@@ -146,6 +181,46 @@ def test_publish_job_skips_tag_creation_only_when_resuming() -> None:
     following_line_end = publish_block.index("\n", tag_step_index)
     if_line = publish_block[tag_step_index:publish_block.index("\n", following_line_end + 1)]
     assert "if: env.TAG_RESUME != 'true'" in if_line
+
+
+def test_publish_job_only_creates_the_release_when_it_does_not_already_exist() -> None:
+    """`publish` must gate `gh release create` on `release_resume` -- when a
+    Release already exists for this commit, creating it again would fail
+    outright rather than resuming the asset attach."""
+    workflow = _workflow_text()
+    publish_block = _job_block(workflow, "publish")
+    assert "RELEASE_RESUME: ${{ needs.verify.outputs.release_resume }}" in publish_block
+    create_step_index = publish_block.index("Create the GitHub Release")
+    following_line_end = publish_block.index("\n", create_step_index)
+    if_line = publish_block[create_step_index:publish_block.index("\n", following_line_end + 1)]
+    assert "if: env.RELEASE_RESUME != 'true'" in if_line
+
+
+def test_release_asset_attach_always_runs_and_is_best_effort() -> None:
+    """Whether the Release was just created fresh or already existed on a
+    resumed run, attaching the SBOM asset must still be attempted -- and a
+    failed attach must never fail the whole run, matching this workflow's
+    established SBOM best-effort convention (Devin's follow-up finding: an
+    asset upload failing after `gh release create` already succeeded must
+    be retryable, not stranded)."""
+    workflow = _workflow_text()
+    publish_block = _job_block(workflow, "publish")
+    create_step_index = publish_block.index("Create the GitHub Release")
+    attach_step_index = publish_block.index("Attach any still-missing release assets")
+    assert create_step_index < attach_step_index
+
+    attach_step = publish_block[attach_step_index:]
+    step_header = attach_step[: attach_step.index("run:")]
+    # The attach step itself carries no `if:` gate -- it must run whether
+    # `Create the GitHub Release` ran or was skipped as already-resumed.
+    assert "if:" not in step_header
+    assert "set -euo pipefail" not in attach_step, (
+        "the attach step must not abort-on-error via -e; a failed upload "
+        "needs its own explicit, non-fatal handling instead"
+    )
+    assert "if ! gh release upload" in attach_step
+    assert "::warning::" in attach_step
+    assert "--clobber" in attach_step
 
 
 # --- `actions: read` scoping (Devin finding 2) -------------------------------

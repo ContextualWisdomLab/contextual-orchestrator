@@ -16,20 +16,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (`workflow_dispatch` only, explicit `version` input, never triggered by
   push/schedule/merge), split into a read-only, credential-less `verify` job
   and a write-scoped `publish` job for least privilege. `verify` checks the
-  dispatched commit is protected `main`'s untampered current tip, checks the
-  requested version against `pyproject.toml`'s `[project]` table (table-
+  dispatched commit is protected `main`'s untampered current tip and that
+  every check GitHub reports for that exact commit is complete with an
+  acceptable conclusion (excluding this release run's own checks), checks
+  the requested version against `pyproject.toml`'s `[project]` table (table-
   boundary aware, so a same-named `version` key in an unrelated table can
   never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
-  GitHub commits API (rejecting one that points at a different commit or
-  whose Release already exists, but permitting a safe idempotent resume when
-  it matches this commit with no Release published yet), re-runs the full
-  test suite fresh, renders release notes from this file's matching
-  `## [X.Y.Z]` section via the tested `scripts/ci/release_notes.py`, and
-  best-effort looks up a CycloneDX SBOM (a missing SBOM or failed lookup
-  warns, never blocks). `publish` re-verifies `main`'s tip has not advanced
-  since `verify` started testing — immediately before it creates anything —
-  then creates the annotated `vX.Y.Z` tag (skipped on a resumed run) and the
-  GitHub Release. Gives downstream consumers
+  GitHub commits API (rejecting only one that points at a different commit;
+  a tag at this commit is always a safe idempotent resume, whether or not
+  its Release already exists — see below), re-runs the full test suite
+  fresh, renders release notes from this file's matching `## [X.Y.Z]`
+  section via the tested `scripts/ci/release_notes.py`, and best-effort
+  looks up a CycloneDX SBOM (a missing SBOM or failed lookup warns, never
+  blocks). `publish` re-verifies `main`'s tip has not advanced and every
+  check is still green since `verify` started testing — immediately before
+  it creates anything — then creates the annotated `vX.Y.Z` tag (skipped on
+  a tag resume) and the GitHub Release (skipped on a Release resume, e.g. a
+  prior run whose asset upload failed after the Release itself was already
+  created), always attempting the best-effort SBOM asset attach afterward
+  either way. Gives downstream consumers
   (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the Wardnet
   consumer-owner handoff, all recorded on `contextual-orchestrator#971`) an
   immutable pin target (`.../releases/tag/vX.Y.Z` — not the mutable

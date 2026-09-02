@@ -13,8 +13,13 @@ name: Release
 # persisted git credentials while it executes repository-controlled code
 # (the test suite, release-notes rendering) -- a `contents: write` token is
 # never present alongside that code. `publish` holds the write token, and its
-# very first step re-checks protected main's tip immediately before tag
-# creation, right after `verify`'s potentially long-running gate finishes.
+# very first steps re-check protected main's tip and every check reported
+# for that exact commit, immediately before tag creation, right after
+# `verify`'s potentially long-running gate finishes. That tip/checks
+# recheck is still a check-then-act window, not an atomic guarantee -- see
+# docs/planning/adrs/0129-canonical-immutable-release.md's "Known
+# limitations" section and docs/RELEASING.md for the accepted residual risk
+# and the recovery path if it is ever actually hit.
 
 on:
   workflow_dispatch:
@@ -39,11 +44,13 @@ jobs:
     permissions:
       contents: read
       actions: read
+      checks: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
     outputs:
       tag_resume: ${{ steps.tag_state.outputs.tag_resume }}
+      release_resume: ${{ steps.tag_state.outputs.release_resume }}
     steps:
       - name: Checkout protected main (no write credentials)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -58,6 +65,33 @@ jobs:
           remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
             echo "::error::Dispatched commit ${GITHUB_SHA} is not protected main's current tip (${remote_head}); a merge landed after this run started. Re-dispatch against the fresh tip." >&2
+            exit 1
+          fi
+
+      - name: Verify every check reported for this commit is complete and green
+        run: |
+          set -euo pipefail
+          checks_pages="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" --paginate --slurp)"
+          # main's own required-check gate already had to pass on the *PR's*
+          # head SHA before this squash/merge commit could exist -- but
+          # separate push-triggered workflows (Security, Fuzz, ...) run
+          # again against this exact new main-tip SHA and can still be
+          # in flight or have failed. Deliberately checks *every* check-run
+          # GitHub reports for this SHA (not a ruleset-derived "required"
+          # subset -- ADR 0129 rejected the ruleset-name lookup specifically
+          # to avoid needing `administration: read`; checking everything is
+          # strictly more conservative and only needs `checks: read`).
+          # Excludes this release run's own check-runs (both verify's and
+          # publish's) via their shared GITHUB_RUN_ID, or a workflow_dispatch
+          # would always find itself as an unfinished check and deadlock.
+          not_ready="$(echo "${checks_pages}" | jq --arg run_id "${GITHUB_RUN_ID}" '
+            [ .[] | .check_runs[]? ]
+            | map(select((.details_url // "") | contains("/actions/runs/" + $run_id + "/") | not))
+            | map(select(.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null)))
+          ')"
+          not_ready_count="$(echo "${not_ready}" | jq 'length')"
+          if [ "${not_ready_count}" != "0" ]; then
+            echo "::error::${not_ready_count} check(s) for commit ${GITHUB_SHA} are not both complete and green (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
             exit 1
           fi
 
@@ -90,6 +124,7 @@ jobs:
           if ! tag_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" --jq .sha 2>/dev/null)"; then
             echo "::notice::Tag v${RELEASE_VERSION} does not exist yet; this is a fresh publish."
             echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
+            echo "release_resume=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -98,13 +133,24 @@ jobs:
             exit 1
           fi
 
-          if gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "::error::v${RELEASE_VERSION} already has a published GitHub Release for this exact commit; there is nothing left to resume." >&2
-            exit 1
-          fi
-
-          echo "::notice::Tag v${RELEASE_VERSION} already points at this commit with no published GitHub Release yet; resuming publication instead of re-tagging."
           echo "tag_resume=true" >> "${GITHUB_OUTPUT}"
+
+          # A published Release already existing does not mean nothing is
+          # left to resume: creating a Release can publish the Release
+          # object and then fail partway through uploading its assets, in
+          # which case the tag and the Release both already exist but a
+          # release asset (the SBOM) can still be missing. Reject only a
+          # tag pointing at a different commit (above); a Release already
+          # existing for *this* commit is a safe resume that still
+          # attempts the best-effort asset attach in `publish`, never a
+          # reject -- see Devin's follow-up finding on this PR.
+          if gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::notice::Tag v${RELEASE_VERSION} already points at this commit and its GitHub Release already exists; resuming to attach any still-missing release assets rather than treating this as nothing left to resume."
+            echo "release_resume=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::Tag v${RELEASE_VERSION} already points at this commit with no published GitHub Release yet; resuming publication instead of re-tagging."
+            echo "release_resume=false" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Run the full required test suite fresh on this exact commit
         run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
@@ -153,10 +199,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      checks: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
       TAG_RESUME: ${{ needs.verify.outputs.tag_resume }}
+      RELEASE_RESUME: ${{ needs.verify.outputs.release_resume }}
     steps:
       - name: Checkout protected main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -174,6 +222,21 @@ jobs:
             exit 1
           fi
 
+      - name: Re-verify every check reported for this commit is complete and green
+        run: |
+          set -euo pipefail
+          checks_pages="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" --paginate --slurp)"
+          not_ready="$(echo "${checks_pages}" | jq --arg run_id "${GITHUB_RUN_ID}" '
+            [ .[] | .check_runs[]? ]
+            | map(select((.details_url // "") | contains("/actions/runs/" + $run_id + "/") | not))
+            | map(select(.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null)))
+          ')"
+          not_ready_count="$(echo "${not_ready}" | jq 'length')"
+          if [ "${not_ready_count}" != "0" ]; then
+            echo "::error::${not_ready_count} check(s) for commit ${GITHUB_SHA} are not both complete and green (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
+            exit 1
+          fi
+
       - name: Download the release notes and SBOM produced by verify
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # actions/download-artifact@v5
         with:
@@ -188,15 +251,27 @@ jobs:
           git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
           git push origin "refs/tags/v${RELEASE_VERSION}"
 
-      - name: Publish the GitHub Release
+      - name: Create the GitHub Release
+        if: env.RELEASE_RESUME != 'true'
         run: |
           set -euo pipefail
-          assets=()
-          if [ -f "sbom-download/cyclonedx-sbom.json" ]; then
-            assets+=("sbom-download/cyclonedx-sbom.json")
-          fi
           gh release create "v${RELEASE_VERSION}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "v${RELEASE_VERSION}" \
-            --notes-file release-notes.md \
-            "${assets[@]}"
+            --notes-file release-notes.md
+
+      - name: Attach any still-missing release assets, best-effort
+        run: |
+          set -uo pipefail
+          sbom_file="sbom-download/cyclonedx-sbom.json"
+          if [ ! -f "${sbom_file}" ]; then
+            echo "::notice::No SBOM artifact was fetched for this commit; nothing to attach."
+            exit 0
+          fi
+          if attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null)" && printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
+            echo "::notice::cyclonedx-sbom.json is already attached to v${RELEASE_VERSION}; nothing to do."
+            exit 0
+          fi
+          if ! gh release upload "v${RELEASE_VERSION}" "${sbom_file}" --repo "${GITHUB_REPOSITORY}" --clobber; then
+            echo "::warning::Could not attach cyclonedx-sbom.json to v${RELEASE_VERSION}; the release is published without it. Re-dispatch the workflow to retry the attach."
+          fi

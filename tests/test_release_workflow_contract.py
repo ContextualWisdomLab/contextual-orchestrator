@@ -248,6 +248,60 @@ def test_final_main_tip_check_happens_after_testing_and_note_rendering_but_befor
     assert 'if [ "${remote_head}" != "${GITHUB_SHA}" ]' in final_tip_check_block
 
 
+def test_checks_read_permission_is_granted_in_both_jobs() -> None:
+    """The checks-green gate (Devin follow-up finding: "Unchecked main
+    checks permit releases") needs `checks: read` in both `verify` (fail
+    fast, before the expensive test suite) and `publish` (the authoritative
+    recheck right before anything is created)."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    publish_block = _job_block(workflow, "publish")
+    assert "checks: read" in verify_block
+    assert "checks: read" in publish_block
+
+
+def test_gate_verifies_every_check_for_the_commit_is_complete_and_green() -> None:
+    """`verify` must fail closed before running the expensive test suite if
+    any check GitHub reports for this exact commit (Security, Fuzz, ... --
+    whatever push-triggered workflows ran again on main's new tip after the
+    merge) is still pending or did not conclude successfully."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    checks_step_index = verify_block.index("Verify every check reported for this commit is complete and green")
+    test_suite_index = verify_block.index("Run the full required test suite fresh on this exact commit")
+    assert checks_step_index < test_suite_index
+
+    checks_block = verify_block[checks_step_index:test_suite_index]
+    assert 'repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs' in checks_block
+    assert '.status != "completed"' in checks_block
+    assert '["success","skipped","neutral"]' in checks_block
+    assert 'if [ "${not_ready_count}" != "0" ]' in checks_block
+    assert "exit 1" in checks_block
+    # Excludes this release run's own check-runs -- otherwise a
+    # workflow_dispatch run would always find itself unfinished and deadlock.
+    assert "GITHUB_RUN_ID" in checks_block
+
+
+def test_final_checks_green_recheck_happens_right_after_the_final_tip_check() -> None:
+    """`publish` must re-verify checks are still green immediately after its
+    final main-tip recheck -- both authoritative gates cluster together,
+    right after checkout, before anything else runs."""
+    workflow = _workflow_text()
+    publish_block = _job_block(workflow, "publish")
+    final_tip_check_index = publish_block.index(
+        "Re-verify protected main has not advanced since verification started"
+    )
+    final_checks_index = publish_block.index("Re-verify every check reported for this commit is complete and green")
+    download_index = publish_block.index("Download the release notes and SBOM")
+    tag_step_index = publish_block.index("Create the annotated release tag")
+    assert final_tip_check_index < final_checks_index < download_index < tag_step_index
+
+    checks_block = publish_block[final_checks_index:download_index]
+    assert 'repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs' in checks_block
+    assert 'if [ "${not_ready_count}" != "0" ]' in checks_block
+    assert "exit 1" in checks_block
+
+
 def test_pinned_actions_use_full_commit_shas() -> None:
     """Every third-party action reference stays pinned per Scorecard convention."""
     workflow = _workflow_text()
