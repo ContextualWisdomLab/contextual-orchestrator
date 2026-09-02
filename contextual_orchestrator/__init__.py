@@ -50,6 +50,19 @@ from .cefr_language_observation import (
     TaskOrchestratorCefrGateway,
     observe_language_response_criteria,
 )
+from .evaluation_criterion_binding import (
+    CategoryExecutionBinding,
+    CriterionExecutionBinding,
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
+from .rater_observation import (
+    GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
+    CriterionObservation,
+    RaterConfigurationIdentity,
+    RaterInvocation,
+    RaterObservationError,
+)
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
@@ -159,6 +172,18 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    # immutable evaluation-criterion binding
+    "CategoryExecutionBinding",
+    "CriterionExecutionBinding",
+    "CriterionSetExecutionBinding",
+    "EvaluationCriterionBindingError",
+    # generic governed-rater observation context
+    "GOVERNED_RATER_OBSERVATION_CONTRACT_V1",
+    "CriterionObservation",
+    "RaterConfigurationIdentity",
+    "RaterInvocation",
+    "RaterObservationError",
+    # compatibility CEFR profile boundary
     "CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1",
     "FAST_MLSIRM_SCORING_SCHEMA_VERSION",
     "CefrContractAdapter",
