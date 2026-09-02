@@ -1793,6 +1793,22 @@ class ModelClient:
                 "error_type": "ValueError",
                 "failure_code": "non_chat_model",
             }
+        if not agent_supports_chat_completions(agent.tags):
+            # This probe always builds and sends Chat Completions shape (see
+            # the payload built below) with no translation branch of its
+            # own, mirroring ModelClient.chat()/stream_chat() (ADR 0128). An
+            # agent proven api:responses_only cannot accept that shape, so
+            # report it as not-ready with a clear, typed reason instead of
+            # letting the raw provider rejection surface as an opaque
+            # transport failure.
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": "ValueError",
+                "failure_code": "responses_only_agent_cannot_serve_chat_probe",
+            }
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -2715,6 +2731,17 @@ class ModelClient:
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
+        if not agent_supports_chat_completions(agent.tags):
+            # Mirrors ModelClient.chat()/stream_chat()/probe() (ADR 0128):
+            # this method only ever builds and submits Chat Completions
+            # shape to the provider's Batch API, with no translation branch
+            # of its own. An agent proven api:responses_only cannot accept
+            # that shape, so batches must fail closed here rather than be
+            # silently rejected upstream with an opaque provider error.
+            raise ValueError(
+                f"agent {agent.id!r} is declared api:responses_only and cannot "
+                "serve a Chat Completions batch request via ModelClient.batch_chat()"
             )
         if agent.base_url.startswith("mock://"):
             results = {

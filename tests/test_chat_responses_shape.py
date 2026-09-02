@@ -586,6 +586,41 @@ def test_stream_chat_raises_for_responses_only_agent_instead_of_silent_wrong_sha
         list(client.stream_chat(agent, [{"role": "user", "content": "hi"}]))
 
 
+def test_probe_reports_not_ready_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
+    """ModelClient.probe() (readiness checks) shares chat()/stream_chat()'s gap:
+    it always builds and sends Chat Completions shape with no translation
+    branch of its own. A responses_only agent must be reported not-ready with
+    a typed reason rather than let the raw provider rejection surface as an
+    opaque transport failure."""
+    agent = ModelAgent(
+        "responses_only_worker",
+        "responses-model",
+        base_url="https://responses-only.example.test/v1",
+        tags=("api:responses_only",),
+    )
+    client = ModelClient(max_retries=0)
+    result = client.probe(agent)
+    assert result["status"] == "not_ready"
+    assert result["failure_code"] == "responses_only_agent_cannot_serve_chat_probe"
+    assert result["error_type"] == "ValueError"
+
+
+def test_batch_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
+    """ModelClient.batch_chat() shares chat()/stream_chat()'s gap: it always
+    submits Chat Completions shape to the provider's Batch API with no
+    translation branch of its own, so it must fail closed for a
+    responses_only agent instead of being silently rejected upstream."""
+    agent = ModelAgent(
+        "responses_only_worker",
+        "responses-model",
+        base_url="https://responses-only.example.test/v1",
+        tags=("api:responses_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with pytest.raises(ValueError, match="api:responses_only"):
+        client.batch_chat(agent, {"one": [{"role": "user", "content": "hi"}]})
+
+
 def test_chat_request_to_responses_request_prefers_max_completion_tokens() -> None:
     """max_completion_tokens is the current field name; it must not be silently
     dropped in favor of the deprecated max_tokens when both/either is present."""
