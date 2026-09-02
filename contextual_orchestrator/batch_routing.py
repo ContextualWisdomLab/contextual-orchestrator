@@ -25,6 +25,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import threading
 import time
 import uuid
@@ -807,11 +808,13 @@ class ProviderEmbeddingBatchBackend:
         )
         if execution_timeout_seconds is not None and execution_timeout_seconds <= 0:
             raise ValueError("provider embedding execution timeout must be positive")
-        self._execution_timeout_seconds = (
-            execution_timeout_seconds
-            if execution_timeout_seconds is not None
-            else self._registry.retention_seconds
-        )
+        # ``None`` is a genuine "no execution deadline" state (the caller's
+        # ``ModelClient`` has no configured wall-clock timeout) and must stay
+        # that way -- it previously fell back to the registry's storage
+        # retention window, silently expiring an intentionally unbounded
+        # embedding job once that window elapsed. ``_execution_deadline``
+        # below treats ``None`` as an unbounded (``+inf``) deadline instead.
+        self._execution_timeout_seconds = execution_timeout_seconds
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
@@ -959,7 +962,12 @@ class ProviderEmbeddingBatchBackend:
                 event.set()
 
     def _execution_deadline(self, job_id: str) -> float:
-        """Persist a bounded lifetime beginning with the first execution claim."""
+        """Persist this job's lifetime beginning with the first execution claim.
+
+        ``+inf`` when the backend was built with no execution timeout (a
+        genuinely unbounded job) -- every deadline comparison below already
+        treats an infinite epoch as "never expires" without further changes.
+        """
         existing = self._deadlines.get(job_id)
         if existing is not None:
             return float(existing)
@@ -970,8 +978,14 @@ class ProviderEmbeddingBatchBackend:
         ):
             existing = self._deadlines.get(job_id)
             if existing is None:
-                request_count = len(self._requests[job_id])
-                deadline = time.time() + self._execution_timeout_seconds * max(1, request_count)
+                if self._execution_timeout_seconds is None:
+                    deadline = float("inf")
+                else:
+                    request_count = len(self._requests[job_id])
+                    deadline = (
+                        time.time()
+                        + self._execution_timeout_seconds * max(1, request_count)
+                    )
                 set_if_absent = getattr(self._deadlines, "set_if_absent", None)
                 if callable(set_if_absent):
                     set_if_absent(job_id, deadline)
@@ -1115,10 +1129,17 @@ class ProviderEmbeddingBatchBackend:
             self._states[job_id] = status
 
     def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
-        """Wait within the caller's explicit deadline for a terminal state."""
+        """Wait within the caller's explicit deadline for a terminal state.
+
+        ``timeout`` may be ``float("inf")`` when the caller has no wall-clock
+        deadline (contextual-orchestrator's no-implicit-deadline default);
+        ``threading.Event.wait`` raises ``OverflowError`` for a non-finite
+        timeout on CPython, so a non-finite value is translated to ``None``
+        (block indefinitely) rather than passed through.
+        """
         event = self._terminal_events.get(job.job_id)
         if event is not None:
-            event.wait(timeout=timeout)
+            event.wait(timeout=timeout if math.isfinite(timeout) else None)
         return self.poll(job)
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:

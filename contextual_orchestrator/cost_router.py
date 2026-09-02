@@ -61,6 +61,13 @@ _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
 _BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
+# The durable provider-embedding claim lease is an internal locking/heartbeat
+# interval (how long one worker holds a job claim before it must renew), not
+# a caller-facing request deadline. It must stay a fixed, positive default
+# independent of ``ModelClient.timeout`` -- deriving it from that (optional,
+# now ``None``-by-default) client timeout meant a durable job registry raised
+# at coordinator construction whenever the caller opted into "no deadline".
+_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0
 
 
 class BatchModelSelectionError(RuntimeError):
@@ -237,15 +244,21 @@ class CostRoutingCoordinator:
         # inference timeouts); treat that the same as an absent/zero
         # attribute rather than raising out of ``float(None)``.
         client_timeout = float(getattr(client, "timeout", None) or 0)
+        # The claim lease is an internal durability heartbeat, independent of
+        # the caller's request deadline: a durable registry always needs a
+        # positive lease, falling back to a fixed default rather than the
+        # (possibly absent) client timeout. Execution stays genuinely
+        # unbounded (``None``) when the caller configured no deadline --
+        # ``ProviderEmbeddingBatchBackend`` no longer substitutes the
+        # registry's storage retention window for that.
+        claim_lease_seconds = (
+            client_timeout if client_timeout > 0 else _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+        ) if self.job_registry.durable else None
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
-            claim_lease_seconds=(
-                client_timeout
-                if self.job_registry.durable and client_timeout > 0
-                else None
-            ),
+            claim_lease_seconds=claim_lease_seconds,
             execution_timeout_seconds=client_timeout if client_timeout > 0 else None,
         )
 
@@ -260,6 +273,22 @@ class CostRoutingCoordinator:
             if first.agent_id is not None
             else self.orchestrator.select_capability_agent("embedding", first.model)
         )
+        # ``first.agent_id`` may be a route pinned at submission time under
+        # an active ``zdr_only`` policy (see ``_resolve_embedding_target``)
+        # and later replayed by ``ProviderEmbeddingBatchBackend`` after a
+        # process restart recovers a durably queued job -- an arbitrarily
+        # long gap during which an operator could have removed the agent's
+        # ZDR tag or repointed it to a non-ZDR route. Re-validate the
+        # request's own recorded privacy scope against the agent's *current*
+        # tags here, at the point of execution, rather than trusting the
+        # pinned id blindly; the ambient ``request_policy`` contextvar used
+        # at submission time is not (and cannot be) in effect on this
+        # worker thread.
+        if first.zdr_only and "privacy:zdr" not in agent.tags:
+            raise RuntimeError(
+                f"embedding agent {agent.id!r} no longer satisfies zdr_only; "
+                "refusing to execute a recovered privacy-scoped batch"
+            )
         if any(
             request.model != first.model or request.agent_id != first.agent_id
             for request in requests
