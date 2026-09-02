@@ -1923,6 +1923,25 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     return requires_non_text_input(discovered.input_modalities)
 
 
+def _declares_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence lists text among this model's own input modalities.
+
+    Verified tool-call support cannot substitute for text-input capability:
+    an image-only model that also happens to accept tool-calling parameters
+    still cannot answer a blind text-only request. Mirrors
+    ``orchestrator.TaskOrchestrator._agent_declares_text_input`` (which reads
+    an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
+    """
+    return any(
+        modality.strip().casefold() == "text"
+        for modality in discovered.input_modalities
+        if isinstance(modality, str) and modality.strip()
+    )
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
     """Return the complete zero-cost model inventory (price evidence only).
 
@@ -2042,26 +2061,36 @@ def general_free_serving_candidates(
     exclusion only when ``model.supports_tool_calls is True`` -- verified
     provider evidence (a real ``supported_parameters`` list containing
     ``"tools"``/``"tool_choice"``; see :func:`_tool_call_support_evidence`)
-    that this exact catalog row accepts tool-calling requests. This is an
-    additive OR, not a replacement: ``supports_tool_calls`` unset (``None``,
-    the fail-closed default whenever a provider's row carries no
-    ``supported_parameters`` evidence at all) or verified absent (``False``)
-    both leave the original exclusion in force. NVIDIA NIM's ``/v1/models``
-    never returns ``supported_parameters``, so this incident's model
+    that this exact catalog row accepts tool-calling requests -- *and*
+    :func:`_declares_text_input` is also true for it. Both are required
+    together: tool-call support alone cannot substitute for text-input
+    capability, or an image-only model that also happens to accept
+    tool-calling parameters would wrongly pass despite being unable to
+    answer a blind text-only request at all (regression:
+    ``test_verified_tools_do_not_admit_image_only_discovered_model``). This
+    is an additive OR with the original exclusion, not a replacement:
+    ``supports_tool_calls`` unset (``None``, the fail-closed default
+    whenever a provider's row carries no ``supported_parameters`` evidence
+    at all), verified absent (``False``), or no declared text input all
+    leave the original exclusion in force. NVIDIA NIM's ``/v1/models`` never
+    returns ``supported_parameters``, so this incident's model
     (``meta/llama-3.2-90b-vision-instruct``) gets ``supports_tool_calls=None``
     unconditionally and stays excluded -- the exemption does not reopen
     #1198. No separate "and output is text" clause is needed here: every row
     that reaches this filter already passed ``is_routable_discovered_model``,
     which (via ``is_discovered_chat_candidate``) already refuses a non-text
     output row, so the exemption is already exactly as narrow as "non-text
-    input, text output, verified tool support" without re-deriving a check
-    this selector already enforces one layer up.
+    input alongside text input, text output, verified tool support" without
+    re-deriving a check this selector already enforces one layer up.
     """
     candidates = [
         model
         for model in free_discovered_models(discovered)
         if is_routable_discovered_model(model)
-        and (not _requires_non_text_input(model) or model.supports_tool_calls is True)
+        and (
+            not _requires_non_text_input(model)
+            or (model.supports_tool_calls is True and _declares_text_input(model))
+        )
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates

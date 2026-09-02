@@ -7094,6 +7094,25 @@ class TaskOrchestrator:
         """
         return "tool_call:supported" in agent.tags
 
+    @staticmethod
+    def _agent_declares_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare text input.
+
+        Tool-call support alone cannot certify a model can serve a blind
+        text-only request -- an image-only model that also happens to accept
+        tool-calling parameters still cannot answer plain text (regression:
+        ``test_verified_tools_do_not_admit_image_only_restored_agent``).
+        Verified tool support is therefore only a meaningful exemption from
+        :meth:`_agent_requires_non_text_input`'s exclusion when the agent's
+        own declared input modalities *also* include ``text`` -- i.e. it is a
+        "text-plus-something-else" model, not an "only something else" one.
+        """
+        return any(
+            tag[len("input:"):].strip().casefold() == "text"
+            for tag in agent.tags
+            if tag.startswith("input:")
+        )
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models.
 
@@ -7134,10 +7153,17 @@ class TaskOrchestrator:
         One additive exemption: an agent verified to accept tool-calling
         requests (:meth:`_agent_has_verified_tool_call_support`, from a
         ``tool_call:supported`` tag backed by real provider
-        ``supported_parameters`` evidence) is admitted even when it also
-        declares a non-text input modality. This is an OR with the existing
-        exclusion, not a replacement: an agent with no such evidence, or with
-        verified evidence it does *not* accept tools, still falls back to the
+        ``supported_parameters`` evidence) that *also* declares text as one
+        of its own input modalities (:meth:`_agent_declares_text_input`) is
+        admitted even when it additionally declares a non-text input
+        modality. Both conditions are required together -- tool-call support
+        cannot substitute for text-input capability, or an image-only model
+        that happens to also accept tool-calling parameters would wrongly
+        pass despite being unable to answer a blind text-only request at all
+        (regression: ``test_verified_tools_do_not_admit_image_only_restored_agent``).
+        This is an OR with the existing exclusion, not a replacement: an
+        agent with no such evidence, or with verified evidence it does *not*
+        accept tools, or with no declared text input, still falls back to the
         original blanket exclusion unchanged. Mirrors
         ``model_discovery.general_free_serving_candidates``'s identical
         exemption at discovery time -- see its docstring for why this does not
@@ -7147,7 +7173,10 @@ class TaskOrchestrator:
         """
         return self._is_free_agent(agent) and (
             not self._agent_requires_non_text_input(agent)
-            or self._agent_has_verified_tool_call_support(agent)
+            or (
+                self._agent_has_verified_tool_call_support(agent)
+                and self._agent_declares_text_input(agent)
+            )
         )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
