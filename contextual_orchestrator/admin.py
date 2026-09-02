@@ -1186,6 +1186,18 @@ Summarize this research thread and verify claims.</textarea>
       renderModelGroups();
     }
 
+    async function refreshAuditEvents() {
+      // recent_audit_events is only exposed on /admin/state, not a scoped
+      // endpoint, so this re-fetches the full state but only applies the
+      // audit slice — avoids the heavier full load() (readiness/simulate
+      // calls) for a plain model-group save/delete.
+      const response = await apiFetch("/admin/state");
+      if (!response.ok) return;
+      const payload = await response.json();
+      state.recent_audit_events = payload.recent_audit_events || [];
+      renderAudit();
+    }
+
     async function saveModelGroup(event) {
       event.preventDefault();
       const groupName = els.modelGroupName.value.trim();
@@ -1199,7 +1211,9 @@ Summarize this research thread and verify claims.</textarea>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
+      els.modelGroupFeedback.style.color = "var(--green)";
       await refreshModelGroups();
+      await refreshAuditEvents();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1748,6 +1762,7 @@ Summarize this research thread and verify claims.</textarea>
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
       els.modelGroupFeedback.textContent = error.message;
+      els.modelGroupFeedback.style.color = "var(--red)";
     }));
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
@@ -1756,9 +1771,13 @@ Summarize this research thread and verify claims.</textarea>
         .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
         .then(() => {
           els.modelGroupFeedback.textContent = t("group_deleted");
-          return refreshModelGroups();
+          els.modelGroupFeedback.style.color = "var(--green)";
+          return refreshModelGroups().then(refreshAuditEvents);
         })
-        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+        .catch(error => {
+          els.modelGroupFeedback.textContent = error.message;
+          els.modelGroupFeedback.style.color = "var(--red)";
+        });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));

@@ -164,6 +164,49 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Field encryption and audited release" not in ADMIN_HTML
 
 
+def test_model_group_mutations_refresh_audit_events() -> None:
+    """Saving or deleting a model group must refresh the shared Audit tab.
+
+    Regression test: `recent_audit_events` is only exposed on `/admin/state`
+    (there is no scoped audit-events endpoint), but `refreshModelGroups()`
+    only re-fetches `/api/v1/model_groups`. Before this fix, a save/delete
+    left the Audit tab showing stale data (or "no audit events") until a
+    full page reload. The fix adds a lightweight `refreshAuditEvents()`
+    helper — re-fetches `/admin/state` and applies only the audit slice —
+    rather than reusing the heavier `load()` (which also re-triggers
+    `simulate()` and every readiness/commercial endpoint), and wires it into
+    both the save and delete handlers.
+    """
+    assert "async function refreshAuditEvents()" in ADMIN_HTML
+    assert 'state.recent_audit_events = payload.recent_audit_events || [];' in ADMIN_HTML
+    assert "renderAudit();" in ADMIN_HTML
+
+    # refreshAuditEvents must not silently duplicate the heavier full-state
+    # reload path (simulate() + every readiness/commercial endpoint) — it is
+    # a scoped re-fetch of /admin/state only.
+    refresh_audit_fn = ADMIN_HTML.split("async function refreshAuditEvents()", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    assert 'apiFetch("/admin/state")' in refresh_audit_fn
+    assert "simulate()" not in refresh_audit_fn
+    assert "refreshReadiness()" not in refresh_audit_fn
+
+    # saveModelGroup: success path refreshes both the group list and audit
+    # events, and marks the feedback text as a success state.
+    save_fn = ADMIN_HTML.split("async function saveModelGroup(event)", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    assert "await refreshModelGroups();" in save_fn
+    assert "await refreshAuditEvents();" in save_fn
+    assert 'els.modelGroupFeedback.style.color = "var(--green)";' in save_fn
+
+    # Delete handler: the .then chain refreshes groups then audit events,
+    # and both the success and error branches set a distinct feedback color.
+    assert "return refreshModelGroups().then(refreshAuditEvents);" in ADMIN_HTML
+    assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--red)";') == 2
+    assert ADMIN_HTML.count('els.modelGroupFeedback.style.color = "var(--green)";') == 2
+
+
 def test_admin_state_exposes_agents_without_secrets() -> None:
     state = TaskOrchestrator(
         [ModelAgent("worker_agent", "gpt-example", "https://example.test/v1", "SECRET_ENV", tags=("coding",))]
@@ -177,5 +220,6 @@ def test_admin_state_exposes_agents_without_secrets() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     test_admin_surface_exists_for_enterprise_operations()
+    test_model_group_mutations_refresh_audit_events()
     test_admin_state_exposes_agents_without_secrets()
     print("ok")
