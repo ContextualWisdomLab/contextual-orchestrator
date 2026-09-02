@@ -175,6 +175,21 @@ def test_model_groups_save_and_delete_refresh_audit_events_and_color_code_feedba
     assert 'const response = await apiFetch("/admin/state");' in ADMIN_HTML
     assert "state.recent_audit_events = payload.recent_audit_events || [];" in ADMIN_HTML
 
+    # refreshAuditEvents is a best-effort refresh of the read-only Audit tab,
+    # awaited right after a save/delete already succeeded. A network or JSON
+    # parse failure inside it must not throw out to saveModelGroup's/the
+    # delete handler's own .catch(), which would mislabel a successful
+    # save/delete as failed. It already treats a non-2xx HTTP response as
+    # non-fatal (`if (!response.ok) return;`); the same must hold for a
+    # thrown exception.
+    refresh_audit_start = ADMIN_HTML.index("async function refreshAuditEvents() {")
+    refresh_audit_end = ADMIN_HTML.index("\n    }", refresh_audit_start)
+    refresh_audit_body = ADMIN_HTML[refresh_audit_start:refresh_audit_end]
+    assert "try {" in refresh_audit_body
+    assert "} catch {" in refresh_audit_body
+    assert refresh_audit_body.index("try {") < refresh_audit_body.index('await apiFetch("/admin/state")')
+    assert refresh_audit_body.index("renderAudit();") < refresh_audit_body.index("} catch {")
+
     save_group_start = ADMIN_HTML.index("async function saveModelGroup(event) {")
     save_group_end = ADMIN_HTML.index("\n    }", save_group_start)
     save_group_body = ADMIN_HTML[save_group_start:save_group_end]

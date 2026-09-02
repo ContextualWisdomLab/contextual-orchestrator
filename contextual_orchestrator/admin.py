@@ -1583,11 +1583,17 @@ Summarize this research thread and verify claims.</textarea>
       `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
     }
     async function refreshAuditEvents() {
-      const response = await apiFetch("/admin/state");
-      if (!response.ok) return;
-      const payload = await response.json();
-      state.recent_audit_events = payload.recent_audit_events || [];
-      renderAudit();
+      try {
+        const response = await apiFetch("/admin/state");
+        if (!response.ok) return;
+        const payload = await response.json();
+        state.recent_audit_events = payload.recent_audit_events || [];
+        renderAudit();
+      } catch {
+        // Best-effort Audit tab refresh: a network or parse failure here
+        // must never surface as a save/delete error to the caller, since
+        // the mutation it followed already succeeded.
+      }
     }
     function renderSecondaryViews() {
       if (!state.policy) return;
