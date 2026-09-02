@@ -1,0 +1,164 @@
+name: Source Fix 971 Exact Head Review
+
+on:
+  push:
+    branches:
+      - fix/model-group-timeout-openrouter
+    paths:
+      - .github/workflows/source-fix-971-exact-head-review.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-971-exact-head-review
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Revalidate exact remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          local_head="$(git rev-parse HEAD)"
+          if [ -z "$remote_head" ] || [ "$remote_head" != "$local_head" ]; then
+            echo "writer head moved: local=$local_head remote=$remote_head" >&2
+            exit 1
+          fi
+
+      - name: Apply exact-head review repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact match, found {count}: {old!r}")
+              p.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace_once(
+              "contextual_orchestrator/model_discovery.py",
+              "from .credentials import get_credential\n",
+              "from .credentials import NotConfigured, get_credential\n",
+          )
+          replace_once(
+              "contextual_orchestrator/model_discovery.py",
+              "    timeout: float,\n    context: ssl.SSLContext | None = None,\n",
+              "    timeout: float | None,\n    context: ssl.SSLContext | None = None,\n",
+          )
+
+          replace_once(
+              "contextual_orchestrator/batch_routing.py",
+              "        execution_timeout_seconds: float | None = None,\n    ) -> None:\n",
+              "        execution_timeout_seconds: float | None = None,\n        request_context: Callable[[EmbeddingBatchRequest], Any] | None = None,\n    ) -> None:\n",
+          )
+          replace_once(
+              "contextual_orchestrator/batch_routing.py",
+              "        self._runner = runner\n        self._max_concurrency = max_concurrency\n",
+              "        self._runner = runner\n        self._request_context = request_context\n        self._max_concurrency = max_concurrency\n",
+          )
+          replace_once(
+              "contextual_orchestrator/batch_routing.py",
+              "        requests = list(self._requests[job_id])\n        try:\n            vectors, prompt_tokens = self._runner(requests)\n",
+              "        requests = list(self._requests[job_id])\n        try:\n            if requests and any(request.zdr_only != requests[0].zdr_only for request in requests):\n                raise ValueError(\"provider embedding batch cannot mix ZDR policies\")\n            request_scope = (\n                self._request_context(requests[0])\n                if self._request_context is not None and requests\n                else nullcontext()\n            )\n            with request_scope:\n                vectors, prompt_tokens = self._runner(requests)\n",
+          )
+
+          replace_once(
+              "contextual_orchestrator/cost_router.py",
+              "_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0\n",
+              "_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0\n_DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0\n",
+          )
+          replace_once(
+              "contextual_orchestrator/cost_router.py",
+              "        client_timeout = float(getattr(client, \"timeout\", None) or 0)\n        return ProviderEmbeddingBatchBackend(\n",
+              "        client_timeout = float(getattr(client, \"timeout\", None) or 0)\n        claim_lease_seconds = float(\n            self.config.get(\n                _EMBEDDING_CONFIG_CATEGORY,\n                \"provider_embedding_claim_lease_seconds\",\n                _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS,\n            )\n        )\n        if self.job_registry.durable and claim_lease_seconds <= 0:\n            raise ValueError(\"durable provider embedding claim lease must be positive\")\n        return ProviderEmbeddingBatchBackend(\n",
+          )
+          replace_once(
+              "contextual_orchestrator/cost_router.py",
+              "            claim_lease_seconds=(\n                client_timeout\n                if self.job_registry.durable and client_timeout > 0\n                else None\n            ),\n            execution_timeout_seconds=client_timeout if client_timeout > 0 else None,\n        )\n",
+              "            claim_lease_seconds=(claim_lease_seconds if self.job_registry.durable else None),\n            execution_timeout_seconds=client_timeout if client_timeout > 0 else None,\n            request_context=lambda request: self.orchestrator.request_policy(request.zdr_only),\n        )\n",
+          )
+
+          replace_once(
+              "contextual_orchestrator/server.py",
+              "                        orchestrator._group_router.observe_failure(embedding_agent.id)\n                        document = None\n",
+              "                        orchestrator._record_embedding_failure(\n                            embedding_agent, \"/v1/embeddings\", last_embedding_error\n                        )\n                        document = None\n",
+          )
+
+          replace_once(
+              "docs/product-technical-gap-baseline.md",
+              "\n#857's 21 still-unresolved review threads,",
+              "\n`#857`'s 21 still-unresolved review threads,",
+          )
+          replace_once(
+              "docs/product-technical-gap-baseline.md",
+              "\n#883, #889 then landed,",
+              "\n`#883`, #889 then landed,",
+          )
+
+          baseline = Path("docs/product-technical-gap-baseline.md")
+          text = baseline.read_text(encoding="utf-8")
+          marker = "## 2026-09-02 — PR #971 exact-head review repair\n"
+          if marker not in text:
+              text += """
+
+## 2026-09-02 — PR #971 exact-head review repair
+
+Exact-head review of `fix/model-group-timeout-openrouter` found four actionable
+runtime defects plus two contract/documentation defects after the no-default-
+inference-timeout change. The repair imports `NotConfigured` where it is caught,
+keeps nullable discovery timeout typing honest, restores per-request `zdr_only`
+context from persisted embedding work after restart, rejects mixed privacy
+policies in one provider embedding batch, separates the durable execution-claim
+lease from model inference timeout with a positive configurable default, and
+routes non-exception embedding failures through the shared circuit-breaker/event
+failure recorder. Focused discovery, durable-registry, embedding-batch, routing,
+and server regressions are required before the one-shot repair publishes.
+"""
+              baseline.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q \
+            tests/test_model_discovery.py \
+            tests/test_batch_job_registry.py \
+            tests/test_batch_embeddings.py \
+            tests/test_cost_router.py \
+            tests/test_embeddings_model_pool_http_honesty.py
+
+      - name: Publish repaired source and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/source-fix-971-exact-head-review.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add contextual_orchestrator/model_discovery.py contextual_orchestrator/batch_routing.py contextual_orchestrator/cost_router.py contextual_orchestrator/server.py docs/product-technical-gap-baseline.md .github/workflows/source-fix-971-exact-head-review.yml
+          git diff --cached --check
+          git commit -m "fix(routing): repair exact-head review findings"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          parent="$(git rev-parse HEAD^)"
+          if [ "$remote_head" != "$parent" ]; then
+            echo "writer head moved before publish: expected=$parent remote=$remote_head" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
