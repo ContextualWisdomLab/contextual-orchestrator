@@ -279,7 +279,7 @@ confidential-client secret placement remain deployment-controller operations.
 Once a provider's credential is registered in the KV, `contextual_orchestrator`
 can discover that provider's available models and turn them into agent-pool
 candidates automatically — no hand-written `agents.json` entry required.
-`contextual_orchestrator/model_discovery.py` covers six providers out of the
+`contextual_orchestrator/model_discovery.py` covers eight providers out of the
 box, all resolved through `get_credential` (never fabricated, never read from
 `os.getenv`):
 
@@ -287,10 +287,21 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | ------------------ | ------------------------ | ------------------ |
 | OpenAI              | `OPENAI_API_KEY`         | `Bearer <token>`   |
 | OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
+| OpenCode Zen        | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
+| OpenCode Go         | `OPENCODE_GO_API_KEY`    | `Bearer <token>`   |
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
-| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Bytez               | `BYTEZ_API_KEY`          | bare token, no scheme word |
 | Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+OpenCode Go is a second, subscription-gated catalog served from the same
+OpenCode Zen console/gateway (`https://opencode.ai/zen/go/v1/models`, vs.
+Zen's own `https://opencode.ai/zen/v1/models`) — see
+`docs/planning/adrs/0042-opencode-go-provider-discovery.md`. It uses the same
+API-key *format* as Zen but is registered under its own KV credential name
+because Go access requires its own paid subscription independent of Zen
+access; register `OPENCODE_ZEN_API_KEY`, `OPENCODE_GO_API_KEY`, both, or
+neither.
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
@@ -303,9 +314,12 @@ When serving the persisted agents, pass the same host with
 `--allowed-provider-host`; startup discovery reads this injected runtime policy
 and never re-reads or promotes gateway environment values.
 
-Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
-`auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
-doesn't use the OpenAI-compatible default.
+Bytez sends its credential as a bare token with no scheme word at all
+(`Authorization: <token>`, per https://docs.bytez.com/http-reference/list/models.md
+— not `Bearer` or `Key`), which is why `ModelAgent` has an `auth_scheme` field
+(default `"Bearer"`) and a dedicated `AUTH_SCHEME_RAW_TOKEN` sentinel — set
+`auth_scheme` per agent when a provider doesn't use the OpenAI-compatible
+default.
 
 Register any subset of the provider keys, then discover:
 
@@ -317,7 +331,7 @@ python -m contextual_orchestrator discover-models --agents-db state/pool.db
 ```
 
 A provider with nothing registered is silently skipped — registering one key
-or all six both work. `discover-models` prints a JSON report
+or all eight both work. `discover-models` prints a JSON report
 (`discovered_count`, `priced_count`, `providers_with_errors`, and each
 `{provider, model, agent_id}` found) and, with `--agents-db`, persists the
 discovered agents into the same sqlite agent-pool file `--serve --agents-db`

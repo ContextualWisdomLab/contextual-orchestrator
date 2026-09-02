@@ -1450,6 +1450,108 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     assert discovered[0].is_free is False
 
 
+def test_opencode_go_is_a_distinct_credential_and_endpoint_from_zen() -> None:
+    """ADR 0042: Go is a second, subscription-gated catalog, not an alias for Zen."""
+    zen = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
+    go = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+
+    assert go.credential_name == "OPENCODE_GO_API_KEY"
+    assert go.credential_name != zen.credential_name
+    assert go.list_url == "https://opencode.ai/zen/go/v1/models"
+    assert go.chat_base_url == "https://opencode.ai/zen/go/v1"
+    assert go.list_url != zen.list_url
+    assert go.chat_base_url != zen.chat_base_url
+    assert go.bootstrap_required is False
+    assert go.models_dev_provider_id == "opencode"
+
+
+def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
+    """Go shares Zen's "opencode" Models.dev catalog (ADR 0041's generalized join)."""
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+    register_credential("OPENCODE_GO_API_KEY", "go-key")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            assert request.get_header("Authorization") is None
+            return _Response(
+                {
+                    "opencode": {
+                        "models": {
+                            "provider/example-free": {
+                                "cost": {"input": 0, "output": 0, "cache_read": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "paid-model": {
+                                "cost": {"input": 2, "output": 12},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                        }
+                    }
+                }
+            )
+        return _Response(
+            {
+                "data": [
+                    {"id": "provider/example-free"},
+                    {"id": "paid-model"},
+                ]
+            }
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].provider_name == "opencode_go"
+    assert discovered[0].credential_name == "OPENCODE_GO_API_KEY"
+    assert discovered[0].is_free is True
+    assert discovered[1].is_free is False
+
+
+def test_opencode_go_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
+    register_credential("OPENCODE_GO_API_KEY", "go-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "vendor/paid-free"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
+def test_opencode_go_credential_missing_does_not_affect_opencode_zen_discovery() -> None:
+    """Registering only Zen must not silently light up Go, and vice versa."""
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            return _Response({"opencode": {"models": {}}})
+        return _Response({"data": [{"id": "vendor/model"}]})
+
+    sources = tuple(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name in {"opencode_zen", "opencode_go"}
+    )
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert [model.provider_name for model in discovered] == ["opencode_zen"]
+
+
 def test_non_text_models_without_unit_price_evidence_are_not_classified_free() -> None:
     """A zero token price alone cannot prove a non-text model is free."""
     source = ProviderModelSource(
@@ -1778,6 +1880,8 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
     assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
+    assert sources["opencode_go"].list_url == "https://opencode.ai/zen/go/v1/models"
+    assert sources["opencode_go"].credential_name == "OPENCODE_GO_API_KEY"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 

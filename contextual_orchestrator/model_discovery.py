@@ -415,6 +415,32 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         bootstrap_required=False,
         models_dev_provider_id="opencode",
     ),
+    # OpenCode Go is a second, subscription-gated catalog served from the same
+    # OpenCode Zen console/gateway under a "/go/" path segment -- confirmed
+    # against the sst/opencode console source (packages/console/app/src/routes/
+    # zen/util/handler.ts): Zen and Go share one Authorization-header
+    # validation path (the same API-key *format* authenticates both), and are
+    # distinguished only by a modelList "full" (Zen) vs "lite" (Go) catalog
+    # selection plus a separate `authInfo.billing.lite` subscription check.
+    # Go's own /v1/models discovery endpoint lives at "/zen/go/v1/models"
+    # (https://opencode.ai/docs/go/); its model ids are a documented subset of
+    # Zen's own catalog, so it reuses Zen's "opencode" Models.dev provider id
+    # for the same fail-closed cost/modality join ADR 0041 generalized.
+    # credential_name is deliberately its own KV entry (not shared with
+    # opencode_zen) even though the key *format* matches: Go requires its own
+    # paid subscription/entitlement independent of Zen access, so treating it
+    # as a distinct account boundary -- mirroring nvidia_nim/nvidia_nim_sub --
+    # keeps per-account bootstrap/diagnostic accounting correct and lets a
+    # deployment register Zen without Go (or vice versa). See ADR 0042.
+    ProviderModelSource(
+        provider_name="opencode_go",
+        credential_name="OPENCODE_GO_API_KEY",
+        list_url="https://opencode.ai/zen/go/v1/models",
+        chat_base_url="https://opencode.ai/zen/go/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
+        models_dev_provider_id="opencode",
+    ),
     ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
@@ -1452,6 +1478,14 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
                 is_free=_bytez_meter_price_is_free(row.get("meterPrice")),
+                # zdr_capable is left at its DiscoveredModel default (False):
+                # Bytez publishes no machine- or human-readable zero-data-retention
+                # policy (checked docs.bytez.com and its public GitHub org), unlike
+                # OpenRouter's dedicated /api/v1/endpoints/zdr evidence endpoint
+                # (_openrouter_zdr_model_ids). Absent that evidence, asserting ZDR
+                # capability here would be an unverified claim about a third party's
+                # data-handling practice, so this stays conservative until Bytez
+                # documents one.
             )
         )
     return _deduplicate_discovered_models(discovered)

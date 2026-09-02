@@ -1,17 +1,20 @@
 """Bootstrap-transport gateway launcher for CI agent loops.
 
-Seeds the five provider keys from GitHub-secrets-provided environment
-variables into the process-local KV credential registry (env is used ONLY as
-bootstrap transport into the KV, never read again at request time), then runs
-the normal ``--serve`` entrypoint in this same process so discovery and
-routing resolve keys through ``get_credential()`` exactly like production.
+Seeds the provider keys from GitHub-secrets-provided environment variables
+into the process-local KV credential registry (env is used ONLY as bootstrap
+transport into the KV, never read again at request time), then runs the
+normal ``--serve`` entrypoint in this same process so discovery and routing
+resolve keys through ``get_credential()`` exactly like production.
 
 Usage:
     python scripts/ci/serve_seeded_gateway.py [extra server args...]
 
-Bootstrap environment variables (all optional; missing ones are skipped):
-    OPENAI_API_KEY, OPENROUTER_API_KEY, OPENCODE_ZEN_API_KEY, BYTEZ_API_KEY,
-    NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, CONTEXTUAL_ORCHESTRATOR_TOKEN
+Bootstrap environment variables (all optional; missing ones are skipped --
+this list is derived from ``PROVIDER_MODEL_SOURCES`` and grows automatically
+as new providers are added there):
+    OPENAI_API_KEY, OPENROUTER_API_KEY, OPENCODE_ZEN_API_KEY,
+    OPENCODE_GO_API_KEY, BYTEZ_API_KEY, NVIDIA_NIM_API_KEY,
+    NVIDIA_NIM_API_KEY_SUB, CONTEXTUAL_ORCHESTRATOR_TOKEN
 """
 
 from __future__ import annotations
