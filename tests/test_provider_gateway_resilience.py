@@ -107,3 +107,4 @@ def test_model_client_has_no_default_inference_deadline() -> None:
     client = ModelClient()
 
     assert client.timeout is None
+    assert client.connect_timeout is None
