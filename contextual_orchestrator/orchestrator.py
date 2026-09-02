@@ -41,8 +41,18 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
+from .chat_responses_shape import (
+    _responses_text,
+    agent_supports_chat_completions,
+    agent_supports_responses,
+    chat_request_to_responses_request,
+    chat_response_to_responses_response,
+    responses_request_to_chat_request,
+    responses_response_to_chat_response,
+)
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .provider_api_version import api_version_for, apply_header, apply_query_param
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
@@ -1067,163 +1077,11 @@ def _local_provider_slot(
             state.condition.notify_all()
 
 
-def _responses_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if not isinstance(value, list):
-        return ""
-    parts: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            parts.append(item)
-        elif isinstance(item, dict) and isinstance(item.get("text"), str):
-            parts.append(item["text"])
-    return "".join(parts)
-
-
-def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
-    # ADR 0002: keep Codex Responses compatibility at the public control-plane
-    # boundary; mlx-lm remains a local Chat Completions worker provider.
-    messages: list[dict[str, Any]] = []
-    instructions = _responses_text(request.get("instructions"))
-    if instructions:
-        messages.append({"role": "system", "content": instructions})
-
-    raw_input = request.get("input", "")
-    if isinstance(raw_input, list):
-        items = raw_input
-    elif isinstance(raw_input, str):
-        items = [{"type": "message", "role": "user", "content": raw_input}]
-    else:
-        raise ValueError("local Responses input must be a string or item list")
-    for item in items:
-        if isinstance(item, str):
-            messages.append({"role": "user", "content": item})
-            continue
-        if not isinstance(item, dict):
-            raise ValueError("local Responses input items must be objects")
-        item_type = item.get("type", "message")
-        if item_type == "message":
-            role = item.get("role", "user")
-            if role == "developer":
-                role = "system"
-            if role not in {"system", "user", "assistant"}:
-                raise ValueError(f"unsupported local Responses message role: {role}")
-            raw_content = item.get("content")
-            content: str | list[dict[str, Any]] = _responses_text(raw_content)
-            if isinstance(raw_content, list):
-                parts: list[dict[str, Any]] = []
-                for part in raw_content:
-                    if not isinstance(part, dict):
-                        continue
-                    part_type = part.get("type")
-                    if part_type in {"input_text", "output_text", "text"} and isinstance(
-                        part.get("text"), str
-                    ):
-                        parts.append({"type": "text", "text": part["text"]})
-                    elif part_type in {"input_image", "image_url"}:
-                        image_url = part.get("image_url")
-                        if isinstance(image_url, str):
-                            image_url = {
-                                "url": image_url,
-                                **(
-                                    {"detail": part["detail"]}
-                                    if isinstance(part.get("detail"), str)
-                                    else {}
-                                ),
-                            }
-                        if isinstance(image_url, dict):
-                            parts.append({"type": "image_url", "image_url": image_url})
-                if any(part.get("type") == "image_url" for part in parts):
-                    content = parts
-            if content:
-                messages.append({"role": role, "content": content})
-        elif item_type == "function_call_output":
-            messages.append({
-                "role": "tool",
-                "tool_call_id": str(item.get("call_id", "")),
-                "content": _responses_text(item.get("output", item.get("content", ""))),
-            })
-        elif item_type == "function_call":
-            messages.append({
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "id": str(item.get("call_id", "")),
-                    "type": "function",
-                    "function": {
-                        "name": str(item.get("name", "")),
-                        "arguments": str(item.get("arguments", "{}")),
-                    },
-                }],
-            })
-        elif item_type in {"input_file", "reasoning", "item_reference"}:
-            continue
-        else:
-            raise ValueError(f"unsupported local Responses input item: {item_type}")
-
-    payload: dict[str, Any] = {
-        "model": request.get("model", "local-model"),
-        "messages": messages,
-        "stream": False,
-    }
-    for key in (
-        "temperature", "top_p", "max_tokens", "stop", "seed", "presence_penalty",
-        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "user",
-        "parallel_tool_calls", "tool_choice",
-    ):
-        if key in request:
-            payload[key] = request[key]
-    if "max_output_tokens" in request and "max_tokens" not in payload:
-        payload["max_tokens"] = request["max_output_tokens"]
-
-    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
-    if response_format is None and isinstance(request.get("response_format"), dict):
-        response_format = request["response_format"]
-    if response_format is not None:
-        payload["response_format"] = response_format
-
-    tools: list[dict[str, Any]] = []
-    for tool in request.get("tools") or []:
-        if not isinstance(tool, dict) or tool.get("type") != "function":
-            continue
-        function = {
-            key: tool[key]
-            for key in ("name", "description", "parameters", "strict")
-            if key in tool
-        }
-        tools.append({"type": "function", "function": function})
-    if tools:
-        payload["tools"] = tools
-
-    tool_choice = payload.get("tool_choice")
-    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-        payload["tool_choice"] = {
-            "type": "function",
-            "function": {"name": tool_choice.get("name", "")},
-        }
-    return payload
-
-
-def _responses_text_format_to_chat_response_format(
-    text: Any,
-) -> dict[str, Any] | None:
-    """Translate a validated Responses text format for workflow evidence calls."""
-    if not isinstance(text, dict) or not isinstance(text.get("format"), dict):
-        return None
-    fmt = text["format"]
-    if fmt.get("type") in {"text", "json_object"}:
-        return {"type": fmt["type"]}
-    if fmt.get("type") != "json_schema":
-        return None
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            key: fmt[key]
-            for key in ("name", "schema", "description", "strict")
-            if key in fmt
-        },
-    }
+# Backward-compatible aliases: the shape-translation implementation moved to
+# chat_responses_shape.py (ADR 0126), but these two private names are kept
+# bound here because existing tests import them straight from this module.
+_responses_to_chat_payload = responses_request_to_chat_request
+_chat_to_responses_payload = chat_response_to_responses_response
 
 
 def _canonical_provider_usage(
@@ -1240,58 +1098,6 @@ def _canonical_provider_usage(
             if type(value) is int and value >= 0:
                 canonical.setdefault(chat_key, value)
     return canonical
-
-
-def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
-    choice = (data.get("choices") or [{}])[0]
-    message = choice.get("message") if isinstance(choice, dict) else {}
-    message = message if isinstance(message, dict) else {}
-    content = message.get("content")
-    if not isinstance(content, str):
-        content = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
-
-    output: list[dict[str, Any]] = []
-    if content or not message.get("tool_calls"):
-        output.append({
-            "id": f"msg_{uuid.uuid4().hex}",
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": content, "annotations": []}],
-        })
-    for tool_call in message.get("tool_calls", []):
-        if not isinstance(tool_call, dict):
-            continue
-        function = tool_call.get("function") or {}
-        output.append({
-            "id": f"fc_{tool_call.get('id', uuid.uuid4().hex)}",
-            "type": "function_call",
-            "status": "completed",
-            "call_id": str(tool_call.get("id", uuid.uuid4().hex)),
-            "name": str(function.get("name", "")),
-            "arguments": str(function.get("arguments", "{}")),
-        })
-
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    output_tokens = int(usage.get("completion_tokens", 0) or 0)
-    response: dict[str, Any] = {
-        "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
-        "object": "response",
-        "created_at": int(data.get("created", time.time())),
-        "model": data.get("model", request.get("model", "local-model")),
-        "output": output,
-        "output_text": content,
-        "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
-        },
-    }
-    if isinstance(request.get("metadata"), dict):
-        response["metadata"] = request["metadata"]
-    return response
 
 
 def is_transient_error(exc: BaseException) -> bool:
@@ -2107,6 +1913,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -2323,6 +2130,7 @@ class ModelClient:
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -2483,8 +2291,17 @@ class ModelClient:
                     "max_tokens",
                     self.request_settings_snapshot()["max_output_tokens"],
                 )
-            if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
-                chat_payload = _responses_to_chat_payload(payload)
+            # Local mlx-lm workers are unconditionally chat-only by transport
+            # (that proven signal predates and stays independent of tags);
+            # any other agent only takes this branch when it positively
+            # declares api:chat_completions_only -- an untagged remote
+            # provider still gets plain passthrough, unchanged from before
+            # this branch existed (see agent_supports_responses's docstring).
+            if normalized_endpoint == "responses" and (
+                _is_local_provider_url(agent.base_url)
+                or not agent_supports_responses(agent.tags)
+            ):
+                chat_payload = responses_request_to_chat_request(payload)
                 if "response_format" in chat_payload and not (
                     "response_format" in agent.tags
                     or "capability:response_format" in agent.tags
@@ -2503,7 +2320,27 @@ class ModelClient:
                         destination,
                         allow_transient_retries=allow_transient_retries,
                     )
-                return _chat_to_responses_payload(chat_response, payload)
+                return chat_response_to_responses_response(chat_response, payload)
+            # Mirror case: an agent that positively declares
+            # api:responses_only (proven to reject Chat Completions shape)
+            # serving a request that arrived in Chat Completions shape.
+            if (
+                normalized_endpoint == "chat/completions"
+                and not agent_supports_chat_completions(agent.tags)
+            ):
+                responses_payload = chat_request_to_responses_request(payload)
+                responses_payload.setdefault(
+                    "max_output_tokens", self.request_settings_snapshot()["max_output_tokens"]
+                )
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    responses_response = self._send_raw_with_retry(
+                        agent,
+                        "responses",
+                        responses_payload,
+                        destination,
+                        allow_transient_retries=allow_transient_retries,
+                    )
+                return responses_response_to_chat_response(responses_response, payload)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
@@ -2523,6 +2360,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}  # pragma: no cover
         if api_key:  # pragma: no cover
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))  # pragma: no cover
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -2569,6 +2407,7 @@ class ModelClient:
         headers = {}  # pragma: no cover
         if api_key:  # pragma: no cover
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))  # pragma: no cover
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             headers=headers,
@@ -2605,6 +2444,7 @@ class ModelClient:
         }
         if api_key:  # pragma: no cover
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))  # pragma: no cover
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=body,
@@ -2689,6 +2529,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
+        apply_header(headers, api_version_for(agent.provider_name))
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
@@ -2816,7 +2657,11 @@ class ModelClient:
             raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
         if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
             raise RuntimeError("provider path must be a single absolute URL path")
-        return f"{base_url}{path}"
+        # Single choke point: every outgoing provider request builds its URL
+        # here, so a query-param-based declared API version (Azure OpenAI's
+        # ?api-version=... convention) is applied automatically with zero
+        # per-call-site wiring. A no-op when the provider declares none.
+        return apply_query_param(f"{base_url}{path}", api_version_for(agent.provider_name))
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -2977,13 +2822,15 @@ class ModelClient:
             f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
             "content-type: application/jsonl\r\n\r\n"
         ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        headers = {
+            "authorization": format_authorization_header(agent.auth_scheme, api_key),
+            "content-type": f"multipart/form-data; boundary={boundary}",
+        }
+        apply_header(headers, api_version_for(agent.provider_name))
         request = urllib.request.Request(
             self._provider_url(agent, "/files"),
             data=body,
-            headers={
-                "authorization": format_authorization_header(agent.auth_scheme, api_key),
-                "content-type": f"multipart/form-data; boundary={boundary}",
-            },
+            headers=headers,
             method="POST",
         )
         with self._open_provider(request, destination) as response:
@@ -2999,13 +2846,15 @@ class ModelClient:
         max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
+        headers = {
+            "authorization": format_authorization_header(agent.auth_scheme, api_key),
+            "content-type": "application/json",
+        }
+        apply_header(headers, api_version_for(agent.provider_name))
         request = urllib.request.Request(
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
-            headers={
-                "authorization": format_authorization_header(agent.auth_scheme, api_key),
-                "content-type": "application/json",
-            },
+            headers=headers,
             method=method,
         )
         with self._open_provider(request, destination) as response:
@@ -3029,9 +2878,11 @@ class ModelClient:
 
     def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
+        headers = {"authorization": format_authorization_header(agent.auth_scheme, api_key)}
+        apply_header(headers, api_version_for(agent.provider_name))
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
+            headers=headers,
             method="GET",
         )
         with self._open_provider(request, destination) as response:

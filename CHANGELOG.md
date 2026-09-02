@@ -10,6 +10,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Added
+
+- `/v1/chat/completions` and `/v1/responses` now translate transparently in
+  either direction when the selected agent is proven restricted to the
+  other OpenAI wire shape (a new `api:chat_completions_only`/
+  `api:responses_only` agent tag), instead of that translation existing
+  only for local mlx-lm workers. An agent with no shape tag is unaffected
+  and keeps today's plain passthrough. Also adds a data-driven per-provider
+  API-version mechanism (a header, e.g. Anthropic's `anthropic-version`, or
+  a query parameter, e.g. Azure OpenAI's `api-version`) applied
+  automatically to every outgoing request for a provider that declares one,
+  with no caller-side configuration. See ADR 0126.
+
 ### Deprecated
 
 - Internal callers now use
