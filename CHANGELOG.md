@@ -23,6 +23,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
+- Fixed a CI-only race in
+  `tests/test_provider_embedding_batch_backend.py`: two tests called
+  `CostRoutingCoordinator.complete_embeddings_batch()` against a provider
+  (async, `ThreadPoolExecutor`-backed) embedding agent without a
+  `wait_timeout`, then asserted on the returned document's `total_tokens`
+  immediately. Under light load the background job usually finished before
+  the immediate poll; under CI's heavier concurrent load it sometimes had
+  not, and the poll returned a non-terminal document lacking
+  `total_tokens` (`KeyError`). Both tests now pass `wait_timeout=1`,
+  matching the pattern already used by sibling tests in the same file for
+  this exact provider-backend-plus-immediate-check shape.
 - Configured-gateway discovery now removes its blank bootstrap row after a
   concrete catalog's chat candidates fail bounded readiness, so virtual
   requests cannot bypass an authentication failure through an unprobed seed;
