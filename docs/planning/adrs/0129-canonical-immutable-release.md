@@ -8,417 +8,167 @@ deciders:
 affected_components:
   - ".github/workflows/release.yml"
   - "scripts/ci/release_notes.py"
+  - "scripts/ci/release_checks_gate.sh"
   - "docs/RELEASING.md"
 related:
   - path: "docs/planning/adrs/0020-fail-closed-release-authorization.md"
     relation: "distinct-concern-shares-fail-closed-spirit"
 success_criteria:
   - metric: "consumer pin target"
-    target: "GET /repos/ContextualWisdomLab/contextual-orchestrator/releases/latest returns a tag, not 404"
-    source: "gh api repos/.../releases/latest after the first manual dispatch"
+    target: "a completed GitHub Release exists at an immutable vX.Y.Z tag and includes its mandatory CycloneDX SBOM"
+    source: "release.yml exact-tag and asset verification"
   - metric: "no vendored source SHA required"
-    target: "a consumer can depend on the released tag/API/client/schema without vendoring this repository's source"
-    source: "owner acceptance criteria, PR #971 comment 2026-09-02T18:26:04Z"
-  - metric: "no paid/provider-specific fallback required"
-    target: "the release mechanism itself calls no paid API and needs no new runtime dependency"
-    source: "workflow uses only actions/checkout, git, and the gh CLI already available on GitHub-hosted runners"
+    target: "consumers can pin a released API/client/schema contract instead of a mutable sibling head or copied source"
+    source: "owner acceptance criteria, contextual-orchestrator#971"
+  - metric: "release identity ambiguity"
+    target: "a branch named vX.Y.Z cannot satisfy release-tag existence or identity checks"
+    source: "tests/test_release_supply_chain_contract.py"
 ---
 
 # Publish a canonical immutable GitHub Release, gated on protected-main evidence
 
-## Context
+## Status
 
-This repository has never cut a release. `git tag -l` is empty, no
-`.github/workflows/*release*.yml` exists, and `GET /repos/ContextualWisdomLab/
-contextual-orchestrator/releases/latest` returns 404. `pyproject.toml` has
-carried `version = "0.2.0"` and `CHANGELOG.md` an `## [0.2.0] - Unreleased`
-section through hundreds of merged PRs, and `CHANGELOG.md`'s own preamble
-already states the intended process ("a version is released only after the
-protected `main` branch, required Checks, independent review, and release
-artifacts are verified on the same commit") — but nothing has ever executed
-it.
+**Proposed.** The workflow implementation exists on PR #1030, but this ADR is intentionally not Accepted yet. The Python-runtime prerequisite #995 must land first, #1030 must be non-force-restacked onto that protected-main descendant, its final exact head must obtain authoritative hosted GREEN evidence, and a real release has not yet been cut. Provenance/attestation and reproducibility evidence beyond the mandatory CycloneDX SBOM also remain release-readiness gaps rather than claims of completion.
 
-This is a real, evidenced cross-repo consumer defect, not a hypothetical
-gap. On `contextual-orchestrator#971` the repository owner (seonghobae)
-recorded, on the same PR body this ADR's `success_criteria` cite, four
-independent consumer-owner handoffs that all hit the same wall:
+## Problem
 
-- **`ContextualWisdomLab/keyverse#132`** (2026-09-02T09:42:46Z): Keyverse
-  vendors `contextual-orchestrator` at commit `045d17da5e2aea56a97e241ee158ab1
-  628d78660`, 175 commits behind protected `main`. A later comment
-  (2026-09-02T18:26:04Z) confirms Keyverse is still pinning source revision
-  `464da4715b495b5eaaa593eba3796e2d976ee0c9` because "[t]he owner repository
-  currently has no GitHub `latest` release endpoint (`/releases/latest`
-  returns 404)."
-- **`ContextualWisdomLab/bandscope#881`** (2026-09-02T11:15:54Z): explicitly
-  told not to copy the mutable owner branch or invent a direct provider
-  fallback; waiting on "an immutable contextual-orchestrator release with
-  the compatible OpenAI-style gateway/API contract."
-- **Wardnet** (2026-09-02T11:42:50Z): "[f]resh release inventory for
-  `ContextualWisdomLab/contextual-orchestrator` is empty, so Wardnet cannot
-  correctly replace these seams with a mutable branch or copied source."
-- **EgressWeave#235** (referenced 2026-09-02T18:26:04Z): a 45-minute Actions
-  job timeout on the same gateway-backed pattern — a related but distinct
-  resumable-long-running-execution gap, explicitly out of scope for this ADR
-  (see Non-Goals).
+`contextual-orchestrator` is a canonical owner for LLM gateway/API/client/schema behavior. Consumers such as Keyverse, BandScope, and Wardnet must consume a versioned owner contract; copying source or pinning a mutable sibling head breaks the CWL ownership boundary and prevents an owner-issued compatibility promise.
 
-The owner's stated RED/GREEN acceptance for the release piece, verbatim from
-that last comment: "the resulting released API/client/schema is immutable
-enough for consumers to pin without vendoring this repository's source ...
-No paid/provider-specific fallback should be required to consume it."
+The repository already has PR-scoped commercial-release authorization (`contextual_orchestrator/release_authorization.py` and ADR 0020), but that concern answers whether a pull request satisfies buyer-facing governance evidence. It does not create or identify an immutable publication artifact. Reusing it as a tag publisher would conflate two bounded responsibilities and duplicate GitHub branch/ruleset bookkeeping.
 
-### Does this compose with `release_authorization.py`, or is it a new concern?
+The release mechanism therefore owns only publication identity and publication evidence for an exact commit. Protected-branch governance remains where it already belongs; consumers receive only the resulting released contract.
 
-`contextual_orchestrator/release_authorization.py`
-(`evaluate_release_authorization`), its ADR (0020), and every test/doc that
-touches it (`tests/test_release_authorization.py`,
-`tests/test_release_authority_snapshot.py`,
-`tests/test_commercial_release_candidate.py`,
-`docs/commercial_release_candidate.md`, `docs/doctoring/
-release-authorization.md`) were read in full before writing this ADR. That
-machinery:
+## Constraints
 
-- is a **pure evaluator function** plus a **read-only collector script**
-  (`scripts/ci/release_authority_snapshot.py`) that together answer "does
-  this GitHub *pull request*'s exact head currently satisfy protected-`main`
-  governance (checks, independent review, findings)?";
-- feeds exactly one caller: `TaskOrchestrator`'s
-  `commercial_release_candidate_report()` behind
-  `/api/v1/commercial_release_candidates/latest` — a **buyer-facing product
-  evidence report inside the running gateway service**, gated behind admin
-  auth, consumed by a human/procurement audience;
-- requires `--pr <number>` and a KV-registered HMAC signing key
-  (`CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY`) before a server
-  operator can even load a snapshot;
-- is **never invoked by any GitHub Actions workflow today** — it is a manual/
-  administrative tool, run by a human or agent with an authenticated `gh` CLI,
-  its own docs say to "[r]egister ... in the KV for both the protected CI
-  collector and the gateway";
-- has **no code path that creates a git tag, a GitHub Release, or any
-  publication artifact**. `docs/commercial_release_candidate.md`'s own scope
-  section says as much: it is "a local product readiness artifact, not a
-  valuation guarantee, purchase commitment, or production compliance
-  certificate."
-
-**Conclusion: this is a new, distinct concern that must not be built as a
-duplicate of the same governance.** The two do not compose at the function-
-call level, for a concrete reason that is not merely "different endpoint":
-`collect_authority()` is *PR-scoped* (it reads `pulls/{pr}/reviews`,
-`pulls/{pr}/commits`, and a PR's `head`/`base`). Protected `main`'s tip after
-a merge is not "a pull request" — there is no stable, non-fragile way to
-keep re-deriving "which PR produced this exact main commit" arbitrarily far
-into a release workflow's future without either (a) hardcoding a PR number
-that goes stale the moment another PR merges, or (b) reverse-searching GitHub
-for the merging PR by commit SHA, which is unreliable across squash/rebase/
-merge-commit strategies and would itself duplicate GitHub's own merge
-bookkeeping inside this repository — exactly what ADR 0020 already warns
-against: "GitHub governance remains in the central `.github` repository
-rather than being duplicated in the inference runtime."
-
-That said, the two **do share the same fail-closed spirit**, and the release
-mechanism must honor it without re-implementing it:
-
-- Branch protection (the active ruleset `release_authority_snapshot.py`
-  itself inspects via `rulesets?includes_parents=true`) is the actual
-  enforcement point. It already refuses to let a PR merge into `main` without
-  every required check terminal-success and the required independent
-  approval on that exact head. Any commit that is genuinely the current tip
-  of protected `main` has therefore already passed the same evidence
-  `evaluate_release_authorization()` would demand of a PR — enforced once, at
-  the authoritative point, not re-derived speculatively per release.
-  Composing "in spirit" means the release workflow's job is to verify that a
-  commit **is, in fact, untampered current protected-`main` tip** (guards
-  against a stale ref, a race with a concurrent merge, or a direct push that
-  bypassed the ruleset) and to re-run this repository's own primary
-  regression gate fresh, immediately before cutting an immutable artifact —
-  not to re-ask "was this PR reviewed," which branch protection already
-  answered irrevocably before the merge could exist.
-- `docs/commercial_release_candidate.md` frames buyer-facing "release
-  authorization" and "product evidence" as deliberately separate concerns
-  that must never be conflated ("Product evidence and release authorization
-  are separate ... Reviewer delay ... never authorizes a release"). A GitHub
-  Release/tag is neither of those two things; it is a third, narrower
-  concern — "does this exact artifact exist at an immutable, citable
-  address" — and folding it into either existing surface would blur a
-  boundary this repository has already deliberately drawn.
+1. No automatic release on every merge. Publication is a deliberate `workflow_dispatch` operation on `main`.
+2. A fresh publication must operate on the protected `main` tip that was actually verified. If `main` advances before mutation, publication fails closed.
+3. An existing release tag is immutable. It is never moved, rewritten, or reused for another commit.
+4. A previously pushed tag may be resumed only when its target is an ancestor of current `main`. Every resume gate evaluates the tag's own target commit, not a newer dispatch SHA.
+5. Tag absence is established only by a confirmed exact-tag 404. Authentication, rate-limit, network, or server failures are not interpreted as absence.
+6. A canonical release is incomplete without its required exact-commit CycloneDX SBOM. SBOM lookup, download, handoff, upload, and post-upload verification are fail-closed.
+7. The release workflow does not weaken or substitute repository/org checks, self-approve, or synthesize GREEN from a predecessor head.
+8. No consumer may depend on this PR branch. Consumers switch only after an actual immutable release exists.
 
 ## Decision
 
-### Trigger
+### Exact release identity
 
-`workflow_dispatch` only, with a required `version` input (e.g. `0.2.0`, no
-leading `v`). No `push`, `schedule`, or tag-push trigger. Releases are
-deliberate, maintainer-initiated actions, never an automatic side effect of
-merging to `main` — consistent with the owner's explicit request in the task
-that spawned this ADR and with `CHANGELOG.md`'s own stated process. Manually
-dispatching a workflow already requires write access to the repository, which
-is the same friction this repository already relies on elsewhere (e.g. no
-separate actor allowlist exists for `workflow_dispatch` in `nim-benchmark.yml`
-or `provider-catalog-sync.yml`); adding a bespoke actor check here would be
-new, unproven ceremony this repository has not needed before.
+The workflow resolves release existence in GitHub's Git-reference namespace:
 
-### Gate (never weakened, never skipped)
+`GET /repos/{owner}/{repo}/git/ref/tags/vX.Y.Z`
 
-Before any tag or Release is created, the release job:
+GitHub's reference API requires callers to distinguish `heads/<branch>` from `tags/<tag>` and returns 404 when that exact reference does not exist. This is materially different from resolving an arbitrary commit-ish. A branch named `vX.Y.Z` therefore cannot impersonate the release tag.
 
-1. Confirms the ref is `refs/heads/main`.
-2. Re-fetches protected `main`'s current tip via `gh api repos/$REPO/commits/
-   main --jq .sha` and fails closed if it does not exactly equal the checked-
-   out commit — guards against a stale dispatch racing a concurrent merge, or
-   a detached/rewritten ref. This needs only `contents: read`. Immediately
-   after, fails closed unless every check GitHub reports for that exact
-   commit (via `commits/$SHA/check-runs`, excluding this release run's own
-   checks) is complete with an acceptable conclusion — guards against
-   dispatching while a push-triggered workflow on the new `main` tip is
-   still in flight or has failed (see the Non-goals note on this and "Known
-   limitations" below). Needs `checks: read`. A dispatch fired moments
-   after a merge can race GitHub's own registration of those push-triggered
-   check-runs, so this report can legitimately come back empty or partial
-   before they exist as entries at all — filtering an empty/partial list for
-   "not complete+green" is vacuously empty too (a later Devin finding,
-   "Missing checks pass release gate"). The gate additionally requires every
-   one of `RELEASE_EXPECTED_PUSH_CHECKS` — this repository's own known
-   push-triggered job names from `ci.yml`, `fuzz.yml`, and `security.yml`,
-   kept in sync by `tests/test_release_workflow_contract.py` — to already be
-   a registered check-run for the commit, so a not-yet-registered state is
-   correctly "not ready", never "nothing to block on". This is still the
-   same no-ruleset, `checks: read`-only approach: a fixed, repository-owned
-   name list, not a call to the branch-ruleset API.
-3. Parses `pyproject.toml`'s `[project]` table (via stdlib `tomllib`, a real
-   TOML parser — not a regex scan, which cannot reliably distinguish a
-   `[project]` table header followed by a trailing comment, a single- or
-   double-quoted version value, or a multiline string containing a line
-   that starts with `[`, from a genuine table boundary or version field)
-   and fails closed unless its `version` is byte-for-byte equal to the
-   `version` input. A release never redefines what version a commit is; the
-   version bump is a normal, already-reviewed PR that must land first.
-4. Fails closed if tag `v${version}` already exists on the remote (queried
-   via the commits API, never a local tag check) and points at a commit
-   that is *not* an ancestor of protected `main`'s current tip — an
-   existing tag is never moved, deleted, or overwritten (immutability), and
-   is never reused for a different release. A tag that *is* an ancestor of
-   `main`'s current tip (identical to it, or main has since advanced past
-   it) is a tag-only interrupted publication — the tag was pushed by an
-   earlier run that then failed before ever creating the GitHub Release —
-   and resumes safely: every later gate (checks-green, this version check,
-   release-notes rendering) evaluates against the *tag's own target
-   commit*, never against a possibly-stale `GITHUB_SHA`/current-`main`
-   value (a later Devin finding, "Tag-only retries mislabel releases" — see
-   `docs/RELEASING.md`). Both the tag-existence and Release-existence
-   lookups distinguish a *confirmed* absence (an HTTP 404 from the commits
-   API; a "release not found" from `gh release view`) from every other
-   lookup failure — rate limit, auth, network blip, a GitHub 5xx (a later
-   Devin finding, "API failures block release recovery"). Only a confirmed
-   absence proceeds as a fresh publish or resume; any other failure fails
-   the step closed instead of guessing "absent" and risking a wrong create
-   attempt against unconfirmed state — a later dispatch then retries and
-   resolves cleanly once the transient failure clears.
-5. Runs this repository's own full test suite fresh, on the exact commit
-   about to be tagged (`uv run --locked --extra api --extra db --extra queue
-   --group dev python -m pytest -q`, the same invocation `ci.yml`'s "Full
-   unit and contract suite" job uses) — a genuine, no-stale-cache
-   confirmation of the single most likely regression surface, not merely a
-   read of a prior run's status.
-6. Extracts `CHANGELOG.md`'s `## [${version}]` section (`scripts/ci/
-   release_notes.py`, new, tested) and fails closed if that section is
-   missing or empty — a Release is never published without real notes.
+The returned Git object is handled explicitly:
 
-Steps 5 (full local suite) and 6 (real content) are direct, cheap, in-
-workflow re-verification. CodeQL, Trivy, OSV, Scorecard, Semgrep,
-`opencode-review`, `noema-review`, and `strix` are **not** re-executed inside
-`release.yml`: they are exactly the required checks that already had to pass
-before this commit could reach protected `main` at all (step 2 confirms that
-identity), several are centrally owned by `ContextualWisdomLab/.github` per
-this repository's own `CLAUDE.md` ("Central PR governance ... is the
-canonical implementation ... for every sibling repo"), and re-running them
-here would duplicate infrastructure this repository does not own rather than
-add release-specific assurance.
+- `object.type == commit`: lightweight tag; that commit is the tag target.
+- `object.type == tag`: annotated tag; peel the tag object once through `/git/tags/{sha}` and require its target type to be `commit`.
+- any other or ambiguous type: fail closed.
 
-### What the release contains
+This repository creates annotated tags for fresh publications. The workflow nevertheless reads lightweight tags defensively because a pre-existing ref can exist independently of this workflow and must be classified before any decision is made.
 
-- An **annotated** git tag `v${version}` (`git tag -a`, not lightweight —
-  carries tagger identity and a message, and is the artifact GitHub's
-  Release API attaches to).
-- A **GitHub Release** (`gh release create`) at that tag, titled `v${version}`,
-  with a body built from the extracted `CHANGELOG.md` section plus the exact
-  released commit SHA.
-- The workflow uploads the CycloneDX SBOM `security.yml`'s
-  `python_supply_chain` job already generates as a release asset when that
-  artifact is available for the released commit, giving consumers the same
-  provenance evidence this repository already produces for every merge to
-  `main` — reusing existing SBOM generation rather than adding a second one
-  inside `release.yml`.
-- `permissions: contents: write` is scoped to the one job that creates the
-  tag/Release; every other job/step keeps the workflow-default `contents:
-  read`.
+Immediately before GitHub Release creation, the publish job independently verifies that remote `refs/tags/vX.Y.Z` exists, that its Git object SHA matches the fetched/created local tag object, and that the local tag peels to `TARGET_SHA`. `gh release create` is never allowed to become the mechanism that implicitly creates an unverified tag from a default branch or other commit-ish.
 
-### Non-goals (explicitly deferred — do not build now)
+### Fresh publish versus resume
 
-- **Composing with `release_authorization.py` at the function-call level.**
-  Deferred per the Context section above. A future PR could extend
-  `evaluate_release_authorization()`/its collector to accept a bare commit
-  SHA instead of a PR number if a concrete need for that specific evidence
-  shape (rather than the ruleset-tip check this ADR specifies) emerges; not
-  needed for a first working mechanism.
-- **Resumable long-running execution / checkpoint-and-re-dispatch** (the
-  EgressWeave#235 / `OPENCODE_RUN_TIMEOUT_SECONDS` half of the owner's
-  2026-09-02 comment). Real, but an orthogonal runtime concern from
-  publishing an immutable release artifact; tracked separately in
-  `docs/product-technical-gap-baseline.md`.
-- **Publishing to PyPI or any package index.** Consumers named in the
-  evidence (Keyverse, BandScope, Wardnet) vendor/pin *source*, not a Python
-  package; a PyPI publish step is unevidenced scope growth for this pass.
-  `pyproject.toml`'s own `version` field is exactly what a future PyPI step
-  would need, so nothing here forecloses it.
-- **Automatic `pyproject.toml` version bumping.** The version bump remains a
-  normal, reviewed PR; `release.yml` only validates it matches the dispatch
-  input.
-- **A release cut on every merge to `main`.** Explicitly rejected — see
-  Trigger above.
-- **Re-deriving required-check *names* dynamically from the GitHub ruleset
-  API** (as `release_authority_snapshot.py` does for its PR-scoped
-  evidence). A later Devin finding on this PR ("Unchecked main checks
-  permit releases") showed the gate still needed *some* check-state
-  verification: the checks that gated the PR's merge ran against the PR's
-  own head SHA, not necessarily against the resulting `main`-tip commit
-  (squash/rebase merges mint a new SHA), and separate push-triggered
-  workflows (Security, Fuzz, ...) that run again on that new tip commit can
-  still be in flight, or have failed, at the moment of a manual dispatch.
-  The gate now queries `commits/$SHA/check-runs` and fails closed unless
-  every check GitHub reports for that exact commit is complete with an
-  acceptable conclusion (see "Known limitations" below) — deliberately
-  *not* the ruleset-derived required-check-name lookup, which stays
-  out of scope: checking everything reported for the commit is strictly
-  more conservative than checking only a derived "required" subset, and
-  needs only `checks: read`, not the `administration: read` the rulesets
-  endpoint requires.
+No existing exact tag means a fresh publication. `TARGET_SHA` is the dispatch SHA and must equal protected `main`'s current tip before verification and again immediately before mutation.
 
-## Research grounding
+An existing exact tag means resume only when its target is identical to or an ancestor of current `main`. `TARGET_SHA` becomes the tag target. Main is allowed to have advanced after the earlier tag push because the tag is already immutable; version validation, checks, tests, release-note rendering, and SBOM lookup all operate on `TARGET_SHA`.
 
-This repository's convention (`CLAUDE.md`, `AGENTS.md`) asks substantive
-feature/process PRs to attach relevant grounding. This change is
-release-engineering/DevOps process tooling — how an existing, unreleased
-version number gets tagged and published — not a novel algorithm or a
-research contribution, so the correct grounding is the normative standards
-this mechanism implements, not an academic literature review:
+A tag that is not on current `main` history is a conflict, not a recovery case. The workflow fails and requires a new version rather than moving the tag.
 
-- Semantic Versioning 2.0.0 (<https://semver.org/spec/v2.0.0.html>) — already
-  the versioning scheme this repository's `CHANGELOG.md` preamble commits
-  to; this ADR's gate (`version` must equal `pyproject.toml` exactly, a
-  version is never redefined once tagged) is what makes that commitment
-  real instead of aspirational prose.
-- Keep a Changelog 1.1.0 (<https://keepachangelog.com/en/1.1.0/>) — also
-  already `CHANGELOG.md`'s stated format; `scripts/ci/release_notes.py`
-  extracts the `## [X.Y.Z]` section this format defines and renders it
-  verbatim as the GitHub Release body, rather than inventing a parallel
-  notes format.
-- The GitHub Releases API (<https://docs.github.com/en/rest/releases>) — the
-  mechanism's actual implementation surface: an annotated tag plus a Release
-  object created through `gh release create`, consumed by downstream
-  clients via `.../releases/tag/vX.Y.Z` (the immutable pin) and
-  `.../releases/latest` (a mutable discovery alias, not a pin — see
-  `docs/RELEASING.md`).
+### Verification gate
 
-## Known limitations
+For `TARGET_SHA`, the read-only verify job:
 
-### Resume evaluates against the tag's own target commit, not a fresh publish's main-tip check
+1. requires all repository-owned expected push checks to be registered;
+2. requires every reported check to have an acceptable terminal conclusion;
+3. parses the project's declared version and requires exact equality with the dispatch input;
+4. runs the full locked test suite fresh on that exact commit;
+5. renders non-empty release notes from the matching CHANGELOG section;
+6. finds a successful exact-commit `security.yml` run and downloads its `cyclonedx-sbom` artifact;
+7. requires a non-empty `cyclonedx-sbom.json` and hands both notes and SBOM to the write-scoped publish job with `if-no-files-found: error`.
 
-The main-tip freshness recheck described below applies only to a **fresh**
-publish (no `v${version}` tag exists yet), where `TARGET_SHA` is this
-dispatch's own commit and must still equal `main`'s live current tip. A
-**resume** of a tag-only interrupted publication — the tag already exists
-and points at a commit that is an ancestor of `main`'s current tip —
-deliberately skips that comparison instead of failing it: `main` having
-advanced past the tag's target commit is the expected, common case a
-resume exists to handle (a later Devin finding, "Tag-only retries mislabel
-releases"), not evidence of staleness. The tagged commit is already
-immutable once pushed, so there is nothing for a live main-tip comparison
-to protect against for a resume; the checks-green gate still re-runs
-against `TARGET_SHA` itself in both cases.
+The write-scoped publish job repeats the checks gate immediately before mutation, verifies the downloaded inputs, creates the annotated tag only for a fresh publication, verifies exact remote tag identity, creates or resumes the GitHub Release, and verifies the mandatory SBOM is attached. If Release creation succeeds but SBOM attachment fails, the workflow fails; a later dispatch resumes the same immutable tag/Release until the mandatory asset is present. That transient partial state is not reported as a successful canonical release.
 
-### Residual check-then-act window before the tag/Release are created
+### Least privilege
 
-Devin flagged this gate's re-verification (main's tip, then every check for
-that commit — both re-checked a second time as `publish`'s first two steps,
-immediately before anything is created) as still leaving a race: if `main`
-advances, or a check regresses, in the moments between that recheck and the
-actual `git push origin refs/tags/...` / `gh release create`, the workflow
-would still publish the commit that *was* the verified, all-green tip
-moments earlier. This window applies to a fresh publish only — see the
-resume note directly above.
+Repository-controlled tests and release-note rendering run in the read-only `verify` job with no persisted git credential. `contents: write` exists only in `publish`, after the read-only gate has succeeded. `checks: read` is used for exact-commit status verification; the workflow does not reproduce org-central review/security ownership.
 
-This is real, and it is also an inherent limitation of any check-then-act
-sequence against an API with no atomic "create this tag only if branch `X`
-is still at commit `Y`" primitive — GitHub does not expose one. No amount of
-re-ordering removes the window entirely; it can only be shrunk. This ADR
-accepts the remaining window as bounded and low-risk, for concrete reasons,
-rather than adding more speculative complexity to chase it toward zero:
+## TDD evidence
 
-- **The window is already close to minimal.** `publish`'s very first
-  fallible actions after checkout are exactly these two rechecks, run
-  back-to-back, with nothing repository-controlled or otherwise slow
-  between them and the checks. The only steps between the last recheck and
-  the actual tag push are downloading the small notes/SBOM artifact
-  `verify` already produced (a same-org GitHub Actions artifact fetch, not
-  arbitrary code) and the `git tag`/`git push` themselves — on the order of
-  a few seconds, not minutes.
-- **The trigger is `workflow_dispatch` only, run by a maintainer, rarely.**
-  This is not a high-frequency automated path (contrast a bot that dispatches
-  releases on every merge, which this ADR's Trigger section explicitly
-  rejects) — the exposure is one narrow window per manual release, not a
-  continuously-open one.
-- **The impact if it is ever actually hit is small and self-describing.** A
-  commit landing in this exact window is, by construction, one that *was*
-  `main`'s genuine, all-checks-green tip only seconds earlier — never a
-  wrong, unreviewed, or malicious commit, and never one that skipped this
-  workflow's own fresh test-suite run (that ran against the commit actually
-  being published). The realistic failure mode is "released a version that
-  was immediately superseded by an unrelated merge," not "released a broken
-  or untrusted artifact."
-- **A real GitHub-side atomic primitive does not exist to close this.**
-  There is no API call that both verifies a ref's current SHA and creates a
-  tag/Release in one atomic, all-or-nothing operation; closing this
-  completely would require either GitHub adding one, or building a
-  bespoke distributed-locking layer around a `workflow_dispatch` action a
-  human already gates by hand — complexity disproportionate to a
-  maintainer-triggered, seconds-wide window with a low-severity failure
-  mode.
+The current repair lineage on #1030 includes:
 
-**If a maintainer ever discovers a release published a commit that was
-immediately superseded:** do not retroactively move, delete, or retag the
-published release — this repository's own release mechanism treats tags as
-immutable once published (see `docs/RELEASING.md`'s Rollback section), and
-an already-superseded tag is not the kind of "genuine publishing mistake
-caught immediately" that section's narrow `gh release delete` exception is
-for. Instead, cut a new patch (or minor, if warranted) release from the
-actual intended tip through the normal dispatch process above; the
-superseded release simply becomes an accurate historical record of what
-`main`'s tip briefly was.
+- `9b93a215530c96509de9d368f0008b713fe0640b`: RED contract rejecting generic `commits/v${RELEASE_VERSION}` tag lookup and optional SBOM behavior.
+- `788dfce254604f1d8cec1681205faf19d6125333`: production GREEN using exact `git/ref/tags/...` identity and fail-closed SBOM evidence/attachment.
+- `29ee4ce28d68c7dc825a998434dd944aff2352f5`: contract assertions aligned to the repaired workflow step names.
+- `d22586f8e8dd9be3762ed7bf02762c9f82fbf771`: release runbook brought code-current with the same invariants.
+
+Hosted GREEN is not claimed from these commits. On the previously observed `d22586f8...` head, CodeQL PR run `33688739873` ended in `startup_failure` and other required workflows were non-terminal. The central runner/control-plane owner path is tracked in `ContextualWisdomLab/.github#712`.
+
+## Alternatives considered
+
+### Use the generic commits endpoint for `vX.Y.Z`
+
+Rejected. A commit-ish resolver is not an exact tag-namespace assertion. The release identity must distinguish `refs/tags/...` from `refs/heads/...` before publication.
+
+### Let `gh release create` create a missing tag implicitly
+
+Rejected. GitHub release creation accepts a `target_commitish` when the tag does not already exist; relying on that behavior expands the mutation surface and weakens the workflow's exact-tag proof. The tag must exist and be verified before the Release is created.
+
+### Make the SBOM best-effort
+
+Rejected. The repository already produces CycloneDX evidence on the security path, and the commercial fleet contract requires release evidence to be attributable to the exact protected commit. Publishing successfully while that mandatory evidence is absent would create a consumer-visible artifact whose supply-chain evidence is weaker than the release contract.
+
+### Re-run every org-central security/review workflow inside release.yml
+
+Rejected. Those checks have canonical owners and are already represented in protected-main/check evidence. Duplicating them here would create mutable local forks of governance. The release workflow consumes their exact-commit results and re-runs only repository-owned release-specific verification.
+
+### Reuse PR-scoped `release_authorization.py` as the publisher
+
+Rejected. It is a buyer/readiness evidence evaluator keyed to a PR, not a Git publication aggregate. Publication remains a separate bounded context with a minimal dependency on GitHub's protected-commit evidence.
 
 ## Consequences
 
-- Consumers gain a real, immutable pin target:
-  `github.com/ContextualWisdomLab/contextual-orchestrator/releases/tag/v0.2.0`,
-  satisfying the owner's stated acceptance criterion without any paid or
-  provider-specific dependency. `.../releases/latest` also starts resolving
-  (no more 404) once the first tag is cut, but it is a mutable discovery
-  alias, not itself a pin target — see `docs/RELEASING.md`.
-- Releasing stays deliberate and rare (manual `workflow_dispatch`), matching
-  `CHANGELOG.md`'s existing stated process instead of introducing a new,
-  undocumented cadence.
-- The buyer-facing `/api/v1/commercial_release_candidates/latest` surface,
-  `release_authorization.py`, and ADR 0020 are untouched by this change —
-  they keep answering "is this PR commercially/buyer-sale-ready," a
-  different question from "does an immutable citable artifact exist."
-- A future PR remains free to wire a stronger, SHA-scoped variant of
-  `evaluate_release_authorization()` into this gate if a concrete gap in the
-  current tip-check surfaces in practice, without needing to revisit this
-  ADR's core trigger/tag/notes decisions.
+Positive effects:
 
-## Customer next action
+- consumers gain a future immutable owner-issued pin instead of source copying;
+- branch/tag namespace confusion is removed from release identity;
+- interrupted tag/Release publication can be resumed without retagging;
+- missing exact-commit SBOM evidence blocks successful publication;
+- write credentials are kept away from repository-controlled test execution.
 
-Run `.github/workflows/release.yml` via `workflow_dispatch` with `version`
-set to `pyproject.toml`'s current value once a maintainer has confirmed the
-`## [x.y.z]` `CHANGELOG.md` section is ready to publish. This ADR's own
-implementation does not trigger a real release; cutting the first `v0.2.0`
-tag is a separate, deliberate action left to the repository owner.
+Costs and residual risks:
+
+- GitHub does not expose an atomic "create tag only if branch still equals SHA" operation, so a small fresh-publish check-then-act window remains after the final `main`-tip check. The mitigation is fail-closed prechecks plus exact remote tag verification; if a concurrent merge wins that window, publish a new patch/minor version and never move the earlier tag.
+- GitHub Release creation and asset upload are separate mutations. A Release can therefore exist temporarily without the SBOM after an interrupted run; workflow success is withheld until the asset is verified.
+- The current path establishes SBOM evidence but does not yet establish the broader provenance/attestation and reproducibility evidence required by the fleet's final release-ready definition. Those are follow-up acceptance items; this ADR remains Proposed until they are resolved or explicitly superseded by another owner decision.
+- #1030 currently depends on #995's supported-runtime correction and on recovery of hosted runner/control-plane execution. Neither is bypassed here.
+
+## Rollback and recovery
+
+Published release tags are immutable. Functional rollback is a forward fix in a new patch/minor release. Routine delete/retag is not a recovery mechanism.
+
+For an interrupted publication on a valid existing tag, re-dispatch the same version. The workflow re-verifies that tag target and completes any missing Release/SBOM mutation without moving the tag.
+
+A tag pointing outside current `main` history, an ambiguous tag object, an unconfirmed lookup failure, a failed exact-commit check, or missing SBOM evidence is a stop condition requiring repair before publication.
+
+## Acceptance before status may become Accepted
+
+- #995 merged normally and #1030 non-force-restacked to the resulting protected-main descendant.
+- all final exact-head required repository and org-central checks terminal GREEN with no valid unresolved review findings.
+- release docs and product/technical gap baseline agree with the final implementation.
+- first canonical version published at an exact tag with verified mandatory SBOM.
+- release provenance/attestation and reproducibility requirements either implemented and tested or governed by a separate Accepted owner ADR with an explicit contract.
+- consumer bump validated against the released API/client/schema rather than this PR branch or an arbitrary source SHA.
+
+## Traceability and primary references
+
+GitHub. (2026). *REST API endpoints for Git references*. GitHub Docs. https://docs.github.com/en/rest/git/refs
+
+GitHub. (2026). *REST API endpoints for Git database*. GitHub Docs. https://docs.github.com/en/rest/git
+
+GitHub. (2026). *REST API endpoints for releases*. GitHub Docs. https://docs.github.com/en/rest/releases/releases
+
+Primary-document check performed 2026-09-03. GitHub's reference documentation explicitly requires the requested ref to be namespaced as `heads/<branch>` or `tags/<tag>` and reports 404 for a missing exact ref; its releases documentation states that `target_commitish` is used to determine where a tag is created when the tag does not already exist. These semantics are the reason this ADR requires exact tag-ref proof before Release creation.
