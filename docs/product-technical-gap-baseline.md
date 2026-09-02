@@ -1,5 +1,112 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: recovered ZDR embedding batch bypassed request-policy enforcement
+
+Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the
+"recovered ZDR batch not re-validated" fix recorded in the
+"embedding recovery/deadline and legacy-id quarantine review" entry below:
+that fix's own re-validation left a gap, independently reported by a Devin
+Review security-level comment on PR #971 and independently re-verified
+against current-head code before any change was made (never trusted as
+stated).
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/cost_router.py`)
+
+> Recovered embeddings bypass ZDR enforcement
+>
+> Recovered `zdr_only` jobs never restore `request_policy`, so OpenRouter
+> omits `provider.zdr`. Mixed privacy identities can also execute under the
+> first request's policy.
+
+### Root cause
+
+`_run_provider_embeddings` is the replay entry point
+`ProviderEmbeddingBatchBackend` calls when a durably-queued embedding job is
+recovered after a process restart and executed on a background worker
+thread. The earlier fix (see "embedding recovery/deadline and legacy-id
+quarantine review" below) added a check that the resolved agent still
+carries the `privacy:zdr` tag, but that check is necessary and not
+sufficient:
+
+1. **The `request_policy` contextvar was never restored.** OpenRouter's
+   enforcing `provider.zdr: true` request field is applied by
+   `_pin_openrouter_zdr` (`orchestrator.py`), which branches on the
+   `_REQUEST_ZDR_ONLY` contextvar set by `TaskOrchestrator.request_policy(...)`
+   -- not on the request's own `zdr_only` field. The submission-time
+   `request_policy(zdr_only)` scope used by every synchronous call site
+   (`cost_router.py` lines ~636, ~770, ~1038, ~1417) is a `ContextVar`,
+   which does not cross the thread boundary `ProviderEmbeddingBatchBackend`
+   replays a recovered job across. `_run_provider_embeddings` called
+   `self._run_embedding_shard(agent, shard)` -> `self.orchestrator.client.embed`
+   /`embed_with_usage` -> `_send_raw` -> `_pin_openrouter_zdr` with no
+   `request_policy` scope active on that thread at all, so the pin's branch
+   condition was always false for a recovered batch regardless of
+   `first.zdr_only` -- the actual HTTP request to OpenRouter silently
+   omitted `provider.zdr`, even though the tag check already re-validated
+   the agent and the code's own comment believed privacy safety was
+   handled.
+2. **No per-request `zdr_only` homogeneity check.** The batch's existing
+   consistency check only asserted every request shared `model` and
+   `agent_id`:
+   `EmbeddingBatchRequest` carries `zdr_only` per request (`batch_routing.py`),
+   but nothing compared it across the batch. A batch mixing
+   `zdr_only=True` and `zdr_only=False` requests under the same
+   `agent_id` executed entirely under `first`'s policy -- either
+   over-restricting a non-ZDR request or, the real risk, silently
+   under-restricting a ZDR request that was not first in the list.
+
+### Fix
+
+`_run_provider_embeddings` (`contextual_orchestrator/cost_router.py`):
+
+- Wraps the sharded `_run_embedding_shard` execution loop in
+  `with self.orchestrator.request_policy(first.zdr_only): ...` -- the same
+  context-manager pattern already used at every other client call site in
+  this file -- so the OpenRouter ZDR pin is correctly re-armed for a
+  recovered batch's actual client call(s), not just checked-and-trusted at
+  the tag level.
+- Extends the existing route-homogeneity check to also require every
+  request in the batch share `first.zdr_only`, alongside the pre-existing
+  `model`/`agent_id` check, raising the same `RuntimeError` (fail closed,
+  same style as the adjacent tag-mismatch check) when they diverge, instead
+  of silently running the whole batch under `first`'s policy.
+
+Both changes are additive and scoped to `_run_provider_embeddings`; no
+other call site or the batch-submission path changed.
+
+### Why this is fail-closed and ZDR-first
+
+This repo's stated policy is ZDR-first: every LLM path routes through the
+`orchestrator/free` pool and privacy-scoped requests must be provably
+zero-retention, not merely assumed so. Before this fix, a *recovered*
+`zdr_only` request could silently execute without the provider-side
+enforcement its caller explicitly requested -- a privacy guarantee that
+looked re-validated (the tag check ran and passed) while the request that
+actually left the process carried no enforcement of it. Both parts of the
+fix restore the same fail-closed shape used everywhere else in this file:
+mismatched privacy identity now raises before any request is sent, and a
+matching identity now genuinely carries its enforcement through to the
+provider, rather than being asserted once and then dropped on the
+replay path.
+
+### Verification
+
+RED-before/GREEN-after, both already present in
+`tests/test_pr971_review_quality_regressions.py` (added ahead of this fix
+landing) and confirmed to fail against pre-fix code, pass against the fix:
+
+- `test_recovered_zdr_batch_reenters_request_privacy_scope` -- monkeypatches
+  `orchestrator.request_policy` to record every `zdr_only` value it is
+  entered with, runs a recovered single-request ZDR batch through
+  `_run_provider_embeddings`, and asserts `request_policy` was entered with
+  `True` exactly once. Failed pre-fix (`entries == []`, the scope was never
+  entered); passes post-fix.
+- `test_provider_embedding_batch_rejects_mixed_privacy_identity` -- builds
+  a two-request batch sharing `model`/`agent_id` but differing
+  `zdr_only`, and asserts `_run_provider_embeddings` raises `RuntimeError`
+  matching `"privacy policy"`. Pre-fix, the batch executed without raising;
+  post-fix it fails closed.
+
 ## 2026-09-02 PR #971: unbounded provider discovery and single-provider bootstrap concentration
 
 Observation time: 2026-09-02 Asia/Seoul. This closes the two remaining

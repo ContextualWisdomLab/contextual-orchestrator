@@ -290,31 +290,43 @@ class CostRoutingCoordinator:
                 "refusing to execute a recovered privacy-scoped batch"
             )
         if any(
-            request.model != first.model or request.agent_id != first.agent_id
+            request.model != first.model
+            or request.agent_id != first.agent_id
+            or request.zdr_only != first.zdr_only
             for request in requests
         ):
-            raise RuntimeError("provider embedding batch must retain one selected route")
+            raise RuntimeError(
+                "provider embedding batch must retain one selected route and privacy policy"
+            )
         max_tokens, _max_chars, max_inputs = self._embedding_request_limits()
         vectors: List[List[float]] = []
         prompt_tokens = 0
         shard: List[EmbeddingBatchRequest] = []
         shard_tokens = 0
-        for request in requests:
-            request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
-            if shard and (
-                len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
-            ):
+        # Re-establish the ambient ``request_policy`` scope for the actual
+        # client call(s) below. It is not in effect on this worker thread
+        # (see the recovery comment above) but the client's OpenRouter ZDR
+        # pin (``_pin_openrouter_zdr``) reads it, not ``first.zdr_only``
+        # directly -- without this, a recovered ``zdr_only`` batch's request
+        # would silently omit ``provider.zdr`` even though the tag check
+        # above already re-validated the route.
+        with self.orchestrator.request_policy(first.zdr_only):
+            for request in requests:
+                request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
+                if shard and (
+                    len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
+                ):
+                    shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
+                    vectors.extend(shard_vectors)
+                    prompt_tokens += shard_usage
+                    shard = []
+                    shard_tokens = 0
+                shard.append(request)
+                shard_tokens += request_tokens
+            if shard:
                 shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
                 vectors.extend(shard_vectors)
                 prompt_tokens += shard_usage
-                shard = []
-                shard_tokens = 0
-            shard.append(request)
-            shard_tokens += request_tokens
-        if shard:
-            shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
-            vectors.extend(shard_vectors)
-            prompt_tokens += shard_usage
         return vectors, prompt_tokens
 
     def _refresh_embedding_backend(self) -> None:

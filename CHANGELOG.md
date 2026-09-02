@@ -971,6 +971,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `::test_bootstrap_selector_prefers_model_group_diversity`,
   `::test_bootstrap_selector_falls_back_to_duplicate_model_group_when_capacity_remains`,
   `tests/test_review_gateway.py::test_build_review_orchestrator_uses_model_group_diversity`).
+- (2026-09-02, PR #971) The privacy re-validation added for a recovered
+  `zdr_only` embedding batch (above) only checked the resolved agent's
+  current tags; it never restored the ambient `request_policy` scope before
+  executing the batch, and the batch's homogeneity check compared only
+  `model`/`agent_id`, not `zdr_only`. Concretely: (1) `_pin_openrouter_zdr`
+  (the code that adds OpenRouter's enforcing `provider.zdr: true` request
+  field) branches on the `request_policy` contextvar, not on `first.zdr_only`
+  directly, and that contextvar is never in effect on the background worker
+  thread that replays a recovered job -- so a recovered ZDR batch's actual
+  HTTP request to OpenRouter silently omitted the ZDR pin even though the tag
+  check above believed it had already re-validated privacy safety; and (2) a
+  batch that somehow mixed `zdr_only=True` and `zdr_only=False` requests
+  under the same `agent_id` executed entirely under `first`'s policy instead
+  of being rejected. `_run_provider_embeddings` now wraps its embedding-shard
+  execution in `self.orchestrator.request_policy(first.zdr_only)` (the same
+  pattern used at every other client call site in `cost_router.py`) and
+  extends the existing route-homogeneity check to also require every request
+  in the batch share `first.zdr_only`, failing closed with the same
+  `RuntimeError` style otherwise (Devin Review on #971)
+  (`tests/test_pr971_review_quality_regressions.py::test_recovered_zdr_batch_reenters_request_privacy_scope`,
+  `::test_provider_embedding_batch_rejects_mixed_privacy_identity`).
 
 ### Added
 
