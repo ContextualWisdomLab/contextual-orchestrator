@@ -66,6 +66,30 @@ _CAPABILITY_NAMES = {"embeddings": "embedding"}
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
+# OpenCode Go publishes several wire protocols. The generic OpenAI-compatible
+# discovery path can safely serve only the IDs documented for
+# ``/v1/chat/completions``. Responses/Anthropic-message IDs stay out of the
+# ordinary chat pool until a protocol-specific adapter is available; this is
+# fail-closed and avoids sending a valid credential to the wrong endpoint.
+# Source: https://opencode.ai/docs/go/ (endpoint table).
+_OPENCODE_GO_CHAT_MODEL_IDS = frozenset({
+    "glm-5.3-flash",
+    "glm-5.3",
+    "glm-5.2",
+    "glm-5.1",
+    "kimi-k3",
+    "kimi-k2.7-code",
+    "kimi-k2.6",
+    "longcat-2.0",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
+    "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "hy4-preview",
+    "hy3",
+})
+
 
 def discovery_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
     """Return public capability evidence with its discovery-ownership marker."""
@@ -335,6 +359,9 @@ class ProviderModelSource:
     bootstrap_required: bool = True
     evidence_only: bool = False
     models_dev_provider_id: str | None = None
+    # Optional fail-closed allowlist for mixed-protocol catalogs.
+    # An empty set means the provider's generic capability rules apply.
+    chat_model_ids: frozenset[str] = frozenset()
 
 
 def configured_gateway_source(
@@ -440,6 +467,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
         bootstrap_required=False,
         models_dev_provider_id="opencode",
+        chat_model_ids=_OPENCODE_GO_CHAT_MODEL_IDS,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -1279,6 +1307,13 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
             continue
+        if source.chat_model_ids and model_id not in source.chat_model_ids:
+            _LOGGER.info(
+                "discovery_skip_mixed_protocol provider=%s model=%s supported_protocol=chat_completions",
+                source.provider_name,
+                model_id,
+            )
+            continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         supported_parameters = (
@@ -1697,8 +1732,8 @@ def discover_all_models(
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
 
-    Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
-    ``openai``) each want the same Models.dev catalog. When any registered
+    Sources including ``opencode_zen`` and ``opencode_go`` may want the same
+    Models.dev catalog; it is fetched once and shared. When any registered
     source declares ``models_dev_provider_id``, fetch it here exactly once
     (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
     hand every source the identical parsed payload, instead of each source
