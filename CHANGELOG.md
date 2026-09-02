@@ -10,6 +10,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Added
+
+- A canonical, immutable release mechanism: `.github/workflows/release.yml`
+  (`workflow_dispatch` only, explicit `version` input, never triggered by
+  push/schedule/merge) verifies the dispatched commit is protected `main`'s
+  untampered current tip, verifies the requested version matches
+  `pyproject.toml`, refuses to re-publish or move an existing tag, re-runs
+  the full test suite fresh, renders release notes from this file's matching
+  `## [X.Y.Z]` section via the new tested `scripts/ci/release_notes.py`, then
+  creates an annotated `vX.Y.Z` tag and a GitHub Release (best-effort
+  CycloneDX SBOM asset attached when available). Gives downstream consumers
+  (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the Wardnet
+  consumer-owner handoff, all recorded on `contextual-orchestrator#971`) an
+  immutable pin target instead of a vendored source SHA. See
+  `docs/planning/adrs/0127-canonical-immutable-release.md` and
+  `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
+  and dispatching the first `v0.2.0` release are deliberately separate
+  actions.
+
 ### Deprecated
 
 - Internal callers now use
