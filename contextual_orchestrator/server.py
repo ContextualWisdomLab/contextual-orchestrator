@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from email.message import Message
+from email.parser import BytesParser
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
@@ -97,6 +98,13 @@ MAX_FILE_UPLOAD_REQUEST_BYTES = (
     MAX_FILE_UPLOAD_BYTES + MAX_FILE_MULTIPART_OVERHEAD_BYTES
 )
 MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
+# OpenAI's real Batch API caps a batch input file at 50,000 requests.
+MAX_BATCH_REQUESTS_PER_FILE = 50_000
+# OpenAI's real Audio API caps a transcription upload at 25 MB.
+MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_AUDIO_UPLOAD_REQUEST_BYTES = (
+    MAX_AUDIO_UPLOAD_BYTES + MAX_FILE_MULTIPART_OVERHEAD_BYTES
+)
 
 
 def _multipart_upload_metadata(body: Any, content_type: str) -> tuple[str, str, int]:
@@ -154,6 +162,48 @@ def _multipart_upload_metadata(body: Any, content_type: str) -> tuple[str, str, 
     if not purpose or not isinstance(filename, str) or not filename or file_size is None:
         raise RequestError(400, "invalid_file", "multipart upload requires purpose and file fields")
     return purpose, filename, file_size
+
+
+def _read_multipart_form(raw: bytes, content_type: str) -> dict[str, Any]:
+    """Parse a small, fully-buffered ``multipart/form-data`` body into fields.
+
+    A text field decodes to ``str``; a file field (one with a ``filename``)
+    decodes to a ``(filename, bytes)`` tuple. Built for small request bodies
+    that are already read into memory in full (Audio uploads, capped at
+    ``MAX_AUDIO_UPLOAD_BYTES`` by the caller) — the streaming, disk-backed
+    ``_multipart_upload_metadata`` above stays the path for the much larger
+    Files uploads.
+    """
+    probe = Message()
+    probe["content-type"] = content_type
+    boundary = probe.get_param("boundary", header="content-type")
+    if not isinstance(boundary, str) or not boundary or len(boundary) > 70:
+        raise RequestError(400, "invalid_file", "multipart boundary is invalid")
+    header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("latin-1")
+    message = BytesParser().parsebytes(header + raw)
+    if not message.is_multipart():
+        raise RequestError(400, "invalid_file", "multipart body is malformed")
+    fields: dict[str, Any] = {}
+    for part in message.get_payload():
+        field_name = part.get_param("name", header="content-disposition")
+        if not isinstance(field_name, str) or not field_name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if isinstance(filename, str) and filename:
+            fields[field_name] = (filename, payload)
+        else:
+            charset = part.get_content_charset("utf-8")
+            fields[field_name] = payload.decode(charset, errors="replace").strip()
+    return fields
+
+
+def _is_multipart_content_type(content_type: str) -> bool:
+    """True when a request's content-type declares a ``multipart/form-data`` body."""
+    return (
+        content_type.split(";", 1)[0].strip().lower() == "multipart/form-data"
+        and "boundary=" in content_type
+    )
 
 
 class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
@@ -236,6 +286,15 @@ ALLOWED_RESPONSES_KEYS = {
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "zdr_only"}
+# OpenAI Batch API create body (client.batches.create()). Only the chat
+# endpoint is wired to a request-shaped batch backend today (see
+# _parse_batch_input_jsonl); other endpoints fail closed with invalid_endpoint.
+ALLOWED_BATCHES_CREATE_KEYS = {"input_file_id", "endpoint", "completion_window", "metadata", "zdr_only"}
+BATCH_CREATE_ENDPOINTS = {"/v1/chat/completions"}
+_OPENAI_BATCH_TERMINAL_STATUSES = {"completed", "failed", "expired", "cancelled"}
+_OPENAI_BATCH_STATUSES = _OPENAI_BATCH_TERMINAL_STATUSES | {
+    "validating", "in_progress", "finalizing", "cancelling",
+}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing", "zdr_only"}
 ALLOWED_EMBEDDINGS_KEYS = {
     "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "zdr_only",
@@ -3313,6 +3372,176 @@ def _validate_batch_requests(
     return batch
 
 
+def _parse_batch_input_jsonl(raw: bytes, *, zdr_only: bool) -> list[BatchRequest]:
+    """Parse an OpenAI Batch API input file (JSONL) into internal batch requests.
+
+    Each line must be shaped like a real Batch input line: ``{"custom_id",
+    "method": "POST", "url": "/v1/chat/completions", "body": {"model",
+    "messages", ...}}`` -- the same shape ``BatchRequest.to_jsonl_line``
+    already writes, so a file this gateway wrote round-trips.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RequestError(400, "invalid_file", "batch input file must be UTF-8 JSONL") from exc
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise RequestError(400, "invalid_file", "batch input file has no requests")
+    if len(lines) > MAX_BATCH_REQUESTS_PER_FILE:
+        raise RequestError(
+            400,
+            "invalid_file",
+            f"batch input file exceeds {MAX_BATCH_REQUESTS_PER_FILE} requests",
+        )
+    requests: list[BatchRequest] = []
+    seen_custom_ids: set[str] = set()
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RequestError(400, "invalid_file", f"line {line_number} is not valid JSON") from exc
+        if not isinstance(entry, dict):
+            raise RequestError(400, "invalid_file", f"line {line_number} must be a JSON object")
+        custom_id = entry.get("custom_id")
+        if not isinstance(custom_id, str) or not custom_id.strip():
+            raise RequestError(400, "invalid_file", f"line {line_number} is missing custom_id")
+        if len(custom_id) > 64:
+            raise RequestError(
+                400, "invalid_file", f"line {line_number} custom_id must be at most 64 characters"
+            )
+        if custom_id in seen_custom_ids:
+            raise RequestError(400, "invalid_file", "custom_id values must be unique within a batch")
+        seen_custom_ids.add(custom_id)
+        if entry.get("method") != "POST":
+            raise RequestError(400, "invalid_file", f"line {line_number} method must be POST")
+        body_obj = entry.get("body")
+        if not isinstance(body_obj, dict):
+            raise RequestError(400, "invalid_file", f"line {line_number} body must be an object")
+        messages = _validate_messages(body_obj.get("messages"))
+        model = body_obj.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
+        if not isinstance(model, str) or not model.strip():
+            raise RequestError(400, "invalid_file", f"line {line_number} model must be a non-empty string")
+        requests.append(
+            BatchRequest(
+                messages=messages,
+                model=model.strip(),
+                custom_id=custom_id,
+                attribution={},
+                mode="auto",
+                zdr_only=zdr_only,
+            )
+        )
+    return requests
+
+
+def _resolve_file_download_agent(
+    orchestrator: Any, files: FileRegistry, gateway_file_id: str, principal_id: str,
+) -> tuple[Any, str]:
+    """Resolve the provider agent + provider-side id backing an owned gateway file.
+
+    Shared by ``GET /v1/files/{id}/content`` and batch input-file ingestion so
+    both surfaces apply the same replica/affinity matching.
+    """
+    try:
+        owner = files.owner(gateway_file_id, principal_id)
+    except KeyError:
+        raise RequestError(404, "file_not_found", "file was not found") from None
+    replicas = owner.replicas or {
+        owner.agent_id: {
+            "provider_file_id": owner.provider_file_id,
+            "agent_affinity_key": owner.agent_affinity_key,
+        }
+    }
+    selected = next(
+        (
+            (item, replica["provider_file_id"])
+            for item in orchestrator.agents
+            if (replica := replicas.get(item.id)) is not None
+            and replica.get("agent_affinity_key") == file_agent_affinity_key(item)
+        ),
+        None,
+    )
+    if selected is None:
+        raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
+    return selected
+
+
+def _co_batch_status_to_openai(raw_status: Any, is_complete: Any) -> str:
+    """Map one batch backend's poll status to an OpenAI Batch API status string."""
+    if isinstance(raw_status, str) and raw_status in _OPENAI_BATCH_STATUSES:
+        return raw_status
+    return "completed" if is_complete else "in_progress"
+
+
+def _openai_batch_object(job_id: str, tracked: dict[str, Any], status: str) -> dict[str, Any]:
+    """Render one tracked batch as an OpenAI Batch API object."""
+    created_at = tracked.get("created_at", 0)
+    request_count = tracked.get("request_count", 0)
+    return {
+        "id": job_id,
+        "object": "batch",
+        "endpoint": tracked.get("endpoint"),
+        "errors": None,
+        "input_file_id": tracked.get("input_file_id"),
+        "completion_window": tracked.get("completion_window"),
+        "status": status,
+        "output_file_id": tracked.get("output_file_id"),
+        "error_file_id": None,
+        "created_at": created_at,
+        "in_progress_at": created_at if status != "validating" else None,
+        "expires_at": None,
+        "finalizing_at": None,
+        "completed_at": tracked.get("completed_at"),
+        "failed_at": tracked.get("failed_at"),
+        "expired_at": None,
+        "cancelling_at": tracked.get("cancelling_at"),
+        "cancelled_at": tracked.get("cancelled_at"),
+        "request_counts": {
+            "total": request_count,
+            "completed": request_count if status == "completed" else 0,
+            "failed": request_count if status == "failed" else 0,
+        },
+        "metadata": tracked.get("metadata"),
+    }
+
+
+def _batch_output_jsonl_line(item: dict[str, Any], *, model: str) -> str:
+    """Render one ``retrieve_batch`` result row as an OpenAI Batch output line.
+
+    ``item`` carries real, already-computed answers/usage from
+    ``CostRoutingCoordinator.retrieve_batch`` -- this only reshapes them into
+    the OpenAI Batch output-file line format, it invents nothing.
+    """
+    prompt_tokens = item.get("prompt_tokens") or 0
+    completion_tokens = item.get("completion_tokens") or 0
+    body = {
+        "id": _new_chat_completion_id(),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": item.get("answer", "")},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    return json.dumps(
+        {
+            "id": f"batch_req_{uuid.uuid4().hex}",
+            "custom_id": item.get("custom_id"),
+            "response": {"status_code": 200, "request_id": _new_chat_completion_id(), "body": body},
+            "error": None,
+        }
+    )
+
+
 def _is_token_id_shaped(value: Any) -> bool:
     """True for numeric token-id shapes (int / whole float), including negatives and bools.
 
@@ -4174,12 +4403,46 @@ def _validate_responses_prediction(body: dict[str, Any]) -> None:
     )
 
 
-def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
-    """Chat Completions ``modalities`` — omit or ``["text"]`` only.
+def _validate_chat_audio_output_request(body: dict[str, Any]) -> bool:
+    """True when Chat Completions requests OpenAI's audio-output modalities shape.
 
-    OpenAI selects output types (text/audio) via modalities. This gateway is
-    text-only; non-text modalities fail closed so clients cannot silently
-    believe audio (or other) output was applied.
+    ``modalities: ["text", "audio"]`` plus an ``audio: {voice, format}`` object
+    is the SDK-native (and only SDK-reachable) way to request spoken-audio chat
+    output — there is no separate ``client.audio.generations`` method. The
+    caller routes this case to single-agent passthrough instead of the
+    multi-agent orchestration path (opaque audio output cannot be merged or
+    re-verified across agents). Any other ``modalities`` value returns
+    ``False`` and is left for ``_validate_chat_modalities`` below to
+    reject/normalize exactly as before.
+    """
+    modalities = body.get("modalities")
+    if not isinstance(modalities, list):
+        return False
+    normalized = {item.strip().lower() for item in modalities if isinstance(item, str)}
+    if normalized != {"text", "audio"} or len(modalities) != len(normalized):
+        return False
+    audio = body.get("audio")
+    if not isinstance(audio, dict) or not all(
+        isinstance(audio.get(field), str) and audio[field].strip()
+        for field in ("voice", "format")
+    ):
+        raise RequestError(
+            400,
+            "invalid_audio",
+            'audio.voice and audio.format are required when modalities includes "audio"',
+        )
+    body["modalities"] = ["text", "audio"]
+    return True
+
+
+def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
+    """Chat Completions ``modalities`` — omit, ``["text"]``, or audio-output only.
+
+    OpenAI selects output types (text/audio) via modalities. This gateway has
+    no multi-agent verification story for non-text output, so every shape but
+    plain text or the audio-output pair (handled earlier by
+    ``_validate_chat_audio_output_request``) fails closed rather than
+    silently believing an unsupported modality was applied.
     """
     if "modalities" not in body:
         return None
@@ -5487,6 +5750,12 @@ def build_server(
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
     video_jobs = VideoJobRegistry(coordinator.job_registry)
     files = FileRegistry(coordinator.job_registry)
+    # OpenAI Batch API (/v1/batches) tracking: job_id -> {owner_id,
+    # input_file_id, endpoint, completion_window, metadata, created_at,
+    # request_count, output_file_id, models_by_custom_id, ...}. The batch's
+    # own lifecycle (submit/poll/retrieve) stays in coordinator._batch_jobs;
+    # this only carries the OpenAI-object fields that has no other home.
+    openai_batches = coordinator.job_registry.mapping("openai_batches")
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
@@ -5755,25 +6024,15 @@ def build_server(
                         owner = files.owner(gateway_file_id, principal_id)
                     except KeyError:
                         raise RequestError(404, "file_not_found", "file was not found") from None
-                    replicas = owner.replicas or {
-                        owner.agent_id: {
-                            "provider_file_id": owner.provider_file_id,
-                            "agent_affinity_key": owner.agent_affinity_key,
-                        }
-                    }
-                    selected = next(
-                        (
-                            (item, replica["provider_file_id"])
-                            for item in orchestrator.agents
-                            if (replica := replicas.get(item.id)) is not None
-                            and replica.get("agent_affinity_key") == file_agent_affinity_key(item)
-                        ),
-                        None,
-                    )
-                    if selected is None:
-                        raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
-                    agent, provider_file_id = selected
+                    if content_request and files.is_local(owner):
+                        # Gateway-generated content (batch output JSONL) has no
+                        # upstream provider replica at all.
+                        self._send_bytes(files.local_content(gateway_file_id), "application/jsonl")
+                        return
                     if content_request:
+                        agent, provider_file_id = _resolve_file_download_agent(
+                            orchestrator, files, gateway_file_id, principal_id
+                        )
                         try:
                             raw, content_type = self._run(
                                 lambda: orchestrator.client.proxy_get_bytes(
@@ -5796,6 +6055,52 @@ def build_server(
                     else:
                         self._send(files.public_response(owner.document, owner))
                     return
+                if path == "/v1/batches" or path.startswith("/v1/batches/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    if path == "/v1/batches":
+                        items = sorted(
+                            (
+                                (job_id, tracked)
+                                for job_id, tracked in openai_batches.items()
+                                if tracked.get("owner_id") == principal_id
+                            ),
+                            key=lambda pair: pair[1].get("created_at", 0),
+                            reverse=True,
+                        )
+                        after = (query.get("after") or [None])[0]
+                        if after is not None:
+                            cursor_index = next(
+                                (index for index, (job_id, _tracked) in enumerate(items) if job_id == after),
+                                None,
+                            )
+                            items = items[cursor_index + 1 :] if cursor_index is not None else []
+                        limit = self._parse_positive_int(
+                            (query.get("limit") or [None])[0], "limit", 20, max_value=100
+                        )
+                        page = items[:limit]
+                        data = [
+                            self._batch_document(job_id, principal_id) for job_id, _tracked in page
+                        ]
+                        self._send(
+                            {
+                                "object": "list",
+                                "data": data,
+                                "first_id": data[0]["id"] if data else None,
+                                "last_id": data[-1]["id"] if data else None,
+                                "has_more": len(items) > limit,
+                            }
+                        )
+                        return
+                    batch_id = path[len("/v1/batches/") :]
+                    if not batch_id or "/" in batch_id:
+                        raise RequestError(400, "invalid_batch", "batch id must be one path segment")
+                    tracked = openai_batches.get(batch_id)
+                    if tracked is None or tracked.get("owner_id") != principal_id:
+                        self._send_error(404, "batch_not_found", f"batch {batch_id} not found")
+                        return
+                    self._send(self._batch_document(batch_id, principal_id))
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.
@@ -5810,6 +6115,16 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
+                # ``GET /v1/videos`` (client.videos.list(), no id) is
+                # intentionally not implemented: unlike Files/Batches, this
+                # gateway keeps no locally cached video-job status document --
+                # GET /v1/videos/{id} below always re-fetches live status from
+                # the owning provider. A genuine list would need per-job
+                # provider round-trips for every owned job on every call, a
+                # materially different (and much more expensive) feature than
+                # single-job retrieve/content; nothing in this product's
+                # consumers calls it today. Add VideoJobRegistry.list() +
+                # N-way live status fan-out here if that changes.
                 if path.startswith("/v1/videos/"):
                     self._authorize("inference")
                     principal_id = security.principal_id(self.headers)
@@ -6356,6 +6671,12 @@ def build_server(
                         owner = files.owner(gateway_file_id, principal_id)
                     except KeyError:
                         raise RequestError(404, "file_not_found", "file was not found") from None
+                    if files.is_local(owner):
+                        # Gateway-generated content has no provider replica to
+                        # delete upstream.
+                        files.delete(gateway_file_id, principal_id)
+                        self._send({"id": gateway_file_id, "object": "file", "deleted": True})
+                        return
                     replicas = owner.replicas or {
                         owner.agent_id: {
                             "provider_file_id": owner.provider_file_id,
@@ -6546,26 +6867,36 @@ def build_server(
                     if saw_failure and every_failure_was_request_too_large:
                         raise RequestError(413, "request_too_large", "request body exceeds every eligible provider limit")
                     raise RequestError(503, "file_provider_unavailable", "no eligible file provider accepted the upload")
-                scope = (
-                    "admin"
-                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
-                    or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
-                    else "inference"
-                )
-                self._authorize(scope, state_changing=True)
-                large_inference_json = path in {
-                    "/v1/chat/completions",
-                    "/v1/responses",
-                    "/v1/images/generations",
-                    "/v1/videos",
-                } or path.startswith("/v1/audio/")
-                body = self._read_json(
-                    max_body_bytes=(
-                        min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
-                        if large_inference_json
-                        else security.max_body_bytes
+                if path == "/v1/audio/transcriptions" and _is_multipart_content_type(
+                    self.headers.get("content-type", "")
+                ):
+                    # The stock SDK's audio.transcriptions.create() always sends
+                    # multipart/form-data -- give it the same ingress treatment
+                    # /v1/files gets, then rejoin the shared body/zdr_only/
+                    # request_policy pipeline below exactly like a JSON body would.
+                    self._authorize("inference", state_changing=True)
+                    body = self._read_multipart_transcription_body()
+                else:
+                    scope = (
+                        "admin"
+                        if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                        or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
+                        else "inference"
                     )
-                )
+                    self._authorize(scope, state_changing=True)
+                    large_inference_json = path in {
+                        "/v1/chat/completions",
+                        "/v1/responses",
+                        "/v1/images/generations",
+                        "/v1/videos",
+                    } or path.startswith("/v1/audio/")
+                    body = self._read_json(
+                        max_body_bytes=(
+                            min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
+                            if large_inference_json
+                            else security.max_body_bytes
+                        )
+                    )
                 zdr_only = _validate_zdr_only(body)
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
@@ -6816,6 +7147,57 @@ def build_server(
                     return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    if _validate_chat_audio_output_request(body):
+                        # Single-agent OpenAI-shaped passthrough -- the same
+                        # capability="audio" plumbing /v1/audio/generations
+                        # already uses. Opaque audio bytes have no multi-agent
+                        # verification story, so this never enters coordinator
+                        # routing/conduct.
+                        _validate_messages(body.get("messages"))
+                        _validate_chat_model(body)
+                        if body.get("stream"):
+                            # ponytail: audio-output chat completions are
+                            # non-streaming only -- proxy_capability has no
+                            # SSE-audio passthrough. Add one if a caller needs
+                            # streamed audio deltas.
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "stream is not supported with audio-output modalities on /v1/chat/completions",
+                            )
+                        audio_started_at = time.perf_counter()
+                        try:
+                            audio_result = self._run(
+                                lambda: orchestrator.proxy_capability(
+                                    body,
+                                    capability="audio",
+                                    endpoint="chat/completions",
+                                    binary=False,
+                                )
+                            )
+                        except ValueError as exc:
+                            raise RequestError(400, "invalid_model", str(exc)) from exc
+                        except ProviderRequestTooLargeError as exc:
+                            raise RequestError(413, "request_too_large", str(exc)) from exc
+                        except RuntimeError as exc:
+                            raise RequestError(
+                                503,
+                                "capability_unavailable",
+                                "no enabled audio-capable model group member is available",
+                            ) from exc
+                        orchestrator.record_analytics_event(
+                            "chat_completion_audio_output",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round(
+                                    (time.perf_counter() - audio_started_at) * 1000, 2
+                                ),
+                            },
+                        )
+                        self._send(audio_result)
+                        return
                     _validate_chat_audio_web_search_surface(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
                     _validate_tool_resources(body, endpoint_path="/v1/chat/completions")
@@ -7491,6 +7873,115 @@ def build_server(
                     self._audit_trace_disclosure("/api/v1/batch_routing_jobs/{job_id}/results")
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
+                if path == "/v1/batches":
+                    # client.batches.create(input_file_id=..., endpoint=...,
+                    # completion_window=...) -- the stock SDK's only entry
+                    # point for the Batch API. Wraps the same submit_batch
+                    # machinery /api/v1/batch_routing_jobs uses, sourced from
+                    # a file already uploaded through the SDK-compatible
+                    # /v1/files endpoint with purpose=batch.
+                    _reject_unknown_keys(body, ALLOWED_BATCHES_CREATE_KEYS)
+                    input_file_id = body.get("input_file_id")
+                    if not isinstance(input_file_id, str) or not input_file_id.strip():
+                        raise RequestError(
+                            400, "invalid_input_file_id", "input_file_id must be a non-empty string"
+                        )
+                    endpoint = body.get("endpoint")
+                    if endpoint not in BATCH_CREATE_ENDPOINTS:
+                        raise RequestError(
+                            400,
+                            "invalid_endpoint",
+                            f"endpoint must be one of {sorted(BATCH_CREATE_ENDPOINTS)}",
+                        )
+                    completion_window = body.get("completion_window", "24h")
+                    if not isinstance(completion_window, str) or not completion_window.strip():
+                        raise RequestError(
+                            400,
+                            "invalid_completion_window",
+                            "completion_window must be a non-empty string",
+                        )
+                    metadata = _validate_openai_metadata(body)
+                    principal_id = security.principal_id(self.headers)
+                    agent, provider_file_id = _resolve_file_download_agent(
+                        orchestrator, files, input_file_id, principal_id
+                    )
+                    try:
+                        raw, _content_type = self._run(
+                            lambda: orchestrator.client.proxy_get_bytes(
+                                agent,
+                                f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
+                                max_response_bytes=MAX_BATCH_FILE_BYTES,
+                            )
+                        )
+                    except urllib.error.HTTPError as exc:
+                        if exc.code == 404:
+                            raise RequestError(
+                                404, "file_not_found", "input file content was not found"
+                            ) from exc
+                        raise RequestError(
+                            503, "file_provider_unavailable", "the file provider is unavailable"
+                        ) from exc
+                    batch_requests = _parse_batch_input_jsonl(raw, zdr_only=zdr_only)
+                    models_by_custom_id = {
+                        request.custom_id: request.model for request in batch_requests
+                    }
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata={"actor_scope": "inference"},
+                                owner_id=principal_id,
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    openai_batches[job.job_id] = {
+                        "owner_id": principal_id,
+                        "input_file_id": input_file_id,
+                        "endpoint": endpoint,
+                        "completion_window": completion_window,
+                        "metadata": metadata,
+                        "created_at": int(time.time()),
+                        "request_count": job.request_count,
+                        "output_file_id": None,
+                        "models_by_custom_id": models_by_custom_id,
+                    }
+                    orchestrator.record_analytics_event(
+                        "openai_batch_created",
+                        {
+                            "endpoint_path": "/v1/batches",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "batch_job_id": job.job_id,
+                            "batch_backend": job.backend,
+                            "request_count": job.request_count,
+                        },
+                    )
+                    self._send(self._batch_document(job.job_id, principal_id))
+                    return
+                if path.startswith("/v1/batches/") and path.endswith("/cancel"):
+                    # client.batches.cancel(batch_id).
+                    batch_id = path[len("/v1/batches/") : -len("/cancel")]
+                    principal_id = security.principal_id(self.headers)
+                    tracked = openai_batches.get(batch_id)
+                    if tracked is None or tracked.get("owner_id") != principal_id:
+                        self._send_error(404, "batch_not_found", f"batch {batch_id} not found")
+                        return
+                    poll_result = self._run(
+                        lambda: coordinator.poll_batch(batch_id, owner_id=principal_id)
+                    )
+                    if not poll_result.get("is_complete") and tracked.get("cancelling_at") is None:
+                        # ponytail: neither LocalBatchBackend nor PgLlmBatchBackend
+                        # expose a cancel primitive for chat batches (only the
+                        # provider embeddings backend does) -- record the
+                        # cancellation request locally and surface "cancelling"
+                        # rather than fabricate provider-side cancellation.
+                        # Upgrade path: wire BatchBackend.cancel() through
+                        # pg-llm-batch once that primitive exists.
+                        tracked["cancelling_at"] = int(time.time())
+                        openai_batches[batch_id] = tracked
+                    self._send(self._batch_document(batch_id, principal_id))
+                    return
                 if path == "/v1/responses":
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
@@ -8135,6 +8626,73 @@ def build_server(
             finally:
                 security.release_run_slot()
 
+        def _materialize_batch_output(
+            self, job_id: str, tracked: dict[str, Any], owner_id: str
+        ) -> str:
+            """Build + register the OpenAI-shaped output file for one completed batch.
+
+            Reshapes ``coordinator.retrieve_batch``'s real, already-computed
+            results into Batch API output lines and registers them as a
+            downloadable gateway file (see ``FileRegistry.register_local``).
+            May raise ``BatchDownloadError`` when the backend's download
+            explicitly failed -- the caller treats that as batch status
+            "failed", not as an unrelated request error.
+            """
+            retrieved = self._run(
+                lambda: coordinator.retrieve_batch(job_id, owner_id=owner_id)
+            )
+            models_by_custom_id = tracked.get("models_by_custom_id") or {}
+            lines = [
+                _batch_output_jsonl_line(
+                    item,
+                    model=models_by_custom_id.get(item.get("custom_id"), "contextual-orchestrator"),
+                )
+                for item in retrieved.get("results", [])
+            ]
+            content = ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
+            document = files.register_local(
+                content,
+                filename=f"{job_id}_output.jsonl",
+                purpose="batch_output",
+                owner_id=owner_id,
+            )
+            return document["id"]
+
+        def _batch_document(self, job_id: str, principal_id: str) -> dict[str, Any]:
+            """Render one tracked batch as a fresh OpenAI Batch object.
+
+            Polls the underlying batch job for live status and, the first time
+            it observes "completed", materializes the output file. Cancellation
+            and download-failure state recorded on ``tracked`` win over a raw
+            poll status.
+            """
+            tracked = openai_batches[job_id]
+            poll_result = self._run(
+                lambda: coordinator.poll_batch(job_id, owner_id=principal_id)
+            )
+            status = _co_batch_status_to_openai(
+                poll_result.get("status"), poll_result.get("is_complete")
+            )
+            if tracked.get("cancelling_at") is not None:
+                if poll_result.get("is_complete"):
+                    status = "cancelled"
+                    tracked.setdefault("cancelled_at", int(time.time()))
+                else:
+                    status = "cancelling"
+            elif tracked.get("failed_at") is not None:
+                status = "failed"
+            elif status == "completed" and not tracked.get("output_file_id"):
+                try:
+                    output_file_id = self._materialize_batch_output(job_id, tracked, principal_id)
+                except BatchDownloadError:
+                    tracked["failed_at"] = int(time.time())
+                    status = "failed"
+                else:
+                    tracked["output_file_id"] = output_file_id
+                    tracked["completed_at"] = int(time.time())
+            openai_batches[job_id] = tracked
+            return _openai_batch_object(job_id, tracked, status)
+
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
             value = default if raw is None else int(raw)
             if value < 1:
@@ -8181,6 +8739,69 @@ def build_server(
                 )
             self._request_body_consumed = True
             return _coerce_json(raw) if raw else {}
+
+        def _read_multipart_transcription_body(self) -> dict[str, Any]:
+            """Translate a multipart Audio transcription upload to the internal shape.
+
+            The stock SDK's ``audio.transcriptions.create()`` always sends a
+            ``file``/``model``/``language``/``response_format``/``prompt``/
+            ``temperature`` multipart form -- there is no JSON-body form of this
+            call. This reads that upload and builds the ``input_audio: {data,
+            format}`` body ``_validate_capability_request`` and
+            ``proxy_capability`` already route, so nothing downstream of ingress
+            changes.
+            """
+            content_type = self.headers.get("content-type", "")
+            try:
+                body_size = _request_body_size(self.headers, MAX_AUDIO_UPLOAD_REQUEST_BYTES)
+            except RequestError:
+                self.close_connection = True
+                raise
+            raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
+            self._request_body_consumed = True
+            fields = _read_multipart_form(raw, content_type)
+            file_field = fields.get("file")
+            if not isinstance(file_field, tuple):
+                raise RequestError(400, "invalid_file", "multipart upload requires a file field")
+            filename, file_bytes = file_field
+            if not file_bytes:
+                raise RequestError(400, "invalid_file", "multipart upload requires a non-empty file")
+            if len(file_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+                raise RequestError(413, "request_too_large", "audio files may not exceed 25 MB")
+            audio_format = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if not audio_format:
+                raise RequestError(
+                    400, "invalid_file", "file field must have a filename with an extension"
+                )
+            request_body: dict[str, Any] = {
+                "input_audio": {
+                    "data": base64.b64encode(file_bytes).decode("ascii"),
+                    "format": audio_format,
+                },
+            }
+            model = fields.get("model")
+            if isinstance(model, str) and model.strip():
+                request_body["model"] = model.strip()
+            for passthrough_field in ("language", "response_format", "prompt"):
+                value = fields.get(passthrough_field)
+                if isinstance(value, str) and value:
+                    request_body[passthrough_field] = value
+            temperature = fields.get("temperature")
+            if isinstance(temperature, str) and temperature:
+                try:
+                    request_body["temperature"] = float(temperature)
+                except ValueError:
+                    raise RequestError(
+                        400, "invalid_temperature", "temperature must be a number"
+                    ) from None
+            return request_body
 
         def log_message(self, format: str, *args: object) -> None:
             """Suppress default request logging to keep service output structured."""

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import base64
 import hashlib
 import json
+import time
 from typing import Any
 import uuid
+
+# Sentinel ``agent_id``/``provider_file_id`` for a gateway-generated file (for
+# example batch output JSONL) that has no upstream provider replica at all —
+# its bytes are stored locally instead. See ``register_local``/``is_local``.
+_LOCAL_FILE_AGENT_ID = "__local__"
 
 
 class FileContractError(RuntimeError):
@@ -49,6 +56,9 @@ class FileRegistry:
         self._owners = job_registry.mapping(
             "file_owners", decode=lambda raw: FileOwner(**raw)
         )
+        # base64 text (JSON-mapping values must be JSON-serializable), keyed
+        # by gateway file id. Only populated for locally registered files.
+        self._content = job_registry.mapping("local_file_content")
 
     def register(
         self,
@@ -100,6 +110,56 @@ class FileRegistry:
         self._owners[gateway_file_id] = owner
         return self.public_response(provider_result, owner)
 
+    def register_local(
+        self,
+        content: bytes,
+        *,
+        filename: str,
+        purpose: str,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        """Register gateway-computed content (no upstream provider replica).
+
+        Used for artifacts the gateway builds itself — batch-output JSONL is
+        the first caller — rather than receiving from an upload. There is no
+        provider file to bind, so ``agent_id``/``provider_file_id`` are the
+        ``_LOCAL_FILE_AGENT_ID`` sentinel and the bytes are served straight
+        back out of ``self._content`` (see ``is_local``/``local_content``).
+        """
+        if not owner_id:
+            raise FileContractError("file owner is unavailable")
+        gateway_file_id = f"file_{uuid.uuid4().hex}"
+        document = {
+            "id": gateway_file_id,
+            "object": "file",
+            "bytes": len(content),
+            "created_at": int(time.time()),
+            "filename": filename,
+            "purpose": purpose,
+            "status": "processed",
+        }
+        owner = FileOwner(
+            gateway_file_id=gateway_file_id,
+            provider_file_id=gateway_file_id,
+            agent_id=_LOCAL_FILE_AGENT_ID,
+            owner_id=owner_id,
+            agent_affinity_key=_LOCAL_FILE_AGENT_ID,
+            document=document,
+            replicas={},
+        )
+        self._owners[gateway_file_id] = owner
+        self._content[gateway_file_id] = base64.b64encode(content).decode("ascii")
+        return dict(document)
+
+    @staticmethod
+    def is_local(owner: FileOwner) -> bool:
+        """True when ``owner`` is gateway-generated content, not provider-backed."""
+        return owner.agent_id == _LOCAL_FILE_AGENT_ID
+
+    def local_content(self, gateway_file_id: str) -> bytes:
+        """Return the raw bytes registered for a locally generated file."""
+        return base64.b64decode(self._content[gateway_file_id])
+
     @staticmethod
     def public_response(document: dict[str, Any], owner: FileOwner) -> dict[str, Any]:
         """Return a provider document with only the gateway identity exposed."""
@@ -129,6 +189,7 @@ class FileRegistry:
         """Remove and return a principal-owned binding after provider deletion."""
         owner = self.owner(gateway_file_id, owner_id)
         del self._owners[gateway_file_id]
+        self._content.pop(gateway_file_id, None)
         return owner
 
     def retain_replicas(

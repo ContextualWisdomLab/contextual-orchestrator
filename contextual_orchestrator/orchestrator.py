@@ -2591,12 +2591,17 @@ class ModelClient:
     ) -> dict[str, Any]:
         """Stream a seekable multipart body to one validated provider account."""
         if agent.base_url.startswith("mock://"):
+            # created_at/status are required by the real OpenAI FileObject
+            # shape (client.files.create() return type) -- omitting them left
+            # the mock transport unusable by a genuine SDK client.
             return {
                 "id": f"provider_file_{uuid.uuid4().hex}",
                 "object": "file",
                 "bytes": content_length,
+                "created_at": int(time.time()),
                 "purpose": "user_data",
                 "filename": "upload",
+                "status": "processed",
             }
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {  # pragma: no cover

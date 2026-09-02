@@ -125,6 +125,31 @@ def test_file_registry_hides_provider_identity_and_enforces_principal_ownership(
     assert bindings[public["id"]]["agent-a"]["provider_file_id"] == "provider-secret-id"
 
 
+def test_file_registry_register_local_has_no_provider_replica() -> None:
+    """A gateway-generated file (batch output) is served from local content."""
+    registry = FileRegistry(JobRegistryFactory())
+    document = registry.register_local(
+        b'{"custom_id": "a"}\n',
+        filename="batch_output.jsonl",
+        purpose="batch_output",
+        owner_id="principal-a",
+    )
+    assert document["id"].startswith("file_")
+    assert document["purpose"] == "batch_output"
+    assert document["bytes"] == len(b'{"custom_id": "a"}\n')
+
+    owner = registry.owner(document["id"], "principal-a")
+    assert registry.is_local(owner)
+    assert registry.local_content(document["id"]) == b'{"custom_id": "a"}\n'
+    assert registry.public_response(owner.document, owner)["id"] == document["id"]
+
+    registry.delete(document["id"], "principal-a")
+    with pytest.raises(KeyError):
+        registry.owner(document["id"], "principal-a")
+    with pytest.raises(KeyError):
+        registry.local_content(document["id"])
+
+
 def test_files_http_upload_list_retrieve_content_and_delete() -> None:
     """The public Files lifecycle retains opaque provider affinity end to end."""
     server = build_server(

@@ -38,6 +38,9 @@ queue = [
 dev = [
   "hypothesis>=6.100",
   "pytest>=8.0",
+  # Real openai SDK client, used only to prove genuine SDK compatibility in
+  # tests (see test_openai_sdk_compat.py) -- never imported by the server.
+  "openai>=2.0",
 ]
 
 [tool.contextual_orchestrator]
