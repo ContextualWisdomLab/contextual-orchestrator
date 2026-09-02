@@ -4846,6 +4846,14 @@ class TaskOrchestrator:
                                     response["usage"], responses=response_request
                                 )
                             structured_attempt_steps.append(dropped_step)
+                            # This malformed/dropped response was billed --
+                            # its usage is now recorded above. Check the
+                            # budget with that usage included *before*
+                            # advancing to another candidate: otherwise a
+                            # malformed response that itself exhausts the
+                            # budget lets another billed call proceed first,
+                            # exceeding the configured spending limit.
+                            enforce_structured_budget()
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
                             synthesis_failure_recorded = True

@@ -204,6 +204,46 @@ def test_structured_budget_rejection_persists_incurred_usage_without_completed_r
     assert orchestrator.count_workflow_runs() == 0
 
 
+def test_malformed_synthesis_response_enforces_budget_before_next_candidate() -> None:
+    """A billed malformed synthesis that itself exhausts the budget must stop
+    there, not silently bill a second provider call before the budget check
+    catches up. Otherwise a request can spend past the configured limit."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second], budget_max_output_tokens=2)
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == first.id:
+            return {
+                "choices": [{"message": {}}],
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 3,
+                    "total_tokens": 5,
+                },
+            }
+        return _completion('{"input_count":10}', 1)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(BudgetExceededError),
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert calls == [first.id]
+    assert orchestrator.budget_status()["spent_output_tokens"] == 3
+    failed = next(iter(orchestrator._workflow_runs.values()))
+    assert failed["failure"]["code"] == "structured_budget_exceeded"
+
+
 def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
     """A too-large repair never migrates its repair prompt to another candidate."""
     first = ModelAgent("first_agent", "first-model", "mock://first")
