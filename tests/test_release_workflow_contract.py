@@ -5,13 +5,20 @@ docs/planning/adrs/0129-canonical-immutable-release.md: a deliberate,
 maintainer-dispatched trigger only; a fail-closed gate that verifies the
 released commit is protected main's untampered current tip and that the
 requested version matches `pyproject.toml`; a fresh full test-suite run; and
-an immutable, never-reused git tag backing a real GitHub Release.
+an immutable, never-reused git tag backing a real GitHub Release. The
+workflow is two jobs (`verify`, read-only and credential-less; `publish`,
+write-scoped) -- see `tests/test_release_workflow_idempotency_contract.py`
+for the deeper resume/reject and least-privilege invariants that split
+motivates.
 
 Uses plain text assertions rather than a YAML parser, matching this
 repository's existing workflow-contract convention (e.g.
 `tests/test_nim_benchmark_workflow_contract.py`) and the Ponytail gate: no
 new dependency (PyYAML is not otherwise used anywhere in this repository)
-when substring/index assertions already prove the same structure.
+when substring/index assertions already prove the same structure. Where a
+finding calls for more than "does this text appear anywhere," helpers below
+bound the search to one job's own step block so the assertion proves real
+step order and job scoping rather than incidental proximity.
 """
 
 from __future__ import annotations
@@ -24,10 +31,40 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release.yml"
 
+_JOB_NAMES = ("verify", "publish")
+
 
 def _workflow_text() -> str:
     """Return the release workflow's raw YAML text."""
     return _WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def _job_block(workflow: str, job_name: str) -> str:
+    """Return one top-level job's own YAML text, steps and all.
+
+    Bounded from the job's `  <job_name>:` line to the next known sibling
+    job at the same two-space indent, or end of file for the last job.
+    Keeping this to the two real job names (rather than a generic regex)
+    avoids ever silently matching a step name that happens to look like a
+    job key.
+    """
+    start = workflow.index(f"\n  {job_name}:\n")
+    later_siblings = [
+        workflow.index(f"\n  {sibling}:\n")
+        for sibling in _JOB_NAMES
+        if sibling != job_name and workflow.index(f"\n  {sibling}:\n") > start
+    ]
+    end = min(later_siblings) if later_siblings else len(workflow)
+    return workflow[start:end]
+
+
+def _step_names(block: str) -> list[str]:
+    """Return a job block's `- name: ...` step names in file order."""
+    return [
+        line.split("- name:", 1)[1].strip()
+        for line in block.splitlines()
+        if line.strip().startswith("- name:")
+    ]
 
 
 def test_release_workflow_file_exists() -> None:
@@ -91,11 +128,17 @@ def test_gate_verifies_requested_version_matches_pyproject_toml() -> None:
     assert "pyproject.toml" in workflow
 
 
-def test_gate_refuses_to_republish_or_move_an_existing_tag() -> None:
-    """An already-existing tag must block the run instead of being overwritten."""
+def test_gate_determines_tag_resume_state_via_the_commits_api() -> None:
+    """A tag's existence is resolved through the commit-dereferencing API.
+
+    Superseded by the idempotent resume/reject design (Devin finding 3): see
+    `tests/test_release_workflow_idempotency_contract.py` for the full
+    resume-vs-reject branching contract.
+    """
     workflow = _workflow_text()
-    assert 'git rev-parse "refs/tags/v${RELEASE_VERSION}"' in workflow
-    assert "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}" in workflow
+    verify_block = _job_block(workflow, "verify")
+    assert 'repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}' in verify_block
+    assert "tag_resume" in verify_block
 
 
 def test_gate_reruns_the_full_test_suite_fresh_before_tagging() -> None:
@@ -132,13 +175,29 @@ def test_release_notes_file_backs_the_published_release_body() -> None:
 
 
 def test_sbom_asset_attachment_is_best_effort_and_never_blocks_the_release() -> None:
-    """A missing SBOM artifact must warn, not fail, the release."""
+    """A missing SBOM artifact, or a failed lookup, must warn, never abort.
+
+    Bounded tightly to just the SBOM step's own body (the next step's
+    heading is the boundary), and asserts the *mechanism* of non-fatality --
+    each fallible `gh` call is guarded by an explicit `if !`, and the step
+    does not opt into `set -e` (which would abort the whole step on the
+    first failing command, including the permission-sensitive `gh run
+    list`) -- rather than only checking that a warning string appears
+    somewhere loosely nearby (Devin finding 4).
+    """
     workflow = _workflow_text()
-    sbom_step_index = workflow.index("Fetch the CycloneDX SBOM")
-    publish_index = workflow.index("Publish the GitHub Release")
-    sbom_block = workflow[sbom_step_index:publish_index]
-    assert "::warning::" in sbom_block
-    assert "gh run download" in sbom_block
+    verify_block = _job_block(workflow, "verify")
+    sbom_step_index = verify_block.index("Fetch the CycloneDX SBOM")
+    next_step_index = verify_block.index("Upload rendered notes and SBOM")
+    sbom_block = verify_block[sbom_step_index:next_step_index]
+
+    assert "set -euo pipefail" not in sbom_block, (
+        "the SBOM step must not abort-on-error via -e; every fallible "
+        "command needs its own explicit failure handling instead"
+    )
+    assert "if ! run_id=" in sbom_block
+    assert "if ! gh run download" in sbom_block
+    assert sbom_block.count("::warning::") >= 2
 
 
 def test_concurrency_group_serializes_release_runs() -> None:
@@ -149,6 +208,44 @@ def test_concurrency_group_serializes_release_runs() -> None:
     concurrency_block = workflow[concurrency_start:jobs_start]
     assert "group: release" in concurrency_block
     assert "cancel-in-progress: false" in concurrency_block
+
+
+def test_verify_job_has_read_only_permissions_and_no_persisted_credentials() -> None:
+    """`verify` runs repository-controlled code (tests, note rendering) with
+    no write token present and no persisted git credential (CodeRabbit
+    CWE-269 hardening: least-privilege split, see the idempotency contract
+    test file for the matching `publish`-side assertions)."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    assert "contents: read" in verify_block
+    assert "actions: read" in verify_block
+    assert "contents: write" not in verify_block
+    assert "persist-credentials: false" in verify_block
+
+
+def test_final_main_tip_check_happens_after_testing_and_note_rendering_but_before_tagging() -> None:
+    """Devin finding 1: a second, authoritative main-tip check must run
+    after every potentially long-running gate (the fresh test suite and
+    note rendering) and before the tag is created -- not only at the start."""
+    workflow = _workflow_text()
+    test_run_index = workflow.index(
+        "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q"
+    )
+    notes_render_index = workflow.index("Render release notes from CHANGELOG.md")
+    final_tip_check_index = workflow.index(
+        "Re-verify protected main has not advanced since verification started"
+    )
+    tag_step_index = workflow.index("Create the annotated release tag")
+
+    assert test_run_index < notes_render_index < final_tip_check_index < tag_step_index
+
+    # The first (fast-fail) tip check still exists, distinct from this one.
+    first_tip_check_index = workflow.index("current, untampered tip")
+    assert first_tip_check_index < test_run_index < final_tip_check_index
+
+    final_tip_check_block = workflow[final_tip_check_index:tag_step_index]
+    assert 'repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha' in final_tip_check_block
+    assert 'if [ "${remote_head}" != "${GITHUB_SHA}" ]' in final_tip_check_block
 
 
 def test_pinned_actions_use_full_commit_shas() -> None:

@@ -8,6 +8,13 @@ name: Release
 # GitHub branch-protection governance: it verifies the released commit really
 # is protected main's current, untampered tip, then re-runs this repository's
 # own primary regression gate fresh before cutting anything.
+#
+# Two jobs, least-privilege: `verify` runs with no write permission and no
+# persisted git credentials while it executes repository-controlled code
+# (the test suite, release-notes rendering) -- a `contents: write` token is
+# never present alongside that code. `publish` holds the write token, and its
+# very first step re-checks protected main's tip immediately before tag
+# creation, right after `verify`'s potentially long-running gate finishes.
 
 on:
   workflow_dispatch:
@@ -25,20 +32,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Publish canonical immutable release
+  verify:
+    name: Verify release preconditions (read-only)
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
+    outputs:
+      tag_resume: ${{ steps.tag_state.outputs.tag_resume }}
     steps:
-      - name: Checkout protected main
+      - name: Checkout protected main (no write credentials)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
-          persist-credentials: true
+          persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
 
@@ -61,26 +71,40 @@ jobs:
         with:
           version: "0.12.5"
 
-      - name: Verify the requested version matches pyproject.toml
+      - name: Verify the requested version matches pyproject.toml's [project] table
         run: |
           set -euo pipefail
-          declared="$(python -c 'import re,sys; text=open("pyproject.toml", encoding="utf-8").read(); m=re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"\s*$", text); sys.exit(1) if not m else print(m.group(1))')"
+          declared="$(python -c 'from scripts.ci.release_notes import read_declared_version; print(read_declared_version(open("pyproject.toml", encoding="utf-8").read()))')"
           if [ "${declared}" != "${RELEASE_VERSION}" ]; then
-            echo "::error::pyproject.toml declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
+            echo "::error::pyproject.toml's [project] table declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
             exit 1
           fi
 
-      - name: Verify tag v${{ inputs.version }} does not already exist
+      - name: Determine whether the release tag is a fresh publish or a safe resume
+        id: tag_state
         run: |
           set -euo pipefail
-          if git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "::error::Tag v${RELEASE_VERSION} already exists locally; a release is never re-published or moved onto a new commit." >&2
+          # The commits API dereferences an annotated or lightweight tag to
+          # its target commit in one call, and needs no local git fetch or
+          # push credential -- this step runs with contents: read only.
+          if ! tag_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" --jq .sha 2>/dev/null)"; then
+            echo "::notice::Tag v${RELEASE_VERSION} does not exist yet; this is a fresh publish."
+            echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, not this run's commit (${GITHUB_SHA}); a release tag is never moved onto a different commit. Publish a new version instead." >&2
             exit 1
           fi
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "::error::Tag v${RELEASE_VERSION} already exists on origin; a release is never re-published or moved onto a new commit." >&2
+
+          if gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::v${RELEASE_VERSION} already has a published GitHub Release for this exact commit; there is nothing left to resume." >&2
             exit 1
           fi
+
+          echo "::notice::Tag v${RELEASE_VERSION} already points at this commit with no published GitHub Release yet; resuming publication instead of re-tagging."
+          echo "tag_resume=true" >> "${GITHUB_OUTPUT}"
 
       - name: Run the full required test suite fresh on this exact commit
         run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
@@ -96,23 +120,73 @@ jobs:
             --commit-sha "${GITHUB_SHA}" \
             --output release-notes.md
 
+      - name: Fetch the CycloneDX SBOM for this commit, best-effort
+        run: |
+          set -uo pipefail
+          run_id=""
+          if ! run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${GITHUB_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"; then
+            echo "::warning::Could not query Security workflow runs for commit ${GITHUB_SHA} (permission or API error); publishing without an SBOM asset."
+            run_id=""
+          fi
+          if [ -n "${run_id}" ]; then
+            if ! gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download; then
+              echo "::warning::Security workflow run ${run_id} has no downloadable cyclonedx-sbom artifact; publishing without it."
+            fi
+          else
+            echo "::warning::No successful Security workflow run found for commit ${GITHUB_SHA}; publishing without an SBOM asset."
+          fi
+
+      - name: Upload rendered notes and SBOM for the publish job
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: release-publish-inputs
+          path: |
+            release-notes.md
+            sbom-download/**
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish:
+    name: Publish canonical immutable release
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      TAG_RESUME: ${{ needs.verify.outputs.tag_resume }}
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Re-verify protected main has not advanced since verification started
+        run: |
+          set -euo pipefail
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Protected main advanced to ${remote_head} while the verify job was testing and rendering notes for ${GITHUB_SHA}; refusing to publish a now-superseded commit as the latest release. Re-dispatch against the fresh tip." >&2
+            exit 1
+          fi
+
+      - name: Download the release notes and SBOM produced by verify
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # actions/download-artifact@v5
+        with:
+          name: release-publish-inputs
+
       - name: Create the annotated release tag
+        if: env.TAG_RESUME != 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
           git push origin "refs/tags/v${RELEASE_VERSION}"
-
-      - name: Fetch the CycloneDX SBOM for this commit, best-effort
-        run: |
-          set -euo pipefail
-          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${GITHUB_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"
-          if [ -n "${run_id}" ]; then
-            gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download || echo "::warning::Security workflow run ${run_id} has no cyclonedx-sbom artifact; publishing without it."
-          else
-            echo "::warning::No successful Security workflow run found for commit ${GITHUB_SHA}; publishing without an SBOM asset."
-          fi
 
       - name: Publish the GitHub Release
         run: |
