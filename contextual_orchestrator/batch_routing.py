@@ -562,6 +562,7 @@ class PgLlmBatchBackend:
                 trace = orchestration.get("trace")
             if not isinstance(trace, list):
                 trace = []
+            trace = [step for step in trace if isinstance(step, dict)]
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
             usage_valid = (

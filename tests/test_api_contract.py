@@ -104,6 +104,7 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"
     ]["post"]
     assert batch_results["security"] == [{"inference_bearer_auth": []}]
+    assert batch_results["requestBody"]["required"] is False
     batch_results_schema = batch_results["requestBody"]["content"]["application/json"][
         "schema"
     ]
