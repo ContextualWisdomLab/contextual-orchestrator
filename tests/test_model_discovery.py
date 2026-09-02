@@ -1439,7 +1439,7 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             raise urllib.error.URLError("offline")
-        return _Response({"data": [{"id": "vendor/paid-free"}]})
+        return _Response({"data": [{"id": "glm-5.3"}]})
 
     with patch(
         "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
@@ -1463,6 +1463,9 @@ def test_opencode_go_is_a_distinct_credential_and_endpoint_from_zen() -> None:
     assert go.chat_base_url != zen.chat_base_url
     assert go.bootstrap_required is False
     assert go.models_dev_provider_id == "opencode"
+    assert "glm-5.3" in go.chat_model_ids
+    assert "grok-4.6" not in go.chat_model_ids
+    assert "minimax-m3" not in go.chat_model_ids
 
 
 def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
@@ -1477,11 +1480,11 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
                 {
                     "opencode": {
                         "models": {
-                            "provider/example-free": {
+                            "glm-5.3": {
                                 "cost": {"input": 0, "output": 0, "cache_read": 0},
                                 "modalities": {"input": ["text"], "output": ["text"]},
                             },
-                            "paid-model": {
+                            "deepseek-v4-pro": {
                                 "cost": {"input": 2, "output": 12},
                                 "modalities": {"input": ["text"], "output": ["text"]},
                             },
@@ -1492,8 +1495,10 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
         return _Response(
             {
                 "data": [
-                    {"id": "provider/example-free"},
-                    {"id": "paid-model"},
+                    {"id": "glm-5.3"},
+                    {"id": "deepseek-v4-pro"},
+                    # Responses-only Go model; it must not become a chat candidate.
+                    {"id": "grok-4.6"},
                 ]
             }
         )
@@ -1508,6 +1513,26 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
     assert discovered[0].credential_name == "OPENCODE_GO_API_KEY"
     assert discovered[0].is_free is True
     assert discovered[1].is_free is False
+    assert [model.model_id for model in discovered] == ["glm-5.3", "deepseek-v4-pro"]
+
+
+def test_opencode_go_excludes_responses_and_messages_models_from_chat_pool() -> None:
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+    register_credential("OPENCODE_GO_API_KEY", "go-key")
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=_Response({
+            "data": [
+                {"id": "grok-4.6"},
+                {"id": "minimax-m3"},
+                {"id": "glm-5.3"},
+            ]
+        }),
+    ):
+        discovered = discover_provider_models(source)
+
+    assert [model.model_id for model in discovered] == ["glm-5.3"]
 
 
 def test_opencode_go_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
