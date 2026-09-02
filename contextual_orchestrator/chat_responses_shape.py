@@ -307,7 +307,7 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
     The mirror of :func:`responses_request_to_chat_request`, needed when a
     caller's request arrives in Chat Completions shape but the selected
     agent only natively speaks the Responses API (declared via
-    :data:`RESPONSES_SHAPE_TAG` with no :data:`CHAT_COMPLETIONS_SHAPE_TAG`).
+    :data:`RESPONSES_ONLY_TAG`).
 
     Every chat message with content becomes one Responses ``input`` item
     carrying the same role; text becomes ``output_text`` parts for the
@@ -361,7 +361,25 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
                 if part_type == "text" and isinstance(part.get("text"), str):
                     parts.append({"type": text_type, "text": part["text"]})
                 elif part_type == "image_url" and part.get("image_url") is not None:
-                    parts.append({"type": "input_image", "image_url": part["image_url"]})
+                    # Chat's image_url is an {"url", "detail"} object; the
+                    # Responses API's input_image takes "image_url" as a bare
+                    # URL string with "detail" as a sibling field (mirroring
+                    # how responses_request_to_chat_request already reads a
+                    # Responses input_image back into chat's nested-object
+                    # form below) -- flatten rather than nest, or a real
+                    # Responses-only provider rejects the image outright.
+                    image_url = part["image_url"]
+                    if isinstance(image_url, dict):
+                        url = image_url.get("url")
+                        detail = image_url.get("detail")
+                    else:
+                        url = image_url
+                        detail = None
+                    if isinstance(url, str):
+                        image_part: dict[str, Any] = {"type": "input_image", "image_url": url}
+                        if isinstance(detail, str):
+                            image_part["detail"] = detail
+                        parts.append(image_part)
             if parts:
                 input_items.append({"type": "message", "role": role, "content": parts})
 
@@ -377,8 +395,13 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
     ):
         if key in payload:
             payload_out[key] = payload[key]
+    # max_completion_tokens is the current OpenAI field name (max_tokens is
+    # deprecated but still widely sent); prefer it when both are present,
+    # since it is the caller's most recently expressed intent.
     if "max_tokens" in payload:
         payload_out["max_output_tokens"] = payload["max_tokens"]
+    if "max_completion_tokens" in payload:
+        payload_out["max_output_tokens"] = payload["max_completion_tokens"]
 
     response_format = payload.get("response_format")
     if isinstance(response_format, dict):

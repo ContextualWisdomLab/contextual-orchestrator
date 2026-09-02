@@ -212,9 +212,13 @@ def test_chat_request_to_responses_request_maps_image_content() -> None:
     }
     translated = chat_request_to_responses_request(payload)
 
+    # Responses' input_image takes image_url as a bare URL string (unlike
+    # Chat Completions' nested {"url": ...} object) -- see
+    # test_chat_request_to_responses_request_flattens_image_url_object for
+    # the dedicated regression test.
     assert translated["input"][0]["content"] == [
         {"type": "input_text", "text": "What is in this image?"},
-        {"type": "input_image", "image_url": {"url": "https://example.test/cat.png"}},
+        {"type": "input_image", "image_url": "https://example.test/cat.png"},
     ]
 
 
@@ -546,3 +550,91 @@ def test_apply_header_and_query_param_are_no_ops_for_none_version() -> None:
     apply_header(headers, None)
     assert headers == {}
     assert apply_query_param("https://example.test/v1/chat", None) == "https://example.test/v1/chat"
+
+
+# ---------------------------------------------------------------------------
+# ModelClient.chat()/stream_chat() must not silently mis-shape a request to
+# an agent proven api:responses_only -- these two methods (used by
+# route_once/triage/planner/conduct's worker calls, not just the public
+# passthrough endpoints _proxy_send guards) always build and send Chat
+# Completions shape with no translation branch of their own, so a
+# responses_only-declared agent must fail closed rather than silently
+# receive a shape it cannot accept.
+# ---------------------------------------------------------------------------
+
+def test_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
+    agent = ModelAgent(
+        "responses_only_worker",
+        "responses-model",
+        base_url="https://responses-only.example.test/v1",
+        tags=("api:responses_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with pytest.raises(ValueError, match="api:responses_only"):
+        client.chat(agent, [{"role": "user", "content": "hi"}])
+
+
+def test_stream_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
+    agent = ModelAgent(
+        "responses_only_worker",
+        "responses-model",
+        base_url="https://responses-only.example.test/v1",
+        tags=("api:responses_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with pytest.raises(ValueError, match="api:responses_only"):
+        list(client.stream_chat(agent, [{"role": "user", "content": "hi"}]))
+
+
+def test_chat_request_to_responses_request_prefers_max_completion_tokens() -> None:
+    """max_completion_tokens is the current field name; it must not be silently
+    dropped in favor of the deprecated max_tokens when both/either is present."""
+    only_new_field = chat_request_to_responses_request({
+        "model": "m", "messages": [{"role": "user", "content": "hi"}],
+        "max_completion_tokens": 111,
+    })
+    assert only_new_field["max_output_tokens"] == 111
+
+    both_fields = chat_request_to_responses_request({
+        "model": "m", "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 50, "max_completion_tokens": 222,
+    })
+    assert both_fields["max_output_tokens"] == 222
+
+
+def test_chat_request_to_responses_request_flattens_image_url_object() -> None:
+    """Chat's image_url is {"url", "detail"}; real Responses-API providers need
+    input_image.image_url as a bare URL string with detail as a sibling field."""
+    payload = {
+        "model": "vision-model",
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": {"url": "https://example.test/cat.png", "detail": "high"},
+            }],
+        }],
+    }
+    translated = chat_request_to_responses_request(payload)
+    image_item = translated["input"][0]["content"][0]
+    assert image_item == {
+        "type": "input_image",
+        "image_url": "https://example.test/cat.png",
+        "detail": "high",
+    }
+
+
+def test_chat_still_works_for_chat_completions_only_and_untagged_agents() -> None:
+    """Guard against over-broadly blocking chat() for every tagged agent."""
+    client = ModelClient(max_retries=0)
+    for tags in ((), ("api:chat_completions_only",)):
+        agent = ModelAgent(
+            "chat_capable_worker",
+            "some-model",
+            base_url="mock://local",
+            tags=tags,
+        )
+        # mock:// short-circuits before any shape concern; reaching it proves
+        # the new guard didn't reject an agent that may legitimately serve
+        # Chat Completions shape.
+        assert client.chat(agent, [{"role": "user", "content": "hi"}])

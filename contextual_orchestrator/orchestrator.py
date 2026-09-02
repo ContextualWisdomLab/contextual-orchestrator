@@ -1685,6 +1685,19 @@ class ModelClient:
         """
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError("model is not chat-compatible and cannot serve a chat request")
+        if not agent_supports_chat_completions(agent.tags):
+            # This method only ever speaks Chat Completions shape (see the
+            # payload built below). An agent proven api:responses_only
+            # (ADR 0126) cannot accept that shape, and unlike
+            # ModelClient._proxy_send this internal helper -- used by
+            # route_once/triage/planner/conduct's worker calls, not just the
+            # public passthrough endpoints -- has no translation branch of
+            # its own. Failing closed here beats silently sending a shape
+            # the agent is declared not to accept.
+            raise ValueError(
+                f"agent {agent.id!r} is declared api:responses_only and cannot "
+                "serve a Chat Completions request via ModelClient.chat()"
+            )
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
@@ -2082,6 +2095,16 @@ class ModelClient:
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
+        if not agent_supports_chat_completions(agent.tags):
+            # See the matching guard in ModelClient.chat(): stream_chat's real
+            # token-streaming transport (_stream_send) always posts Chat
+            # Completions shape and has no translation branch, so an agent
+            # proven api:responses_only must fail closed here rather than
+            # silently receive a shape it cannot accept.
+            raise ValueError(
+                f"agent {agent.id!r} is declared api:responses_only and cannot "
+                "serve a Chat Completions request via ModelClient.stream_chat()"
             )
         self._local.usage = None
         if agent.base_url.startswith("mock://"):

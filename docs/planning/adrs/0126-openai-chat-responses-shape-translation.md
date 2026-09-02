@@ -165,14 +165,27 @@ versioned provider is one dict entry, never a new `if provider_name ==
 
 ## Consequences
 
-- `/v1/chat/completions` and `/v1/responses` both now serve a
-  shape-correct response regardless of which shape the selected agent's
-  provider natively speaks, without any `server.py` route change --
-  `ModelClient._proxy_send` is upstream of every code path that reaches a
-  real provider for either endpoint.
+- `/v1/chat/completions` and `/v1/responses`, called with a caller-selected
+  model that reaches a provider through `ModelClient._proxy_send` (direct
+  passthrough, and `_orchestrated_provider_completion`'s final synthesis
+  call), now serve a shape-correct response regardless of which shape the
+  selected agent's provider natively speaks, without any `server.py` route
+  change.
 - No agent configured before this ADR changes behavior: the new branches
   fire only for a positively-tagged agent (plus the pre-existing,
   unmodified local-mlx signal).
+- **`_proxy_send` is not upstream of every provider call.** `ModelClient.chat()`
+  and `ModelClient.stream_chat()` -- used by `route_once`'s worker
+  selection, triage, planner calls, and `conduct`'s own intermediate
+  evidence-gathering steps, not just the two public passthrough endpoints
+  above -- always build and send Chat Completions shape with no translation
+  branch of their own. An agent declared `api:responses_only` that gets
+  selected through any of those paths would otherwise silently receive a
+  shape it is proven not to accept. A follow-up commit on this same PR
+  closes that gap by having both methods fail closed (raise `ValueError`)
+  for a `responses_only`-tagged agent, rather than building the
+  considerably larger live-shape-translation machinery real token streaming
+  through those methods would need -- that remains deferred, tracked below.
 - Not every field round-trips. Responses' built-in tool-use primitives
   (`web_search_call`, `computer_call`, `mcp_call`/`mcp_list_tools`,
   `image_generation_call`, `local_shell_call`) and reasoning-summary items
@@ -190,6 +203,19 @@ versioned provider is one dict entry, never a new `if provider_name ==
   content and every tool call's name/arguments/linkage, but not necessarily
   the exact original message *count* -- verified explicitly in
   `tests/test_chat_responses_shape.py`.
+- **Deferred: `ModelClient.chat()`/`stream_chat()` fail closed for a
+  `responses_only` agent rather than translating.** `route_once`, triage,
+  planner calls, `conduct`'s intermediate worker steps, and real
+  token-by-token streaming (`stream_route`) all reach a provider through
+  these two methods, not `_proxy_send`. Building live translation for them
+  -- particularly for `stream_chat`, which would mean re-shaping a
+  provider's real-time Responses SSE deltas back into Chat Completions
+  deltas as they arrive, not translating one already-complete JSON body --
+  is meaningfully more work than this ADR's scope. Until that exists, an
+  agent declared `api:responses_only` is usable only through the two public
+  passthrough endpoints' non-streaming/`_proxy_send`-routed paths; selecting
+  it for general routing raises a clear `ValueError` instead of silently
+  sending it a shape it cannot accept.
 - **Deferred: Azure OpenAI and native Anthropic are not populated into
   `PROVIDER_API_VERSIONS`, on purpose.** Both motivated this mechanism, and
   the mechanism is ready for them, but onboarding either as a real,
