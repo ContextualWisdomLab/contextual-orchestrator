@@ -22,7 +22,7 @@ raises ``ValueError`` for them exactly as it did before this module existed
 (ADR 0002's own admission: "unsupported Codex namespaces ... are not
 forwarded"). Multiple ``tool_calls`` on one chat assistant turn become that
 many separate Responses ``function_call`` items, which loses the fact they
-originally shared one turn. See ``docs/planning/adrs/0127-openai-chat-responses-shape-translation.md``
+originally shared one turn. See ``docs/planning/adrs/0128-openai-chat-responses-shape-translation.md``
 for the full inventory of what is and is not preserved.
 """
 

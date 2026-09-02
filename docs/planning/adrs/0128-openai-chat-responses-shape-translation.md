@@ -1,5 +1,5 @@
 ---
-id: "0127"
+id: "0128"
 title: "Bidirectional Chat Completions <-> Responses shape translation"
 status: accepted
 proposed_date: "2026-09-02"
