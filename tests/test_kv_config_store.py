@@ -149,6 +149,22 @@ def test_config_store_factory_falls_back_when_postgres_is_unavailable(monkeypatc
     assert config_store.get("routing_policy", "quality_floor") == 0.8
 
 
+def test_config_store_factory_propagates_live_postgres_migration_failure(monkeypatch) -> None:
+    """Fail closed when a constructed Postgres store cannot read migration state."""
+    class _UnreadableConfigBackend(_ConfigBackend):
+        def get(self, category: str, key: str, default: Any = None) -> Any:
+            """Represent a live backend whose reads fail during compatibility migration."""
+            raise ConnectionError("database read failed")
+
+    pg_llm_batch_module = types.ModuleType("pg_llm_batch")
+    pg_llm_batch_module.PostgresConfigStore = _UnreadableConfigBackend
+    pg_llm_batch_module.SecretStore = _SecretBackend
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", pg_llm_batch_module)
+
+    with pytest.raises(ConnectionError, match="database read failed"):
+        get_config_store("postgresql://example/config")
+
+
 def _postgres_backed_config_store(monkeypatch, config_backend: "_ConfigBackend"):
     """Return a ``get_config_store`` result backed by the given live-DSN double.
 
