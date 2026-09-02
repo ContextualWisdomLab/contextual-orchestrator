@@ -1542,7 +1542,7 @@ def test_opencode_go_metadata_failure_keeps_availability_but_not_free_suffix() -
     def urlopen(request, timeout=None, **_kwargs):
         if request.full_url == "https://models.dev/api.json":
             raise urllib.error.URLError("offline")
-        return _Response({"data": [{"id": "vendor/paid-free"}]})
+        return _Response({"data": [{"id": "glm-5.3"}]})
 
     with patch(
         "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
@@ -1550,6 +1550,7 @@ def test_opencode_go_metadata_failure_keeps_availability_but_not_free_suffix() -
     ):
         discovered = discover_provider_models(source)
 
+    assert [model.model_id for model in discovered] == ["glm-5.3"]
     assert discovered[0].is_free is False
 
 
