@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: no-heuristics `ModelClient` default retry correction
+
+Observation time: 2026-09-02 Asia/Seoul.
+
+### Summary
+
+- A fresh audit of PR #971 (`fix/model-group-timeout-openrouter`) found that
+  `ModelClient` still defaulted `max_retries` to a hand-picked `2` with no
+  cited standard, paper, or the org's own research (Fugu, Conductor,
+  TRINITY) establishing that number.
+- RED regression commit `c1dcff6e903a7cfd7dab4584d628a5fbf57cf789`
+  (`tests/test_no_heuristic_default_transport_retry.py`) asserted a default
+  `ModelClient` must allocate zero automatic retries, independent of
+  provider/model/reasoning identity; it failed against the `max_retries=2`
+  default (`2 == 0`), confirming the RED state before the fix.
+- Fix applied: `ModelClient.__init__`'s `max_retries` default is now `0`
+  (`contextual_orchestrator/orchestrator.py`). `docs/adr/0001-tool-execution-fallback-policy.md`
+  gained a 2026-09-02 amendment recording that RFC 9110 and NIST SP 800-204
+  constrain *when* retry/circuit-breaking is safe but name no specific
+  numeric allocation, so the allocation is no longer library-authored;
+  explicit nonzero retry budgets remain caller-owned configuration. The RED
+  regression test now passes, and the focused provider/transport regression
+  suites (`tests/test_provider_gateway_resilience.py`,
+  `tests/test_provider_integration.py`, `tests/test_provider_error_taxonomy.py`,
+  `tests/test_no_heuristic_default_transport_retry.py`) were re-run green.
+- The PR's own one-shot repair machinery
+  (`.github/workflows/source-fix-971-default-retry-policy.yml` and its
+  trigger/script) sat `queued` for 100+ minutes under org-wide Actions
+  capacity congestion and was completed manually instead of waiting further;
+  the now-superseded queued run was cancelled and the one-shot machinery
+  removed from the branch per the standing self-removal convention.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.

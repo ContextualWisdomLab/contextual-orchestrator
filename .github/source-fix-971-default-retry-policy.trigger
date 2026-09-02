@@ -1,2 +1,0 @@
-source-fix-971-default-retry-policy
-expected-head=7486a1d8c4b6126a3b84884dbd6be6e7837dbb2b

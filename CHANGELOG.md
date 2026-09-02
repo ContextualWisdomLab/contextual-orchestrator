@@ -867,6 +867,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- (2026-09-02, PR #971) `ModelClient`'s constructor no longer defaults
+  `max_retries` to a hand-picked `2`: no cited standard, paper, or the org's
+  own research (Fugu, Conductor, TRINITY) establishes that number, and a
+  fresh audit found it was never justified. RFC 9110 §9.2.2 constrains *when*
+  replay can be safe for idempotent semantics, and NIST SP 800-204 discusses
+  retry/circuit-breaker resilience as a pattern, but neither identifies a
+  specific numeric retry allocation for this library. The default is now
+  `0`: a default `ModelClient` allocates zero automatic provider transport
+  retries, independent of provider, model, or reasoning identity
+  (`tests/test_no_heuristic_default_transport_retry.py`). Explicit nonzero
+  retry budgets remain caller-owned configuration, never a library-authored
+  default (ADR 0001 amendment, 2026-09-02).
 
 ### Added
 
