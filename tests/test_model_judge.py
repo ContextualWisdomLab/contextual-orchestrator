@@ -509,13 +509,17 @@ def test_judge_failure_fails_closed() -> None:
 
 
 def test_fast_mlsirm_path_is_used_when_available() -> None:
+    """Model judge verification drives the injected judge and keeps the adapter's own usage."""
+
     class _FakeJudge:
         def __init__(self, orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            """Store the injected adapter plus the requested mode and accept threshold."""
             self.adapter = orchestrator
             self.mode = mode
             self.accept_threshold = accept_threshold
 
         def judge(self, **_) -> object:
+            """Drive one adapter call and return a fixed, accepted structured verdict."""
             self.adapter.complete([{"role": "user", "content": "ping"}])
             return type("Result", (), {
                 "accepted": True,
@@ -531,6 +535,7 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
 
     class _Criterion:
         def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            """Store one rubric criterion's id, description, and weight."""
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight

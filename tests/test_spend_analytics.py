@@ -30,6 +30,7 @@ def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
 
 
 def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
+    """Output-only tokenizer usage leaves prompt/cost totals explicitly unavailable, not estimated."""
     # This test owns the raw-output tokenizer fallback contract, not the
     # optional fast-mlsirm judge integration. Resolve that optional capability
     # deterministically as unavailable so installing an extra package cannot

@@ -32,6 +32,7 @@ class _ChangingUsageResponse(dict[str, object]):
     """Expose a TOCTOU-sensitive ``get('usage')`` without altering other keys."""
 
     def __init__(self) -> None:
+        """Seed a valid structured judge response and a zero usage-read counter."""
         super().__init__(
             choices=[
                 {"message": {"content": '{"decision":"ACCEPT","reason":"ok"}'}}
@@ -40,6 +41,7 @@ class _ChangingUsageResponse(dict[str, object]):
         self.usage_reads = 0
 
     def get(self, key: str, default: object = None) -> object:
+        """Return other keys normally; return zero usage once, then a changed value."""
         if key != "usage":
             return super().get(key, default)
         self.usage_reads += 1
@@ -53,6 +55,7 @@ class _ChangingUsageResponse(dict[str, object]):
 
 
 def _adapter(*, usage_source: str | None) -> _FastMLSIJudgeAdapter:
+    """Build a judge adapter fixture with zero served_usage and the given provenance."""
     adapter = _FastMLSIJudgeAdapter(
         orchestrator=None,  # type: ignore[arg-type]
         text="task",

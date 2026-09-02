@@ -73,6 +73,7 @@ TASKS = [{"prompt": "task one"}, {"prompt": "task two"}, {"prompt": "task three"
 
 
 def test_batch_route_persists_runs_with_usage() -> None:
+    """Batch routing persists one run per task, each carrying the worker Batch API's own usage."""
     client = _CountingClient()
     orchestrator = _orch(client)
     # This regression measures the worker Batch API usage contract only.  The

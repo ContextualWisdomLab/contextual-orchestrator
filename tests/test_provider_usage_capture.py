@@ -44,6 +44,7 @@ def test_take_usage_returns_and_clears() -> None:
 
 
 def test_reported_usage_preferred_and_labeled() -> None:
+    """Provider-reported completion usage wins over a char-count estimate and is labeled 'reported'."""
     client = _ReportingClient(completion_tokens=50)
     orchestrator = TaskOrchestrator(
         [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
@@ -64,6 +65,7 @@ def test_reported_usage_preferred_and_labeled() -> None:
 
 
 def test_reported_prompt_tokens_surface_in_totals() -> None:
+    """Provider-reported prompt tokens roll up into spend_analytics totals labeled 'reported'."""
     client = _ReportingClient(completion_tokens=30)  # also reports prompt_tokens=5 per call
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
     orchestrator._triage_fn = lambda text: False  # single-step route accounting
