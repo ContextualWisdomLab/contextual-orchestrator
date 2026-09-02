@@ -1,5 +1,255 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: main-merge conflict resolution, remaining ThreadPoolExecutor shutdown-blocks, and a verified false positive
+
+Observation time: 2026-09-02 Asia/Seoul, later the same day as the entries
+below. Closes out the rest of today's #971 session: the branch's actual
+`main`-merge conflict (a real divergence, not the shallow-clone false alarm
+noted in an earlier pass), the two remaining `ThreadPoolExecutor`-atexit-join
+instances of the root cause already fixed twice below (this file's own
+"unbounded per-model OS thread allocation" and "shared discovery metadata
+fetches" entries), a raw-`Future` regression that root-cause fix itself
+introduced, a shutdown-contract hardening on the new `_DaemonWorkerPool`
+primitive, and an external self-fix proposal traced and confirmed non-causal
+before being left unapplied. Every claim below is independently re-verified
+against `git log`/`git show` on the actual branch history and current-head
+source rather than restated from a hand-off.
+
+### Merge-conflict resolution: `main` -> branch, `mergeable_state` `dirty` -> `blocked`
+
+GitHub's `mergeable_state` for #971 was genuinely `dirty` -- confirmed by a
+real trial merge, not the shallow-clone false alarm noted in an earlier pass
+this same day. Root cause: `main`'s `0db4e5a7` ("fix(review): remove
+heuristic candidate cap and ranking") dropped the `max_agents` parameter from
+`review_gateway.py`'s `build_review_orchestrator`/CLI entirely as part of
+moving admission to evidence-only (no cap, no ranking), while this branch's
+own `tests/test_review_gateway.py` still carried tests written against the
+pre-removal API and threaded `max_agents=` through several fixtures
+(`test_build_review_orchestrator_routes_to_cheapest_selected_agent`,
+`test_build_review_orchestrator_uses_model_group_diversity`,
+`test_build_review_orchestrator_rejects_invalid_agent_limit`,
+`test_main_rejects_invalid_agent_limit_without_traceback`) -- both sides had
+independently rewritten the same test file since the PR's base diverged.
+
+Resolved via the standard recipe: `git fetch origin main`, `git merge
+origin/main` (merge commit `d9320266`, merging `main` at `464da471` into the
+branch at `41aaeff9`), with `git status` reporting exactly one conflicted
+path, `tests/test_review_gateway.py`. Before resolving, verified the
+diversity-selection logic the branch-only tests nominally exercised is
+separately and currently covered elsewhere:
+`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_prefers_model_group_diversity`
+and `::test_bootstrap_selector_spans_multiple_providers_before_repeating_one`,
+plus `tests/test_model_discovery_boundaries.py`'s provider-name assertions on
+`select_bootstrap_discovered_agents`, all still exist and pass at current
+head and exercise the same selector the dropped
+`test_build_review_orchestrator_uses_model_group_diversity` only wrapped in
+an HTTP-gateway fixture around. With that confirmed, resolved the conflict by
+taking `main`'s version of the file (its evidence-only-admission test suite,
+no `max_agents` anywhere) rather than reintroducing a parameter `main` had
+deliberately removed -- dropping the two `#971`-branch-only tests that had
+gone stale against `main`'s evolved API instead of trying to keep both APIs
+alive. Verified with the targeted suite (`tests/test_review_gateway.py`,
+`tests/test_discovery_bootstrap_selection.py`,
+`tests/test_model_discovery_boundaries.py`,
+`tests/test_endpoint_race_callback_settlement.py`,
+`tests/test_daemon_worker_pool_shutdown.py`: 53 passed, 0 failed), then
+pushed. GitHub's `mergeable_state` for #971 now reads `blocked` (checks-only;
+re-confirmed live at time of writing, head `558c8470`), not `dirty`.
+
+### Remaining `ThreadPoolExecutor`-atexit-join instances of the same root cause
+
+The `ThreadPoolExecutor`-registers-an-atexit-join gotcha already fixed twice
+in the entries below (OpenRouter free-endpoint fetch; shared discovery
+metadata fetches) recurred in two more call sites found by further Devin
+Review passes on this same branch, both fixed with the identical
+daemon-thread/bare-`Future` pattern:
+
+- **`endpoint_race.race_first_valid`** (`endpoint_race.py`, commit
+  `9b28bd22`) fanned its equivalent-endpoint race attempts out across a
+  `ThreadPoolExecutor`. Combined with this org's default no-deadline
+  `ModelClient.timeout=None`, a losing race participant stuck in an
+  uncancellable provider call that never returns could hang process shutdown
+  forever, even though the winner had already answered the caller and
+  `race_first_valid` had already returned. Fixed by driving each attempt from
+  a raw `threading.Thread(daemon=True)` built on a bare
+  `concurrent.futures.Future` (the documented low-level primitive
+  `ThreadPoolExecutor` itself is built on): `set_running_or_notify_cancel()`
+  preserves the existing "cancelled before it started never calls the
+  provider" duplicate-cost guarantee, and `wait()`/`future.cancel()`/
+  `future.result()`/`future.exception()` behave identically to the prior
+  executor-backed futures. All 22 pre-existing tests in
+  `tests/test_endpoint_race.py` and
+  `tests/test_endpoint_race_terminal_provenance.py` pass unmodified. New
+  regression
+  `tests/test_endpoint_race_process_exit.py::test_uncancellable_loser_never_returning_does_not_block_process_exit`
+  (a subprocess test: one attempt blocks on an `Event` nothing ever sets, the
+  fast attempt wins, script falls through to a normal unforced exit) hung the
+  full 15s bound and was killed (RED) against the pre-fix code, and exits in
+  well under 5s (GREEN) with the fix. Full suite at that commit: 3430 passed,
+  6 failed (same named pre-existing sandbox gaps as the entries below), 2
+  skipped.
+- **`ProviderEmbeddingBatchBackend`** (`batch_routing.py`, commit `59b2fc87`)
+  drove its durable, pollable job queue through a `ThreadPoolExecutor` at
+  every construction site (crash recovery in `__init__`, and `start()`);
+  `cost_router.py`'s `_provider_embedding_backend()` passes
+  `execution_timeout_seconds=None` by default, and even a finite value there
+  is only a cooperative check made after a runner returns, never a preemptive
+  cancellation of an in-flight call -- so a hung provider-embedding runner
+  could block that join, and therefore process shutdown, forever, even after
+  `close()` had already been called. Fixed with a new `_DaemonWorkerPool`
+  primitive: a fixed-size pool of `threading.Thread(daemon=True)` workers
+  pulling `(fn, args)` off a `queue.Queue`, exposing the exact
+  `submit()`/`shutdown(wait=, cancel_futures=)` surface `ThreadPoolExecutor`
+  has (including the surface a pre-existing test double reaches into
+  directly). The pool stays fixed-size (matching `max_concurrency`), workers
+  spawn lazily on `submit()`, and every durability/claim/recovery/publish
+  code path (`_run_job`, `_run_claimed_job`, `_execution_deadline`,
+  `_fail_expired_job`, `_publish_terminal`, reserve/start/cancel/poll/wait)
+  is unchanged. New regression
+  `tests/test_provider_embedding_batch_backend_process_exit.py::test_hung_provider_embedding_runner_does_not_block_process_exit_after_close`
+  (subprocess test, same shape as above) is RED against the pre-fix code and
+  GREEN with the fix. `tests/test_provider_embedding_batch_backend.py` (24
+  tests) passes unmodified; the broader affected 18-file suite: 294 passed, 4
+  pre-existing/out-of-scope failures. Full suite: 3433 passed, 6 failed, 2
+  skipped -- matches the branch's known baseline exactly, no regressions.
+
+### Regression from the `endpoint_race.py` raw-`Future` refactor: unsettled `Future` on a raising callback
+
+`race_first_valid`'s raw-`Future` rewrite above (`9b28bd22`) called the
+caller-supplied `on_attempt_complete` observer callback and then
+unconditionally called `future.set_result(value)` on the success path -- but
+if the callback itself raised, that exception propagated up through the
+worker thread and the `Future` was left permanently `RUNNING`, so `wait()`/
+`future.result()` on an unbounded (`deadline_seconds=None`) race could hang
+forever, silently reintroducing the exact class of bug the `ThreadPoolExecutor`
+removal had just fixed (`ThreadPoolExecutor` used to settle a `Future` with a
+raised worker-callback's exception automatically; the bare-`Future` rewrite
+had to reimplement that contract explicitly and initially missed the
+success-path case). Fixed in commit `a3afc800`: both the failure-path and
+success-path callback invocations are now wrapped in `try`/`except
+BaseException`, and any callback exception settles the `Future` via
+`future.set_exception(...)` on whichever path it occurred, so an observer
+failure can never strand a `Future` mid-race. Regression coverage added in
+`tests/test_endpoint_race_callback_settlement.py` (commit `83582ad7`)
+exercises callback failures after both a successful and a failed provider
+attempt, with `deadline_seconds=None`. Traced/documented in
+`CHANGELOG.d/endpoint-race-callback-settlement.md` (commit `742b5d52`).
+
+### Hardening: `_DaemonWorkerPool.submit()` now fails closed after `shutdown()`
+
+A further Devin Review pass on the new `_DaemonWorkerPool` (added above in
+`59b2fc87`) found an Info-severity gap: `shutdown()` set no closed flag, so a
+concurrent direct `submit()` could enqueue real work behind the shutdown
+sentinels every worker exits on -- work no worker would ever pick up again.
+Stock `ThreadPoolExecutor.submit()` raises `RuntimeError` once `shutdown()`
+has run; `_DaemonWorkerPool` did not replicate that fail-fast contract.
+Traced every current call site: `ProviderEmbeddingBatchBackend` only calls
+`submit()` from `__init__` (before any external reference to `self` exists)
+and from `start()`, and both `start()` and `close()` already serialize
+through the backend's own `_executor_lock` with `start()` checking
+`self._closed` first -- so today's actual production risk was narrow -- but
+a standalone primitive should not depend on every future caller reproducing
+that locking discipline. Fixed in commit `18a76eb5`: a `self._shutdown` flag,
+set under the pool's existing `_workers_lock` inside `shutdown()` and checked
+under the same lock at the top of `submit()` (which now also enqueues under
+that lock, not before acquiring it), so the check and the
+enqueue/shutdown transition can never interleave; `submit()` now raises
+`RuntimeError("cannot schedule new work after shutdown")` instead of
+silently queuing behind the sentinels. New regression
+`tests/test_provider_embedding_batch_backend.py::test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work`
+and a follow-on standalone regression `tests/test_daemon_worker_pool_shutdown.py`
+(commit `02389e2f`) both pass; the broader 14-file affected suite: 210
+passed, the same 4 pre-existing tokenizer-unavailable ZDR failures.
+Traced/documented in `CHANGELOG.d/provider-embedding-daemon-worker-pool.md`
+(commit `558c8470`).
+
+### False-positive analysis preserved as evidence: a proposed `provider_routing` equality guard is non-causal
+
+A separately, concurrently pushed self-fix workflow on this same branch
+(`.github/workflows/source-fix-971-live-review-quality.yml` +
+`scripts/ci/pr971_live_review_quality_repair.py`) proposed two repairs: (1)
+bounding the OpenRouter free-endpoint worker fetch to eight daemon workers --
+already independently correct and already landed in production (commit
+`0d774450`, this file's "unbounded per-model OS thread allocation" entry
+below), so this half was fully superseded before the workflow could ever run;
+and (2) adding `or request.provider_routing != first.provider_routing` to
+`_run_provider_embeddings`'s (`cost_router.py`) existing
+`model`/`agent_id`/`zdr_only` homogeneity guard, on the theory that equal
+`model`/`agent_id`/`zdr_only` fields could still coalesce two requests
+carrying different persisted `provider_routing` metadata into one batch.
+
+Traced before applying anything: `EmbeddingBatchRequest.provider_routing`
+(`batch_routing.py`) is read in exactly one place in the whole codebase,
+`EmbeddingBatchRequest.to_jsonl_line()`, which serializes it into the OpenAI
+Batch API JSONL request body (`body["provider"] = dict(self.provider_routing)`)
+for the separate JSONL-batch-submission path. `_run_provider_embeddings`
+never calls `to_jsonl_line()` and never reads `provider_routing` anywhere in
+its body -- confirmed by reading the function in full: its homogeneity check
+and its downstream `_run_embedding_shard`/client calls only ever reference
+`model`, `agent_id`, and `zdr_only`. The proposed guard was therefore
+non-causal for the execution path it targeted: no request routed through
+`_run_provider_embeddings` can have its provider behavior affected by
+`provider_routing` at all, matching or mismatching. **Not applied** -- kept
+as verified false-positive evidence rather than blindly implementing an
+external suggestion. The stale workflow and its helper script were removed
+directly (commits `0247eca9`, `d388564c`) per this branch's standing "no
+purpose-complete self-modifying/source-fix workflows" rule, since the
+worker-bound half could never re-apply against the new head (its
+`replace_once` target text no longer exists there) and the `provider_routing`
+half was confirmed to fix nothing real.
+
+### Verification
+
+Directly re-run in this session against current head `558c8470`:
+`tests/test_review_gateway.py`, `tests/test_discovery_bootstrap_selection.py`,
+`tests/test_model_discovery_boundaries.py`,
+`tests/test_endpoint_race_callback_settlement.py`, and
+`tests/test_daemon_worker_pool_shutdown.py` together -- 53 passed, 0 failed.
+Each individual fix above additionally carries its own RED-before/GREEN-after
+subprocess or in-process regression and its own contemporaneous full-suite
+run (3430-3433 passed, 6 failed -- the same named pre-existing/out-of-scope
+sandbox gaps throughout this file's 2026-09-02 entries: tokenizer-unavailable
+`test_batch_embeddings.py` ZDR tests, the unavailable `fast_mlsirm` module,
+and one `usage_source` spend-analytics assertion -- 2 skipped), recorded in
+each commit message and reproduced here rather than re-typed from memory.
+`git fetch origin fix/model-group-timeout-openrouter` immediately before
+writing this entry showed head unchanged at `558c8470`; the PR's live
+`mergeable_state` was `blocked` at the same check.
+
+### Remaining open work carried forward
+
+1. **Bootstrap admission's hand-authored diversity/tie-break heuristics**
+   (`model_discovery.py`'s `select_bootstrap_discovered_agents`:
+   representative request weights, lexical tie-breakers,
+   provider/model-group pass ordering, incomplete/equal-evidence fallbacks)
+   still need a research-/evidence-backed decision model, or a documented
+   fail-closed replacement when evidence cannot uniquely justify a decision
+   -- not a repair by changing constants, weights, quotas, or tie-break
+   strings.
+2. **The hourly OpenCode workflow's `cancel-in-progress: false` concurrency
+   gap**: a single wedged run can occupy the `opencode-hourly-loop`
+   concurrency group for up to GitHub's implicit ~360-minute hosted-runner
+   ceiling, serializing every later hourly trigger behind it rather than
+   running it. This needs a durable/resumable contextual-orchestrator-owned
+   execution/checkpoint/re-dispatch boundary preserving exact-head identity
+   across external runner termination -- not a leaf-authored elapsed-time
+   cutoff, which would violate this org's `timeout=null` model-inference
+   policy. A related but narrower fix has already been opened separately as
+   PR #1027 ("fix(ci): remove elapsed-time job cap on the hourly loop; pin
+   model to orchestrator/free", head `ad9c23c2`, open/draft as of this
+   entry): it removes the `loop` job's `timeout-minutes` cap entirely and
+   pins `orchestrator/auto` -> `orchestrator/free`, but its own description
+   explicitly does not attempt the checkpointing/resumability piece, which
+   remains open.
+3. **Legacy bootstrap identifier-generation mixing**: bootstrap reporting can
+   expose a fingerprinted `selected_agent_ids` identity while
+   `enabled_agent_ids` retains the migrated legacy persisted identity for the
+   same endpoint. Consumer semantics need one identity-consistent contract,
+   or explicitly typed generated-vs-persisted identifiers.
+
+These are large-scope architectural items, deliberately left untouched by
+today's session rather than patched narrowly.
+
 ## 2026-09-02 PR #971: unbounded per-model OS thread allocation in OpenRouter free-endpoint discovery
 
 Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the
