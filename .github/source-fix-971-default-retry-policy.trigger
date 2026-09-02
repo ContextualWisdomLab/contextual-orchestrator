@@ -1,2 +1,3 @@
 source-fix-971-default-retry-policy
-expected-head=7486a1d8c4b6126a3b84884dbd6be6e7837dbb2b
+expected-head=92ff90b18a6364b4a49ea3d8f83930b65caa6fa4
+retried-after-cancelled-run=33580866230
