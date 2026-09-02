@@ -189,5 +189,55 @@ def test_orchestrator_free_auto_rejects_legacy_conduct_cache_entries() -> None:
     assert result["answer"] != "stale conduct answer"
 
 
+def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
+    """A warm cache entry for the default/auto path must not pay for triage.
+
+    Regression: folding ``resolved_mode`` into the cache key made ``complete()``
+    call ``would_route()`` -- and therefore the live, model-backed triage call
+    -- unconditionally *before* the cache lookup. For ``mode="auto"`` against
+    the gateway default model, that decision genuinely needs a real provider
+    call whenever the process-local triage cache is cold (a fresh replica, an
+    evicted entry), even when the distributed response cache already holds the
+    answer. A cache hit must short-circuit before that call ever happens.
+    """
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_worker",
+                "mock-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    triage_calls = 0
+
+    def _counting_triage(_text: str) -> bool:
+        nonlocal triage_calls
+        triage_calls += 1
+        return False
+
+    orchestrator._triage_fn = _counting_triage
+    messages = [{"role": "user", "content": "warm-cache default auto request"}]
+    key = orchestrator._cache_key(messages, "auto", TaskOrchestrator.GATEWAY_DEFAULT_MODEL, None)
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        key,
+        {"mode": "route", "answer": "warm answer", "trace": [{"role": "worker"}]},
+    )
+
+    result = orchestrator.complete(messages, mode="auto")
+
+    assert result["cache_status"] == "hit"
+    assert result["answer"] == "warm answer"
+    assert triage_calls == 0
+    assert client.calls == 0
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

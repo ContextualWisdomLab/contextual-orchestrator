@@ -5123,23 +5123,40 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
-        route_decision = self.would_route(messages, mode, model_name)
+        # Only resolve route-vs-conduct now when it is free: mode="route"/"conduct"
+        # and an explicitly-named model (e.g. FREE_MODEL) settle without a live
+        # triage call. The remaining case -- mode="auto" against the gateway
+        # default/AUTO_MODEL -- genuinely depends on _needs_workflow()'s model
+        # call, so it stays undetermined (None) until a cache miss confirms one
+        # is actually needed; a warm cache entry must never pay for it.
+        cheap_decision = self._would_route_without_triage(mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
+            route_decision = (
+                cheap_decision
+                if cheap_decision is not None
+                else self.would_route(messages, mode, model_name)
+            )
             result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "bypass" if bypass_cache else "disabled"
             return result
+        resolved_mode = None if cheap_decision is None else ("route" if cheap_decision else "conduct")
         try:
             key = self._cache_key(
                 messages,
                 mode,
                 model_name,
                 cache_partition,
-                resolved_mode="route" if route_decision else "conduct",
+                resolved_mode=resolved_mode,
             )
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
+            route_decision = (
+                cheap_decision
+                if cheap_decision is not None
+                else self.would_route(messages, mode, model_name)
+            )
             result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "miss"
             return result
@@ -5156,6 +5173,9 @@ class TaskOrchestrator:
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
             return result
+        route_decision = (
+            cheap_decision if cheap_decision is not None else self.would_route(messages, mode, model_name)
+        )
         result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
         try:
             cache.put(key, result)
@@ -5178,6 +5198,23 @@ class TaskOrchestrator:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
+    def _would_route_without_triage(self, mode: str, model_name: str) -> bool | None:
+        """``would_route()``'s answer when it never requires a live triage call.
+
+        Mirrors ``would_route()``'s short-circuiting exactly, stopping one step
+        short of the only branch that calls ``_needs_workflow()`` (a real model
+        request): ``mode="auto"`` against the gateway default or ``AUTO_MODEL``.
+        Returns ``None`` there so a caller can defer that live call until it is
+        known to be necessary (e.g. after a response-cache lookup misses).
+        """
+        if mode == "route":
+            return True
+        if mode == "auto":
+            if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+                return True
+            return None
+        return False
+
     def would_route(
         self,
         messages: list[ChatMessage],
@@ -5185,14 +5222,11 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
+        cheap_decision = self._would_route_without_triage(mode, model_name)
+        if cheap_decision is not None:
+            return cheap_decision
         text = self._latest_user_text(messages)
-        return mode == "route" or (
-            mode == "auto"
-            and (
-                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
-                or not self._needs_workflow(text)
-            )
-        )
+        return not self._needs_workflow(text)
 
     def stream_route(
         self,
