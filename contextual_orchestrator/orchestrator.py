@@ -4154,34 +4154,58 @@ class TaskOrchestrator:
                 for value in [row.get("agent_id")]
                 if isinstance(value, str) and value
             ]
-        # conduct() can serve a non-final step's output as the answer (the
-        # verifier-required fallback to the worker's output, or the
-        # verifier's own output when a synthesizer step is not required) --
-        # the trace still records every step's provider call, so the *last*
-        # row is not reliably the one that produced ``answer``. Prefer the
-        # row(s) whose recorded output actually match the served answer;
-        # fall back to the last-row heuristic for callers (plain passthrough,
-        # cache hits) that never populate "answer"/"output" at all.
-        answer = result.get("answer")
+        # conduct() records the id of the step whose output actually became
+        # ``answer`` as ``answering_step_id`` (a non-final step when the
+        # verifier rejects and falls back to the worker's output). Resolving
+        # the served row by that identity is unambiguous even when a later,
+        # genuinely-served step's output happens to duplicate an earlier
+        # step's text byte-for-byte -- text equality alone cannot tell a
+        # fallback-to-earlier-step apart from a later step that coincidentally
+        # repeats an earlier step's text (#983 finding 6). Callers that never
+        # run a multi-step workflow, or a workflow record persisted before
+        # this field existed, fall back to the text-matched/last-row
+        # heuristics below.
+        answering_step_id = result.get("answering_step_id")
         answering_rows = (
             [
                 row
                 for row in rows
-                if isinstance(row, Mapping) and row.get("output") == answer
+                if isinstance(row, Mapping) and row.get("id") == answering_step_id
             ]
-            if isinstance(answer, str)
+            if isinstance(answering_step_id, int)
             else []
         )
+        if not answering_rows:
+            # conduct() can serve a non-final step's output as the answer (the
+            # verifier-required fallback to the worker's output, or the
+            # verifier's own output when a synthesizer step is not required) --
+            # the trace still records every step's provider call, so the *last*
+            # row is not reliably the one that produced ``answer``. Prefer the
+            # row(s) whose recorded output actually match the served answer;
+            # fall back to the last-row heuristic for callers (plain passthrough,
+            # cache hits) that never populate "answer"/"output" at all.
+            answer = result.get("answer")
+            answering_rows = (
+                [
+                    row
+                    for row in rows
+                    if isinstance(row, Mapping) and row.get("output") == answer
+                ]
+                if isinstance(answer, str)
+                else []
+            )
         served_rows = answering_rows or rows
-        # Among *text* matches, prefer the earliest row: conduct()'s only
-        # fallback path serves an earlier step's already-produced output
-        # (the worker's, once the verifier rejects a later step), so the
-        # served step is never later in the trace than a row that merely
-        # happens to duplicate its text (e.g. a synthesizer that
-        # independently produces byte-identical output). When nothing
-        # matched by text (the plain-passthrough/cache-hit callers that
-        # never populate answer/output), fall back to the prior last-row
-        # heuristic over the full, unfiltered trace (#983 finding 3).
+        # Among *text* matches (no ``answering_step_id`` evidence available),
+        # prefer the earliest row: this ordering is a best-effort fallback
+        # only, kept for workflow records persisted before
+        # ``answering_step_id`` existed. It cannot by itself distinguish a
+        # fallback-to-earlier-step from a later step that coincidentally
+        # duplicates an earlier one's text -- exactly why the
+        # ``answering_step_id`` lookup above takes priority whenever it is
+        # available (#983 finding 6). When nothing matched by text (the
+        # plain-passthrough/cache-hit callers that never populate
+        # answer/output), fall back to the prior last-row heuristic over the
+        # full, unfiltered trace (#983 finding 3).
         ordered_rows = served_rows if answering_rows else reversed(served_rows)
         served = (
             None
@@ -6889,6 +6913,10 @@ class TaskOrchestrator:
                 ids = [step.id for step in steps if step.role == role]
                 return outputs.get(ids[-1], "") if ids else ""
 
+            def last_step_id(role: str) -> int | None:
+                ids = [step.id for step in steps if step.role == role]
+                return ids[-1] if ids else None
+
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
@@ -6901,8 +6929,10 @@ class TaskOrchestrator:
                     excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[-1].id]
+            answering_step_id = steps[-1].id
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
+                answering_step_id = last_step_id("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
@@ -6914,12 +6944,15 @@ class TaskOrchestrator:
                     excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            answering_step_id = steps[2].id if not self.policy.verifier_required else steps[-1].id
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
+                answering_step_id = steps[1].id
 
         result = {
             "mode": "conduct",
             "answer": answer,
+            "answering_step_id": answering_step_id,
             "trace": trace,
             "verification": verification,
             "plan_source": plan_source,

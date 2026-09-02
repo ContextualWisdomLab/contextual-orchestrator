@@ -6989,7 +6989,23 @@ def build_server(
                     # _validate_routing is pure, so this is behavior-preserving
                     # and keeps the two call sites from drifting apart.
                     request_routing = endpoint_routing
-                    _validate_candidate_routing(orchestrator, request_routing, model_name)
+                    # Preflight against the request's own required tags (e.g. an
+                    # image-bearing message needs "vision") the same way the
+                    # ordinary chat and orchestrated Responses branches do, so an
+                    # incompatible pin fails closed here with invalid_routing
+                    # instead of surfacing later as a generic execution error
+                    # (#983).
+                    structured_routing_messages = _validate_messages(body.get("messages"))
+                    _validate_candidate_routing(
+                        orchestrator,
+                        request_routing,
+                        model_name,
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(structured_routing_messages)
+                            else ()
+                        ),
+                    )
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -8047,6 +8063,27 @@ def build_server(
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
+                    # The early role-only preflight above (before "input" was
+                    # even parsed) cannot know whether this request carries an
+                    # image; re-check now that the request's true required
+                    # tags are known, the same way the orchestrated Responses
+                    # branches above already do, so an incompatible pin fails
+                    # closed here with invalid_routing instead of surfacing
+                    # later as a generic execution error on this provider
+                    # passthrough path (#983).
+                    _validate_candidate_routing(
+                        orchestrator,
+                        responses_routing_control,
+                        model_name,
+                        required_roles=orchestrator.candidate_pin_required_roles(
+                            "conduct", model_name
+                        ),
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(responses_messages)
+                            else ()
+                        ),
+                    )
                     response_max_tokens = next(
                         (
                             body.get(key)

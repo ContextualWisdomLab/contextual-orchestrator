@@ -47,6 +47,16 @@ OPENAPI_SPEC = {
                             "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
                         },
                     },
+                    "endpoint": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
+                        "description": (
+                            "Pin the request to one configured endpoint selector. "
+                            "Forces synchronous routing (channel=sync); cannot be "
+                            "combined with channel=batch or latency_tolerant=true."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },

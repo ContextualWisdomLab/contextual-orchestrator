@@ -1460,3 +1460,205 @@ def test_served_candidate_id_prefers_earliest_row_on_duplicate_fallback_text(
     assert result["trace"][3]["output"] == "worker_agent output"
     assert result["answer"] == "worker_agent output"
     assert evidence["served_candidate_id"] == "worker_agent"
+
+
+def test_served_candidate_id_matches_later_step_on_duplicate_accepted_text(
+    monkeypatch,
+) -> None:
+    """Mirror image of the fallback-duplicate case above: here the verifier
+    *accepts* the synthesizer's output, so the synthesizer -- not the worker
+    -- is the genuinely served candidate, even though the synthesizer's
+    output happens to duplicate the worker's earlier text byte-for-byte. No
+    earliest/latest ordering over text matches can be correct for both this
+    case and the fallback case simultaneously: routing evidence must resolve
+    the served row from ``answering_step_id`` (the step conduct() actually
+    served), not from which row's text happens to match first (#983,
+    "Duplicate outputs misidentify served candidate" -- the exact
+    mirror-image of the fallback-duplicate fix above)."""
+
+    class _CollidingClient(ModelClient):
+        def chat(self, agent, messages, effort_profile=None):
+            if agent.id in ("worker_agent", "synth_agent"):
+                # Deliberately duplicate text across an earlier and a later
+                # step so two trace rows share the exact same "output".
+                return "duplicate output"
+            return f"{agent.id} output"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("thinker_agent", "model-thinker"),
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("verifier_agent", "model-verifier"),
+            ModelAgent("synth_agent", "model-synth"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=_CollidingClient(),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_plan",
+        lambda task, *, model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL: [
+            WorkflowStep(0, "thinker", "thinker_agent", "decompose"),
+            WorkflowStep(1, "worker", "worker_agent", "work", (0,)),
+            WorkflowStep(2, "verifier", "verifier_agent", "verify", (0, 1)),
+            WorkflowStep(3, "synthesizer", "synth_agent", "synthesize", (0, 1, 2)),
+        ],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *args, **kwargs: {
+            "accepted": True,
+            "reason": "test forces acceptance",
+            "verifier_output": "verifier_agent output",
+            "judge": "model",
+        },
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator.conduct([{"role": "user", "content": "task"}])
+        evidence = orchestrator._candidate_routing_evidence(result)
+
+    assert [row["agent_id"] for row in result["trace"]] == [
+        "thinker_agent",
+        "worker_agent",
+        "verifier_agent",
+        "synth_agent",
+    ]
+    # Both the worker row (index 1) and the synthesizer row (index 3) carry
+    # output == "duplicate output" -- the accepted answer -- but only the
+    # synthesizer (the later, genuinely served step) actually produced it.
+    assert result["trace"][1]["output"] == "duplicate output"
+    assert result["trace"][3]["output"] == "duplicate output"
+    assert result["answer"] == "duplicate output"
+    assert result["answering_step_id"] == 3
+    assert evidence["served_candidate_id"] == "synth_agent"
+
+
+def test_candidate_routing_evidence_falls_back_to_text_match_without_answering_step_id() -> None:
+    """A workflow record persisted before ``answering_step_id`` existed (or
+    any other caller that omits it) must still resolve routing evidence via
+    the prior text-matching/last-row heuristics rather than crashing or
+    silently returning no evidence."""
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ]
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        orchestrator._record_candidate_attempt("worker_agent")
+        evidence = orchestrator._candidate_routing_evidence(
+            {
+                "answer": "worker_agent output",
+                "trace": [
+                    {"id": 0, "agent_id": "worker_agent", "output": "worker_agent output"},
+                ],
+            }
+        )
+
+    assert evidence is not None
+    assert evidence["served_candidate_id"] == "worker_agent"
+
+
+def test_http_structured_chat_preflight_rejects_vision_incompatible_pin() -> None:
+    """A structured (response_format) chat request that carries an image must
+    fail closed with invalid_routing when pinned to a candidate that lacks
+    the "vision" tag, the same way the ordinary chat path already does --
+    this branch previously validated only roles, so the incompatible pin
+    would have surfaced later as a generic execution error instead (#983)."""
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_only", "worker-model")],
+        client=client,
+    )
+    token = "structured-vision-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "inspect"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,AA=="},
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_routing"
+    assert client.calls == []
+
+
+def test_http_responses_provider_path_preflight_rejects_vision_incompatible_pin() -> None:
+    """The raw single-agent /v1/responses provider passthrough (reached when
+    a request is not eligible for orchestrated Responses handling, e.g. it
+    carries response_format) must also fail closed with invalid_routing on a
+    vision-incompatible pin -- this path previously ran only the early
+    role-only preflight (#983)."""
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_only", "worker-model")],
+        client=client,
+    )
+    token = "responses-vision-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "inspect"},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_routing"
+    assert client.calls == []
