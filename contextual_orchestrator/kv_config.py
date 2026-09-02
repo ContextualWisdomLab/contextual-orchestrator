@@ -73,6 +73,27 @@ def migrate_legacy_categories(config_store: "ConfigStore") -> None:
     constructed its own store. Only the factory path ran this before; an
     injected store carrying legacy ``routing.*`` rows never got migrated.
     Call this at every real consumer's construction boundary, not only here.
+
+    Concurrency note (Devin-review finding on #1017): the ``ConfigStore``
+    protocol offers no conditional/compare-and-swap write, so a genuinely
+    concurrent operator update landing between this function's read of the
+    replacement key and its own ``set`` could, in principle, be clobbered
+    back to the stale legacy value. Re-checking the replacement key
+    immediately before the write (below) narrows that window to just the
+    gap between that re-check and the write itself, rather than the whole
+    legacy-value read in between -- it does not eliminate the race, since
+    doing that would need a real conditional-write primitive
+    (``INSERT ... ON CONFLICT DO NOTHING`` or equivalent) that neither this
+    protocol nor ``pg_llm_batch.PostgresConfigStore.set()`` (an
+    unconditional upsert) currently exposes; that is this migration's
+    owning repository's boundary to extend, not something to work around
+    here. In practice this migration runs once per process construction
+    (a boot-time compatibility shim, not a steady-state hot path), so the
+    realistic exposure is a multi-replica Postgres-backed deployment
+    restarting at the same moment an operator reconfigures the exact same
+    key -- narrow, but real; tracked as a residual item alongside gap G-17
+    in ``ContextualWisdomLab/.github``'s
+    ``docs/product-technical-gap-baseline.md``.
     """
     for legacy_category, (replacement_category, config_keys) in _LEGACY_CATEGORY_MIGRATIONS.items():
         for config_key in config_keys:
@@ -90,12 +111,22 @@ def migrate_legacy_categories(config_store: "ConfigStore") -> None:
                 config_key,
                 _MISSING_CONFIG_VALUE,
             )
-            if legacy_config_value is not _MISSING_CONFIG_VALUE:
-                config_store.set(
+            if legacy_config_value is _MISSING_CONFIG_VALUE:
+                continue
+            if (
+                config_store.get(
                     replacement_category,
                     config_key,
-                    legacy_config_value,
+                    _MISSING_CONFIG_VALUE,
                 )
+                is not _MISSING_CONFIG_VALUE
+            ):
+                continue
+            config_store.set(
+                replacement_category,
+                config_key,
+                legacy_config_value,
+            )
 
 
 class ConfigStore(Protocol):

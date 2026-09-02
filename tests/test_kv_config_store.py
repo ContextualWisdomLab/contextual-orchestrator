@@ -19,6 +19,7 @@ from contextual_orchestrator.kv_config import (
     InMemoryConfigStore,
     PostgresConfigStoreAdapter,
     get_config_store,
+    migrate_legacy_categories,
 )
 
 
@@ -213,6 +214,64 @@ def test_renamed_category_backfills_every_key_already_persisted_under_the_old_na
 
     for config_index, config_key in enumerate(config_keys):
         assert config_store.get(replacement_category, config_key) == config_index
+
+
+class _InterleavedWriteConfigBackend:
+    """Deterministically simulates an operator write landing mid-migration.
+
+    Devin-review finding on #1017: ``migrate_legacy_categories`` reads the
+    replacement key (absent), reads the legacy key, then writes the
+    replacement key -- with no conditional/compare-and-swap primitive
+    available, a real concurrent operator write to the replacement key
+    between the first read and the final write would be silently
+    overwritten by the stale legacy value. This double makes that
+    interleaving deterministic instead of timing-dependent: the first read
+    of the replacement key reports it absent (as a genuinely fresh key
+    would), and every read after that reports the value an operator is
+    modeled as having written in the interim.
+    """
+
+    def __init__(self, legacy_value: object, interleaved_value: object) -> None:
+        self._legacy_value = legacy_value
+        self._interleaved_value = interleaved_value
+        self._replacement_reads = 0
+
+    def get(self, category: str, key: str, default: Any = None) -> Any:
+        """Report the replacement key as absent once, then interleaved-written."""
+        legacy_category, (replacement_category, _keys) = next(
+            iter(_LEGACY_CATEGORY_MIGRATIONS.items())
+        )
+        if category == legacy_category:
+            return self._legacy_value
+        if category == replacement_category:
+            self._replacement_reads += 1
+            return default if self._replacement_reads == 1 else self._interleaved_value
+        return default  # pragma: no cover - no other category is read here
+
+    def set(self, category: str, key: str, value: Any) -> None:
+        """Record every write so the test can assert none clobbers the interleaved value."""
+        self.last_set = (category, key, value)
+
+
+def test_migration_re_checks_immediately_before_writing_to_narrow_the_race(
+) -> None:
+    """A write landing between the absence-check and the legacy-value read survives.
+
+    Proves the re-check added directly above the ``set`` call actually does
+    something: without it, this exact interleaving would silently overwrite
+    the operator's real value with the stale legacy one.
+    """
+    legacy_category, (replacement_category, config_keys) = next(
+        iter(_LEGACY_CATEGORY_MIGRATIONS.items())
+    )
+    config_key = config_keys[0]
+    backend = _InterleavedWriteConfigBackend(
+        legacy_value="stale_legacy_value", interleaved_value="operator_write_mid_migration"
+    )
+
+    migrate_legacy_categories(backend)
+
+    assert not hasattr(backend, "last_set")
 
 
 def test_renamed_category_migration_never_overwrites_an_explicit_new_value(

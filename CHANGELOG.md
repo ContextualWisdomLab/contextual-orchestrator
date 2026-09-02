@@ -937,6 +937,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   validation fixes described next -- every one confirmed genuinely RED
   before its fix and GREEN after, verified directly by temporarily
   reverting each fix and re-running, not assumed.
+  **Fourth review round:** the `ConfigStore` protocol has no conditional/
+  compare-and-swap write, so a genuinely concurrent operator update landing
+  between `migrate_legacy_categories`'s read of the replacement key and its
+  own write could, in principle, be clobbered back to the stale legacy
+  value. Added a re-check of the replacement key immediately before the
+  write, narrowing that window from "the whole legacy-value read" to just
+  the gap between the re-check and the write itself -- this does not
+  eliminate the race (a real conditional-write primitive would, but neither
+  this protocol nor `pg_llm_batch.PostgresConfigStore.set()`, an
+  unconditional upsert, currently exposes one; extending that is the owning
+  repository's boundary, not something to work around here). New
+  deterministic test (`_InterleavedWriteConfigBackend`) simulates the exact
+  interleaving without relying on real threading timing, confirmed
+  genuinely RED before the re-check and GREEN after. Documented as a known,
+  narrow residual (realistic exposure: a multi-replica Postgres-backed
+  deployment restarting at the same moment an operator reconfigures the
+  exact same key) tracked alongside gap G-17 in `ContextualWisdomLab/
+  .github`'s `docs/product-technical-gap-baseline.md`.
 - `ALLOWED_AGENT_PATCH_KEYS`/`ALLOWED_AGENT_CREATE_KEYS` in `server.py` --
   the HTTP-layer request-validation allowlists, entirely separate from
   `patch_agent`/`add_agent`'s own field handling in `orchestrator.py` --
