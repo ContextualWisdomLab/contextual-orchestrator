@@ -47,18 +47,12 @@ jobs:
             exit 1
           fi
 
-      - name: Materialize durable restart/privacy regression
+      - name: Materialize durable restart privacy and timeout regressions
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("tests/test_batch_job_registry.py")
-          text = path.read_text(encoding="utf-8")
-          marker = "def test_recovered_provider_embedding_restores_persisted_request_context() -> None:"
-          if marker not in text:
-              text = text.rstrip() + '''
+          if ! grep -q 'def test_recovered_provider_embedding_restores_persisted_request_context' tests/test_batch_job_registry.py; then
+            cat >> tests/test_batch_job_registry.py <<'PYTEST'
 
 
 def test_recovered_provider_embedding_restores_persisted_request_context() -> None:
@@ -109,23 +103,76 @@ def test_recovered_provider_embedding_restores_persisted_request_context() -> No
         assert events == [("enter", True), ("exit", True)]
     finally:
         recovered.close()
-'''
-              path.write_text(text, encoding="utf-8")
-          PY
 
-      - name: Prove current-head regression is RED
+
+def test_provider_embedding_rejects_mixed_zdr_policy_before_provider_io() -> None:
+    """One provider batch cannot inherit one request's privacy identity for another."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    calls = 0
+
+    def runner(requests):
+        nonlocal calls
+        calls += 1
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=1,
+    )
+    job = backend.submit(
+        [
+            EmbeddingBatchRequest(input_text="private", zdr_only=True),
+            EmbeddingBatchRequest(input_text="public", zdr_only=False),
+        ]
+    )
+    try:
+        document = backend.wait(job, timeout=1)
+        assert document["status"] == "failed"
+        assert document["failure"]["error_type"] == "ValueError"
+        assert calls == 0
+    finally:
+        backend.close()
+
+
+def test_default_provider_embedding_execution_has_no_wall_clock_deadline() -> None:
+    """Crash-recovery leases renew without inventing a model inference deadline."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: ([[1.0] for _request in requests], len(requests)),
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.1,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="slow-is-valid")])
+    try:
+        assert backend.wait(job, timeout=1)["status"] == "completed"
+        assert job.job_id not in backend._deadlines
+    finally:
+        backend.close()
+PYTEST
+          fi
+
+      - name: Prove all three current-head regressions are RED
         shell: bash
         run: |
           set -euo pipefail
-          set +e
-          python -m pytest -q tests/test_batch_job_registry.py::test_recovered_provider_embedding_restores_persisted_request_context
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "::error::restart/privacy regression was already GREEN before repair"
-            exit 1
-          fi
-          echo "RED verified"
+          for test_name in \
+            test_recovered_provider_embedding_restores_persisted_request_context \
+            test_provider_embedding_rejects_mixed_zdr_policy_before_provider_io \
+            test_default_provider_embedding_execution_has_no_wall_clock_deadline
+          do
+            set +e
+            python -m pytest -q "tests/test_batch_job_registry.py::${test_name}"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "::error::${test_name} was already GREEN before the causal repair"
+              exit 1
+            fi
+          done
+          echo "RED verified for restart authority, mixed privacy, and unbounded inference"
 
       - name: Apply smallest causal owner repair
         shell: bash
@@ -154,6 +201,16 @@ def test_recovered_provider_embedding_restores_persisted_request_context() -> No
           )
           replace_once(
               "contextual_orchestrator/batch_routing.py",
+              "        self._execution_timeout_seconds = (\n            execution_timeout_seconds\n            if execution_timeout_seconds is not None\n            else self._registry.retention_seconds\n        )\n",
+              "        self._execution_timeout_seconds = execution_timeout_seconds\n",
+          )
+          replace_once(
+              "contextual_orchestrator/batch_routing.py",
+              "        existing = self._deadlines.get(job_id)\n        if existing is not None:\n            return float(existing)\n        with self._registry.lock(\n",
+              "        existing = self._deadlines.get(job_id)\n        if existing is not None:\n            return float(existing)\n        if self._execution_timeout_seconds is None:\n            return float(\"inf\")\n        with self._registry.lock(\n",
+          )
+          replace_once(
+              "contextual_orchestrator/batch_routing.py",
               "        requests = list(self._requests[job_id])\n        try:\n            vectors, prompt_tokens = self._runner(requests)\n",
               "        requests = list(self._requests[job_id])\n        try:\n            if requests and any(request.zdr_only != requests[0].zdr_only for request in requests):\n                raise ValueError(\"provider embedding batch cannot mix ZDR policies\")\n            request_scope = (\n                self._request_context(requests[0])\n                if self._request_context is not None and requests\n                else nullcontext()\n            )\n            with request_scope:\n                vectors, prompt_tokens = self._runner(requests)\n",
           )
@@ -177,13 +234,15 @@ def test_recovered_provider_embedding_restores_persisted_request_context() -> No
           text = baseline.read_text(encoding="utf-8")
           marker = "## 2026-09-02 — persisted embedding execution authority"
           if marker not in text:
-              text = text.rstrip() + '''
-
-## 2026-09-02 — persisted embedding execution authority
-
-PR #971 treats persisted `zdr_only` as request authority that must be re-entered at the provider execution boundary after restart, not merely as stored metadata. `ProviderEmbeddingBatchBackend` rejects mixed-policy batches and executes the runner inside the recovered request scope. Durable claim lease duration is separately configured from model inference duration so the default `timeout=None` contract cannot erase crash-recovery ownership. Exact-head restart regression and the broader batch/cost-router suites are the source-level completion evidence; temporary source-fix workflows are never production artifacts.
-'''
-              baseline.write_text(text, encoding="utf-8")
+              section = "\n".join([
+                  "",
+                  "",
+                  marker,
+                  "",
+                  "PR #971 treats persisted `zdr_only` as request authority that must be re-entered at the provider execution boundary after restart, not merely as stored metadata. `ProviderEmbeddingBatchBackend` rejects mixed-policy batches and executes the runner inside the recovered request scope. Durable claim lease duration is separately configured from model inference duration; the default provider execution deadline remains unbounded and the lease is renewed while an in-flight model call owns the claim. Exact-head restart/privacy/timeout regressions and the broader batch/cost-router suites are the source-level completion evidence; temporary source-fix workflows are never production artifacts.",
+                  "",
+              ])
+              baseline.write_text(text.rstrip() + section, encoding="utf-8")
 
           changelog = Path("CHANGELOG.md")
           text = changelog.read_text(encoding="utf-8")
@@ -205,6 +264,8 @@ PR #971 treats persisted `zdr_only` as request authority that must be re-entered
           python -m compileall -q contextual_orchestrator
           python -m pytest -q \
             tests/test_batch_job_registry.py::test_recovered_provider_embedding_restores_persisted_request_context \
+            tests/test_batch_job_registry.py::test_provider_embedding_rejects_mixed_zdr_policy_before_provider_io \
+            tests/test_batch_job_registry.py::test_default_provider_embedding_execution_has_no_wall_clock_deadline \
             tests/test_batch_job_registry.py \
             tests/test_batch_embeddings.py \
             tests/test_cost_router.py
@@ -236,10 +297,12 @@ PR #971 treats persisted `zdr_only` as request authority that must be re-entered
       - name: Commit verified owner repair and publish with workflow-starting credential
         shell: bash
         env:
-          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${WORKFLOW_PUSH_TOKEN:-}" ]; then
+          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-}}"
+          if [ -z "$workflow_push_token" ]; then
             echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
             exit 1
           fi
@@ -255,5 +318,5 @@ PR #971 treats persisted `zdr_only` as request authority that must be re-entered
           git add -A
           git diff --cached --check
           git commit -m "fix(batch): restore persisted embedding execution policy"
-          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${workflow_push_token}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:${GITHUB_REF_NAME}"
