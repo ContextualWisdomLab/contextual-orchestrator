@@ -1,0 +1,92 @@
+{
+  "contract_id": "cwl_governed_rater_observation/v1",
+  "description": "Normative cross-SDK edge cases for canonical references and criterion identity. Duplicate JSON object member names must be rejected before schema validation.",
+  "reference_cases": [
+    {
+      "name": "canonical reference",
+      "value": "criterion-a",
+      "valid": true
+    },
+    {
+      "name": "whitespace only",
+      "value": "   ",
+      "valid": false
+    },
+    {
+      "name": "leading whitespace",
+      "value": " criterion-a",
+      "valid": false
+    },
+    {
+      "name": "trailing whitespace",
+      "value": "criterion-a ",
+      "valid": false
+    },
+    {
+      "name": "leading byte order mark",
+      "value": "\ufeffcriterion-a",
+      "valid": false
+    },
+    {
+      "name": "trailing byte order mark",
+      "value": "criterion-a\ufeff",
+      "valid": false
+    },
+    {
+      "name": "internal ordinary space remains opaque identity text",
+      "value": "criterion a",
+      "valid": true
+    },
+    {
+      "name": "internal C1 control",
+      "value": "criterion\u0085a",
+      "valid": false
+    },
+    {
+      "name": "exact 256-character boundary",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": true
+    },
+    {
+      "name": "raw 257-character padded boundary is not normalized",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ",
+      "valid": false
+    }
+  ],
+  "observation_identity_cases": [
+    {
+      "name": "distinct criterion keys",
+      "valid": true,
+      "value": {
+        "criterion-a": {
+          "status": "observed",
+          "category_anchor_ref": "anchor-1",
+          "evidence_reference_ids": ["evidence-1"],
+          "uncertainty": "low",
+          "review_signal_refs": [],
+          "reason_ref": null
+        },
+        "criterion-b": {
+          "status": "abstained",
+          "category_anchor_ref": null,
+          "evidence_reference_ids": [],
+          "uncertainty": "high",
+          "review_signal_refs": [],
+          "reason_ref": "insufficient-evidence"
+        }
+      }
+    },
+    {
+      "name": "duplicate criterion member names",
+      "valid": false,
+      "stage": "duplicate-object-member admission before schema validation",
+      "json_text": "{\"criterion-a\":{\"status\":\"observed\",\"category_anchor_ref\":\"anchor-1\",\"evidence_reference_ids\":[\"evidence-1\"],\"uncertainty\":\"low\",\"review_signal_refs\":[],\"reason_ref\":null},\"criterion-a\":{\"status\":\"abstained\",\"category_anchor_ref\":null,\"evidence_reference_ids\":[],\"uncertainty\":\"high\",\"review_signal_refs\":[],\"reason_ref\":\"insufficient-evidence\"}}"
+    },
+    {
+      "name": "duplicate nested observation member names",
+      "valid": false,
+      "stage": "recursive duplicate-object-member admission before schema validation",
+      "json_text": "{\"criterion-a\":{\"status\":\"observed\",\"status\":\"abstained\",\"category_anchor_ref\":\"anchor-1\",\"evidence_reference_ids\":[\"evidence-1\"],\"uncertainty\":\"low\",\"review_signal_refs\":[],\"reason_ref\":null}}"
+    }
+  ]
+}
