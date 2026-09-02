@@ -1200,7 +1200,7 @@ Summarize this research thread and verify claims.</textarea>
       try {
         const response = await apiFetch("/admin/state");
         if (!response.ok) {
-          throw new Error(\`Audit state request failed with HTTP \${response.status}\`);
+          throw new Error(`Audit state request failed with HTTP ${response.status}`);
         }
         const payload = await response.json();
         state.recent_audit_events = payload.recent_audit_events || [];
@@ -1234,7 +1234,7 @@ Summarize this research thread and verify claims.</textarea>
       const groupName = els.modelGroupName.value.trim();
       const memberIds = Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value);
       const exists = state.modelGroups.some(group => group.group_name === groupName.replaceAll("-", "_").toLowerCase());
-      const response = await fetch(exists ? \`/api/v1/model_groups/\${encodeURIComponent(groupName)}\` : "/api/v1/model_groups", {
+      const response = await fetch(exists ? `/api/v1/model_groups/${encodeURIComponent(groupName)}` : "/api/v1/model_groups", {
         method: exists ? "PATCH" : "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
@@ -1247,7 +1247,7 @@ Summarize this research thread and verify claims.</textarea>
     }
     
     async function deleteModelGroup(groupName) {
-      const response = await fetch(\`/api/v1/model_groups/\${encodeURIComponent(groupName)}\`, {method: "DELETE"});
+      const response = await fetch(`/api/v1/model_groups/${encodeURIComponent(groupName)}`, {method: "DELETE"});
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "Could not delete model group");
       els.modelGroupFeedback.textContent = t("group_deleted");
