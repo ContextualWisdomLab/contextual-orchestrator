@@ -303,6 +303,13 @@ because Go access requires its own paid subscription independent of Zen
 access; register `OPENCODE_ZEN_API_KEY`, `OPENCODE_GO_API_KEY`, both, or
 neither.
 
+It is a mixed-protocol catalog: the current official endpoint table
+assigns some model IDs to `/v1/chat/completions`, some to `/v1/responses`,
+and some to `/v1/messages`. Discovery admits only the documented
+chat-completions IDs to the generic CO chat pool; the other IDs are retained
+out of that pool until a protocol-specific adapter is available. This avoids
+credentialed requests to the wrong endpoint and is intentionally fail-closed.
+
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
 host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
