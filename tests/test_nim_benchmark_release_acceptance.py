@@ -356,10 +356,10 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
     )
     evaluation = report["evaluation"]
 
-    assert evaluation["evidence_status"] == "evidence_review_required"
-    assert evaluation["decision_use"] == "production_candidate_review"
-    assert evaluation["minimum_paired_task_count"] == 30
-    assert evaluation["required_completion_fraction"] == 0.9
+    assert evaluation["evidence_status"] == "measurement_evidence_only"
+    assert evaluation["decision_use"] == "measurement_evidence_only"
+    assert evaluation["minimum_paired_task_count"] is None
+    assert evaluation["required_completion_fraction"] is None
     assert evaluation["routing_recommendation"] is None
     assert report["provenance"]["benchmark_parameters"]["policy_total_token_budget"] == (
         nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET

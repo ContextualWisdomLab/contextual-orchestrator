@@ -46,3 +46,14 @@ Tang, Y., Cetin, E., Xu, J., Sun, Q., Nielsen, S., Richard, V., Goda, H., Tymche
 Zhou, H., Tan, Z., Zhang, Z., Fan, Y., Lin, Y., Kang, L., Song, X., Li, R., Huang, S., Yu, A., Fan, Y., Chen, Y., Xu, K., Liu, X., Qin, Y., Torr, P., Zhang, C., & Yin, Z. (2026). *Select-then-Solve: Paradigm routing as inference-time optimization for LLM agents* [Preprint]. arXiv:2604.06753.
 
 Yang, P., Chen, W., Yang, T., Feng, P., Xing, J., Guo, W., Yao, Y., Han, Y., Li, H., Wang, X., Wang, Z., Xiao, J., Yang, A., Tian, L., Ai, L., Yang, E., & Shi, T. (2026). *TwinRouterBench: Fast static and live dynamic evaluation for realistic agentic LLM routing* [Preprint]. arXiv:2605.18859.
+
+## NIM output-allocation boundary (2026-09-02)
+
+The prior live default of 264 output tokens was derived from a deterministic
+dry-run observation (256 plus an eight-token margin), not from Fugu, Conductor,
+TRINITY, a provider contract, or a validated allocation model. It is therefore
+retained only as a non-authoritative dry-run fixture. Live NIM benchmarking now
+requires an explicit governed output allocation and fails closed when it is
+absent. This preserves the research register's narrower conclusion: learned
+routing papers justify empirically evaluated decision policies, not hand-set
+compute budgets.

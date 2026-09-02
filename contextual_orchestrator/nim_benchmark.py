@@ -100,21 +100,22 @@ DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
 DRY_RUN_FIXED_UNIX_TIME = 1767225600.0
 # Issue contract: Conductor/TRINITY-style deep paths are capped at five steps.
 MAX_WORKFLOW_DEPTH = 5
-# Provider output remains capped at 264 tokens by default. The equal cell-wide
-# prompt-plus-completion budget scales with the maximum five-call envelope so a
-# fixed conduct workflow can carry its prompts without being starved. The
-# eight-token margin over the historical 256 keeps the locked 30-task
-# manifest's tightest conduct_bounded task (four-call accumulated prompt
-# context) inside its equal budget under the current deterministic dry-run
-# token estimate; see test_smoke_manifest_cannot_authorize_production_routing.
-DEFAULT_MAX_OUTPUT_TOKENS = 264
-DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKENS
+# Historical deterministic dry-run fixture only. The former 256 + 8 margin was
+# hand-selected and therefore cannot allocate live test-time compute. Live runs
+# require an explicit output-token cap from the caller's governed evaluation
+# design. Compatibility constants remain non-authoritative for fixtures/tests.
+DRY_RUN_FIXTURE_MAX_OUTPUT_TOKENS = 264
+DEFAULT_MAX_OUTPUT_TOKENS = DRY_RUN_FIXTURE_MAX_OUTPUT_TOKENS
+DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = (
+    MAX_WORKFLOW_DEPTH * DRY_RUN_FIXTURE_MAX_OUTPUT_TOKENS
+)
 # Bound every provider response before materializing it in memory. Eight MiB is
 # ample for model catalogs, JSON probe responses, and the deliberately tiny
 # benchmark media outputs while preventing a provider from returning an
 # unbounded body to the evidence collector.
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
-# Smoke manifests can exercise plumbing but cannot justify production routing.
+# Historical fixture values retained only for compatibility/tests. They are not
+# statistical sufficiency criteria and must not change evidence status or routing.
 MINIMUM_PAIRED_TASK_COUNT = 30
 REQUIRED_COMPLETION_FRACTION = 0.9
 
@@ -2116,7 +2117,7 @@ def evaluate_policies(
     client: ModelClient,
     request_budget: RequestBudget,
     timer: Callable[[], float] = time.perf_counter,
-    total_token_budget: int = DEFAULT_POLICY_TOTAL_TOKEN_BUDGET,
+    total_token_budget: int | None = None,
     maximum_calls: int = MAX_WORKFLOW_DEPTH,
 ) -> dict[str, Any]:
     """Run every compared policy with equal cell-level token and call budgets.
@@ -2148,6 +2149,10 @@ def evaluate_policies(
     tasks = locked_evaluation_tasks(manifest)
     if not tasks:
         raise BenchmarkContractError("task manifest has no locked evaluation tasks")
+    if total_token_budget is None:
+        raise BenchmarkContractError(
+            "total_token_budget requires an explicit governed evaluation allocation"
+        )
     planned = planned_evaluation_requests(len(agents), len(tasks))
     if planned > request_budget.remaining_requests:
         raise BenchmarkBudgetError(
@@ -2550,20 +2555,11 @@ def _evaluation_evidence_summary(
     paired_task_ids = successful_tasks_by_policy.get("route_once", set()) & (
         successful_tasks_by_policy.get("conduct_bounded", set())
     )
-    sufficient = (
-        locked_task_count >= MINIMUM_PAIRED_TASK_COUNT
-        and len(paired_task_ids) >= MINIMUM_PAIRED_TASK_COUNT
-        and completion_fraction >= REQUIRED_COMPLETION_FRACTION
-    )
     return {
-        "evidence_status": (
-            "evidence_review_required" if sufficient else "insufficient_evidence"
-        ),
-        "decision_use": (
-            "production_candidate_review" if sufficient else "benchmark_smoke_only"
-        ),
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "evidence_status": "measurement_evidence_only",
+        "decision_use": "measurement_evidence_only",
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "observed_locked_task_count": locked_task_count,
         "observed_paired_task_count": len(paired_task_ids),
         "observed_completion_fraction": completion_fraction,
@@ -2775,10 +2771,9 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "",
         "## Evidence sufficiency",
         "",
-        f"- paired tasks: {report['evaluation']['observed_paired_task_count']} "
-        f"/ {report['evaluation']['minimum_paired_task_count']} required",
-        f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
-        f"/ {report['evaluation']['required_completion_fraction']} required",
+        f"- observed paired tasks: {report['evaluation']['observed_paired_task_count']}",
+        f"- observed completion fraction: {report['evaluation']['observed_completion_fraction']}",
+        "- statistical sufficiency threshold: none; a pre-registered validated evaluation design is required",
         "- production routing recommendation: none"
         if report["evaluation"]["routing_recommendation"] is None
         else f"- production routing recommendation: {report['evaluation']['routing_recommendation']}",
@@ -3093,7 +3088,7 @@ def run_benchmark(
     max_total_requests: int = 2000,
     probe_concurrency: int = 4,
     timeout_seconds: float = 60.0,
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+    max_output_tokens: int | None = None,
     max_eval_models: int = 7,
     seed: int = 7,
     git_sha: str = "",
@@ -3135,6 +3130,13 @@ def run_benchmark(
         raise BenchmarkContractError(
             f"run_mode must be 'dry_run' or 'live', not {run_mode!r}"
         )
+    if max_output_tokens is None:
+        if run_mode == "dry_run":
+            max_output_tokens = DRY_RUN_FIXTURE_MAX_OUTPUT_TOKENS
+        else:
+            raise BenchmarkContractError(
+                "live benchmark requires an explicit governed max_output_tokens allocation"
+            )
     if (
         isinstance(max_output_tokens, bool)
         or not isinstance(max_output_tokens, int)
@@ -3203,8 +3205,8 @@ def run_benchmark(
         "max_workflow_depth": MAX_WORKFLOW_DEPTH,
         "policy_total_token_budget": max_output_tokens * MAX_WORKFLOW_DEPTH,
         "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "seed": seed,
         "task_manifest_version": manifest["manifest_version"],
         "pricing_scenario_version": (
@@ -3330,7 +3332,12 @@ def run_benchmark_cli(argv: list[str]) -> int:
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument(
-        "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Explicit governed per-provider-call output-token cap; required for live runs"
+        ),
     )
     parser.add_argument("--max-eval-models", type=int, default=7)
     parser.add_argument("--seed", type=int, default=7)
