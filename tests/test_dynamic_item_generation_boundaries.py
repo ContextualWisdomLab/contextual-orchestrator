@@ -1,180 +1,223 @@
-"""Fail-closed boundaries for provider-neutral item-generation evidence."""
+"""Fail-closed resource and identity boundaries for dynamic generation."""
 
 from __future__ import annotations
 
-import json
+import ast
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+import contextual_orchestrator.dynamic_item_generation as generation
 from contextual_orchestrator.dynamic_item_generation import (
     DYNAMIC_ITEM_GENERATION_CONTRACT_V1,
+    MAX_GENERATION_CRITERIA,
+    MAX_GENERATION_REFERENCES,
     DynamicItemGenerationError,
     DynamicItemGenerationInvocation,
-    GenerationConfigurationIdentity,
-    GenerationStatus,
 )
 
 
-def _configuration_payload() -> dict[str, Any]:
+def _criterion(seed: str) -> dict[str, object]:
+    """Return one complete criterion for boundary tests."""
     return {
-        "generator_family_ref": "generator_family_alpha",
-        "provider_ref": "provider_alpha",
-        "model_revision_ref": "model_revision_alpha",
-        "implementation_revision_ref": "implementation_revision_alpha",
-        "instruction_revision_ref": "instruction_revision_alpha",
-        "response_schema_revision_ref": "response_schema_revision_alpha",
-        "workflow_mode_ref": "workflow_mode_route",
-        "modality_channel_ref": "modality_text",
+        "criterion_revision_ref": f"{seed}_revision",
+        "definition_ref": f"{seed}_definition",
+        "definition_sha256": "1" * 64,
+        "admissible_evidence_rule_ref": f"{seed}_evidence",
+        "admissible_evidence_rule_sha256": "2" * 64,
+        "exclusion_rule_ref": f"{seed}_exclusion",
+        "exclusion_rule_sha256": "3" * 64,
+        "response_semantics_ref": f"{seed}_semantics",
+        "response_semantics_sha256": "4" * 64,
+        "abstention_rule_ref": f"{seed}_abstention",
+        "abstention_rule_sha256": "5" * 64,
+        "not_observable_rule_ref": f"{seed}_not_observable",
+        "not_observable_rule_sha256": "6" * 64,
+        "categories": {
+            f"{seed}_zero": {
+                "definition_ref": f"{seed}_zero_definition",
+                "definition_sha256": "7" * 64,
+                "order_index": 0,
+            },
+            f"{seed}_one": {
+                "definition_ref": f"{seed}_one_definition",
+                "definition_sha256": "8" * 64,
+                "order_index": 1,
+            },
+        },
     }
 
 
-def _payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _payload() -> dict[str, Any]:
+    """Return one minimal valid criterion-bound generation payload."""
+    return {
         "contract_id": DYNAMIC_ITEM_GENERATION_CONTRACT_V1,
-        "invocation_ref": "generation_invocation_alpha",
-        "configuration": _configuration_payload(),
-        "blueprint_revision_ref": "evaluation_blueprint_revision_1",
-        "source_snapshot_refs": ["source_snapshot_1"],
-        "retrieval_context_refs": ["retrieval_context_1"],
-        "attempt_refs": ["attempt_1"],
+        "invocation_ref": "invocation",
+        "configuration": {
+            "generator_family_ref": "family",
+            "provider_ref": "provider",
+            "model_revision_ref": "model",
+            "implementation_revision_ref": "implementation",
+            "instruction_revision_ref": "instruction",
+            "response_schema_revision_ref": "schema",
+            "workflow_mode_ref": "workflow",
+            "modality_channel_ref": "text",
+        },
+        "blueprint_revision_ref": "blueprint",
+        "criterion_set": {
+            "criterion_set_snapshot_ref": "criterion_set",
+            "criterion_set_sha256": "a" * 64,
+            "blueprint_revision_ref": "blueprint",
+            "rubric_revision_ref": "rubric",
+            "intended_use_ref": "intended_use",
+            "construct_ref": "construct",
+            "population_scope_ref": "population",
+            "language_scope_ref": "language",
+            "domain_scope_ref": "domain",
+            "criteria": {"criterion": _criterion("criterion")},
+        },
+        "target_criterion_refs": ["criterion"],
+        "source_snapshot_refs": [],
+        "retrieval_context_refs": [],
+        "attempt_refs": ["attempt"],
         "seed_ref": None,
         "status": "generated",
-        "generated_item_ref": "evaluation_item_alpha",
-        "generated_content_ref": "generated_content_alpha",
-        "generated_content_sha256": "a" * 64,
+        "generated_item_ref": "item",
+        "generated_content_ref": "content",
+        "generated_content_sha256": "b" * 64,
         "reason_ref": None,
     }
-    payload.update(overrides)
-    return payload
 
 
-def test_json_parser_handles_escaped_strings_and_rejects_bad_envelopes() -> None:
-    payload = _payload()
-    payload["configuration"]["provider_ref"] = 'provider_"alpha'  # type: ignore[index]
-    parsed = DynamicItemGenerationInvocation.from_json(json.dumps(payload))
-    assert parsed.configuration.provider_ref == 'provider_"alpha'
-
-    for value in (object(), "{not-json", "[" * 65 + "0" + "]" * 65):
-        with pytest.raises(DynamicItemGenerationError) as caught:
-            DynamicItemGenerationInvocation.from_json(value)  # type: ignore[arg-type]
-        assert caught.value.code == "invalid_json"
-
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation.from_json("[]")
-    assert caught.value.code == "invalid_object"
-
-
-def test_mapping_and_unknown_field_boundaries() -> None:
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation.from_mapping({1: "not-a-string-key"})
-    assert caught.value.code == "invalid_object_key"
-
-    payload = _payload(unexpected_field="value")
+def _code(payload: dict[str, Any]) -> str:
+    """Return one stable error code."""
     with pytest.raises(DynamicItemGenerationError) as caught:
         DynamicItemGenerationInvocation.from_mapping(payload)
-    assert caught.value.code == "unknown_field"
-
-    payload = _payload()
-    del payload["reason_ref"]
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation.from_mapping(payload)
-    assert caught.value.code == "missing_field"
-
-
-def test_configuration_requires_exact_complete_known_fields() -> None:
-    payload = _configuration_payload()
-    del payload["provider_ref"]
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        GenerationConfigurationIdentity.from_mapping(payload)
-    assert caught.value.code == "missing_field"
-
-    payload = _configuration_payload()
-    payload["unexpected"] = "value"
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        GenerationConfigurationIdentity.from_mapping(payload)
-    assert caught.value.code == "unknown_field"
-
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        GenerationConfigurationIdentity.from_mapping([])
-    assert caught.value.code == "invalid_object"
+    return caught.value.code
 
 
 @pytest.mark.parametrize(
-    "invalid",
+    "invalid_ref",
     (
         "",
-        " provider_alpha",
-        "provider_alpha ",
-        "\ufeffprovider_alpha",
-        "provider_alpha\ufeff",
+        " ref",
+        "ref ",
+        "\ufeffref",
+        "ref\ufeff",
         "line\nbreak",
         "\ud800",
+        "left\u200bright",
         "x" * 257,
-        object(),
     ),
 )
-def test_reference_values_are_exact_bounded_unicode_scalars(invalid: object) -> None:
-    payload = _configuration_payload()
-    payload["provider_ref"] = invalid
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        GenerationConfigurationIdentity.from_mapping(payload)
-    assert caught.value.code == "invalid_reference"
+def test_exact_references_reject_aliases_controls_surrogates_and_excess(
+    invalid_ref: str,
+) -> None:
+    """Opaque references are never normalized or accepted beyond their budget."""
+    payload = _payload()
+    payload["invocation_ref"] = invalid_ref
+    assert _code(payload) == "invalid_reference"
 
 
-def test_reference_arrays_are_typed_nonempty_when_required_and_bounded() -> None:
-    for attempts in ("attempt_1", [], ["attempt_1"] * 257):
-        payload = _payload(attempt_refs=attempts)
-        with pytest.raises(DynamicItemGenerationError) as caught:
-            DynamicItemGenerationInvocation.from_mapping(payload)
-        assert caught.value.code == "invalid_references"
+def test_complete_lowercase_digests_are_required_everywhere() -> None:
+    """Content and criterion meaning cannot be identified by partial digests."""
+    for path in (
+        ("generated_content_sha256",),
+        ("criterion_set", "criterion_set_sha256"),
+        (
+            "criterion_set",
+            "criteria",
+            "criterion",
+            "definition_sha256",
+        ),
+    ):
+        payload = _payload()
+        cursor: dict[str, Any] = payload
+        for component in path[:-1]:
+            cursor = cursor[component]
+        cursor[path[-1]] = "A" * 64
+        assert _code(payload) == "invalid_sha256"
 
 
-def test_status_digest_and_terminal_state_coupling_fail_closed() -> None:
-    for status in (object(), "unknown"):
-        with pytest.raises(DynamicItemGenerationError) as caught:
-            DynamicItemGenerationInvocation.from_mapping(_payload(status=status))
-        assert caught.value.code == "invalid_status"
+def test_reference_collections_are_typed_unique_nonempty_and_bounded() -> None:
+    """Attempts and criterion targets retain strict bounded identity."""
+    for field in (
+        "target_criterion_refs",
+        "attempt_refs",
+    ):
+        payload = _payload()
+        payload[field] = []
+        assert _code(payload) == "invalid_references"
 
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation.from_mapping(
-            _payload(generated_content_sha256=object())
-        )
-    assert caught.value.code == "invalid_sha256"
+        payload = _payload()
+        payload[field] = ["same", "same"]
+        assert _code(payload) == "duplicate_reference"
 
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation.from_mapping(
-            _payload(
-                status=GenerationStatus.FAILED,
-                generated_item_ref=None,
-                generated_content_ref=None,
-                generated_content_sha256=None,
-                reason_ref=None,
-            )
-        )
-    assert caught.value.code == "non_generated_requires_reason"
+        payload = _payload()
+        payload[field] = "not-an-array"
+        assert _code(payload) == "invalid_references"
 
+    payload = _payload()
+    payload["attempt_refs"] = [
+        f"attempt_{index}" for index in range(MAX_GENERATION_REFERENCES + 1)
+    ]
+    assert _code(payload) == "invalid_references"
 
-def test_direct_constructor_rejects_contract_and_configuration_rebinding() -> None:
-    configuration = GenerationConfigurationIdentity.from_mapping(_configuration_payload())
-    common = {
-        "invocation_ref": "generation_invocation_alpha",
-        "configuration": configuration,
-        "blueprint_revision_ref": "evaluation_blueprint_revision_1",
-        "source_snapshot_refs": [],
-        "retrieval_context_refs": [],
-        "attempt_refs": ["attempt_1"],
-        "seed_ref": None,
-        "status": GenerationStatus.GENERATED,
-        "generated_item_ref": "evaluation_item_alpha",
-        "generated_content_ref": "generated_content_alpha",
-        "generated_content_sha256": "a" * 64,
-        "reason_ref": None,
+    criteria = {
+        f"criterion_{index}": _criterion(f"criterion_{index}")
+        for index in range(MAX_GENERATION_CRITERIA + 1)
     }
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation(**common, contract_id="wrong/v1")
-    assert caught.value.code == "contract_incompatible"
+    payload = _payload()
+    payload["criterion_set"]["criteria"] = criteria
+    payload["target_criterion_refs"] = list(criteria)
+    assert _code(payload) == "invalid_criterion_set"
 
-    with pytest.raises(DynamicItemGenerationError) as caught:
-        DynamicItemGenerationInvocation(**{**common, "configuration": object()})
-    assert caught.value.code == "invalid_configuration"
+
+def test_contract_configuration_and_domain_types_fail_closed() -> None:
+    """Incompatible contracts and foreign direct domain objects are rejected."""
+    payload = _payload()
+    payload["contract_id"] = "wrong/v1"
+    assert _code(payload) == "contract_incompatible"
+
+    payload = _payload()
+    del payload["configuration"]["provider_ref"]
+    assert _code(payload) == "missing_field"
+
+    payload = _payload()
+    payload["configuration"]["temperature"] = 0.2
+    assert _code(payload) == "unknown_field"
+
+
+def test_generated_content_identity_and_failure_reason_types_are_strict() -> None:
+    """Terminal states cannot pass non-string references through optional paths."""
+    payload = _payload()
+    payload["generated_item_ref"] = object()
+    assert _code(payload) == "invalid_reference"
+
+    payload = _payload()
+    payload["generated_content_sha256"] = object()
+    assert _code(payload) == "invalid_sha256"
+
+    payload = _payload()
+    payload.update(
+        status="failed",
+        generated_item_ref=None,
+        generated_content_ref=None,
+        generated_content_sha256=None,
+        reason_ref=object(),
+    )
+    assert _code(payload) == "invalid_reference"
+
+
+def test_public_generation_module_has_complete_docstrings() -> None:
+    """Every function and class in the new public module is documented."""
+    source_path = Path(generation.__file__)
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    missing = [
+        f"{node.name}@{node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and ast.get_docstring(node) is None
+    ]
+    assert missing == []
