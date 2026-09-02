@@ -37,6 +37,9 @@ consume untrusted bytes/JSON:
     ``opencode_zen``/``nvidia_nim``/``nvidia_nim_sub``/``openai`` rows
     (ADR 0041). Must never raise and must never return ``True`` unless every
     present monetary value is a valid non-negative finite zero.
+11. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
+    observation boundary. Arbitrary JSON must fail closed or round-trip to the
+    same bounded published-language payload.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -74,6 +77,11 @@ from contextual_orchestrator.reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     production_default_change_allowed,
     run_equal_budget_ablation,
+)
+from contextual_orchestrator.rater_observation import (
+    MAX_RATER_OBSERVATIONS,
+    RaterInvocation,
+    RaterObservationError,
 )
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
@@ -138,7 +146,9 @@ def exercise_request_body(raw: bytes) -> None:
 
     # Unknown-key rejection must never raise anything but RequestError.
     try:
-        server._reject_unknown_keys(body, {"prompt_text", "run_mode", "messages", "mode"})
+        server._reject_unknown_keys(
+            body, {"prompt_text", "run_mode", "messages", "mode"}
+        )
     except RequestError:
         pass
 
@@ -331,7 +341,12 @@ def exercise_redaction(text: str) -> None:
     assert once == twice, "redaction is not idempotent"
 
     # ``redact_value`` must preserve container shape while redacting leaves.
-    payload = {"trace": [text, {"nested": text}], "count": 3, "flag": True, "none": None}
+    payload = {
+        "trace": [text, {"nested": text}],
+        "count": 3,
+        "flag": True,
+        "none": None,
+    }
     out = redact_value(payload)
     assert isinstance(out, dict)
     assert isinstance(out["trace"], list)
@@ -341,12 +356,27 @@ def exercise_redaction(text: str) -> None:
 
 def _mock_orchestrator() -> TaskOrchestrator:
     agents = [
-        ModelAgent(id="general_agent", model="mock-generalist", base_url="mock://generalist",
-                   tags=("reasoning", "writing", "planning"), priority=1),
-        ModelAgent(id="builder_agent", model="mock-builder", base_url="mock://builder",
-                   tags=("coding", "debugging", "implementation"), priority=2),
-        ModelAgent(id="reviewer_agent", model="mock-reviewer", base_url="mock://reviewer",
-                   tags=("verification", "security", "review"), priority=3),
+        ModelAgent(
+            id="general_agent",
+            model="mock-generalist",
+            base_url="mock://generalist",
+            tags=("reasoning", "writing", "planning"),
+            priority=1,
+        ),
+        ModelAgent(
+            id="builder_agent",
+            model="mock-builder",
+            base_url="mock://builder",
+            tags=("coding", "debugging", "implementation"),
+            priority=2,
+        ),
+        ModelAgent(
+            id="reviewer_agent",
+            model="mock-reviewer",
+            base_url="mock://reviewer",
+            tags=("verification", "security", "review"),
+            priority=3,
+        ),
     ]
     return TaskOrchestrator(agents)
 
@@ -380,7 +410,7 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
         if not frame or frame == "data: [DONE]":
             continue
         assert frame.startswith("data: ")
-        json.loads(frame[len("data: "):])
+        json.loads(frame[len("data: ") :])
 
 
 def exercise_reasoning_effort_profile(value: Any) -> None:
@@ -397,7 +427,9 @@ def exercise_reasoning_effort_profile(value: Any) -> None:
     try:
         # ``true_theta`` belongs to the ablation input, not the profile schema.
         # Keep the two trust-boundary payloads separate so this branch is reachable.
-        profile_value = {key: item for key, item in value.items() if key != "true_theta"}
+        profile_value = {
+            key: item for key, item in value.items() if key != "true_theta"
+        }
         profile = parse_reasoning_effort_profile(profile_value)
     except (EffortProfileError, TypeError, ValueError):
         return
@@ -434,6 +466,18 @@ def exercise_structured_output_error(content: str, schema: Any) -> None:
     }
     result = _structured_output_error(content, response_format)
     assert result in {None, "invalid_json", "schema_missing", "schema_violation"}
+
+
+def exercise_rater_observation(value: Any) -> None:
+    """Drive arbitrary JSON through the governed rater observation boundary."""
+    try:
+        invocation = RaterInvocation.from_mapping(value)
+    except RaterObservationError:
+        return
+    payload = invocation.to_payload()
+    assert 1 <= len(payload["observations"]) <= MAX_RATER_OBSERVATIONS
+    assert RaterInvocation.from_mapping(payload).to_payload() == payload
+
 
 def exercise_nim_catalog(raw: bytes) -> None:
     """Drive the NIM benchmark model-catalog parser over arbitrary bytes.
