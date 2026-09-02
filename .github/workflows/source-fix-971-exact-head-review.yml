@@ -8,7 +8,7 @@ on:
       - .github/workflows/source-fix-971-exact-head-review.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: source-fix-971-exact-head-review
@@ -18,8 +18,6 @@ jobs:
   repair:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
     steps:
       - name: Checkout exact writer head without persisted mutation credentials
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -336,7 +334,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f \
+          git rm -f --ignore-unmatch \
             .github/workflows/source-fix-971-exact-head-review.yml \
             .github/workflows/source-fix-971-default-retry-policy.yml \
             .github/source-fix-971-default-retry-policy.trigger \
@@ -349,6 +347,8 @@ jobs:
 
       - name: Commit verified owner repair and publish with workflow-starting credential
         shell: bash
+        env:
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${WORKFLOW_PUSH_TOKEN:-}" ]; then
