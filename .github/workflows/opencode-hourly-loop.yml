@@ -2,7 +2,7 @@ name: OpenCode hourly maintenance loop
 
 # Hourly autonomous maintenance: an OpenCode agent whose model traffic is
 # served by THIS repository's gateway (contextual-orchestrator) with
-# auto-discovered providers and operator-managed model-group routing.
+# auto-discovered providers and governed orchestrator/free candidate admission.
 # The agent works the PR queue (review -> fix -> recheck -> merge), root-causes
 # failing checks, and advances docs/product-technical-gap-baseline.md items.
 
@@ -51,11 +51,6 @@ jobs:
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
-    # 300m (5h): generous headroom above the ~2h+ per-model runs this loop's
-    # gateway/inference steps intentionally leave unbounded, while staying
-    # well under the platform's implicit 360m job cap so cancel-in-progress:
-    # false can't let one wedged run block up to ~6 hourly triggers.
-    timeout-minutes: 300
     permissions:
       contents: write # required for reviewed branch fixes; scoped to this job
       pull-requests: write
@@ -128,7 +123,7 @@ jobs:
           cat > ~/.config/opencode/opencode.json <<JSON
           {
             "\$schema": "https://opencode.ai/config.json",
-            "model": "contextual_orchestrator_gateway/orchestrator/auto",
+            "model": "contextual_orchestrator_gateway/orchestrator/free",
             "provider": {
               "contextual_orchestrator_gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -138,7 +133,7 @@ jobs:
                   "apiKey": "${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "orchestrator/auto": { "name": "measured automatic orchestration" }
+                  "orchestrator/free": { "name": "governed free-pool orchestration" }
                 }
               }
             }
@@ -157,7 +152,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/auto \
+          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/free \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
