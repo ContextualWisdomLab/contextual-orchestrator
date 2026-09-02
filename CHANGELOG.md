@@ -1004,9 +1004,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   plus usage-record identities. Missing provider usage is explicitly
   unavailable; the gateway does not estimate billing tokens from the final
   answer, and nested gateway upstreams remain compatible (ADR 0040).
-- Experimental CEFR criterion-observation gateway with exact contract checks,
-  independent rater blindness, bounded structured-output parsing, replay
-  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
