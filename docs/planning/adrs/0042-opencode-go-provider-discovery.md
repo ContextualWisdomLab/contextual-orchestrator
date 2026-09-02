@@ -1,9 +1,8 @@
 ---
 id: "0042"
 title: "Add OpenCode Go as a second, subscription-gated provider source"
-status: accepted
+status: proposed
 proposed_date: "2026-09-02"
-accepted_date: "2026-09-02"
 deciders:
   - "repository maintainer"
 affected_components:
@@ -19,9 +18,9 @@ success_criteria:
   - metric: "fail-closed cost/modality join"
     target: "opencode_go joins the same 'opencode' Models.dev catalog as opencode_zen, under the same unmatched-id/missing-cost/fetch-failure fail-closed rules ADR 0041 already proved"
     source: "tests/test_model_discovery.py::test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference and test_opencode_go_metadata_failure_keeps_availability_but_not_free_suffix"
-  - metric: "no new parser"
-    target: "opencode_go reuses the default openai_compatible style; no opencode_go-specific parsing branch exists"
-    source: "contextual_orchestrator/model_discovery.py PROVIDER_MODEL_SOURCES entry for opencode_go (style left at its default)"
+  - metric: "mixed-protocol safety"
+    target: "only IDs documented for /v1/chat/completions enter the ordinary chat pool; /responses and /messages IDs are excluded until a protocol-specific adapter exists"
+    source: "contextual_orchestrator/model_discovery.py::_OPENCODE_GO_CHAT_MODEL_IDS and tests/test_model_discovery.py::test_opencode_go_excludes_responses_and_messages_models_from_chat_pool"
 ---
 
 # Add OpenCode Go as a second, subscription-gated provider source
@@ -82,12 +81,13 @@ Add one more `ProviderModelSource` entry, `opencode_go`, immediately after
 - `list_url="https://opencode.ai/zen/go/v1/models"`,
   `chat_base_url="https://opencode.ai/zen/go/v1"` — Go's own endpoints, not
   Zen's.
-- `style` left at its default (`"openai_compatible"`) — Go's `/v1/models`
-  response has the same shape as every other OpenAI-compatible source
-  already handled by `_parse_openai_compatible`; no new parser, no new
-  `style="opencode_go"` branch. This is the smallest possible diff: one
-  declarative tuple entry, reusing 100% of the existing discovery, retry,
-  dedup, and privacy-tag machinery.
+- `style` remains `"openai_compatible"` for the discovery envelope,
+  but the source carries an explicit allowlist derived from Go's official
+  endpoint table. Go's `/v1/models` response has the same shape as other
+  OpenAI-compatible discovery responses, while its model IDs do not all share
+  the same request protocol. Only the documented chat-completions subset enters
+  the generic CO chat pool; responses/message models fail closed until a
+  protocol-specific adapter is released.
 - `bootstrap_required=False` — matches `opencode_zen`; most deployments will
   have neither, one, or the other, never both required.
 - `models_dev_provider_id="opencode"` — the same value as `opencode_zen`.
@@ -119,6 +119,10 @@ Add one more `ProviderModelSource` entry, `opencode_go`, immediately after
   `CHANGELOG.d/bytez-raw-token-authorization.md` fragment already on `main`
   show Bytez actually takes a bare token with no scheme word — the docs table
   had not been updated to match that fix.
+- Go models using `/v1/responses` or `/v1/messages` are deliberately not
+  promoted to ordinary chat agents yet. This is a temporary capability boundary,
+  not a claim that those endpoints are unsupported; a later protocol adapter
+  must add explicit endpoint metadata and wire-format tests before admission.
 - No change to any existing provider's behavior: `opencode_zen`'s source
   entry, credential, and tests are untouched.
 
