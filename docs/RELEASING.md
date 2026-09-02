@@ -2,7 +2,7 @@
 
 This document is for a human maintainer cutting a real, immutable
 `contextual-orchestrator` release. It is deliberately narrow — see
-[`docs/planning/adrs/0127-canonical-immutable-release.md`](planning/adrs/0127-canonical-immutable-release.md)
+[`docs/planning/adrs/0129-canonical-immutable-release.md`](planning/adrs/0129-canonical-immutable-release.md)
 for the full design and its explicit non-goals.
 
 ## What a release is, and is not

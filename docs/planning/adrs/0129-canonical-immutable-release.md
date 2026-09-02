@@ -1,5 +1,5 @@
 ---
-id: "0127"
+id: "0129"
 title: "Publish a canonical immutable GitHub Release, gated on protected-main evidence"
 status: proposed
 proposed_date: "2026-09-02"

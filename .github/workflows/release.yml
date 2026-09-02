@@ -2,7 +2,7 @@ name: Release
 
 # Publishes a canonical, immutable GitHub Release so downstream consumers can
 # pin a versioned tag instead of vendoring this repository's source SHA (see
-# docs/planning/adrs/0127-canonical-immutable-release.md). This is a
+# docs/planning/adrs/0129-canonical-immutable-release.md). This is a
 # deliberate, maintainer-dispatched action only -- it never runs on push,
 # schedule, or as a side effect of merging to main. It never re-implements
 # GitHub branch-protection governance: it verifies the released commit really

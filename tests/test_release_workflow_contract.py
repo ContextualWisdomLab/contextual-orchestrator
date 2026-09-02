@@ -1,7 +1,7 @@
 """Static contract for the canonical immutable release mechanism.
 
 Pins the structure of `.github/workflows/release.yml` per
-docs/planning/adrs/0127-canonical-immutable-release.md: a deliberate,
+docs/planning/adrs/0129-canonical-immutable-release.md: a deliberate,
 maintainer-dispatched trigger only; a fail-closed gate that verifies the
 released commit is protected main's untampered current tip and that the
 requested version matches `pyproject.toml`; a fresh full test-suite run; and

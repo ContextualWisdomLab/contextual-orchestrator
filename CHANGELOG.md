@@ -24,7 +24,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the Wardnet
   consumer-owner handoff, all recorded on `contextual-orchestrator#971`) an
   immutable pin target instead of a vendored source SHA. See
-  `docs/planning/adrs/0127-canonical-immutable-release.md` and
+  `docs/planning/adrs/0129-canonical-immutable-release.md` and
   `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
   and dispatching the first `v0.2.0` release are deliberately separate
   actions.

@@ -35,7 +35,7 @@ Four independent downstream consumers hit this wall on
 - **`ContextualWisdomLab/EgressWeave#235`**: a 45-minute Actions job timeout
   on the same gateway-backed pattern — the resumable-long-running-execution
   half of this gap, tracked here but explicitly out of scope for the release
-  mechanism landed below (see Non-goals in ADR 0127).
+  mechanism landed below (see Non-goals in ADR 0129).
 
 The owner's stated RED/GREEN acceptance for the release piece, verbatim
 (PR #971, comment at 2026-09-02T18:26:04Z): "the resulting released API/
@@ -77,11 +77,11 @@ review evidence `evaluate_release_authorization()` would ask for, once, at
 merge time — the release gate's job is to confirm a commit really is that
 untampered protected-`main` tip, not re-litigate a question branch
 protection already answered. Full reasoning:
-[ADR 0127](planning/adrs/0127-canonical-immutable-release.md).
+[ADR 0129](planning/adrs/0129-canonical-immutable-release.md).
 
 ### What was built (this session, landed on a branch — not yet merged, no release cut)
 
-- **ADR**: `docs/planning/adrs/0127-canonical-immutable-release.md` — trigger
+- **ADR**: `docs/planning/adrs/0129-canonical-immutable-release.md` — trigger
   (`workflow_dispatch` only, explicit `version` input, never push/schedule),
   gate (exact current-main-tip check, `pyproject.toml` version match, tag-
   non-existence, a fresh full-suite pytest run), release contents (annotated
@@ -103,7 +103,7 @@ protection already answered. Full reasoning:
     existing text-assertion contract-test convention (`tests/
     test_nim_benchmark_workflow_contract.py`) rather than adding a new
     PyYAML dependency nothing else in this repository uses.
-- **`.github/workflows/release.yml`**: implements the ADR 0127 gate exactly
+- **`.github/workflows/release.yml`**: implements the ADR 0129 gate exactly
   as designed above; `permissions: contents: write` is scoped to the release
   job only, every other default stays `contents: read`.
 - **`docs/RELEASING.md`**: new, maintainer-facing runbook for dispatching a
@@ -130,7 +130,7 @@ owner after this mechanism is reviewed and merged. The resumable-long-
 running-execution half of the 2026-09-02 owner comment (EgressWeave#235,
 `OPENCODE_RUN_TIMEOUT_SECONDS`, checkpoint/re-dispatch across runner
 termination) is unaddressed here — a real, separate runtime gap, deliberately
-out of scope for this release-mechanism pass (see ADR 0127's Non-goals).
+out of scope for this release-mechanism pass (see ADR 0129's Non-goals).
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
