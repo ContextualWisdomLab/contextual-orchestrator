@@ -2692,3 +2692,25 @@ controls, and makes serving identity fail closed unless exact `answering_step_id
 explicit `served_agent_id` evidence exists. Regression coverage exercises more than
 32 exclusions, missing identity, and explicit identity provenance. Exact-head hosted
 checks remain authoritative before merge.
+
+## 2026-09-02 — PR #983 follow-up: unconditional `served_agent_id` regression
+
+A full local suite run of the above repair surfaced a real regression it introduced:
+making `route_once`/`stream_route` stamp `served_agent_id` on every trace row
+unconditionally (to give the no-heuristics evidence reader an explicit fact even for
+an unchanged serving agent) broke a separate, pre-existing regression guard —
+`test_provider_reliability.py`'s and `test_tool_execution_fallback.py`'s "the default
+mock path must behave exactly as before: single attempt, no failover metadata" — by
+adding `served_agent_id` to trace rows that must never carry it outside a failover.
+Root-caused by diffing the failure against a clean `origin/main` worktree (no
+failure) versus the PR head (regressed), confirming the stamp change was the exact
+cause rather than a full-suite pollution artifact. Fixed by scoping the unconditional
+stamp to only fire while request-local candidate-attempt tracking is active (inside a
+`candidate_routing_policy` scope, detectable via
+`_REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None`), leaving the ordinary
+no-candidate-policy path's trace shape unchanged. All 200 tests across the affected
+files plus the full local suite (3355 passed, 2 pre-existing sandbox-only failures:
+`fast_mlsirm` unavailable, `test_spend_analytics` local-tokenizer artifact) pass
+clean. Lesson: a production fact-recording change made for one evidence consumer's
+sake must be checked against every other consumer of the same trace shape, not just
+the consumer it was written for.

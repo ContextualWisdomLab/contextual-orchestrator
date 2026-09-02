@@ -28,6 +28,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `route_once` and `stream_route` no longer stamp `served_agent_id` on every
+  trace row unconditionally. An earlier no-heuristics repair for candidate-
+  routing evidence made that stamp unconditional to give
+  `_candidate_routing_evidence` an explicit serving fact even when unchanged,
+  but this broke the pre-existing contract (regression-guarded by
+  `test_provider_reliability.py` and `test_tool_execution_fallback.py`) that
+  the ordinary, no-candidate-policy path never carries failover metadata for
+  an unchanged serving agent. The stamp is now unconditional only while
+  request-local candidate-attempt tracking is actually active (i.e. inside a
+  `candidate_routing_policy` scope); the ordinary path is unaffected.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

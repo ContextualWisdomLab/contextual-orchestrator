@@ -5597,8 +5597,12 @@ class TaskOrchestrator:
             "access": [],
             "latency_ms": round(latency_seconds * 1000, 2),
             "output": answer,
-            "served_agent_id": agent.id,
         }
+        if _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None:
+            # Streaming never fails over to a different agent, so this is
+            # always an explicit "served == agent" fact for candidate-routing
+            # evidence, never a failover signal.
+            trace_step["served_agent_id"] = agent.id
         if isinstance(usage, dict):
             trace_step["usage"] = usage
         record = self._with_effort_snapshot(
@@ -6677,9 +6681,15 @@ class TaskOrchestrator:
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
-            row["served_agent_id"] = attempt_served_id
             if attempt_served_id != candidate.id:
+                row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
+            elif _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None:
+                # Candidate-routing evidence needs an explicit serving fact on
+                # every attempt, even an unchanged one -- the ordinary no-policy
+                # path below must keep omitting the key entirely (regression
+                # guard: default mock path stays "no failover metadata").
+                row["served_agent_id"] = attempt_served_id
             answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
