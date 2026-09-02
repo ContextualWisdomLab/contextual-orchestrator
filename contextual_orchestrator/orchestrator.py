@@ -4824,6 +4824,28 @@ class TaskOrchestrator:
                             and isinstance(exc, ProviderResponseError)
                             and candidate_endpoint == preferred_endpoint
                         ):
+                            dropped_step = {
+                                "id": len(workflow["trace"])
+                                + len(structured_attempt_steps),
+                                "role": "synthesizer",
+                                "agent_id": candidate.id,
+                                "subtask": "Provider-facing structured synthesis",
+                                "access": [
+                                    step["id"] for step in workflow["trace"]
+                                ],
+                                "latency_ms": round(
+                                    (time.perf_counter() - synthesis_started)
+                                    * 1000,
+                                    2,
+                                ),
+                                "output": "",
+                                "validation_outcome": "provider_error",
+                            }
+                            if isinstance(response.get("usage"), dict):
+                                dropped_step["usage"] = _canonical_provider_usage(
+                                    response["usage"], responses=response_request
+                                )
+                            structured_attempt_steps.append(dropped_step)
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
                             synthesis_failure_recorded = True
