@@ -50,6 +50,12 @@ from .cefr_language_observation import (
     TaskOrchestratorCefrGateway,
     observe_language_response_criteria,
 )
+from .evaluation_criterion_binding import (
+    CategoryExecutionBinding,
+    CriterionExecutionBinding,
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
 from .rater_observation import (
     GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
     CriterionObservation,
@@ -163,6 +169,11 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    # immutable evaluation-criterion binding
+    "CategoryExecutionBinding",
+    "CriterionExecutionBinding",
+    "CriterionSetExecutionBinding",
+    "EvaluationCriterionBindingError",
     # generic governed-rater observation context
     "GOVERNED_RATER_OBSERVATION_CONTRACT_V1",
     "CriterionObservation",
