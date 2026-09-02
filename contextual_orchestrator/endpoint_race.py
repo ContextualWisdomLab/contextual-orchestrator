@@ -116,12 +116,25 @@ def race_first_valid(
             if not validate(value):
                 raise ValueError("endpoint returned an invalid completed response")
         except BaseException as exc:
+            reported_exc = exc
             if on_attempt_complete is not None:
-                on_attempt_complete(attempt.endpoint_id, None, exc)
-            future.set_exception(exc)
+                try:
+                    on_attempt_complete(attempt.endpoint_id, None, exc)
+                except BaseException as callback_exc:
+                    # ThreadPoolExecutor used to settle its Future with an
+                    # exception raised by the worker callback. Preserve that
+                    # contract explicitly now that raw daemon workers drive
+                    # bare Futures: an observer failure must never strand a
+                    # Future in RUNNING state under an unbounded race.
+                    reported_exc = callback_exc
+            future.set_exception(reported_exc)
             return
         if on_attempt_complete is not None:
-            on_attempt_complete(attempt.endpoint_id, value, None)
+            try:
+                on_attempt_complete(attempt.endpoint_id, value, None)
+            except BaseException as callback_exc:
+                future.set_exception(callback_exc)
+                return
         future.set_result(value)
 
     # Bare `concurrent.futures.Future` objects driven by raw `daemon=True`
