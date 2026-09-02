@@ -813,6 +813,18 @@ class _DaemonWorkerPool:
     observe a durable job's state immediately after ``submit()`` returns
     keep the same effectively-synchronous-for-fast-runners timing the
     ``ThreadPoolExecutor``-backed implementation had.
+
+    ``submit()`` also mirrors ``ThreadPoolExecutor``'s closed-pool contract:
+    once ``shutdown()`` has run, a later ``submit()`` raises ``RuntimeError``
+    instead of silently queuing work behind the shutdown sentinels, where it
+    would never be picked up by any worker (every worker already exits on
+    its own sentinel and none are spawned after shutdown, since
+    ``submit()`` is the only place that spawns them). ``ProviderEmbeddingBatchBackend``
+    itself never races ``submit()`` against ``shutdown()`` this way --
+    ``start()`` and ``close()`` both serialize through the backend's
+    ``_executor_lock`` and ``start()`` checks ``self._closed`` first -- but
+    this pool is a standalone primitive and must not depend on every caller
+    reproducing that locking to avoid stranding a job.
     """
 
     def __init__(self, max_workers: int, *, thread_name_prefix: str = "provider_embedding_worker") -> None:
@@ -821,6 +833,7 @@ class _DaemonWorkerPool:
         self._queue: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...]] | None] = queue.Queue()
         self._workers: list[threading.Thread] = []
         self._workers_lock = threading.Lock()
+        self._shutdown = False
 
     def _drain(self) -> None:
         while True:
@@ -834,9 +847,17 @@ class _DaemonWorkerPool:
                 _LOGGER.exception("provider embedding worker task raised")
 
     def submit(self, fn: Callable[..., Any], *args: Any) -> None:
-        """Queue ``fn(*args)`` for a pool worker. Fire-and-forget: no Future."""
-        self._queue.put((fn, args))
+        """Queue ``fn(*args)`` for a pool worker. Fire-and-forget: no Future.
+
+        Raises ``RuntimeError`` if ``shutdown()`` has already run, matching
+        ``ThreadPoolExecutor.submit``'s closed-pool contract, instead of
+        enqueuing work behind the shutdown sentinels where no worker would
+        ever pick it up.
+        """
         with self._workers_lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new work after shutdown")
+            self._queue.put((fn, args))
             if len(self._workers) < self._max_workers:
                 worker = threading.Thread(
                     target=self._drain,
@@ -863,6 +884,7 @@ class _DaemonWorkerPool:
                 except queue.Empty:
                     break
         with self._workers_lock:
+            self._shutdown = True
             workers = list(self._workers)
         for _ in workers:
             self._queue.put(None)

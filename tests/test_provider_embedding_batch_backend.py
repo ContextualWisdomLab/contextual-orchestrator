@@ -8,6 +8,7 @@ import pytest
 from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     ProviderEmbeddingBatchBackend,
+    _DaemonWorkerPool,
 )
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator import (
@@ -309,6 +310,29 @@ def test_close_waits_for_start_to_submit_work() -> None:
     starter.join(timeout=1)
     closer.join(timeout=1)
     assert shutdown_called.is_set()
+
+
+def test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work() -> None:
+    """A post-shutdown ``submit`` must fail fast, not enqueue behind sentinels.
+
+    Regression for a Devin Review finding ("Daemon pool accepts
+    post-shutdown work", ContextualWisdomLab/contextual-orchestrator#971):
+    ``_DaemonWorkerPool.shutdown`` used to set no closed state, so a
+    concurrent direct ``submit`` could enqueue real work behind the
+    shutdown sentinels every worker exits on -- work no worker would ever
+    pick up again. Real ``ThreadPoolExecutor.submit`` raises
+    ``RuntimeError`` once ``shutdown()`` has run; ``_DaemonWorkerPool`` now
+    matches that contract instead of silently stranding the job.
+    """
+    pool = _DaemonWorkerPool(2)
+    ran = threading.Event()
+    pool.submit(ran.set)
+    assert ran.wait(timeout=1)
+
+    pool.shutdown()
+
+    with pytest.raises(RuntimeError, match="shutdown"):
+        pool.submit(lambda: None)
 
 
 def test_server_shutdown_closes_embedding_workers() -> None:
