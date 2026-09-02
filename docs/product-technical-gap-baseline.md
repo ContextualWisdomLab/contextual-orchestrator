@@ -1,5 +1,68 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 PR #971: unbounded per-model OS thread allocation in OpenRouter free-endpoint discovery
+
+Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the
+"unbounded provider discovery and single-provider bootstrap concentration"
+fix recorded below: that fix's own `_openrouter_free_model_endpoints`
+rewrite (raw `threading.Thread(daemon=True)` workers instead of a
+`ThreadPoolExecutor`, to avoid blocking interpreter shutdown) left a
+separate, distinct gap, independently reported by a Devin Review comment on
+PR #971 and independently re-verified against current-head code before any
+change was made.
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/model_discovery.py`)
+
+> Free-model discovery creates unbounded threads
+>
+> When OpenRouter lists many free models, `workers` allocates one thread per
+> row. Large catalogs can exhaust memory or prevent provider discovery from
+> starting.
+
+### Root cause
+
+`_openrouter_free_model_endpoints` built one `threading.Thread` object per
+free model up front (`workers = [threading.Thread(...) for model_id in
+model_ids]`) and started every one of them immediately. A
+`threading.Semaphore(min(8, len(model_ids) or 1))` bounded how many of those
+threads could do real fetch *work* concurrently, but did nothing to bound
+how many native OS threads were *created and started* in the first place --
+each with real kernel/stack allocation overhead. A catalog of hundreds or
+thousands of free models (OpenRouter's actual free-tier catalog size is not
+contractually bounded) would therefore still allocate and start that many
+threads at once, before the semaphore ever limited anything, risking memory
+exhaustion or stalling discovery before a single fetch could begin -- exactly
+the finding.
+
+### Fix
+
+Replaced the one-thread-per-model construction with a fixed pool of at most
+8 daemon worker threads that each pull model IDs from a `queue.Queue` until
+it is empty, so the live thread count for this fetch stays bounded (`<= 8`)
+regardless of catalog size. The already-established daemon-only,
+abandon-on-hang behavior (no `ThreadPoolExecutor`, no interpreter-shutdown
+block) is unchanged; each worker still simply stops draining the queue if
+its current fetch hangs, while the other workers keep making independent
+progress.
+
+### Verification
+
+New regression `test_openrouter_free_model_endpoints_caps_concurrent_thread_creation`
+in `tests/test_model_discovery.py`: submits 40 free models with a
+fetch that blocks on a shared `threading.Event`, samples
+`threading.enumerate()` for live `openrouter-endpoints`-named threads while
+every fetch that will ever start is blocked, and asserts the count is `<= 8`
+(not 40). RED confirmed against the pre-fix one-thread-per-model
+implementation (40 live threads observed for 40 models); GREEN after the
+fixed-pool fix (`<= 8`). The pre-existing hang-safety regression
+(`test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`)
+continues to pass unchanged. Full suite: 3384 passed, 7 failed (all
+pre-existing/out-of-scope: 4x missing native `_token_packer` extension in
+`test_batch_embeddings.py`, the still-in-progress terminal-embedding-failover
+finding tracked separately, missing `fast_mlsirm` module, and the
+tokenizer-mismatch `test_spend_analytics.py` sandbox artifact), 2 skipped.
+`interrogate -f 100 contextual_orchestrator/model_discovery.py`: 100%.
+
 ## 2026-09-02 PR #971: recovered ZDR embedding batch bypassed request-policy enforcement
 
 Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the

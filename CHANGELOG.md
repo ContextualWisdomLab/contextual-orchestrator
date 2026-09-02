@@ -20,6 +20,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- OpenRouter free-model endpoint discovery (`_openrouter_free_model_endpoints`)
+  now fans its per-model fetch out across a fixed pool of at most 8 daemon
+  worker threads pulling model IDs from a queue, instead of allocating one
+  `threading.Thread` object per free model and gating only the *work* (not
+  thread creation itself) behind an 8-slot semaphore. A catalog of hundreds
+  or thousands of free models previously still allocated and started that
+  many native OS threads up front — real kernel/stack overhead each — before
+  the semaphore ever limited anything, risking memory exhaustion or stalling
+  discovery before a single fetch could begin. Live thread count now stays
+  bounded regardless of catalog size; daemon-only workers and the abandon-
+  on-deadline behavior for the enclosing bounded discovery call are
+  unchanged.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

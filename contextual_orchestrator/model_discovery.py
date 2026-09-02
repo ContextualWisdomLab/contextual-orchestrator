@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import math
+import queue
 import re
 import ssl
 import threading
@@ -1242,8 +1243,15 @@ def _openrouter_free_model_endpoints(
     carry none of that registration, so a hung fetch is abandoned exactly
     like every other stalled discovery-time network call in this module:
     the thread is silently discarded at interpreter exit, and shutdown is
-    never blocked on it. ``max_workers``-equivalent concurrency (at most 8
-    fetches in flight at a time) is preserved via a bounding semaphore.
+    never blocked on it. Concurrency is bounded by a *fixed pool of at most
+    8 daemon workers* pulling model IDs from a queue, rather than one
+    ``threading.Thread`` object per model gated only by a semaphore around
+    its work: the latter still allocates and starts one native OS thread
+    per model up front (real kernel/stack overhead each) before the
+    semaphore ever limits anything, so a catalog of hundreds or thousands
+    of free models could exhaust memory or stall discovery before a single
+    fetch even began. A fixed pool keeps the live thread count bounded
+    regardless of catalog size.
     """
     rows = payload.get("data") if isinstance(payload, dict) else None
     model_ids = [
@@ -1254,6 +1262,8 @@ def _openrouter_free_model_endpoints(
         and isinstance(row.get("pricing"), dict)
         and _pricing_is_free(row.get("pricing"))
     ]
+    if not model_ids:
+        return {}
 
     def fetch(model_id: str) -> Any:
         author, separator, slug = model_id.partition("/")
@@ -1270,22 +1280,24 @@ def _openrouter_free_model_endpoints(
 
     results: dict[str, Any] = {}
     results_lock = threading.Lock()
-    concurrency_limit = threading.Semaphore(min(8, len(model_ids) or 1))
+    work_queue: queue.Queue[str] = queue.Queue()
+    for model_id in model_ids:
+        work_queue.put(model_id)
 
-    def run(model_id: str) -> None:
-        with concurrency_limit:
+    def run() -> None:
+        while True:
+            try:
+                model_id = work_queue.get_nowait()
+            except queue.Empty:
+                return
             value = fetch(model_id)
-        with results_lock:
-            results[model_id] = value
+            with results_lock:
+                results[model_id] = value
 
+    worker_count = min(8, len(model_ids))
     workers = [
-        threading.Thread(
-            target=run,
-            args=(model_id,),
-            name=f"openrouter-endpoints-{model_id}",
-            daemon=True,
-        )
-        for model_id in model_ids
+        threading.Thread(target=run, name="openrouter-endpoints", daemon=True)
+        for _ in range(worker_count)
     ]
     for worker in workers:
         worker.start()
@@ -1295,7 +1307,9 @@ def _openrouter_free_model_endpoints(
         # above), so blocking this thread forever on an abandoned peer is
         # the same accepted tradeoff already documented for
         # `_run_bounded_by_deadline` -- the daemon property is what matters
-        # for shutdown, not how long this particular thread blocks.
+        # for shutdown, not how long this particular thread blocks. A
+        # worker stuck on one hung fetch simply never drains the rest of
+        # the queue; the other workers keep making progress independently.
         worker.join()
     return results
 

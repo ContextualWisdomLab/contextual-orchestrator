@@ -957,6 +957,76 @@ def test_openrouter_free_model_endpoints_hang_does_not_block_process_exit() -> N
     assert elapsed < 5.0, f"process took {elapsed:.1f}s to exit with a hung endpoint fetch outstanding"
 
 
+def test_openrouter_free_model_endpoints_caps_concurrent_thread_creation() -> None:
+    """A large free-model catalog must not allocate one OS thread per model.
+
+    Regression for a Devin Review finding: the per-model endpoint fetch fan-out
+    used to build one ``threading.Thread`` object per free model and start all
+    of them immediately, gating only *work* (not thread creation itself) behind
+    an 8-slot semaphore. A catalog of hundreds or thousands of free models would
+    therefore still allocate and start that many native OS threads at once --
+    each with real kernel/stack overhead -- before any semaphore-bounded
+    concurrency limit ever applied, risking memory exhaustion or stalling
+    discovery before a single fetch could even begin. The fan-out now uses a
+    fixed pool of at most 8 daemon worker threads pulling model IDs from a
+    queue, so the live thread count stays bounded regardless of catalog size.
+    """
+    model_count = 40
+    payload = {
+        "data": [
+            {"id": f"free/model-{i}", "pricing": {"prompt": "0", "completion": "0"}}
+            for i in range(model_count)
+        ]
+    }
+    release = threading.Event()
+    entered = threading.Event()
+    concurrent_entries = 0
+    max_concurrent_entries = 0
+    entries_lock = threading.Lock()
+
+    def blocking_fetch_json(url, *, api_key="", auth_scheme="Bearer", timeout=None):
+        nonlocal concurrent_entries, max_concurrent_entries
+        with entries_lock:
+            concurrent_entries += 1
+            max_concurrent_entries = max(max_concurrent_entries, concurrent_entries)
+        entered.set()
+        release.wait(timeout=5)
+        with entries_lock:
+            concurrent_entries -= 1
+        return {"data": []}
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        side_effect=blocking_fetch_json,
+    ):
+        runner = threading.Thread(
+            target=_openrouter_free_model_endpoints,
+            args=(payload,),
+            kwargs={"api_key": "k", "timeout": None},
+            daemon=True,
+        )
+        runner.start()
+        assert entered.wait(timeout=5), "no fetch ever started"
+        # Give every worker that will ever start a chance to do so before
+        # sampling -- the whole point is proving a ceiling holds, not a
+        # transient snapshot.
+        time.sleep(0.2)
+        live_worker_threads = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name.startswith("openrouter-endpoints")
+        ]
+        release.set()
+        runner.join(timeout=5)
+        assert not runner.is_alive()
+
+    assert len(live_worker_threads) <= 8, (
+        f"{len(live_worker_threads)} live 'openrouter-endpoints' threads for "
+        f"{model_count} models -- expected a fixed pool of at most 8"
+    )
+    assert max_concurrent_entries <= 8
+
+
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     """A provider parameter alone cannot make an image-only model a synthesizer."""
     register_credential("OPENROUTER_API_KEY", "sk-router")
