@@ -4,15 +4,14 @@ from pathlib import Path
 
 
 def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() -> None:
-    """Keep scheduled agent traffic on the seeded gateway and required key set.
+    """Keep scheduled agent traffic on the governed free pool and required key set.
 
-    The requested pool id is the fixed "orchestrator/free" (zero-cost,
-    ZDR-first), not "orchestrator/auto" -- see docs/adr/
-    0007-hourly-loop-orchestrator-free-pool-pin.md. This matches every other
-    OpenCode/Noema consumer across the ecosystem (only Strix's
-    security-analysis use case has a documented exception onto "auto").
-    "--auto-discover-model-agents" is a separate concern: the gateway's own
-    provider/credential discovery, not which pool OpenCode routes through.
+    The requested pool id is the fixed ``orchestrator/free``, not
+    ``orchestrator/auto``. ``--auto-discover-model-agents`` is a separate
+    concern: the gateway's own provider/credential discovery, not which pool
+    OpenCode routes through. Every GitHub Actions model-backed caller covered by
+    this contract must remain on the free pool; provider and credential
+    admission stays inside contextual-orchestrator.
     """
     workflow = Path(".github/workflows/opencode-hourly-loop.yml").read_text()
     prompt = Path(".github/opencode/hourly-loop-prompt.md").read_text()
@@ -56,3 +55,15 @@ def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() ->
     assert "clear redundancy or" in prompt
     assert "Rust is authoritative" in prompt
     assert "LLM-token arithmetic in Python" in prompt
+
+
+def test_hourly_loop_adr_stays_proposed_and_does_not_reopen_auto_routing() -> None:
+    """Keep the open-PR decision honest and fail closed without an auto escape hatch."""
+    adr = Path("docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md").read_text()
+
+    assert "- Status: Proposed" in adr
+    assert "future GitHub Actions" in adr
+    assert "must remain on `orchestrator/free`" in adr
+    assert "needs its own ADR amendment" not in adr
+    assert "free-catalog exhaustion, not a code defect" not in adr
+    assert "not a code defect" not in adr
