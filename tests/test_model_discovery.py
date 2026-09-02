@@ -6,6 +6,8 @@ import io
 import json
 import logging
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 from contextlib import contextmanager
@@ -28,6 +30,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
+    PROVIDER_DISCOVERY_DEADLINE_SECONDS,
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ModelUnitPrice,
@@ -2006,6 +2009,100 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].error_code == "transport_error"
     assert "connection refused" not in str(errors[0])
     assert errors[0].__cause__ is None
+
+
+def test_provider_discovery_deadline_default_is_bounded_and_independent() -> None:
+    """The discovery deadline is a finite default, distinct from other timeouts.
+
+    #971's design boundary keeps model *inference* (``ModelClient.timeout``)
+    and the per-HTTP-call discovery socket timeout (``DISCOVERY_TIMEOUT_SECONDS``)
+    unbounded by default. The separate per-provider discovery deadline this
+    finding requires must not silently inherit that -- it needs its own
+    finite bound so a stalled provider is ever actually abandoned.
+    """
+    assert PROVIDER_DISCOVERY_DEADLINE_SECONDS is not None
+    assert 0 < PROVIDER_DISCOVERY_DEADLINE_SECONDS < float("inf")
+
+
+def test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete() -> None:
+    """One provider's catalog fetch hanging forever must not starve the rest.
+
+    Regression for the #971 review finding: "model discovery must not allow
+    one stalled provider catalog request to block discovery of all later
+    healthy providers forever; this requires a separately bounded/cancellable
+    discovery mechanism, not a model-inference timeout." Before this fix,
+    ``discover_all_models``'s per-provider loop called
+    ``discover_provider_models`` directly and in-line -- nothing bounded or
+    cancelled that call, so a hang there blocked every later source forever
+    (this test would time out the whole suite without the fix). Patches
+    ``discover_provider_models`` itself, not just the HTTP layer, with a call
+    that blocks on an ``Event`` nothing ever sets -- proving the new bound
+    catches a hang the per-request socket ``timeout=`` kwarg could never
+    catch, since this mock does not even look at it.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    never_set = threading.Event()
+
+    def fake_discover_provider_models(source, *, timeout=None, ca_bundle=None, models_dev_metadata=None):
+        if source.provider_name == "openai":
+            never_set.wait()  # Hangs forever -- nothing ever sets this event.
+            raise AssertionError("unreachable: the stalled provider must never return")
+        return [
+            DiscoveredModel(
+                provider_name=source.provider_name,
+                model_id="meta/llama-3.3",
+                credential_name=source.credential_name,
+                chat_base_url=source.chat_base_url,
+                auth_scheme=source.auth_scheme,
+                capabilities=("chat",),
+            )
+        ]
+
+    started = time.monotonic()
+    with patch(
+        "contextual_orchestrator.model_discovery.discover_provider_models",
+        side_effect=fake_discover_provider_models,
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE, OPENROUTER_SOURCE),
+            discovery_deadline=0.2,
+        )
+    elapsed = time.monotonic() - started
+
+    # Generous bound for CI jitter -- what matters is that this is nowhere
+    # near "forever" and is driven by the 0.2s deadline, not the test runner.
+    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled provider"
+    assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
+    assert len(errors) == 1
+    assert errors[0].provider_name == "openai"
+    assert errors[0].error_code == "discovery_timeout"
+
+
+def test_discover_all_models_discovery_deadline_none_opts_into_unbounded_wait() -> None:
+    """An explicit ``discovery_deadline=None`` bypasses the bounding thread entirely.
+
+    Covers :func:`_discover_provider_models_bounded`'s unbounded branch: a
+    caller that explicitly wants the pre-#971-fix unbounded wait back (no
+    daemon thread, no join deadline) can still get it by passing
+    ``discovery_deadline=None``, and ordinary discovery still succeeds.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        return _Response({"data": [{"id": "gpt-review"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(
+            (OPENAI_SOURCE,),
+            discovery_deadline=None,
+        )
+
+    assert errors == []
+    assert [m.model_id for m in discovered] == ["gpt-review"]
 
 
 def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:

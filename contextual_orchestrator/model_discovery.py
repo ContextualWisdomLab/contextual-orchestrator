@@ -21,6 +21,7 @@ import logging
 import math
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -49,6 +50,26 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS: float | None = None
+# Bounded, cancellable wall-clock budget for one provider's *entire* catalog
+# discovery attempt (`discover_provider_models`, including every fetch and
+# retry it makes internally) inside `discover_all_models`'s per-provider
+# loop. This is a wholly separate concern from `DISCOVERY_TIMEOUT_SECONDS`
+# (the per-HTTP-call socket timeout passed *into* each fetch, which stays
+# unbounded by default so a slow-but-live catalog response is not mistaken
+# for an unavailable provider) and from `ModelClient.timeout` (the caller's
+# model-*inference* deadline, which #971 deliberately defaults to no
+# elapsed-time limit). Provider catalog listing at bootstrap/discovery time
+# is a different concern from serving a completion: one stalled provider's
+# list request -- even one whose hang the per-call socket timeout cannot
+# bound, e.g. a connection accepted but never answered, or in tests a mock
+# that blocks forever -- must never block discovery of every later,
+# healthy provider forever. `discover_all_models` runs each provider's
+# discovery on its own daemon thread and stops waiting once this deadline
+# elapses, recording a `ProviderDiscoveryError` and moving on to the next
+# provider; the abandoned thread cannot block interpreter shutdown (daemon)
+# and its eventual result, if any, is simply discarded. Pass
+# `discovery_deadline=None` explicitly to opt back into unbounded waiting.
+PROVIDER_DISCOVERY_DEADLINE_SECONDS: float = 30.0
 _LOGGER = logging.getLogger(__name__)
 # One retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
@@ -1652,16 +1673,87 @@ def discover_provider_models(
     return result
 
 
+def _discover_provider_models_bounded(
+    source: ProviderModelSource,
+    *,
+    timeout: float | None,
+    ca_bundle: str | None,
+    models_dev_metadata: Any,
+    discovery_deadline: float | None,
+) -> list[DiscoveredModel]:
+    """Run one provider's :func:`discover_provider_models` under a wall-clock bound.
+
+    Runs the call on its own daemon thread and stops waiting once
+    ``discovery_deadline`` elapses, raising :class:`ProviderDiscoveryError`
+    with error code ``"discovery_timeout"`` instead of blocking forever. This
+    bounds the whole per-provider attempt -- every internal fetch and retry
+    :func:`discover_provider_models` makes -- not just one HTTP call, so it
+    catches a hang the per-request socket timeout does not: a connection
+    accepted but never answered, a redirect loop, or (in tests) a mock that
+    never returns. The thread is daemonized specifically so an abandoned,
+    still-hung attempt cannot block interpreter shutdown; its result, if it
+    ever arrives, is simply discarded -- Python threads cannot be forcibly
+    killed, so "cancellable" here means "the caller stops waiting on it",
+    the same abandon-on-deadline approach already used for the OpenRouter
+    uptime sweep thread. ``discovery_deadline=None`` opts back into the
+    unbounded wait ``discover_all_models`` used before this bound existed.
+    """
+    if discovery_deadline is None:
+        return discover_provider_models(
+            source,
+            timeout=timeout,
+            ca_bundle=ca_bundle,
+            models_dev_metadata=models_dev_metadata,
+        )
+    results: list[list[DiscoveredModel]] = []
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(
+                discover_provider_models(
+                    source,
+                    timeout=timeout,
+                    ca_bundle=ca_bundle,
+                    models_dev_metadata=models_dev_metadata,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
+            failures.append(exc)
+
+    worker = threading.Thread(
+        target=run,
+        name=f"discover-provider-{source.provider_name}",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=discovery_deadline)
+    if worker.is_alive():
+        # The provider's catalog fetch is still running; abandon it rather
+        # than starve every source later in `discover_all_models`'s loop.
+        raise ProviderDiscoveryError(source.provider_name, "discovery_timeout")
+    if failures:
+        raise failures[0]
+    return results[0] if results else []
+
+
 def discover_all_models(
     sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
     *,
     timeout: float | None = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
+    discovery_deadline: float | None = PROVIDER_DISCOVERY_DEADLINE_SECONDS,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
     """Discover models across every provider with a registered credential.
 
     One provider's failure never blocks the others: errors are collected and
-    returned alongside whatever models were successfully discovered.
+    returned alongside whatever models were successfully discovered. This
+    now includes a provider whose catalog fetch simply never returns --
+    ``discovery_deadline`` (default :data:`PROVIDER_DISCOVERY_DEADLINE_SECONDS`,
+    a bounded, cancellable, per-provider budget wholly separate from any
+    model-inference deadline; see :func:`_discover_provider_models_bounded`)
+    bounds each provider's *entire* discovery attempt so one stalled source
+    can no longer block discovery of every later, healthy provider forever.
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
@@ -1681,11 +1773,12 @@ def discover_all_models(
     for source in sources:
         try:
             discovered.extend(
-                discover_provider_models(
+                _discover_provider_models_bounded(
                     source,
                     timeout=timeout,
                     ca_bundle=ca_bundle,
                     models_dev_metadata=models_dev_metadata,
+                    discovery_deadline=discovery_deadline,
                 )
             )
         except ProviderDiscoveryError as exc:
@@ -2171,16 +2264,34 @@ def select_bootstrap_discovered_agents(
     price_book: "PriceBook",
     limit: int,
 ) -> list[DiscoveredModel]:
-    """Build a deterministic, price-honest, model-group-diverse initial pool.
+    """Build a deterministic, price-honest, provider- and model-group-diverse pool.
 
     Candidates retain the known-price-first ordering of
     :func:`select_top_n_cheapest_discovered_agents` (queried here with no
     effective cap so it returns the full ranked, deduplicated, routable
-    field), but the first pass takes at most one endpoint for each
-    provider-declared exact model identity (its model group), not a whole
-    provider account. Remaining capacity is filled in the same deterministic
-    cost order. No vendor or endpoint name is used to infer a shared family
-    or collapse credential state. Duplicate serving identities never consume
+    field). Three ordered passes, each strictly preferred over the next:
+
+    1. At most one endpoint per *provider* and per model group. This is the
+       pass that actually delivers "provider-diverse" (not only
+       "model-group-diverse"): admitting several cheap, distinctly-named
+       models from a single provider before any other viable provider gets
+       a turn would build a pool that looks diverse by model identity while
+       remaining one provider's outage away from total failure -- exactly
+       the gap this pass closes. It does not reorder by price on its own;
+       it only *defers* a candidate whose provider already has a selected
+       endpoint, so a same-provider model is still preferred the moment no
+       untried provider remains.
+    2. Once every provider with a viable candidate has contributed (or
+       capacity ran out), fill remaining slots from the deferred candidates
+       that still introduce a new model group, still in cost order.
+    3. Any capacity still open (more slots than distinct model groups) is
+       filled from the remaining deterministic cost order, duplicate
+       endpoints included, exactly as before this pass existed.
+
+    No vendor or endpoint name is used to infer a shared family or collapse
+    credential state -- provider identity is `DiscoveredModel.provider_name`
+    exactly as reported by discovery (e.g. `nvidia_nim` and `nvidia_nim_sub`
+    remain independent). Duplicate serving identities never consume
     capacity twice.
     """
     if limit <= 0:
@@ -2194,16 +2305,29 @@ def select_bootstrap_discovered_agents(
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
     model_groups: set[str] = set()
+    providers: set[str] = set()
 
     for model in ranked:
         model_group = model_group_name_for(model)
-        if model_group in model_groups:
+        if model_group in model_groups or model.provider_name in providers:
             deferred.append(model)
+            continue
+        model_groups.add(model_group)
+        providers.add(model.provider_name)
+        selected.append(model)
+        if len(selected) == limit:
+            return selected
+
+    still_deferred: list[DiscoveredModel] = []
+    for model in deferred:
+        model_group = model_group_name_for(model)
+        if model_group in model_groups:
+            still_deferred.append(model)
             continue
         model_groups.add(model_group)
         selected.append(model)
         if len(selected) == limit:
             return selected
 
-    selected.extend(deferred[: limit - len(selected)])
+    selected.extend(still_deferred[: limit - len(selected)])
     return selected
