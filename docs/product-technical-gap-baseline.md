@@ -63,6 +63,114 @@ finding tracked separately, missing `fast_mlsirm` module, and the
 tokenizer-mismatch `test_spend_analytics.py` sandbox artifact), 2 skipped.
 `interrogate -f 100 contextual_orchestrator/model_discovery.py`: 100%.
 
+## 2026-09-02 PR #971: terminal-failure batch embedding documents restored endpoint health
+
+Observation time: 2026-09-02 Asia/Seoul. Closes the remaining still-open
+review blocker carried in PR #971's own description ("terminal
+failed/cancelled/rejected batch documents must not clear endpoint circuit
+failures, and incomplete synchronous documents must be recorded through the
+shared embedding-failure path before failover"): the synchronous-document
+half of that sentence was already fixed (see the "synchronous `/v1/embeddings`
+member result ... bypassed `orchestrator._record_embedding_failure`" entry in
+`CHANGELOG.md`'s `## [0.2.0] - Unreleased`); this entry is the terminal-batch
+half. Independently re-verified against current-head code before any change
+was made (never trusted as stated) -- confirmed genuinely still broken, not
+already fixed or stale.
+
+### Finding (Devin Review, PR #971, `contextual_orchestrator/server.py`)
+
+> Failed embedding jobs restore endpoint health
+>
+> When a batch returns a terminal failure, `observe_success` records success
+> and clears its circuit. Later requests keep selecting the failed endpoint.
+
+### Root cause
+
+The `/v1/batch/embeddings` HTTP handler's member-failover loop (the `for
+embedding_agent in embedding_agents:` loop calling
+`coordinator.complete_embeddings_batch(...)`) recorded success
+unconditionally on any call that returned without raising:
+
+```python
+except Exception as exc:
+    last_embedding_error = exc
+    orchestrator._record_embedding_failure(embedding_agent, "/v1/batch/embeddings", exc)
+    continue
+orchestrator._group_router.observe_success(embedding_agent.id, ...)
+orchestrator._record_success(embedding_agent.id)
+break
+...
+is_complete = document.get("status") == "completed"  # only decides the HTTP status code
+```
+
+`complete_embeddings_batch` submits the batch and returns whatever document
+`CostRoutingCoordinator.embeddings_batch_document` produces for it -- which
+can be a **terminal-failure document** (`status` of `"failed"`,
+`"cancelled"`, or `"rejected"` -- the exact set
+`embeddings_batch_document` itself checks to stop emitting a polling
+cadence) returned *normally*, with no exception raised. The bug was
+ordering, not a missing check: `observe_success`/`_record_success` ran and
+the loop `break`-ed *before* the terminal-status check the same function
+already computed one line later (`is_complete`) -- that check only ever
+gated the HTTP response code (200 vs 202), never success recording or
+failover. So a genuinely failed batch member still marked its endpoint
+healthy and cleared its circuit breaker; later requests kept selecting that
+broken endpoint instead of failing over to a healthy one. The sibling
+synchronous `/v1/embeddings` handler in the same file does not have this
+bug: it already gates success recording on
+`document.get("status") == "completed" and document.get("embeddings") is
+not None` and routes anything else through `_record_embedding_failure`
+before continuing -- confirmed the only other `observe_success`/
+`_record_success` call site in `server.py`, so this was the one remaining
+instance of the pattern in this file.
+
+### Fix
+
+`contextual_orchestrator/server.py`, `/v1/batch/embeddings` handler:
+
+- Added a module-level `_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES =
+  frozenset({"failed", "cancelled", "rejected"})`, matching
+  `CostRoutingCoordinator.embeddings_batch_document`'s own terminal-status
+  vocabulary (`cost_router.py`).
+- The loop now checks `document.get("status")` against that set
+  immediately after a successful (non-raising) call and before recording
+  any success: a terminal-failure document builds a synthetic
+  `RuntimeError(f"embedding batch member ended with {document.get('status')}")`,
+  routes it through the same shared `orchestrator._record_embedding_failure`
+  recorder an exception would use, discards the document, and `continue`s
+  to the next candidate agent -- the same failover shape a raised exception
+  already got. Only a document whose status is *not* a terminal failure
+  (`"completed"`, or an in-flight status such as `"queued"`, `"validating"`,
+  `"running"`) still records success and `break`s.
+- No other file changed; `model_discovery.py` and the rest of
+  `cost_router.py` are out of scope for this fix (separate in-flight work on
+  this branch).
+
+### Verification
+
+RED-before/GREEN-after. A pre-existing test in
+`tests/test_pr971_review_quality_regressions.py` --
+`test_terminal_embedding_batch_document_fails_over_before_marking_health`
+(mocks `coordinator.complete_embeddings_batch` to return a `status: "failed"`
+document for the first, higher-priority agent and a non-terminal
+`status: "validating"` document for the second, then posts to
+`/v1/batch/embeddings`) -- failed pre-fix (asserted `attempted == [first.id,
+second.id]`; pre-fix code `break`-ed after the first agent's false success,
+so only `[first.id]` was ever attempted and the response carried the failed
+`batch_id`) and passes post-fix (both agents attempted, 202 response carries
+the second agent's `"accepted-batch"` id). Directly confirmed with an
+additional ad hoc spy harness (not committed) around
+`orchestrator._group_router.observe_success`, `orchestrator._record_success`,
+and `orchestrator._record_embedding_failure` for the same scenario:
+post-fix, `observe_success`/`_record_success` are called only with the
+second (healthy) agent's id, and `_record_embedding_failure` is called
+exactly once with the first (failed) agent's id and a `RuntimeError`
+("embedding batch member ended with failed") -- i.e. the failed endpoint's
+circuit is never falsely cleared, and it is routed through the same
+recorder an exception would use. Full suite and `interrogate --fail-under
+100` confirmed green apart from named pre-existing sandbox-only failures
+unrelated to this change.
+
 ## 2026-09-02 PR #971: recovered ZDR embedding batch bypassed request-policy enforcement
 
 Observation time: 2026-09-02 Asia/Seoul. Follow-up correction to the

@@ -4975,6 +4975,16 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     return model
 
 
+# Terminal-failure batch document statuses that must never be treated as a
+# healthy completion for endpoint-health purposes. Mirrors the vocabulary
+# ``CostRoutingCoordinator.embeddings_batch_document`` (cost_router.py) uses
+# to stop polling a batch job: "failed"/"cancelled"/"rejected" are terminal
+# outcomes with no embeddings and no further transitions, distinct from
+# "completed" (success) and from in-flight statuses such as "queued",
+# "validating", or "running" (still eligible to become "completed" later).
+_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES = frozenset({"failed", "cancelled", "rejected"})
+
+
 def _available_embedding_agents(orchestrator: Any, model_name: str) -> list[Any]:
     """Map temporary embedding quarantine to the public availability contract."""
     try:
@@ -7446,6 +7456,23 @@ def build_server(
                             orchestrator._record_embedding_failure(
                                 embedding_agent, "/v1/batch/embeddings", exc
                             )
+                            continue
+                        if document.get("status") in _TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES:
+                            # complete_embeddings_batch returned normally, but the
+                            # document itself is a terminal failure (no exception
+                            # was raised). Treat it exactly like a raised exception
+                            # for failover purposes: route it through the same
+                            # shared failure recorder used above so the endpoint's
+                            # circuit is not falsely cleared by observe_success
+                            # below, then try the next candidate instead of
+                            # breaking out with a failed document.
+                            last_embedding_error = RuntimeError(
+                                f"embedding batch member ended with {document.get('status')}"
+                            )
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", last_embedding_error
+                            )
+                            document = None
                             continue
                         orchestrator._group_router.observe_success(
                             embedding_agent.id,

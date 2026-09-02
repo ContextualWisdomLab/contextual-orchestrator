@@ -1053,6 +1053,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   abandoned like every other stalled discovery-time network call in this
   module and the process can still exit
   (`tests/test_model_discovery.py::test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`).
+- (2026-09-02, PR #971) The `/v1/batch/embeddings` handler's member-failover
+  loop called `observe_success`/`_record_success` for the just-tried agent
+  unconditionally, before ever inspecting the returned document's `status`
+  -- unlike the sibling `/v1/embeddings` fix above (same root cause), this
+  loop's own terminal-status check (`is_complete = document.get("status")
+  == "completed"`) only ran afterward, purely to pick the response's HTTP
+  status code, not to gate success recording or failover. So a
+  `complete_embeddings_batch` call that returned normally with a terminal
+  failure document (`status` of `failed`, `cancelled`, or `rejected` --
+  `CostRoutingCoordinator.embeddings_batch_document`'s own terminal
+  vocabulary) still marked that endpoint healthy and cleared its circuit,
+  `break`ing out of the loop before any other candidate was tried; a
+  genuinely broken endpoint kept being selected by every later request
+  instead of failing over (Devin Review on #971). The loop now checks the
+  document's status before recording success: a terminal-failure document is
+  routed through the same shared `_record_embedding_failure` recorder an
+  exception would use and the loop `continue`s to the next candidate; only a
+  non-terminal-failure document (`completed`, or an in-flight status such as
+  `queued`/`validating`/`running`) records success and breaks
+  (`tests/test_pr971_review_quality_regressions.py::test_terminal_embedding_batch_document_fails_over_before_marking_health`).
 
 ### Added
 
