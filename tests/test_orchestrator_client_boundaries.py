@@ -556,6 +556,7 @@ def test_batch_chat_success_on_https_provider_returns_validated_results() -> Non
         model="remote-chat-model",
         base_url="https://remote.example/v1",
         credential_key="REMOTE_API_KEY",
+        batch_endpoint_supported=True,
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}
@@ -575,6 +576,7 @@ def test_batch_chat_wraps_provider_failures_without_provider_text() -> None:
         model="remote-chat-model",
         base_url="https://remote.example/v1",
         credential_key="REMOTE_API_KEY",
+        batch_endpoint_supported=True,
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}
