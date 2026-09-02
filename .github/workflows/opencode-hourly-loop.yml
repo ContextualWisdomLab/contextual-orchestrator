@@ -51,7 +51,11 @@ jobs:
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # 300m (5h): generous headroom above the ~2h+ per-model runs this loop's
+    # gateway/inference steps intentionally leave unbounded, while staying
+    # well under the platform's implicit 360m job cap so cancel-in-progress:
+    # false can't let one wedged run block up to ~6 hourly triggers.
+    timeout-minutes: 300
     permissions:
       contents: write # required for reviewed branch fixes; scoped to this job
       pull-requests: write
