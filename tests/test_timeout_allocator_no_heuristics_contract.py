@@ -31,3 +31,9 @@ def test_timeout_design_fails_closed_without_identified_statistical_decision_mod
     assert "operator-supplied" in text
     assert "no automatic timeout recommendation" in text.lower()
     assert "fail closed" in text.lower()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    test_timeout_design_has_no_fixed_sample_or_fallback_decision_rules()
+    test_timeout_design_fails_closed_without_identified_statistical_decision_model()
+    print("ok")
