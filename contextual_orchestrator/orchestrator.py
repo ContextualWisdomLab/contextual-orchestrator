@@ -4422,6 +4422,9 @@ class TaskOrchestrator:
         virtual selector may advance to another eligible provider only after an
         HTTP 413 proves that the prior provider rejected the request before
         generation; other synthesis failures remain single-shot and fail closed.
+        Once a synthesis succeeds, the realtime fast-mlsirm judge observes the
+        served answer for quality-ledger and psychometric routing evidence
+        only -- it never changes the response already decided above.
         """
         response_request = endpoint == "responses"
         api_surface = "responses" if response_request else "chat.completions"
@@ -4931,11 +4934,26 @@ class TaskOrchestrator:
                 )
             final_agent = next_agent
             synthesis_started = time.perf_counter()
+        synthesis_latency_seconds = time.perf_counter() - synthesis_started
         self._record_success(final_agent.id)
         if final_agent.group_name:
-            self._group_router.observe_success(
-                final_agent.id, time.perf_counter() - synthesis_started
-            )
+            self._group_router.observe_success(final_agent.id, synthesis_latency_seconds)
+        # Feed the judged-quality ledger (and, when a prompt_context is
+        # available, the psychometric router) from this already-decided
+        # answer -- observation-only, matching stream_route/_finalize_batch_row:
+        # the verdict is recorded for future routing evidence, never branched
+        # on here, since send_synthesis's own retry/failover already ran to
+        # completion by this point.
+        usage = (repair_step or synthesis_step).get("usage")
+        self._realtime_route_judge(
+            text=task,
+            answer=synthesis_output,
+            served_id=final_agent.id,
+            latency_seconds=synthesis_latency_seconds,
+            usage=usage,
+            free_only=free_only,
+            prompt_context=prompt_context,
+        )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
         echo = raw.get("echo")

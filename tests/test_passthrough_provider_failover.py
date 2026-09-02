@@ -26,6 +26,40 @@ from contextual_orchestrator.orchestrator import (
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
+@pytest.fixture(autouse=True)
+def _stub_realtime_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this file's exact-sequence assertions about provider failover only.
+
+    ``_orchestrated_provider_completion`` now calls the realtime fast-mlsirm
+    judge once synthesis succeeds (observation-only: it never changes the
+    response). ``SequencedProxyClient`` is a minimal transport double with no
+    ``outcomes`` entry for whichever agent gets selected as verifier, so a
+    real judge attempt would append an unplanned call to ``client.calls`` and
+    break the ``[agent_id for agent_id, _ in client.calls] == [...]``
+    assertions this file is actually about. Patch at the class level (not
+    just ``_build``) so every inline ``TaskOrchestrator(...)`` construction in
+    this file is covered.
+    """
+
+    def _accept(
+        self: TaskOrchestrator,
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        **_ignored: Any,
+    ) -> dict[str, Any]:
+        del self, task, free_only, _ignored
+        return {
+            "accepted": True,
+            "reason": "stubbed for passthrough failover coverage",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        }
+
+    monkeypatch.setattr(TaskOrchestrator, "_model_judge_verification", _accept)
+
+
 class SequencedProxyClient:
     """Return one configured outcome per provider while recording attempts."""
 
