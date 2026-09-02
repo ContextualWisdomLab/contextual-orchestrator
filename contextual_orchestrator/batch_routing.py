@@ -481,8 +481,8 @@ class PgLlmBatchBackend:
         return f"memory://{uuid.uuid4().hex}"
 
     @staticmethod
-    def _run_batch_coroutine(coro: Any) -> Any:
-        return asyncio.run(coro)
+    def _run_batch_coroutine(batch_coroutine: Any) -> Any:
+        return asyncio.run(batch_coroutine)
 
     def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
         """Upload JSONL + create a batch job via the pg-llm-batch client."""
@@ -1225,8 +1225,8 @@ class PgLlmBatchEmbeddingBackend:
         return f"memory://{uuid.uuid4().hex}"
 
     @staticmethod
-    def _run_batch_coroutine(coro: Any) -> Any:
-        return asyncio.run(coro)
+    def _run_batch_coroutine(batch_coroutine: Any) -> Any:
+        return asyncio.run(batch_coroutine)
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
