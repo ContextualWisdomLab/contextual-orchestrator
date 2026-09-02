@@ -6955,17 +6955,27 @@ class TaskOrchestrator:
             for sub_partition in (eligible, excluded):
                 by_id = {member.id: member for member in sub_partition}
                 ordered.extend(
-                    by_id[member_id] for member_id in self._measured_member_order(list(by_id))
+                    by_id[member_id]
+                    for member_id in self._measured_member_order(list(by_id), sample=True)
                 )
         return ordered
 
-    def _measured_member_order(self, member_ids: list[str]) -> list[str]:
+    def _measured_member_order(
+        self, member_ids: list[str], *, sample: bool = False
+    ) -> list[str]:
         """Order same-declaration members by measured evidence, quality first.
 
         Evidence ladder: judged-answer observations (real-time fast-mlsirm
         verdicts) govern when any member has them; otherwise the transport
         throughput/stability ledger decides; with no evidence at all the
         caller's input order survives untouched. No synthetic scores.
+
+        ``sample=True`` is for live serving selection only: it asks the chosen
+        router for one Thompson-sampled draw per member with real evidence
+        (:meth:`ModelGroupRouter.sampled_ranked_member_ids`) instead of
+        comparing posterior means. The default ``sample=False`` is the exact
+        prior deterministic behavior, kept for every admin/report reader
+        (:meth:`get_model_group`) unchanged.
         """
         judged_quality = any(
             self._quality_router.member_observation_count(member_id) > 0
@@ -6980,6 +6990,8 @@ class TaskOrchestrator:
                     judged_quality,
                     router.member_score(member_id),
                 )
+        if sample:
+            return router.sampled_ranked_member_ids(member_ids)
         return router.ranked_member_ids(member_ids)
 
     def _psychometric_order(
