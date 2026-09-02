@@ -203,7 +203,10 @@ def get_config_store(
     With no DSN, an :class:`InMemoryConfigStore` is returned (the standalone /
     test default). With a DSN, the ``pg_llm_batch`` Postgres-backed stores are
     used when ``pg_llm_batch`` is importable; otherwise the call degrades to the
-    in-memory store so the orchestrator never hard-depends on Postgres.
+    in-memory store so the orchestrator never hard-depends on Postgres. Once a
+    Postgres-backed adapter has been constructed, however, compatibility
+    migration failures propagate so a transient persistence outage cannot
+    silently switch a live process to default/in-memory routing policy.
     """
     if not postgres_dsn:
         in_memory_config_store = InMemoryConfigStore(seed=seed)
@@ -218,13 +221,14 @@ def get_config_store(
             postgres_config_store,
             postgres_secret_store,
         )
-        if seed:
-            for config_category, category_entries in seed.items():
-                for config_key, config_value in category_entries.items():
-                    config_store_adapter.set(config_category, config_key, config_value)
-        _migrate_legacy_categories(config_store_adapter)
-        return config_store_adapter
-    except Exception:  # pragma: no cover - fall back when deps/DB unavailable
+    except Exception:  # pragma: no cover - fall back when deps/DB cannot initialize
         in_memory_config_store = InMemoryConfigStore(seed=seed)
         _migrate_legacy_categories(in_memory_config_store)
         return in_memory_config_store
+
+    if seed:
+        for config_category, category_entries in seed.items():
+            for config_key, config_value in category_entries.items():
+                config_store_adapter.set(config_category, config_key, config_value)
+    _migrate_legacy_categories(config_store_adapter)
+    return config_store_adapter
