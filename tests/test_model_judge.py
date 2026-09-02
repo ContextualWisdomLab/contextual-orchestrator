@@ -676,6 +676,42 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
 
 
+def test_fast_mlsirm_adapter_structured_completion_records_candidate_attempt() -> None:
+    """``complete_structured`` calls ``client.proxy_send`` directly rather than
+    through ``_invoke`` (which self-instruments via ``_record_candidate_attempt``
+    in its race-member ``call()`` closure), so this path must record its own
+    attempt -- otherwise the billed provider call silently drops out of
+    ``attempted_candidate_ids`` evidence (#983 Devin finding: "Attempt
+    evidence omits provider calls")."""
+    orchestrator, _ = _orch("unused")
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+        mode="route",
+    )
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
+    }
+    with patch.object(
+        orchestrator.client,
+        "proxy_send",
+        return_value={
+            "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
+        },
+    ):
+        with orchestrator.candidate_routing_policy({"candidate_id": "general_agent"}):
+            adapter.complete_structured(
+                [{"role": "user", "content": "judge"}],
+                mode="conduct",
+                response_format=response_format,
+            )
+            evidence = orchestrator._candidate_routing_evidence({"trace": []})
+
+    assert evidence["attempted_candidate_ids"] == ["general_agent"]
+
+
 def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None:
     """An invalid synthesis is repaired once and both provider calls stay visible."""
     orchestrator, _ = _orch("unused")

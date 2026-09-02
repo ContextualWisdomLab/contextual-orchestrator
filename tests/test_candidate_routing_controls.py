@@ -1643,6 +1643,138 @@ def test_candidate_routing_evidence_falls_back_to_text_match_without_answering_s
     assert evidence["served_candidate_id"] == "worker_agent"
 
 
+def test_orchestrated_provider_completion_answering_step_id_identifies_synthesis_over_duplicate_internal_step() -> None:
+    """The structured/tool-loop path built by ``_orchestrated_provider_completion``
+    persists an internal ``conduct()`` workflow plus its own final synthesis
+    row. When the synthesizer's output happens to duplicate an earlier
+    internal workflow step's text byte-for-byte, routing evidence must still
+    resolve to the synthesizer that actually served the response -- not to
+    the internal step it duplicates -- by recording ``answering_step_id`` on
+    the persisted workflow record, mirroring ``conduct()``'s own fix (#983
+    Devin finding: "Repeated output misidentifies served candidate")."""
+    agents = [
+        ModelAgent("synth_agent", "synth-model", "mock://catalog"),
+        ModelAgent("excluded_agent", "excluded-model", "mock://catalog"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *_args, **_kwargs: [agents[0]]  # type: ignore[method-assign]
+    orchestrator.conduct = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "internal_worker",
+                "output": "duplicate text",
+            },
+        ],
+        "verification": None,
+    }
+
+    def send(agent, _endpoint, _payload):
+        return {"choices": [{"message": {"content": "duplicate text"}}]}
+
+    orchestrator.client.proxy_send_once = send
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator._orchestrated_provider_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "task"}],
+            },
+            endpoint="chat/completions",
+            effort_profile=None,
+        )
+        workflow_id = result["orchestration"]["workflow_run_id"]
+        persisted = orchestrator.get_workflow_run(workflow_id)
+        evidence = orchestrator._candidate_routing_evidence(persisted)
+
+    assert [row["output"] for row in persisted["trace"]] == [
+        "duplicate text",
+        "duplicate text",
+    ]
+    assert persisted["answer"] == "duplicate text"
+    assert persisted["answering_step_id"] == persisted["trace"][1]["id"]
+    assert persisted["trace"][1]["agent_id"] == "synth_agent"
+    assert evidence is not None
+    assert evidence["served_candidate_id"] == "synth_agent"
+
+
+def test_orchestrated_provider_completion_answering_step_id_identifies_repair_over_duplicate_internal_step() -> None:
+    """Mirror of the synthesis-duplicate case above for the repair branch:
+    when the caller's ``response_format`` rejects the first synthesis
+    attempt and the *repair* retry succeeds with output that duplicates an
+    earlier internal workflow step's text, routing evidence must resolve to
+    the repair row (the one that actually produced ``answer``), not the
+    internal step it duplicates. No earliest/latest text-match ordering can
+    be correct for both this case and the synthesis-duplicate case
+    simultaneously -- exactly why ``answering_step_id`` must point at the
+    repair row here (#983 Devin finding: "Repeated output misidentifies
+    served candidate", suggested-fix case: "synthesis and repair output
+    duplicate an earlier workflow step")."""
+    agents = [
+        ModelAgent("synth_agent", "synth-model", "mock://catalog"),
+        ModelAgent("excluded_agent", "excluded-model", "mock://catalog"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *_args, **_kwargs: [agents[0]]  # type: ignore[method-assign]
+    orchestrator.conduct = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "internal_worker",
+                "output": '{"final": "true"}',
+            },
+        ],
+        "verification": None,
+    }
+
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        if len(calls) == 1:
+            return {"choices": [{"message": {"content": "not valid json"}}]}
+        return {"choices": [{"message": {"content": '{"final": "true"}'}}]}
+
+    orchestrator.client.proxy_send_once = send
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator._orchestrated_provider_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "task"}],
+                "response_format": {"type": "json_object"},
+            },
+            endpoint="chat/completions",
+            effort_profile=None,
+        )
+        workflow_id = result["orchestration"]["workflow_run_id"]
+        persisted = orchestrator.get_workflow_run(workflow_id)
+        evidence = orchestrator._candidate_routing_evidence(persisted)
+
+    assert calls == ["synth_agent", "synth_agent"]
+    assert [row["role"] for row in persisted["trace"]] == [
+        "worker",
+        "synthesizer",
+        "repair",
+    ]
+    assert persisted["trace"][0]["output"] == '{"final": "true"}'
+    assert persisted["trace"][1]["output"] == "not valid json"
+    assert persisted["trace"][2]["output"] == '{"final": "true"}'
+    assert persisted["answer"] == '{"final": "true"}'
+    assert persisted["answering_step_id"] == persisted["trace"][2]["id"]
+    assert persisted["trace"][2]["agent_id"] == "synth_agent"
+    assert evidence is not None
+    assert evidence["served_candidate_id"] == "synth_agent"
+
+
 def test_http_structured_chat_preflight_rejects_vision_incompatible_pin() -> None:
     """A structured (response_format) chat request that carries an image must
     fail closed with invalid_routing when pinned to a candidate that lacks

@@ -445,6 +445,12 @@ class _FastMLSIJudgeAdapter:
                 agent, request, effort_profile
             )
         request["stream"] = False
+        # complete() reaches _invoke(), which records the attempt itself;
+        # this structured path calls proxy_send directly, so the attempt
+        # must be recorded here or it never appears in
+        # attempted_candidate_ids evidence (#983 Devin finding: "Attempt
+        # evidence omits provider calls").
+        self.orchestrator._record_candidate_attempt(agent.id)
         response = self.orchestrator.client.proxy_send(
             agent, "chat/completions", request
         )
@@ -5258,6 +5264,19 @@ class TaskOrchestrator:
                 "policy_mode": "conduct",
                 "prompt_text": task,
                 "answer": synthesis_output,
+                # Identify the exact trace row (the repair row when a repair
+                # ran and succeeded, else the initial synthesis row) whose
+                # output actually became ``answer`` -- mirrors conduct()'s own
+                # ``answering_step_id`` (#983 finding 6) so
+                # _candidate_routing_evidence resolves the serving candidate
+                # by identity instead of falling back to a text match that
+                # cannot tell this row apart from an earlier internal
+                # workflow step whose output it coincidentally duplicates
+                # (#983 Devin finding: "Repeated output misidentifies served
+                # candidate").
+                "answering_step_id": (
+                    repair_step["id"] if repair_step is not None else synthesis_step["id"]
+                ),
                 "cache_status": "bypass",
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
@@ -7531,6 +7550,11 @@ class TaskOrchestrator:
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
             return None
+        # Only a cache miss reaches the provider -- record the attempt here,
+        # not above the cache lookup, so a cache hit (never calls embed())
+        # does not falsely appear in attempted_candidate_ids evidence (#983
+        # Devin finding: "Attempt evidence omits provider calls").
+        self._record_candidate_attempt(embedding_member)
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
@@ -7558,6 +7582,11 @@ class TaskOrchestrator:
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
             return None
+        # Only a cache miss reaches the provider -- record the attempt here,
+        # not above the cache lookup, so a cache hit (never calls embed())
+        # does not falsely appear in attempted_candidate_ids evidence (#983
+        # Devin finding: "Attempt evidence omits provider calls").
+        self._record_candidate_attempt(embedding_member)
         try:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
