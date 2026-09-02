@@ -1,5 +1,55 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 live verification: OpenRouter free discovery, ZDR non-exclusion, and Models.dev field synthesis
+
+Observation time: 2026-09-02 Asia/Seoul. Ran the actual discovery code (not
+just PR descriptions) against the real OpenRouter API with a live
+`OPENROUTER_API_KEY` in read-only/dry-run mode, and read the current `main`
+tip (`88390816`) directly.
+
+- **OpenRouter auto-discovery genuinely feeds `orchestrator/free`.** `openrouter`
+  is a live entry in `PROVIDER_MODEL_SOURCES` (`contextual_orchestrator/model_discovery.py:402-408`),
+  reachable through `discover_all_models` with no provider-specific carve-out
+  in `_is_general_free_agent`/`general_free_serving_candidates`/`agent_from_discovered`.
+  Live run against `https://openrouter.ai/api/v1/models` on 2026-09-02
+  discovered 566 OpenRouter models, correctly classified 10 as `is_free`
+  (e.g. `z-ai/glm-5.2:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`), with
+  zero errors. This is the real routing path, not only the opt-in canary CLI
+  added in PR #985. PR #971/#985 are open and currently `mergeable_state:
+  behind`; their production-code content already substantially overlaps what
+  is on `main` today (their live diff against `main` touches only tests/docs),
+  so the mechanical merge scheduler updating them once approved is expected
+  to be sufficient -- no further production change was needed here.
+- **ZDR-true models are never excluded by a `zdr: false` (not-required) pool.**
+  `TaskOrchestrator._zdr_agent_allowed` (`contextual_orchestrator/orchestrator.py:3992-3995`)
+  is `not zdr_required or "privacy:zdr" in agent.tags` -- when a pool/request
+  does not require ZDR, the expression is unconditionally `True` regardless
+  of an agent's own tags, so a ZDR-capable agent can mathematically never be
+  dropped by a non-ZDR-requiring pool. `_apply_discovered_model_evidence`
+  already propagates OpenRouter's ZDR endpoint evidence onto matching model
+  ids from every other discovered provider, proven by
+  `tests/test_model_discovery.py::test_discover_all_models_applies_model_zdr_evidence_to_other_sources`.
+  Added `tests/test_provider_bootstrap.py::test_orchestrator_free_pool_never_excludes_zdr_true_models_from_multiple_providers`
+  to prove this end-to-end through bootstrap activation into the live
+  `orchestrator/free` candidate set for ZDR-capable free models from two
+  provider families at once. No production change was needed for this item.
+- **Models.dev metadata could silently clobber a provider's own metadata --
+  fixed.** `_merge_models_dev_metadata` unconditionally overwrote a matched
+  row's `architecture`/`max_output_tokens`/`context_window` with Models.dev's
+  values even when Models.dev had no `modalities`/`limit` data for that
+  model, discarding the provider's own already-discovered evidence for
+  nothing. Reproduced live with a synthetic partial record before fixing.
+  Cost (`pricing`/`is_free`) intentionally stays exclusively Models.dev-
+  sourced (ADR 0041's cost-safety argument: a compromised provider must never
+  be able to self-report "free"); architecture/capacity fields now union
+  field-by-field, preferring Models.dev's value only when Models.dev actually
+  reports one. `openrouter` itself still does not join Models.dev at all
+  (`models_dev_provider_id=None`, ADR 0041's deliberate choice, since
+  OpenRouter already reports real per-token pricing) -- that decision is
+  unchanged; this fix closes the join's real clobbering bug for the four
+  providers (`openai`, `nvidia_nim`, `nvidia_nim_sub`, `opencode_zen`) that do
+  join. Added `tests/test_model_discovery.py::test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence`.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
