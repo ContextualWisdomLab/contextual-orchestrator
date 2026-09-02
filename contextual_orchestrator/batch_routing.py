@@ -42,7 +42,7 @@ from .batch_job_registry import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_ROUTING_CATEGORY = "routing"
+_ROUTING_CATEGORY = "routing_config"
 _PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
 
 

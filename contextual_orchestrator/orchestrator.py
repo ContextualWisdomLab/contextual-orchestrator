@@ -597,6 +597,17 @@ class ModelAgent:
     endpoint_equivalence: dict[str, Any] | None = None
     # Provider-declared support for the Chat Completions terminal usage frame.
     stream_usage_supported: bool = False
+    # Declared image-generation endpoint path override for this exact
+    # deployment, when it differs from the OpenAI-compatible default
+    # ("images/generations"). ``None`` means no override -- the request is
+    # sent to the same endpoint path as every other capability. Set this
+    # explicitly (via agent-pool config or discovery metadata) for a provider
+    # whose image API lives at a different path (e.g. OpenRouter serves image
+    # generation at "images"); never infer it from ``provider_name`` at
+    # request-routing time -- provider identity is a display/admin alias, not
+    # a routing condition (see docs/planning/adrs -- provider-group hardcoding
+    # is prohibited in selection/fallback/endpoint-routing decisions).
+    image_generation_endpoint: str | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -647,6 +658,7 @@ class ModelAgent:
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
             "stream_usage_supported": self.stream_usage_supported,
+            "image_generation_endpoint": self.image_generation_endpoint,
         }
 
     @property
@@ -682,6 +694,7 @@ class ModelAgent:
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
             stream_usage_supported=value.get("stream_usage_supported", False),
+            image_generation_endpoint=value.get("image_generation_endpoint"),
         )
 
 
@@ -7564,8 +7577,8 @@ class TaskOrchestrator:
                 }
                 payload["model"] = agent.model
                 provider_endpoint = (
-                    "images"
-                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                    agent.image_generation_endpoint
+                    if agent.image_generation_endpoint and endpoint == "images/generations"
                     else endpoint
                 )
                 return (
@@ -7620,8 +7633,8 @@ class TaskOrchestrator:
             }
             payload["model"] = agent.model
             provider_endpoint = (
-                "images"
-                if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                agent.image_generation_endpoint
+                if agent.image_generation_endpoint and endpoint == "images/generations"
                 else endpoint
             )
             started_at = time.perf_counter()

@@ -854,6 +854,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- `proxy_capability`'s image-generation endpoint rewrite no longer compares
+  `agent.provider_name` against the literal `"openrouter"`: provider identity
+  is a display/admin alias, never a routing condition. `ModelAgent` gained an
+  explicit, declared `image_generation_endpoint` field (`None` by default,
+  meaning no rewrite); both the immediate-race and sequential-failover call
+  sites in `proxy_capability` now branch on that field instead. No shipped
+  agent config or discovery path set the old hardcoded name today, so this is
+  not a behavior change for any current deployment -- a future OpenRouter (or
+  any other provider's) image-capable agent must declare
+  `image_generation_endpoint` explicitly to get the endpoint rewrite.
+- `batch_routing.py` and `cost_router.py` shared a single-word KV config
+  category (`"routing"`) for feature flags -- both module constants
+  (`_ROUTING_CATEGORY`, `_EMBEDDING_CONFIG_CATEGORY`) and
+  `batch_job_registry.py`'s direct literal read now use the two-word
+  `"routing_config"` category name, matching the naming convention
+  (`conventions.require_object_name`) that already governs other configurable
+  identifiers. This is one renamed, still-shared category (batch, embedding,
+  and job-retention flags all still read/write the same category, as before)
+  -- not three separate categories -- so no key is orphaned by the rename.
+- `tests/test_psychometric_routing.py` no longer fails collection for the
+  entire test suite in an environment without `numpy`/`fast_mlsirm`
+  installed. Only the one test that exercises the real `fast_mlsirm`-backed
+  scoring path now uses `pytest.importorskip` (mirroring
+  `psychometric_routing.py`'s own lazy, fail-closed-on-`ImportError` design);
+  the other four tests in that module never needed either optional package
+  and now run unconditionally.
 
 ### Added
 

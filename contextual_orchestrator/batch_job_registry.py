@@ -444,7 +444,7 @@ def build_job_registry(config_store: Any) -> JobRegistryFactory:
     retention = DEFAULT_RETENTION_SECONDS
     get = getattr(config_store, "get", None)
     if callable(get):
-        configured = get("routing", "batch_job_retention_seconds", DEFAULT_RETENTION_SECONDS)
+        configured = get("routing_config", "batch_job_retention_seconds", DEFAULT_RETENTION_SECONDS)
         if type(configured) is int and configured >= 1:
             retention = configured
     return JobRegistryFactory(client, retention_seconds=retention)

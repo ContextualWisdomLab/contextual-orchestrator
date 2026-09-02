@@ -61,7 +61,7 @@ def test_bulk_priority_routes_batch_but_interactive_forces_sync() -> None:
 
 def test_batch_min_tokens_threshold_from_config() -> None:
     config = InMemoryConfigStore()
-    config.set("routing", "batch_min_tokens", 500)
+    config.set("routing_config", "batch_min_tokens", 500)
     policy = RoutingPolicy(config)
     assert policy.decide(RoutingHints(), prompt_tokens=200).channel == "sync"
     assert policy.decide(RoutingHints(), prompt_tokens=800).channel == "batch"
@@ -69,7 +69,7 @@ def test_batch_min_tokens_threshold_from_config() -> None:
 
 def test_batch_token_threshold_stays_sync_when_prompt_count_unavailable() -> None:
     config = InMemoryConfigStore()
-    config.set("routing", "batch_min_tokens", 500)
+    config.set("routing_config", "batch_min_tokens", 500)
     decision = RoutingPolicy(config).decide(RoutingHints(), prompt_tokens=None)
     assert decision.channel == "sync"
     assert "unavailable" in decision.reason
@@ -77,7 +77,7 @@ def test_batch_token_threshold_stays_sync_when_prompt_count_unavailable() -> Non
 
 def test_batch_disabled_config_forces_sync() -> None:
     config = InMemoryConfigStore()
-    config.set("routing", "batch_enabled", False)
+    config.set("routing_config", "batch_enabled", False)
     policy = RoutingPolicy(config)
     assert policy.decide(RoutingHints(latency_tolerant=True)).channel == "sync"
 

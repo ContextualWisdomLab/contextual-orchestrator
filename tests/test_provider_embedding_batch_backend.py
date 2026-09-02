@@ -101,7 +101,7 @@ def test_unknown_tokenizer_fails_before_provider_when_byte_bound_exceeds_budget(
         AssertionError("provider must not be called")
     )
     config = InMemoryConfigStore()
-    config.set("routing", "embedding_max_tokens_per_request", 3)
+    config.set("routing_config", "embedding_max_tokens_per_request", 3)
     coordinator = CostRoutingCoordinator(
         TaskOrchestrator([agent], client=client),
         config,
@@ -445,8 +445,8 @@ def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -
         TaskOrchestrator([agent], client=client),
         embedding_token_counter=_SyntheticExactCounter(),
     )
-    coordinator.config.set("routing", "embedding_max_tokens_per_request", 3)
-    coordinator.config.set("routing", "embedding_max_inputs_per_request", 2)
+    coordinator.config.set("routing_config", "embedding_max_tokens_per_request", 3)
+    coordinator.config.set("routing_config", "embedding_max_inputs_per_request", 2)
 
     document = coordinator.complete_embeddings_batch(
         ["one two", "three four", "five"],
