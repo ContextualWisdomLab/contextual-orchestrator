@@ -21,6 +21,7 @@ def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() ->
     assert "--auto-discover-model-agents" in workflow
     assert workflow.count("contextual_orchestrator_gateway/orchestrator/free") == 2
     assert '"orchestrator/free":' in workflow
+    assert '"orchestrator/auto":' not in workflow
     assert "contextual_orchestrator_gateway/orchestrator/auto" not in workflow
     for credential_name in (
         "BYTEZ_API_KEY",

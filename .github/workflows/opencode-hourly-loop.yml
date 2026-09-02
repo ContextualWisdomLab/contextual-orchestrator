@@ -12,12 +12,13 @@ name: OpenCode hourly maintenance loop
 # a separate concern from which pool OpenCode routes through. This mirrors
 # every other OpenCode/Noema review consumer across the ecosystem
 # (ContextualWisdomLab/.github ADR-0003: "OpenCode and Noema admit only
-# zero-priced routes"; only Strix's security-analysis use case has a
-# documented, evidence-tiered exception onto "orchestrator/auto"). This
-# repo's own hourly loop -- general review/fix/merge maintenance, not
-# security analysis -- has no such exception and previously used
-# "orchestrator/auto" with no ADR justifying the divergence; see
-# docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md.
+# zero-priced routes"; Strix originally had a documented, evidence-tiered
+# exception onto "orchestrator/auto", but that ADR's own 2026-08-30 amendment
+# superseded it, moving Strix onto "orchestrator/free" too -- no central
+# .github review workflow has a live "auto" exception any more). This repo's
+# own hourly loop -- general review/fix/merge maintenance, not security
+# analysis -- previously used "orchestrator/auto" with no ADR justifying the
+# divergence; see docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md.
 
 on:
   schedule:

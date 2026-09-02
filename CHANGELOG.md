@@ -23,10 +23,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - The hourly OpenCode maintenance loop (`.github/workflows/opencode-hourly-loop.yml`)
   now requests the fixed `orchestrator/free` pool instead of `orchestrator/auto`,
   matching every other OpenCode/Noema consumer in the ecosystem (`.github`
-  ADR-0003: "OpenCode and Noema admit only zero-priced routes"; only Strix's
-  security-analysis use case has a documented `auto` exception). This
-  repository's own hourly loop had no such exception and no ADR justifying
-  the divergence — see `docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md`.
+  ADR-0003: "OpenCode and Noema admit only zero-priced routes"; Strix originally
+  had a documented `auto` exception, but that ADR's own 2026-08-30 amendment
+  moved Strix onto `orchestrator/free` too, so no central `.github` review
+  workflow has a live `auto` exception any more). This repository's own hourly
+  loop had no ADR justifying its divergence — see
+  `docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md`.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

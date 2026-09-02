@@ -27,20 +27,25 @@ ContextualWisdomLab ecosystem has an explicit, opposite default for this
 exact class of consumer. `ContextualWisdomLab/.github`'s
 [ADR-0003](https://github.com/ContextualWisdomLab/.github/blob/main/docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 (this repository is the gateway that ADR governs the CI consumption of)
-states plainly: "OpenCode and Noema admit only zero-priced routes." Only
-Strix — running *security analysis*, not general review/fix work — has a
-documented, evidence-tiered exception onto `orchestrator/auto`, and even
-that exception required its own 2026-08-30 ADR amendment reversing Strix's
-*original* `auto` default, specifically because an `auto`-routed CI
-consumer can silently admit a priced, non-zero-cost route without any
-code-level signal that it happened. `.github`'s own directly analogous
+states plainly: "OpenCode and Noema admit only zero-priced routes." Strix —
+running *security analysis*, not general review/fix work — originally had a
+documented, evidence-tiered exception onto `orchestrator/auto`, but that
+ADR's own 2026-08-30 amendment superseded it: the org owner explicitly
+directed Strix off `orchestrator/auto` and onto the same `orchestrator/free`
+pool OpenCode and Noema already use, as a deliberate, accepted-risk override
+(Strix now has no external fallback during a free-pool outage, rather than
+degrading to a paid route). As of that amendment, **no central `.github`
+review workflow has a live exception onto `orchestrator/auto`** — the pool
+mode itself still exists in the sidecar for any future caller that opts in
+explicitly, but nothing currently does by default. `.github`'s own directly analogous
 "autofix that pushes code" workflow, `pr-review-autofix.yml`, is pinned to
 `orchestrator/free`, not `auto` — and that workflow does the same class of
 work this repository's hourly loop does (review → fix → push), not
 security analysis. Every other config-level or code-level reference to a
 pool id across `.github`'s central workflows and naruon's own contextual-
 orchestrator client (see naruon
-[docs/adr/0005](https://github.com/ContextualWisdomLab/naruon/blob/develop/docs/adr/0005-kg-extraction-orchestrator-free-pool-pin.md))
+[docs/adr/0005](https://github.com/ContextualWisdomLab/naruon/pull/1525),
+pending merge to `develop` at the time of this ADR)
 resolves to `orchestrator/free` for this exact reason: an operator or a
 future edit cannot silently regress a fixed constant the way a
 still-configurable field could.
@@ -66,10 +71,13 @@ GitHub Actions workflow usage specifically.
    (which of the five configured API keys have usable models) — a separate
    concern from which pool id OpenCode itself requests once the gateway is
    up. Discovery stays broad; routing is pinned.
-3. No evidence-tiered exception is claimed for this workflow. Unlike Strix
-   (security analysis, ADR-0003's documented exception), this loop's job is
-   general PR maintenance — the same class of work `pr-review-autofix.yml`
-   already does on `orchestrator/free` in `.github`. If a future, evidence-
+3. No evidence-tiered exception is claimed for this workflow. Strix's
+   `orchestrator/auto` exception was historical and is itself superseded
+   (see Context) — every central `.github` review workflow and this
+   repository's own hourly loop now converge on `orchestrator/free`. This
+   loop's job is general PR maintenance — the same class of work
+   `pr-review-autofix.yml` already does on `orchestrator/free` in `.github`.
+   If a future, evidence-
    backed need for `orchestrator/auto` capability emerges here (e.g., a
    demonstrated free-pool capability gap for the specific fix/merge tasks
    this loop performs), it needs its own ADR amendment with that evidence —
@@ -119,9 +127,13 @@ review sidecar with governed gateway pools* [ADR, amended 2026-08-30].
 https://github.com/ContextualWisdomLab/.github/blob/main/docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
 
 ContextualWisdomLab. (2026). *ADR-0005: Pin orchestrator-routed KG
-extraction to the `orchestrator/free` pool* [ADR].
+extraction to the `orchestrator/free` pool* [ADR, pending merge to `develop`
+as of this ADR's date].
 `ContextualWisdomLab/naruon` `docs/adr/0005-kg-extraction-orchestrator-free-pool-pin.md`.
-https://github.com/ContextualWisdomLab/naruon/blob/develop/docs/adr/0005-kg-extraction-orchestrator-free-pool-pin.md
+https://github.com/ContextualWisdomLab/naruon/pull/1525
+The PR link is cited instead of a `blob/develop` permalink because the file
+does not exist on `develop` yet; update to the merged blob URL once
+ContextualWisdomLab/naruon#1525 merges.
 Companion decision, found and fixed in the same session: naruon's own
 contextual-orchestrator client had the analogous gap (a request that
 should have named a fixed pool id instead carried an unrelated
