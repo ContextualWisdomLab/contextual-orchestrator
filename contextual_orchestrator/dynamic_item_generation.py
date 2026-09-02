@@ -1,9 +1,10 @@
-"""Provider-neutral dynamic item-generation invocation evidence.
+"""Provider-neutral criterion-bound dynamic item-generation evidence.
 
 The module is an Anti-Corruption Layer for model, human, or algorithmic item
-generators. It records exact configuration, input, attempt, and generated-content
-identity while structurally excluding scoring, adjudication, validation, anchor
-promotion, and deterministic-regeneration authority.
+generators. It records exact generator configuration, immutable evaluation
+criteria, input provenance, attempts, and generated-content identity while
+structurally excluding scoring, adjudication, validation, anchor promotion, and
+deterministic-regeneration authority.
 """
 
 from __future__ import annotations
@@ -15,9 +16,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .evaluation_criterion_binding import (
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
+
 DYNAMIC_ITEM_GENERATION_CONTRACT_V1 = "cwl_dynamic_item_generation_invocation/v1"
 MAX_GENERATION_REFERENCE_LENGTH = 256
 MAX_GENERATION_REFERENCES = 256
+MAX_GENERATION_CRITERIA = 128
 MAX_GENERATION_JSON_DEPTH = 64
 
 _PROHIBITED_AUTHORITY_FIELDS = frozenset(
@@ -58,6 +65,8 @@ _INVOCATION_FIELDS = frozenset(
         "invocation_ref",
         "configuration",
         "blueprint_revision_ref",
+        "criterion_set",
+        "target_criterion_refs",
         "source_snapshot_refs",
         "retrieval_context_refs",
         "attempt_refs",
@@ -89,6 +98,7 @@ class DynamicItemGenerationError(ValueError):
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting duplicate member names."""
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -100,6 +110,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _json_depth_is_bounded(value: str) -> bool:
+    """Check container nesting without counting bracket characters in strings."""
     depth = 0
     in_string = False
     escaped = False
@@ -124,6 +135,7 @@ def _json_depth_is_bounded(value: str) -> bool:
 
 
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
+    """Require one string-keyed mapping at the provider boundary."""
     if not isinstance(value, Mapping):
         raise DynamicItemGenerationError(
             "invalid_object", f"{field_name} must be an object"
@@ -138,6 +150,7 @@ def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
 def _reject_unknown_fields(
     payload: Mapping[str, Any], allowed: frozenset[str], field_name: str
 ) -> None:
+    """Reject foreign authority before ordinary unknown-field failures."""
     unknown = set(payload) - allowed
     if unknown.intersection(_PROHIBITED_AUTHORITY_FIELDS):
         raise DynamicItemGenerationError(
@@ -153,6 +166,7 @@ def _reject_unknown_fields(
 
 
 def _reference(value: Any, field_name: str) -> str:
+    """Validate one exact bounded opaque reference without normalization."""
     if type(value) is not str:
         raise DynamicItemGenerationError(
             "invalid_reference", f"{field_name} must be a string"
@@ -164,7 +178,8 @@ def _reference(value: Any, field_name: str) -> str:
         or value.endswith("\ufeff")
         or len(value) > MAX_GENERATION_REFERENCE_LENGTH
         or any(
-            unicodedata.category(character) in {"Cc", "Cs"} for character in value
+            unicodedata.category(character) in {"Cc", "Cs", "Cf"}
+            for character in value
         )
     ):
         raise DynamicItemGenerationError(
@@ -175,6 +190,7 @@ def _reference(value: Any, field_name: str) -> str:
 
 
 def _optional_reference(value: Any, field_name: str) -> str | None:
+    """Validate an optional opaque reference while preserving absence."""
     if value is None:
         return None
     return _reference(value, field_name)
@@ -185,16 +201,18 @@ def _reference_tuple(
     field_name: str,
     *,
     allow_empty: bool,
+    maximum: int = MAX_GENERATION_REFERENCES,
 ) -> tuple[str, ...]:
+    """Copy and validate a bounded unique reference collection."""
     if not isinstance(value, (list, tuple)):
         raise DynamicItemGenerationError(
             "invalid_references", f"{field_name} must be an array"
         )
-    if (not allow_empty and not value) or len(value) > MAX_GENERATION_REFERENCES:
+    if (not allow_empty and not value) or len(value) > maximum:
         lower = 0 if allow_empty else 1
         raise DynamicItemGenerationError(
             "invalid_references",
-            f"{field_name} must contain {lower}..{MAX_GENERATION_REFERENCES} references",
+            f"{field_name} must contain {lower}..{maximum} references",
         )
     normalized = tuple(_reference(item, field_name) for item in value)
     if len(set(normalized)) != len(normalized):
@@ -205,6 +223,7 @@ def _reference_tuple(
 
 
 def _status(value: Any) -> GenerationStatus:
+    """Parse the closed terminal-status vocabulary without coercion."""
     if type(value) is GenerationStatus:
         return value
     if type(value) is not str:
@@ -220,6 +239,7 @@ def _status(value: Any) -> GenerationStatus:
 
 
 def _sha256(value: Any, field_name: str) -> str:
+    """Validate one complete lowercase SHA-256 digest."""
     if type(value) is not str:
         raise DynamicItemGenerationError(
             "invalid_sha256", f"{field_name} must be a string"
@@ -232,6 +252,14 @@ def _sha256(value: Any, field_name: str) -> str:
             f"{field_name} must be a complete lowercase SHA-256 digest",
         )
     return value
+
+
+def _criterion_set(value: Any) -> CriterionSetExecutionBinding:
+    """Parse one criterion set and translate its errors into this ACL."""
+    try:
+        return CriterionSetExecutionBinding.from_mapping(value)
+    except EvaluationCriterionBindingError as exc:
+        raise DynamicItemGenerationError(exc.code, str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -248,6 +276,7 @@ class GenerationConfigurationIdentity:
     modality_channel_ref: str
 
     def __post_init__(self) -> None:
+        """Retain an exact configuration identity without alias normalization."""
         for field_name in _CONFIGURATION_FIELDS:
             object.__setattr__(
                 self, field_name, _reference(getattr(self, field_name), field_name)
@@ -284,11 +313,13 @@ class GenerationConfigurationIdentity:
 
 @dataclass(frozen=True)
 class DynamicItemGenerationInvocation:
-    """Immutable evidence for one complete generator execution."""
+    """Immutable evidence for one generator execution under frozen criteria."""
 
     invocation_ref: str
     configuration: GenerationConfigurationIdentity
     blueprint_revision_ref: str
+    criterion_set: CriterionSetExecutionBinding
+    target_criterion_refs: tuple[str, ...] | list[str]
     source_snapshot_refs: tuple[str, ...] | list[str]
     retrieval_context_refs: tuple[str, ...] | list[str]
     attempt_refs: tuple[str, ...] | list[str]
@@ -301,6 +332,7 @@ class DynamicItemGenerationInvocation:
     contract_id: str = DYNAMIC_ITEM_GENERATION_CONTRACT_V1
 
     def __post_init__(self) -> None:
+        """Enforce criterion, provenance, and terminal-state invariants."""
         if self.contract_id != DYNAMIC_ITEM_GENERATION_CONTRACT_V1:
             raise DynamicItemGenerationError(
                 "contract_incompatible", "unsupported dynamic item-generation contract"
@@ -317,6 +349,27 @@ class DynamicItemGenerationInvocation:
             raise DynamicItemGenerationError(
                 "invalid_configuration", "configuration has the wrong domain type"
             )
+        if type(self.criterion_set) is not CriterionSetExecutionBinding:
+            raise DynamicItemGenerationError(
+                "invalid_criterion_set", "criterion_set has the wrong domain type"
+            )
+        if self.blueprint_revision_ref != self.criterion_set.blueprint_revision_ref:
+            raise DynamicItemGenerationError(
+                "criterion_set_blueprint_mismatch",
+                "invocation blueprint must match the frozen criterion-set blueprint",
+            )
+        targets = _reference_tuple(
+            self.target_criterion_refs,
+            "target_criterion_refs",
+            allow_empty=False,
+            maximum=MAX_GENERATION_CRITERIA,
+        )
+        if targets != self.criterion_set.criterion_refs:
+            raise DynamicItemGenerationError(
+                "criterion_coverage_mismatch",
+                "generation must target every frozen criterion exactly once in order",
+            )
+        object.__setattr__(self, "target_criterion_refs", targets)
         object.__setattr__(
             self,
             "source_snapshot_refs",
@@ -396,7 +449,7 @@ class DynamicItemGenerationInvocation:
 
     @classmethod
     def from_json(cls, value: str) -> "DynamicItemGenerationInvocation":
-        """Decode provider-neutral JSON while rejecting duplicate object members."""
+        """Decode provider-neutral JSON while rejecting duplicate members."""
         if type(value) is not str:
             raise DynamicItemGenerationError(
                 "invalid_json", "generation invocation JSON must be a string"
@@ -433,6 +486,8 @@ class DynamicItemGenerationInvocation:
                 payload["configuration"]
             ),
             blueprint_revision_ref=payload["blueprint_revision_ref"],
+            criterion_set=_criterion_set(payload["criterion_set"]),
+            target_criterion_refs=payload["target_criterion_refs"],
             source_snapshot_refs=payload["source_snapshot_refs"],
             retrieval_context_refs=payload["retrieval_context_refs"],
             attempt_refs=payload["attempt_refs"],
@@ -445,12 +500,14 @@ class DynamicItemGenerationInvocation:
         )
 
     def to_payload(self) -> dict[str, Any]:
-        """Return a source-text-free provider-neutral invocation envelope."""
+        """Return a detached source-text-free provider-neutral envelope."""
         return {
             "contract_id": self.contract_id,
             "invocation_ref": self.invocation_ref,
             "configuration": self.configuration.to_payload(),
             "blueprint_revision_ref": self.blueprint_revision_ref,
+            "criterion_set": self.criterion_set.to_payload(),
+            "target_criterion_refs": list(self.target_criterion_refs),
             "source_snapshot_refs": list(self.source_snapshot_refs),
             "retrieval_context_refs": list(self.retrieval_context_refs),
             "attempt_refs": list(self.attempt_refs),
