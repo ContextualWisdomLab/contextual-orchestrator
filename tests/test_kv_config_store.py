@@ -8,7 +8,12 @@ from typing import Any
 
 import pytest
 
-from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    CostRoutingCoordinator,
+    ModelAgent,
+    RoutingPolicy,
+    TaskOrchestrator,
+)
 from contextual_orchestrator.kv_config import (
     _LEGACY_CATEGORY_MIGRATIONS,
     InMemoryConfigStore,
@@ -299,3 +304,42 @@ def test_cost_routing_coordinator_migrates_a_directly_injected_store() -> None:
 
     assert coordinator.config.get(replacement_category, "batch_enabled") is False
     assert coordinator.policy._batch_enabled() is False
+
+
+def test_cost_routing_coordinator_migrates_for_a_caller_supplied_routing_policy() -> None:
+    """A pre-built RoutingPolicy bypasses RoutingPolicy.__init__'s own migration.
+
+    Devin-review follow-up finding on #1017: migrate_legacy_categories only
+    ran inside RoutingPolicy.__init__, so a caller supplying its own
+    already-constructed routing_policy (built from a store never passed
+    through that constructor) skipped it entirely -- and, since
+    CostRoutingCoordinator.__init__ only constructs RoutingPolicy when
+    routing_policy is None, build_job_registry(self.config) was the sole
+    remaining touch point actually guaranteed to run against self.config in
+    that case. Migrating there closes the gap for both the job registry's
+    own batch_job_retention_seconds read and any later embedding-category
+    read against the same shared self.config object.
+    """
+    legacy_category, (replacement_category, config_keys) = next(
+        iter(_LEGACY_CATEGORY_MIGRATIONS.items())
+    )
+    injected_config_store = InMemoryConfigStore(
+        seed={legacy_category: {"batch_job_retention_seconds": 3600}}
+    )
+    assert (
+        injected_config_store.get(replacement_category, "batch_job_retention_seconds", "unset")
+        == "unset"
+    )
+    prebuilt_policy = RoutingPolicy(InMemoryConfigStore())  # built from an unrelated store
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_worker", "mock-model", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, injected_config_store, routing_policy=prebuilt_policy
+    )
+
+    assert coordinator.policy is prebuilt_policy
+    assert (
+        coordinator.config.get(replacement_category, "batch_job_retention_seconds") == 3600
+    )

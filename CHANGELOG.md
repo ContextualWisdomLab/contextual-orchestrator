@@ -898,27 +898,54 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   See `tests/test_kv_config_store.py`'s four new tests (backfill-from-legacy,
   new-value-precedence, idempotent-across-reconnects, in-memory-seed-path) for
   the RED-before-GREEN evidence.
-  **Second review round on #1017 found three further defects, all fixed:**
-  (1) the migration call originally sat inside the same broad
-  `try/except Exception` that falls back to an ephemeral `InMemoryConfigStore`
-  when `pg_llm_batch` is unavailable or Postgres is unreachable at
-  construction -- a transient failure purely in the migration's own reads on
-  an otherwise successfully connected store fell into that same except and
-  silently discarded visibility into *all* of the caller's real durable
-  config, not just the migrated keys. The migration call (renamed public,
-  `migrate_legacy_categories`) now runs after that except block so such a
-  failure propagates instead. (2) only the `get_config_store()` factory ran
-  the migration, so a caller injecting an already-constructed `ConfigStore`
-  directly into `CostRoutingCoordinator` (e.g. a real Postgres-backed store
-  already carrying legacy `routing.*` rows) never got it migrated;
-  `CostRoutingCoordinator.__init__` now also calls
-  `migrate_legacy_categories(self.config)` right after settling
-  `self.config`, covering `RoutingPolicy` and `build_job_registry` (both
-  built from that same instance) for the injected-store path too. (3) the
+  **Second review round on #1017 found three further defects.** Fixed
+  independently and concurrently by reviewer `seonghobae` (pushed directly
+  to this PR branch; merged here rather than force-pushed over, per this
+  repo's concurrent-agent-commit policy): (1) the migration call originally
+  sat inside the same broad `try/except Exception` that falls back to an
+  ephemeral `InMemoryConfigStore` when `pg_llm_batch` is unavailable or
+  Postgres is unreachable at construction -- a transient failure purely in
+  the migration's own reads on an otherwise successfully connected store
+  fell into that same except and silently discarded visibility into *all*
+  of the caller's real durable config, not just the migrated keys. The
+  migration call (renamed public, `migrate_legacy_categories`) now runs
+  after that except block, and seed-application was moved out there too
+  for the same reason, so either failure propagates instead. (3) the
   `RoutingPolicy` docstring still advertised the pre-rename `routing`
-  category. Five more tests added: injected-store migration, migration-
-  failure propagation (verified genuinely RED before the fix, GREEN after),
-  and the persistence/validation fixes described next.
+  category. (2) only the `get_config_store()` factory ran the migration, so
+  a caller injecting an already-constructed `ConfigStore` directly (e.g. a
+  real Postgres-backed store already carrying legacy `routing.*` rows)
+  never got it migrated. Reconciled with a RED test
+  (`tests/test_routing_config_compatibility.py`) expecting the fix at the
+  precise consumption boundary: `RoutingPolicy.__init__` now calls
+  `migrate_legacy_categories(config_store)` directly, which -- since
+  `CostRoutingCoordinator.__init__` constructs `RoutingPolicy(self.config)`
+  from the same shared object before `build_job_registry(self.config)`
+  runs -- transitively covers that consumer too for the common
+  (default-`routing_policy`) path.
+  **Third review round found the remaining gap in (2):** a caller supplying
+  its own pre-built `routing_policy` (bypassing `RoutingPolicy.__init__`
+  entirely) still left `build_job_registry`'s `batch_job_retention_seconds`
+  read -- and, transitively, any later embedding-category read against that
+  same shared `self.config` -- unmigrated. `build_job_registry()` itself now
+  also calls `migrate_legacy_categories(config_store)` before its own read,
+  since it is unconditionally invoked in `CostRoutingCoordinator.__init__`
+  regardless of whether `routing_policy` was custom-supplied. Eight more
+  tests added across all three rounds: injected-store migration (at both
+  the `RoutingPolicy` and `CostRoutingCoordinator`/custom-`routing_policy`
+  boundaries), migration-failure propagation, and the persistence/
+  validation fixes described next -- every one confirmed genuinely RED
+  before its fix and GREEN after, verified directly by temporarily
+  reverting each fix and re-running, not assumed.
+- `ALLOWED_AGENT_PATCH_KEYS`/`ALLOWED_AGENT_CREATE_KEYS` in `server.py` --
+  the HTTP-layer request-validation allowlists, entirely separate from
+  `patch_agent`/`add_agent`'s own field handling in `orchestrator.py` --
+  did not include `image_generation_endpoint`, so despite the persistence
+  fix below, every real HTTP request setting it was rejected with an
+  `unknown_fields` error before `patch_agent`/`add_agent` ever saw the
+  field. Added to both allowlists; new end-to-end HTTP test in
+  `tests/test_agent_pool_db.py` exercises a live PATCH and POST through the
+  actual server, not just the in-process `orchestrator.py` methods.
 - `ModelAgent.image_generation_endpoint` (added above in this same PR) was
   never wired into `_AgentPoolStore`, the durable `--state-db`/`agents_db`
   SQLite persistence used across process restarts: the field was absent from

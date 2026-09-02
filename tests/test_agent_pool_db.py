@@ -564,11 +564,34 @@ def test_http_create_and_delete_worker_agents() -> None:
         )
         assert status == 404 and wrong_pool_create["error"]["code"] == "agent_not_found"
 
+        # Devin-review finding on #1017: ALLOWED_AGENT_PATCH_KEYS/
+        # ALLOWED_AGENT_CREATE_KEYS in server.py are a separate HTTP-layer
+        # validation allowlist from patch_agent/add_agent's own field
+        # handling in orchestrator.py -- adding the field to the latter
+        # without the former meant every real HTTP request setting
+        # image_generation_endpoint was rejected as an unknown field before
+        # patch_agent/add_agent ever saw it.
+        status, image_patched = _call(
+            f"{base}/general_agent", "PATCH", token, {"image_generation_endpoint": "images"}
+        )
+        assert status == 200 and image_patched["image_generation_endpoint"] == "images"
+
+        status, image_created = _call(
+            base,
+            "POST",
+            token,
+            {**NEW_AGENT, "id": "image_capable_agent", "image_generation_endpoint": "images"},
+        )
+        assert status == 201 and image_created["image_generation_endpoint"] == "images"
+
         status, unknown = _call(base, "POST", token, {**NEW_AGENT, "id": "extra_agent", "surprise": 1})
         assert status == 400 and unknown["error"]["code"] == "unknown_fields"
 
         status, removed = _call(f"{base}/coding_agent", "DELETE", token)
         assert status == 200 and removed["removed"] == "coding_agent"
+
+        status, removed_image_agent = _call(f"{base}/image_capable_agent", "DELETE", token)
+        assert status == 200 and removed_image_agent["removed"] == "image_capable_agent"
 
         status, _ = _call(f"{base}/ghost_agent", "DELETE", token)
         assert status == 404

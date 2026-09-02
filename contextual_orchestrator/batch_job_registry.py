@@ -42,6 +42,8 @@ from collections.abc import MutableMapping
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
+from .kv_config import migrate_legacy_categories
+
 # Registry entries expire after this many seconds so abandoned jobs do
 # not accumulate forever. Seven days comfortably outlives every batch
 # backend's own completion window.
@@ -424,7 +426,16 @@ def build_job_registry(config_store: Any) -> JobRegistryFactory:
     ``queue`` extra), registries stay in-process dicts — exactly the
     pre-Valkey behavior — so nothing changes for deployments that have
     not opted in.
+
+    Migrates legacy KV categories on ``config_store`` before reading
+    ``batch_job_retention_seconds`` below: ``CostRoutingCoordinator``
+    normally triggers the same migration as a side effect of constructing
+    its default ``RoutingPolicy`` from the same shared store first, but a
+    caller supplying its own pre-built ``routing_policy`` (skipping that
+    construction) or calling this function directly would otherwise never
+    see a legacy-persisted retention value.
     """
+    migrate_legacy_categories(config_store)
     from .credentials import get_credential
 
     try:
