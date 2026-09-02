@@ -714,6 +714,7 @@ ADMIN_HTML = r"""<!doctype html>
     }
     .btn.primary { background: var(--teal); color: white; border-color: var(--teal); }
     .btn:hover { filter: brightness(.98); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
     .toolbar {
       padding: 12px 14px;
       display: flex;
@@ -1270,6 +1271,13 @@ Summarize this research thread and verify claims.</textarea>
       state.modelTimeouts = payload.items || [];
       renderModelTimeouts();
     }
+    async function refreshAuditEvents() {
+      const response = await apiFetch("/admin/state");
+      if (!response.ok) return;
+      const payload = await response.json();
+      state.recent_audit_events = payload.recent_audit_events || [];
+      renderAudit();
+    }
     async function saveModelTimeout(model, seconds) {
       const response = await apiFetch(`/api/v1/model_timeouts/${encodeURIComponent(model)}`, {
         method: "PATCH",
@@ -1280,6 +1288,7 @@ Summarize this research thread and verify claims.</textarea>
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model timeout");
       els.modelTimeoutFeedback.textContent = t("model_timeout_saved");
       await refreshModelTimeouts();
+      await refreshAuditEvents();
     }
     async function clearModelTimeout(model) {
       const response = await apiFetch(`/api/v1/model_timeouts/${encodeURIComponent(model)}`, {method: "DELETE"});
@@ -1287,6 +1296,7 @@ Summarize this research thread and verify claims.</textarea>
       if (!response.ok) throw new Error(payload.error?.message || "Could not clear model timeout");
       els.modelTimeoutFeedback.textContent = t("model_timeout_cleared");
       await refreshModelTimeouts();
+      await refreshAuditEvents();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
