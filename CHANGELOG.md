@@ -20,6 +20,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The general-purpose `orchestrator/free` blind-serving pool
+  (`model_discovery.general_free_serving_candidates`,
+  `TaskOrchestrator._is_general_free_agent`) now admits a free multimodal
+  model that a provider's catalog row *verifies* accepts tool-calling
+  requests (a real `supported_parameters` list naming `"tools"`/
+  `"tool_choice"`, recorded on a new `DiscoveredModel.supports_tool_calls`
+  tri-state field and a `tool_call:supported` agent tag). This is an
+  additive OR on top of ContextualWisdomLab/.github#1198's original
+  non-text-input exclusion, not a replacement: a model with no such evidence
+  (`None`, the fail-closed default) or verified *unsupported* (`False`)
+  stays excluded exactly as before. NVIDIA NIM's `/v1/models` never returns
+  `supported_parameters`, so the incident's own model
+  (`meta/llama-3.2-90b-vision-instruct`) always gets `supports_tool_calls=None`
+  and remains excluded -- this narrowing does not reopen #1198. The durable
+  provider-catalog store's tag-based restoration
+  (`provider_catalog_store._restore_model_semantics`) now also round-trips
+  this evidence, so a catalog refresh or restart cannot silently drop it.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

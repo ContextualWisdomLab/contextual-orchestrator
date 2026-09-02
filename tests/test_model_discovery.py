@@ -1255,6 +1255,49 @@ def test_general_free_serving_candidates_modality_shapes() -> None:
     )} == {"text-only-model", "vision-only-model", "meta/llama-3.2-90b-vision-instruct"}
 
 
+def _tool_call_capable_multimodal_model(*, supports_tool_calls: bool | None) -> DiscoveredModel:
+    """A free, chat-capable, image-input model with a given tool-call evidence state."""
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="verified-tool-vision-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image", "text"),
+        output_modalities=("text",),
+        is_free=True,
+        supports_tool_calls=supports_tool_calls,
+    )
+
+
+def test_general_free_serving_candidates_includes_a_free_multimodal_model_with_verified_tool_support() -> None:
+    """Verified tool-call support exempts a free multimodal model from the exclusion."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=True)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert [candidate.model_id for candidate in serving_candidates] == [model.model_id]
+
+
+def test_general_free_serving_candidates_still_excludes_multimodal_model_with_unknown_tool_support() -> None:
+    """No tool-call evidence at all (the default) leaves the exclusion in force."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=None)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert serving_candidates == []
+
+
+def test_general_free_serving_candidates_still_excludes_multimodal_model_with_verified_no_tool_support() -> None:
+    """Verified *lack* of tool-call support must not be treated as truthy evidence."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=False)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert serving_candidates == []
+
+
 def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
     """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree.
 
@@ -1265,8 +1308,9 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
     input" -- both now delegate to ``chat_capability.requires_non_text_input``
     for that classification. This locks the three fixture shapes already
     established by ``test_general_free_serving_candidates_modality_shapes``
-    (text-only, vision-only-input, text+image) so the two call sites cannot
-    silently diverge again.
+    (text-only, vision-only-input, text+image) plus a fourth,
+    verified-tool-call-support shape, so the two call sites cannot silently
+    diverge on either the original exclusion or its additive exemption.
     """
     text_only = DiscoveredModel(
         provider_name="nvidia_nim",
@@ -1291,7 +1335,8 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
         is_free=True,
     )
     text_and_image = _nim_vision_model()
-    discovered = [text_only, vision_only, text_and_image]
+    verified_tool_call_vision = _tool_call_capable_multimodal_model(supports_tool_calls=True)
+    discovered = [text_only, vision_only, text_and_image, verified_tool_call_vision]
     serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
 
     # ModelAgent.id must be two-or-more-word snake_case; provider model ids
@@ -1302,7 +1347,11 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
         model.model_id: ModelAgent(
             model.model_id.casefold().translate(agent_id_translation),
             model.model_id,
-            tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
+            tags=(
+                "cost:free",
+                *(f"input:{value}" for value in model.input_modalities),
+                *(("tool_call:supported",) if model.supports_tool_calls is True else ()),
+            ),
         )
         for model in discovered
     }
@@ -1345,6 +1394,85 @@ def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices(
 
     assert len(discovered) == 1
     assert discovered[0].is_free is False
+
+
+def _multimodal_source() -> ProviderModelSource:
+    """Shared gateway source fixture for tool-call-evidence parsing tests."""
+    return ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+
+def test_openrouter_row_with_tools_parameter_records_verified_tool_call_support() -> None:
+    """A row whose ``supported_parameters`` names ``"tools"`` is verified support."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-with-tools",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                    "supported_parameters": ["tools", "response_format"],
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is True
+
+
+def test_openrouter_row_without_tools_parameter_records_no_verified_tool_call_support() -> None:
+    """A returned ``supported_parameters`` list lacking ``"tools"`` is verified absence."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-no-tools",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                    "supported_parameters": ["response_format"],
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is False
+
+
+def test_openrouter_row_missing_supported_parameters_leaves_tool_call_support_unknown() -> None:
+    """No ``supported_parameters`` field at all (NIM's real shape) stays unknown."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-no-evidence",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is None
 
 
 def test_discovery_does_not_mark_rows_free_with_unknown_unit_price_dimensions() -> None:

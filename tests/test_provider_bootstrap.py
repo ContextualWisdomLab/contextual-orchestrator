@@ -338,6 +338,36 @@ def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligibl
     assert orchestrator._is_general_free_agent(agent) is False
 
 
+def test_active_agent_from_discovered_free_multimodal_model_with_verified_tools_is_free_pool_eligible():
+    """Verified tool-call support exempts a free multimodal agent from the exclusion.
+
+    Companion to ``test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligible``:
+    the same bootstrap-activation path, but with a provider row that also
+    carries verified ``supported_parameters`` tool-call evidence
+    (``supports_tool_calls=True``). ``TaskOrchestrator._is_general_free_agent``'s
+    additive OR exemption must admit this agent into ``orchestrator/free``
+    while the un-evidenced sibling above stays excluded.
+    """
+    vision_model_with_tools = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "meta/llama-3.2-90b-vision-instruct", 0.0),
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+        supports_tool_calls=True,
+    )
+
+    agent = provider_bootstrap._active_agent_from_discovered(vision_model_with_tools)
+    orchestrator = TaskOrchestrator([agent])
+
+    assert agent.disabled is False
+    assert "cost:free" in agent.tags
+    assert "tool_call:supported" in agent.tags
+    assert orchestrator._is_free_agent(agent) is True
+    # The verified-tool-call-support exemption admits it into orchestrator/free.
+    assert orchestrator._is_general_free_agent(agent) is True
+
+
 def test_serving_tags_preserve_explicit_no_zdr_evidence():
     """Explicit unsupported zero-data retention survives tag normalization."""
     model = replace(
@@ -346,6 +376,19 @@ def test_serving_tags_preserve_explicit_no_zdr_evidence():
     )
 
     assert "privacy:no_zdr" in provider_bootstrap.serving_tags_for_discovered(model)
+
+
+def test_serving_tags_carry_verified_tool_call_support_only_when_true():
+    """``tool_call:supported`` appears only for verified-true evidence, never for unknown/false."""
+    base = _model("opencode_zen", "OPENCODE_ZEN_API_KEY", "temporary-name", 0.0)
+
+    verified_supported = replace(base, supports_tool_calls=True)
+    verified_unsupported = replace(base, supports_tool_calls=False)
+    unknown = replace(base, supports_tool_calls=None)
+
+    assert "tool_call:supported" in provider_bootstrap.serving_tags_for_discovered(verified_supported)
+    assert "tool_call:supported" not in provider_bootstrap.serving_tags_for_discovered(verified_unsupported)
+    assert "tool_call:supported" not in provider_bootstrap.serving_tags_for_discovered(unknown)
 
 
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(

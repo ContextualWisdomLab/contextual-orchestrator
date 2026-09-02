@@ -7081,6 +7081,19 @@ class TaskOrchestrator:
             tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
         )
 
+    @staticmethod
+    def _agent_has_verified_tool_call_support(agent: ModelAgent) -> bool:
+        """Return whether discovery evidence verified this agent accepts tool-calling requests.
+
+        Reads the ``tool_call:supported`` tag written only when a provider's
+        catalog row carried real ``supported_parameters`` evidence naming
+        ``"tools"``/``"tool_choice"`` (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``). Absence of the tag
+        means unverified, never a negative claim -- mirrors
+        :meth:`_agent_requires_non_text_input`'s tag-reading pattern.
+        """
+        return "tool_call:supported" in agent.tags
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models.
 
@@ -7117,8 +7130,25 @@ class TaskOrchestrator:
         selection path shares -- including an agent row loaded from a durable
         pool store that was written before this exclusion existed, or one
         activated by a pool-construction path this repository adds later.
+
+        One additive exemption: an agent verified to accept tool-calling
+        requests (:meth:`_agent_has_verified_tool_call_support`, from a
+        ``tool_call:supported`` tag backed by real provider
+        ``supported_parameters`` evidence) is admitted even when it also
+        declares a non-text input modality. This is an OR with the existing
+        exclusion, not a replacement: an agent with no such evidence, or with
+        verified evidence it does *not* accept tools, still falls back to the
+        original blanket exclusion unchanged. Mirrors
+        ``model_discovery.general_free_serving_candidates``'s identical
+        exemption at discovery time -- see its docstring for why this does not
+        reopen ContextualWisdomLab/.github#1198 (NVIDIA NIM never reports
+        ``supported_parameters``, so its incident model can never carry this
+        tag).
         """
-        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
+        return self._is_free_agent(agent) and (
+            not self._agent_requires_non_text_input(agent)
+            or self._agent_has_verified_tool_call_support(agent)
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 

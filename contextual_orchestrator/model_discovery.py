@@ -99,6 +99,35 @@ def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None
     return None
 
 
+def _tool_call_support_evidence(supported_parameters: Any) -> bool | None:
+    """Return verified tool-calling support from a raw ``supported_parameters`` value.
+
+    Live OpenRouter verification (569 models; 75 zero-priced, non-text-input
+    rows; 8 of those declare ``"tools"``) shows a provider's
+    ``supported_parameters`` list is a real, deliberate declaration of which
+    request fields a model accepts -- not just missing data when it omits
+    ``"tools"``/``"tool_choice"``. So a returned list that lacks either name is
+    verified negative evidence (``False``), matching the tri-state contract
+    used for ``supports_zero_data_retention`` and its siblings.
+
+    Must be called with the *raw* ``row.get("supported_parameters")`` value,
+    not a field-absent-defaults-to-``[]`` local derived from it -- otherwise a
+    provider that never sends this field at all (e.g. NVIDIA NIM's
+    ``/v1/models``, which carries no ``supported_parameters`` key) would be
+    misread as having explicitly declared zero supported parameters, collapsing
+    honest absence of evidence (``None``) into a false verified-negative
+    (``False``).
+    """
+    if not isinstance(supported_parameters, list):
+        return None
+    params = {
+        value.strip().casefold()
+        for value in supported_parameters
+        if isinstance(value, str) and value.strip()
+    }
+    return "tools" in params or "tool_choice" in params
+
+
 def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
     """Return ``False`` when a provider's 400 clearly rejects multi-tool calls.
 
@@ -493,6 +522,7 @@ class DiscoveredModel:
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
+    supports_tool_calls: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
@@ -1255,11 +1285,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        raw_supported_parameters = row.get("supported_parameters")
         supported_parameters = (
-            row.get("supported_parameters")
-            if isinstance(row.get("supported_parameters"), list)
-            else []
+            raw_supported_parameters if isinstance(raw_supported_parameters, list) else []
         )
+        supports_tool_calls = _tool_call_support_evidence(raw_supported_parameters)
         top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
@@ -1376,6 +1406,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     if isinstance(row.get("supports_no_prompt_retention"), bool)
                     else None
                 ),
+                supports_tool_calls=supports_tool_calls,
                 privacy_policy_urls=_privacy_policy_urls(source, row),
             )
         )
@@ -1847,6 +1878,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
+            *(("tool_call:supported",) if discovered.supports_tool_calls is True else ()),
         ),
         priority=priority,
         disabled=True,
@@ -2005,11 +2037,31 @@ def general_free_serving_candidates(
     to an ordinary chat agent -- excludes both here too, so this selector's
     count never overstates how many free models the general chat pool could
     actually serve.
+
+    A non-text-input model is exempted from :func:`_requires_non_text_input`'s
+    exclusion only when ``model.supports_tool_calls is True`` -- verified
+    provider evidence (a real ``supported_parameters`` list containing
+    ``"tools"``/``"tool_choice"``; see :func:`_tool_call_support_evidence`)
+    that this exact catalog row accepts tool-calling requests. This is an
+    additive OR, not a replacement: ``supports_tool_calls`` unset (``None``,
+    the fail-closed default whenever a provider's row carries no
+    ``supported_parameters`` evidence at all) or verified absent (``False``)
+    both leave the original exclusion in force. NVIDIA NIM's ``/v1/models``
+    never returns ``supported_parameters``, so this incident's model
+    (``meta/llama-3.2-90b-vision-instruct``) gets ``supports_tool_calls=None``
+    unconditionally and stays excluded -- the exemption does not reopen
+    #1198. No separate "and output is text" clause is needed here: every row
+    that reaches this filter already passed ``is_routable_discovered_model``,
+    which (via ``is_discovered_chat_candidate``) already refuses a non-text
+    output row, so the exemption is already exactly as narrow as "non-text
+    input, text output, verified tool support" without re-deriving a check
+    this selector already enforces one layer up.
     """
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if is_routable_discovered_model(model)
+        and (not _requires_non_text_input(model) or model.supports_tool_calls is True)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates
