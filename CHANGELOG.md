@@ -20,6 +20,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `endpoint_race.race_first_valid` now drives each equivalent-endpoint
+  attempt from a raw `threading.Thread(daemon=True)` worker built on a bare
+  `concurrent.futures.Future`, instead of a `concurrent.futures.ThreadPoolExecutor`.
+  `ThreadPoolExecutor` registers every worker it starts with
+  `concurrent.futures.thread`'s own interpreter-exit hook, which
+  unconditionally joins each still-running worker at shutdown regardless of
+  that worker thread's own daemon flag; combined with this org's default
+  no-deadline `ModelClient.timeout=None`, a losing race participant blocked
+  in a provider call that never returns could hang process shutdown forever
+  even though the winner already answered the caller (Devin Review finding
+  on #971, "Endpoint races block process shutdown"). `set_running_or_notify_cancel()`
+  on the bare `Future` preserves the existing "cancelled before it started
+  never calls the provider" duplicate-cost guarantee, and every other
+  coordination primitive (`wait()`, `future.cancel()`, `future.result()`,
+  `future.exception()`) behaves identically to the prior executor-backed
+  futures — "first valid response wins" semantics, unbounded wait for the
+  active call, and cancellation/drain provenance are unchanged.
 - OpenRouter free-model endpoint discovery (`_openrouter_free_model_endpoints`)
   now fans its per-model fetch out across a fixed pool of at most 8 daemon
   worker threads pulling model IDs from a queue, instead of allocating one
