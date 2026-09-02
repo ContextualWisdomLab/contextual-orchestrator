@@ -595,6 +595,56 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Model group deleted"}},
             },
         },
+        "/api/v1/model_timeouts": {
+            "get": {
+                "operationId": "list_model_timeouts",
+                "summary": "List every configured model's effective request timeout",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Model timeout collection"}},
+            },
+        },
+        "/api/v1/model_timeouts/{model}": {
+            "get": {
+                "operationId": "get_model_timeout",
+                "summary": "Get one model's effective timeout, override, and recent audit history",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "model", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "Model timeout detail"}, "404": {"description": "Not found"}},
+            },
+            "patch": {
+                "operationId": "set_model_timeout",
+                "summary": "Set an operator override for one model's request timeout, in seconds",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "model", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["timeout_seconds"],
+                                "properties": {
+                                    "timeout_seconds": {
+                                        "type": "number",
+                                        "minimum": 1,
+                                        "maximum": 14400,
+                                        "description": "Request timeout override, in seconds.",
+                                    },
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {"200": {"description": "Model timeout updated"}, "404": {"description": "Not found"}},
+            },
+            "delete": {
+                "operationId": "clear_model_timeout",
+                "summary": "Clear an operator override, restoring the inherited default timeout",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "model", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "Model timeout override cleared"}, "404": {"description": "Not found"}},
+            },
+        },
         "/api/v1/orchestration_policies/default_policy": {
             "get": {
                 "operationId": "get_default_policy",

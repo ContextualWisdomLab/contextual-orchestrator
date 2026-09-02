@@ -26,6 +26,20 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
         "group_saved": "Group saved. Send requests with this group name to use measured routing.",
         "group_deleted": "Group deleted. Its provider models remain available.",
+        "model_timeouts_title": "Model timeouts",
+        "model_timeouts_desc": "How long a request to each model may run before it times out, in seconds.",
+        "model_timeout_model_header": "Model",
+        "model_timeout_effective_header": "Timeout (s)",
+        "model_timeout_source_header": "Source",
+        "model_timeout_actions_header": "Actions",
+        "model_timeout_source_default": "Default",
+        "model_timeout_source_override": "Override",
+        "model_timeout_input_label": "New timeout (seconds)",
+        "save_model_timeout": "Save",
+        "clear_model_timeout": "Restore default",
+        "model_timeout_saved": "Timeout saved. New requests to this model use it immediately.",
+        "model_timeout_cleared": "Override cleared. This model now uses the default timeout.",
+        "no_model_timeouts": "No models are configured yet.",
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
@@ -287,6 +301,20 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
         "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
+        "model_timeouts_title": "모델 타임아웃",
+        "model_timeouts_desc": "각 모델에 대한 요청이 타임아웃되기까지 허용되는 시간(초)입니다.",
+        "model_timeout_model_header": "모델",
+        "model_timeout_effective_header": "타임아웃(초)",
+        "model_timeout_source_header": "출처",
+        "model_timeout_actions_header": "작업",
+        "model_timeout_source_default": "기본값",
+        "model_timeout_source_override": "재정의",
+        "model_timeout_input_label": "새 타임아웃(초)",
+        "save_model_timeout": "저장",
+        "clear_model_timeout": "기본값으로 복원",
+        "model_timeout_saved": "타임아웃을 저장했습니다. 이 모델에 대한 새 요청부터 즉시 적용됩니다.",
+        "model_timeout_cleared": "재정의를 해제했습니다. 이제 이 모델은 기본 타임아웃을 사용합니다.",
+        "no_model_timeouts": "아직 구성된 모델이 없습니다.",
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
@@ -1075,6 +1103,24 @@ Summarize this research thread and verify claims.</textarea>
             <div class="metric"><span data-i18n="single_api_status">OpenAI-compatible endpoint active</span><strong>/v1/chat/completions</strong></div>
           </div>
         </section>
+        <section class="panel" id="model-timeouts" tabindex="-1">
+          <div class="panel-header">
+            <h2 data-i18n="model_timeouts_title">Model timeouts</h2>
+          </div>
+          <p data-i18n="model_timeouts_desc">How long a request to each model may run before it times out, in seconds.</p>
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="model_timeout_model_header">Model</th>
+                <th data-i18n="model_timeout_effective_header">Timeout (s)</th>
+                <th data-i18n="model_timeout_source_header">Source</th>
+                <th data-i18n="model_timeout_actions_header">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="modelTimeoutRows"></tbody>
+          </table>
+          <p id="modelTimeoutFeedback" role="status" aria-live="polite"></p>
+        </section>
       </section>
     </main>
   </div>
@@ -1112,6 +1158,8 @@ Summarize this research thread and verify claims.</textarea>
       modelGroupMembers: document.querySelector("#modelGroupMembers"),
       modelGroupFeedback: document.querySelector("#modelGroupFeedback"),
       modelGroups: document.querySelector("#modelGroups"),
+      modelTimeoutRows: document.querySelector("#modelTimeoutRows"),
+      modelTimeoutFeedback: document.querySelector("#modelTimeoutFeedback"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language"),
       sessionForm: document.querySelector("#sessionForm"),
@@ -1121,6 +1169,7 @@ Summarize this research thread and verify claims.</textarea>
       endSession: document.querySelector("#endSession")
     };
     let state = {agents: [], modelGroups: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
+    state.modelTimeouts = [];
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -1200,6 +1249,44 @@ Summarize this research thread and verify claims.</textarea>
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
       await refreshModelGroups();
+    }
+    function renderModelTimeouts() {
+      els.modelTimeoutRows.innerHTML = (state.modelTimeouts || []).map(row => `
+        <tr data-model="${escapeHtml(row.model)}">
+          <td>${escapeHtml(row.model)}</td>
+          <td>${escapeHtml(row.effective_timeout_seconds)}</td>
+          <td><span class="chip ${row.source === "override" ? "green" : ""}">${row.source === "override" ? t("model_timeout_source_override") : t("model_timeout_source_default")}</span></td>
+          <td>
+            <input type="number" min="1" max="14400" step="1" aria-label="${escapeHtml(t("model_timeout_input_label"))}" placeholder="${escapeHtml(row.default_timeout_seconds)}">
+            <button class="btn" type="button" data-save-timeout="${escapeHtml(row.model)}">${t("save_model_timeout")}</button>
+            <button class="btn" type="button" data-clear-timeout="${escapeHtml(row.model)}" ${row.source === "override" ? "" : "disabled"}>${t("clear_model_timeout")}</button>
+          </td>
+        </tr>`).join("") || `<tr><td colspan="4" class="empty" data-i18n="no_model_timeouts">${t("no_model_timeouts")}</td></tr>`;
+    }
+    async function refreshModelTimeouts() {
+      const response = await apiFetch("/api/v1/model_timeouts");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not load model timeouts");
+      state.modelTimeouts = payload.items || [];
+      renderModelTimeouts();
+    }
+    async function saveModelTimeout(model, seconds) {
+      const response = await apiFetch(`/api/v1/model_timeouts/${encodeURIComponent(model)}`, {
+        method: "PATCH",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({timeout_seconds: seconds})
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not save model timeout");
+      els.modelTimeoutFeedback.textContent = t("model_timeout_saved");
+      await refreshModelTimeouts();
+    }
+    async function clearModelTimeout(model) {
+      const response = await apiFetch(`/api/v1/model_timeouts/${encodeURIComponent(model)}`, {method: "DELETE"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not clear model timeout");
+      els.modelTimeoutFeedback.textContent = t("model_timeout_cleared");
+      await refreshModelTimeouts();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1613,6 +1700,7 @@ Summarize this research thread and verify claims.</textarea>
       localStorage.setItem("admin_lang", lang);
       if (state.agents.length) renderAgents();
       if (state.agents.length) renderModelGroups();
+      if (state.modelTimeouts?.length) renderModelTimeouts();
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
@@ -1625,6 +1713,7 @@ Summarize this research thread and verify claims.</textarea>
       if (els.sessionAction) els.sessionAction.hidden = true;
       state = await res.json();
       await refreshModelGroups();
+      await refreshModelTimeouts();
       await refreshAnalytics();
       await refreshReadiness();
       renderAgents();
@@ -1759,6 +1848,17 @@ Summarize this research thread and verify claims.</textarea>
           return refreshModelGroups();
         })
         .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+    });
+    els.modelTimeoutRows.addEventListener("click", event => {
+      const saveModel = event.target.dataset?.saveTimeout;
+      const clearModel = event.target.dataset?.clearTimeout;
+      if (saveModel) {
+        const row = event.target.closest("tr");
+        const seconds = Number(row.querySelector("input").value);
+        saveModelTimeout(saveModel, seconds).catch(error => { els.modelTimeoutFeedback.textContent = error.message; });
+      } else if (clearModel) {
+        clearModelTimeout(clearModel).catch(error => { els.modelTimeoutFeedback.textContent = error.message; });
+      }
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));

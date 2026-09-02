@@ -389,6 +389,7 @@ python tests/test_self_check.py
 python tests/test_paper_contracts.py
 python -m pytest -q tests/test_reasoning_effort_profile.py
 python tests/test_admin_contract.py
+python -m pytest -q tests/test_model_timeouts.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_nim_benchmark.py

@@ -205,6 +205,28 @@ def _validate_provider_probe_timeout(timeout: float) -> float:
     return value
 
 
+# Per-model LLM call timeout overrides (admin-editable). Bounds mirror the
+# widest already-evidenced org LLM timeout precedent (NOEMA_LLM_TIMEOUT_SECONDS
+# = 14400s; see docs/product-technical-gap-baseline.md) rather than an
+# invented round number, and a 1s floor keeps an override from silently
+# starving every request to a model.
+MIN_MODEL_TIMEOUT_SECONDS = 1.0
+MAX_MODEL_TIMEOUT_SECONDS = 14400.0
+
+
+def _validate_model_timeout_seconds(timeout: float) -> float:
+    """Validate an operator-supplied per-model chat/stream request timeout override."""
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError("model timeout must be a finite number of seconds")
+    value = float(timeout)
+    if not math.isfinite(value) or not MIN_MODEL_TIMEOUT_SECONDS <= value <= MAX_MODEL_TIMEOUT_SECONDS:
+        raise ValueError(
+            "model timeout must be between "
+            f"{MIN_MODEL_TIMEOUT_SECONDS:g} and {MAX_MODEL_TIMEOUT_SECONDS:g} seconds"
+        )
+    return value
+
+
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
 
@@ -1707,6 +1729,10 @@ class ModelClient:
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
+        # Optional per-model override seam (wired by TaskOrchestrator from its
+        # admin-editable model_timeout_override registry). None preserves the
+        # exact prior behavior: every call uses the flat instance ``timeout``.
+        self.model_timeout_resolver: Callable[[str], float] | None = None
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1929,7 +1955,12 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_with_retry(agent, payload, destination)
+            timeout_override = self._resolve_timeout(agent)
+            return (
+                self._send_with_retry(agent, payload, destination)
+                if timeout_override is None
+                else self._send_with_retry(agent, payload, destination, timeout=timeout_override)
+            )
 
     def apply_effort_profile(
         self,
@@ -2083,6 +2114,10 @@ class ModelClient:
         # Classify instead of collapsing: a 401/404/429 upstream failure is
         # caller-actionable and must not surface as one opaque internal error.
         raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
+
+    def _resolve_timeout(self, agent: ModelAgent) -> float | None:
+        """Return this agent's per-model timeout override, or ``None`` for the instance default."""
+        return self.model_timeout_resolver(agent.model) if self.model_timeout_resolver else None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -2311,10 +2346,19 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+            timeout_override = self._resolve_timeout(agent)
+            if timeout_override is None:
+                yield from self._stream_send(agent, payload, destination)
+            else:
+                yield from self._stream_send(agent, payload, destination, timeout=timeout_override)
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
@@ -2336,7 +2380,12 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         try:
-            with self._open_provider(request, destination) as response:
+            opened = (
+                self._open_provider(request, destination)
+                if timeout is None
+                else self._open_provider(request, destination, timeout=timeout)
+            )
+            with opened as response:
                 for raw in response:
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
@@ -3592,7 +3641,7 @@ class _StateStore:
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
-    _KEYED = {"workflow_run", "evaluation_run", "psychometric_observation"}
+    _KEYED = {"workflow_run", "evaluation_run", "psychometric_observation", "model_timeout_override"}
     _TABLE_NAME = "orchestration_records"
     _LEGACY_TABLE_NAME = "records"
     _LEGACY_INDEX_NAME = "records_kind_seq"
@@ -3734,6 +3783,14 @@ class _StateStore:
                 rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
+
+    def delete(self, kind: str, key: str) -> None:
+        """Delete one keyed record with no replacement (a clear/restore-to-default op)."""
+        if kind not in self._KEYED:
+            raise ValueError("only keyed state can be deleted by key")
+        with self._lock:
+            self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
+            self._conn.commit()
 
     def prune_keyed(self, kind: str, retained_keys: set[str]) -> None:
         """Delete keyed rows outside the caller's bounded in-memory set."""
@@ -3897,6 +3954,13 @@ class TaskOrchestrator:
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
         self.client = client or ModelClient()
+        # Admin-editable per-model timeout overrides (model name -> seconds).
+        # Absent entries inherit self.client.timeout. Wired into the client as
+        # a resolver so every chat/stream call already routed through
+        # ModelClient picks up operator changes with no other call-site change.
+        self._model_timeout_overrides: dict[str, float] = {}
+        if isinstance(self.client, ModelClient):
+            self.client.model_timeout_resolver = self._model_timeout_override_for
         self.token_counter = token_counter or build_token_counter()
         # The cost coordinator installs this optional sink. Direct orchestrator
         # callers still retain audit evidence without inventing price or usage.
@@ -4075,6 +4139,8 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        for override in self._store.load("model_timeout_override"):
+            self._model_timeout_overrides[str(override["model"])] = float(override["timeout_seconds"])
         for observation in self._store.load("psychometric_observation"):
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
@@ -6118,6 +6184,100 @@ class TaskOrchestrator:
         self._routers_forget_members({agent.id for agent in self.candidates})
         self._append_audit_event("model_group_deleted", {"group_name": name})
         return {"group_name": name, "deleted": True}
+
+    def _known_model_names(self) -> set[str]:
+        """Return the distinct provider model identifiers configured on any agent."""
+        return {agent.model for agent in self.candidates}
+
+    def effective_model_timeout(self, model: str) -> float:
+        """Return the seconds an outbound call to ``model`` should use.
+
+        An operator override wins; otherwise the request inherits the
+        client's flat default (``self.client.timeout``). This is the single
+        resolver wired into :class:`ModelClient` so route/conduct calls,
+        streaming, and any future transport all observe the same value with
+        no other call-site change.
+        """
+        return self._model_timeout_overrides.get(model, float(self.client.timeout))
+
+    def _model_timeout_override_for(self, model: str) -> float | None:
+        """Return only an explicit operator override, or ``None``.
+
+        This -- not :meth:`effective_model_timeout` -- is the resolver wired
+        into :class:`ModelClient`. Returning ``None`` when no override exists
+        lets every call site keep passing no ``timeout`` kwarg at all in the
+        common (no-override) case, exactly matching the flat-default
+        behavior every existing caller/test already relies on, rather than
+        always passing an explicit (if numerically identical) value.
+        """
+        return self._model_timeout_overrides.get(model)
+
+    def _model_timeout_audit_history(self, model: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recorded set/clear events for one model's timeout, newest first."""
+        matches = [
+            event
+            for event in reversed(self._audit_events)
+            if event["event_type"] in ("model_timeout_set", "model_timeout_cleared")
+            and event["event_detail"].get("model") == model
+        ]
+        return matches[:limit]
+
+    def _model_timeout_payload(self, model: str, *, with_audit: bool = False) -> dict[str, Any]:
+        """Build the admin-facing view of one model's effective timeout."""
+        override = self._model_timeout_overrides.get(model)
+        payload = {
+            "model": model,
+            "effective_timeout_seconds": self.effective_model_timeout(model),
+            "override_timeout_seconds": override,
+            "default_timeout_seconds": float(self.client.timeout),
+            "source": "override" if override is not None else "default",
+        }
+        if with_audit:
+            payload["audit_history"] = self._model_timeout_audit_history(model)
+        return payload
+
+    def list_model_timeouts(self) -> list[dict[str, Any]]:
+        """Return every configured model's effective timeout and override status."""
+        names = sorted(self._known_model_names() | set(self._model_timeout_overrides))
+        return [self._model_timeout_payload(name) for name in names]
+
+    def get_model_timeout(self, model: str) -> dict[str, Any]:
+        """Return one model's timeout detail plus its recent set/clear audit history.
+
+        Raises ``KeyError`` when ``model`` matches no configured agent and has
+        no (now-orphaned) override on record.
+        """
+        if model not in self._known_model_names() and model not in self._model_timeout_overrides:
+            raise KeyError(model)
+        return self._model_timeout_payload(model, with_audit=True)
+
+    def set_model_timeout(self, model: str, timeout_seconds: float) -> dict[str, Any]:
+        """Set (or replace) an operator override for one model's request timeout."""
+        if model not in self._known_model_names():
+            raise KeyError(model)
+        value = _validate_model_timeout_seconds(timeout_seconds)
+        previous = self._model_timeout_overrides.get(model)
+        self._model_timeout_overrides[model] = value
+        if self._store is not None:
+            self._store.save("model_timeout_override", model, {"model": model, "timeout_seconds": value})
+        self._append_audit_event(
+            "model_timeout_set",
+            {"model": model, "previous_timeout_seconds": previous, "timeout_seconds": value},
+        )
+        return self._model_timeout_payload(model, with_audit=True)
+
+    def clear_model_timeout(self, model: str) -> dict[str, Any]:
+        """Clear an operator override, restoring the inherited default for ``model``."""
+        if model not in self._model_timeout_overrides:
+            raise KeyError(model)
+        previous = self._model_timeout_overrides.pop(model)
+        if self._store is not None:
+            self._store.delete("model_timeout_override", model)
+        self._append_audit_event(
+            "model_timeout_cleared",
+            {"model": model, "previous_timeout_seconds": previous},
+        )
+        return self._model_timeout_payload(model, with_audit=True)
 
     def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
         """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""

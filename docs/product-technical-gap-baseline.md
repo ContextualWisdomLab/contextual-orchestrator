@@ -1,5 +1,80 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 Admin web: per-model LLM timeout view/set/clear/restore (closes a §8 gap)
+
+Observation time: 2026-09-02. Scope: a cross-repo research pass covering
+admin-web state across `noema`, `contextual-orchestrator`, and `keyverse`
+(owner request: "관리자 웹 개발… 및 상호 연계 준비"), plus the
+already-standing per-model-timeout admin requirement recorded in
+`ContextualWisdomLab/.github`'s `docs/product-goal-directive.md` §8.
+
+**Findings (evidence, not assumption):**
+
+- No per-model LLM timeout config existed anywhere in this repository
+  before this change. `ModelClient.timeout` was one flat instance value
+  (default 90s) applied to every outbound call regardless of model; no
+  registry, no admin endpoint, no persistence.
+- `/admin` (`admin.py`, 1780+ lines) is a real, already-serving operator
+  console — not a stub — with Models/Routing/Evaluations/Datasets/Access/
+  Integrations/Observability/Audit/Settings views, backed by
+  `/admin/state` and `/api/v1/*`. `admin_ui/` (a `admin_ui/` React +
+  Storybook scaffold added in PR #893) remains exactly the unmodified
+  Vite `react-ts` demo output — confirmed by direct inspection, matching
+  planning ADR 0036's (superseded) own audit finding. Planning ADR 0033
+  (accepted, operative) already settled this: keep `admin.py` inline
+  stdlib HTML, defer React/Storybook until one of three concrete triggers
+  is met. None is met by this change, so this feature extends `admin.py`
+  in place and does not touch `admin_ui/`.
+- `credentials.py`/`kv_config.py` (this repo's KV-backed secret/config
+  seam) and the `model_group` family on `TaskOrchestrator` are the
+  established patterns for admin-editable, audited, KV-persisted operator
+  state; this feature follows the `model_group` pattern rather than
+  inventing a new one.
+- Sibling research (same pass, separate PRs): `noema` (Cloudflare Worker
+  OIDC/credential-exchange broker; only `/health`, `/ready`, `/exchange`,
+  Durable-Object-only state, no admin-readable surface at all today — the
+  least-ready of the three, no code changed there this iteration) and
+  `keyverse` (Keycloak-fronted IdP; had **no** encrypted secrets store,
+  **no** frontend of any kind, and its in-flight PR #103 already covers
+  most of a "service ABAC/RBAC" capability the owner separately asked
+  Keyverse to grow into — see that PR's own ADR-0014/0015/0016 for the
+  full three-capability research).
+
+**What shipped in this PR:**
+
+`TaskOrchestrator.list_model_timeouts`/`get_model_timeout`/
+`set_model_timeout`/`clear_model_timeout` (KV-persisted overrides,
+`MIN_MODEL_TIMEOUT_SECONDS=1`/`MAX_MODEL_TIMEOUT_SECONDS=14400` validation,
+audit history via the existing `_append_audit_event`); `GET
+/api/v1/model_timeouts(/{model})`, `PATCH`/`DELETE
+/api/v1/model_timeouts/{model}` (declared in `api_contract.py`); a
+`ModelClient.model_timeout_resolver` seam wired end-to-end into `chat()`
+and `stream_chat()` so a set override changes real outbound call behavior,
+not just stored config (verified against a fake transport capturing the
+actual `timeout=` kwarg reaching `_open_provider`); a new "Model timeouts"
+panel in `admin.py`'s Settings view (bilingual en/ko, additive-only edit
+so every existing `test_admin_contract.py` assertion still passes
+unmodified). See planning ADR 0042 for the full design record, including
+why the `ModelClient` resolver returns `None` (not the resolved default)
+absent an override — the fix for a real regression this change introduced
+and caught locally before push (three existing test files' strict-signature
+mock stand-ins broke when every call always passed an explicit `timeout=`
+kwarg; the fix was correcting the resolver's semantics, not patching every
+test double).
+
+**Verified:** `python tests/test_self_check.py`, the full suite (3307+ new
+tests passed locally, 0 failed after the fix above), `interrogate -v` on
+every touched module (100%), `tests/test_api_contract.py`/
+`test_admin_contract.py`/`test_conventions.py` all green.
+
+**Left for the next iteration:** batch/embeddings/rerank/transcription/
+image transport paths still use only the flat default (chat + streaming
+chat — the primary route/conduct path this requirement is about — are
+wired); Keyverse SSO for `/admin` (a real cross-repo integration, designed
+in this pass's report but not built); the Keyvault-backed
+`KeyverseCredentialBackend` noted in keyverse PR #129's ADR-0016 as this
+repo's natural next consumer of that work, not started here.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.

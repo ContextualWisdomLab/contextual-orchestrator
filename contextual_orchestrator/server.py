@@ -304,6 +304,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
+ALLOWED_MODEL_TIMEOUT_PATCH_KEYS = {"timeout_seconds"}
 ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 DEFAULT_MAX_ADMIN_SESSIONS = 256
@@ -5966,6 +5967,16 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "model_group_not_found", "model group not found")
                     return
+                if path == "/api/v1/model_timeouts":
+                    items = orchestrator.list_model_timeouts()
+                    self._send({"items": items, "total_count": len(items)})
+                    return
+                if path.startswith("/api/v1/model_timeouts/"):
+                    try:
+                        self._send(orchestrator.get_model_timeout(urllib.parse.unquote(path.rsplit("/", 1)[-1])))
+                    except KeyError:
+                        self._send_error(404, "model_timeout_not_found", "model timeout not found")
+                    return
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
@@ -6315,6 +6326,17 @@ def build_server(
                         ) from exc
                     self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
                     return
+                if path.startswith("/api/v1/model_timeouts/"):
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_MODEL_TIMEOUT_PATCH_KEYS)
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        self._send(orchestrator.set_model_timeout(name, body.get("timeout_seconds")))
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_timeout_not_found", "model timeout not found"
+                        ) from exc
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -6414,6 +6436,16 @@ def build_server(
                             404, "model_group_not_found", "model group not found"
                         ) from exc
                     self._send(deleted, 200)
+                    return
+                if path.startswith("/api/v1/model_timeouts/"):
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        cleared = orchestrator.clear_model_timeout(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_timeout_not_found", "model timeout override not found"
+                        ) from exc
+                    self._send(cleared, 200)
                     return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
