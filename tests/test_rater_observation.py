@@ -1,22 +1,23 @@
-"""Tests for the domain-neutral governed rater observation context."""
+"""Contracts for criterion-bound governed rater observations."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 from copy import deepcopy
-from pathlib import Path
+from typing import Any
 
 import pytest
 
+from contextual_orchestrator.evaluation_criterion_binding import (
+    CategoryExecutionBinding,
+    CriterionExecutionBinding,
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
 from contextual_orchestrator.rater_observation import (
-    GOVERNED_RATER_CONFORMANCE_SHA256,
     GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
-    GOVERNED_RATER_SCHEMA_SHA256,
-    GOVERNED_RATER_UPSTREAM_REVISION,
     MAX_RATER_EVIDENCE_REFERENCES,
     MAX_RATER_OBSERVATIONS,
-    MAX_RATER_REFERENCE_LENGTH,
     MAX_RATER_REVIEW_SIGNALS,
     CriterionObservation,
     RaterConfigurationIdentity,
@@ -25,480 +26,483 @@ from contextual_orchestrator.rater_observation import (
 )
 
 
-def _configuration() -> dict[str, str]:
+def _category(seed: str, order: int) -> dict[str, object]:
+    """Return one category definition receipt."""
     return {
-        "rater_family_ref": "model-family",
+        "definition_ref": f"{seed}_definition",
+        "definition_sha256": seed[0] * 64,
+        "order_index": order,
+    }
+
+
+def _criterion(seed: str) -> dict[str, object]:
+    """Return one substantive criterion receipt."""
+    return {
+        "criterion_revision_ref": f"{seed}_revision_1",
+        "definition_ref": f"{seed}_definition",
+        "definition_sha256": "1" * 64,
+        "admissible_evidence_rule_ref": f"{seed}_evidence_rule",
+        "admissible_evidence_rule_sha256": "2" * 64,
+        "exclusion_rule_ref": f"{seed}_exclusion_rule",
+        "exclusion_rule_sha256": "3" * 64,
+        "response_semantics_ref": f"{seed}_response_semantics",
+        "response_semantics_sha256": "4" * 64,
+        "abstention_rule_ref": f"{seed}_abstention_rule",
+        "abstention_rule_sha256": "5" * 64,
+        "not_observable_rule_ref": f"{seed}_not_observable_rule",
+        "not_observable_rule_sha256": "6" * 64,
+        "categories": {
+            f"{seed}_not_supported": _category("a_category", 0),
+            f"{seed}_supported": _category("b_category", 1),
+        },
+    }
+
+
+def _criterion_set() -> dict[str, object]:
+    """Return an immutable non-empty criterion set."""
+    return {
+        "criterion_set_snapshot_ref": "criterion_set_snapshot_1",
+        "criterion_set_sha256": "a" * 64,
+        "blueprint_revision_ref": "evaluation_blueprint_revision_1",
+        "rubric_revision_ref": "rubric_revision_1",
+        "intended_use_ref": "intended_use_1",
+        "construct_ref": "construct_1",
+        "population_scope_ref": "population_scope_1",
+        "language_scope_ref": "language_scope_1",
+        "domain_scope_ref": "domain_scope_1",
+        "criteria": {
+            "criterion_evidence_support": _criterion(
+                "criterion_evidence_support"
+            ),
+            "criterion_safety": _criterion("criterion_safety"),
+        },
+    }
+
+
+def _configuration() -> dict[str, str]:
+    """Return one exact rater configuration."""
+    return {
+        "rater_family_ref": "rater-family",
         "provider_ref": "provider",
-        "implementation_revision_ref": "model-revision",
-        "instruction_revision_ref": "prompt-revision",
-        "response_schema_revision_ref": "schema-revision",
-        "workflow_mode_ref": "blind-independent",
+        "implementation_revision_ref": "implementation-v1",
+        "instruction_revision_ref": "instruction-v1",
+        "response_schema_revision_ref": "schema-v1",
+        "workflow_mode_ref": "independent-blind",
         "modality_channel_ref": "text",
     }
 
 
-def _observed(criterion_ref: str = "criterion-a") -> dict[str, object]:
+def _observed(category: str = "criterion_evidence_support_supported") -> dict[str, Any]:
+    """Return one observed criterion payload."""
     return {
-        "criterion_ref": criterion_ref,
         "status": "observed",
-        "category_anchor_ref": "category-2",
+        "category_anchor_ref": category,
         "evidence_reference_ids": ["evidence-1"],
-        "uncertainty": "medium",
+        "uncertainty": "low",
         "review_signal_refs": [],
         "reason_ref": None,
     }
 
 
-def _abstained(criterion_ref: str = "criterion-b") -> dict[str, object]:
+def _abstained() -> dict[str, Any]:
+    """Return one explicit abstention payload."""
     return {
-        "criterion_ref": criterion_ref,
         "status": "abstained",
         "category_anchor_ref": None,
         "evidence_reference_ids": [],
         "uncertainty": "high",
-        "review_signal_refs": ["human-review"],
+        "review_signal_refs": ["review-1"],
         "reason_ref": "insufficient-evidence",
     }
 
 
-def _invocation() -> dict[str, object]:
-    observed = _observed()
-    abstained = _abstained()
+def _invocation() -> dict[str, Any]:
+    """Return one complete criterion-bound invocation."""
     return {
         "contract_id": GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
         "invocation_ref": "invocation-1",
         "configuration": _configuration(),
+        "evaluation_run_snapshot_ref": "run-snapshot-1",
+        "item_instance_ref": "item-instance-1",
         "task_revision_ref": "task-v1",
-        "rubric_revision_ref": "rubric-v1",
+        "rubric_revision_ref": "rubric_revision_1",
+        "criterion_set": _criterion_set(),
         "response_evidence_ref": "response-evidence-1",
         "observations": {
-            observed.pop("criterion_ref"): observed,
-            abstained.pop("criterion_ref"): abstained,
+            "criterion_evidence_support": _observed(),
+            "criterion_safety": _abstained(),
         },
     }
 
 
-def _error_code(callable_object) -> str:
-    with pytest.raises(RaterObservationError) as exc_info:
-        callable_object()
-    return exc_info.value.code
+def _code(callable_: Any) -> str:
+    """Return a stable domain error code from one failing call."""
+    with pytest.raises((RaterObservationError, EvaluationCriterionBindingError)) as err:
+        callable_()
+    return err.value.code
 
 
-class _OversizedList(list[object]):
-    """List whose contents must not be traversed after its size is rejected."""
-
-    def __iter__(self):
-        raise AssertionError("oversized input was traversed")
-
-
-def test_round_trip_preserves_observations_without_decision_fields() -> None:
-    invocation = RaterInvocation.from_mapping(_invocation())
-    payload = invocation.to_payload()
-
-    assert payload == _invocation()
-    assert invocation.observations[0].category_anchor_ref == "category-2"
-    assert invocation.observations[1].reason_ref == "insufficient-evidence"
-    assert not {
-        "score",
-        "final_score",
-        "latent_trait",
-        "level",
-        "placement",
-        "pass_fail",
-        "certification",
-        "employment_decision",
-    }.intersection(payload)
+def test_criterion_set_carries_substantive_rules_categories_and_scope() -> None:
+    """Criterion meaning is explicit and content-addressed before evaluation."""
+    binding = CriterionSetExecutionBinding.from_mapping(_criterion_set())
+    criterion = binding.criterion("criterion_evidence_support")
+    assert criterion.definition_ref == "criterion_evidence_support_definition"
+    assert criterion.admissible_evidence_rule_ref.endswith("_evidence_rule")
+    assert criterion.exclusion_rule_ref.endswith("_exclusion_rule")
+    assert criterion.response_semantics_ref.endswith("_response_semantics")
+    assert criterion.abstention_rule_ref.endswith("_abstention_rule")
+    assert criterion.not_observable_rule_ref.endswith("_not_observable_rule")
+    assert criterion.category_refs == (
+        "criterion_evidence_support_not_supported",
+        "criterion_evidence_support_supported",
+    )
+    assert binding.intended_use_ref == "intended_use_1"
+    assert binding.to_payload() == _criterion_set()
 
 
-def test_top_level_score_or_decision_fields_are_rejected_explicitly() -> None:
-    for field_name in ("score", "placement", "employment_decision"):
-        payload = _invocation()
-        payload[field_name] = "forbidden"
-        assert _error_code(
-            lambda payload=payload: RaterInvocation.from_mapping(payload)
-        ) == ("decision_leakage")
+def test_criterion_set_rejects_missing_empty_unknown_and_malformed_meaning() -> None:
+    """Refs alone cannot stand in for missing criterion rules or categories."""
+    empty = _criterion_set()
+    empty["criteria"] = {}
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(empty)) == (
+        "invalid_criterion_set"
+    )
 
+    missing = _criterion_set()
+    del missing["construct_ref"]
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(missing)) == (
+        "missing_field"
+    )
 
-def test_unknown_and_missing_top_level_fields_fail_closed() -> None:
-    unknown = _invocation()
-    unknown["provider_payload"] = {}
-    assert _error_code(lambda: RaterInvocation.from_mapping(unknown)) == "unknown_field"
+    unknown = _criterion_set()
+    unknown["score"] = 1
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(unknown)) == (
+        "unknown_field"
+    )
 
-    missing = _invocation()
-    del missing["rubric_revision_ref"]
-    assert _error_code(lambda: RaterInvocation.from_mapping(missing)) == "missing_field"
+    malformed = _criterion_set()
+    malformed["criterion_set_sha256"] = "bad"
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(malformed)) == (
+        "invalid_sha256"
+    )
 
-    assert _error_code(lambda: RaterInvocation.from_mapping([])) == "invalid_object"
-    assert _error_code(lambda: RaterInvocation.from_mapping({1: "value"})) == (
+    wrong = _criterion_set()
+    wrong["criteria"] = []
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(wrong)) == (
+        "invalid_object"
+    )
+
+    non_string = _criterion_set()
+    non_string["criteria"] = {1: _criterion("criterion")}
+    assert _code(lambda: CriterionSetExecutionBinding.from_mapping(non_string)) == (
         "invalid_object_key"
     )
 
 
-def test_configuration_requires_exact_fields_and_bounded_references() -> None:
-    assert (
-        RaterConfigurationIdentity.from_mapping(_configuration()).provider_ref
-        == "provider"
-    )
-
-    unknown = _configuration()
-    unknown["temperature"] = "1"
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(unknown)) == (
-        "unknown_field"
-    )
-
-    decision = _configuration()
-    decision["score"] = "forbidden"
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(decision)) == (
-        "decision_leakage"
-    )
-
-    missing = _configuration()
-    del missing["provider_ref"]
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(missing)) == (
-        "missing_field"
-    )
-
-    wrong_type = _configuration()
-    wrong_type["provider_ref"] = 3  # type: ignore[assignment]
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(wrong_type)) == (
-        "invalid_reference"
-    )
-
-    empty = _configuration()
-    empty["provider_ref"] = "   "
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(empty)) == (
-        "invalid_reference"
-    )
-
-    oversized = _configuration()
-    oversized["provider_ref"] = "x" * (MAX_RATER_REFERENCE_LENGTH + 1)
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(oversized)) == (
-        "invalid_reference"
-    )
-
-    control = _configuration()
-    control["provider_ref"] = "bad\nvalue"
-    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(control)) == (
-        "invalid_reference"
-    )
-
-
-def test_shared_canonical_reference_conformance_fixture() -> None:
-    fixture_path = (
-        Path(__file__).parent
-        / "fixtures/governed_rater_observation_v1_conformance.json"
-    )
-    fixture_bytes = fixture_path.read_bytes()
-    fixture = json.loads(fixture_bytes)
-    assert (
-        hashlib.sha256(fixture_bytes).hexdigest() == GOVERNED_RATER_CONFORMANCE_SHA256
-    )
-    assert fixture["contract_id"] == GOVERNED_RATER_OBSERVATION_CONTRACT_V1
-    assert (
-        GOVERNED_RATER_UPSTREAM_REVISION == "38487df3f5f84b475e07b39cf13c893293e542e7"
-    )
-    assert (
-        GOVERNED_RATER_SCHEMA_SHA256
-        == "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
-    )
-    assert (
-        GOVERNED_RATER_CONFORMANCE_SHA256
-        == "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
-    )
-    assert fixture["reference_cases"]
-    for case in fixture["reference_cases"]:
-        configuration = _configuration()
-        configuration["provider_ref"] = case["value"]
-        if case["valid"]:
-            assert (
-                RaterConfigurationIdentity.from_mapping(configuration).provider_ref
-                == case["value"]
-            )
-        else:
-            assert (
-                _error_code(
-                    lambda configuration=configuration: (
-                        RaterConfigurationIdentity.from_mapping(configuration)
-                    )
-                )
-                == "invalid_reference"
-            )
-
-
-def test_shared_duplicate_member_cases_fail_before_mapping_validation() -> None:
-    fixture = json.loads(
-        (
-            Path(__file__).parent
-            / "fixtures/governed_rater_observation_v1_conformance.json"
-        ).read_text()
-    )
-    for case in fixture["observation_identity_cases"]:
-        if case["valid"]:
-            continue
-        observations = case["json_text"]
-        raw = json.dumps(_invocation()).replace(
-            json.dumps(_invocation()["observations"]), observations
+def test_criterion_categories_are_defined_unique_ordered_and_bounded() -> None:
+    """Every observed category has content-addressed meaning and stable order."""
+    payload = _criterion("criterion")
+    payload["categories"] = {"only": _category("a_category", 0)}
+    assert _code(
+        lambda: CriterionExecutionBinding.from_mapping(
+            payload, criterion_ref="criterion"
         )
-        assert (
-            _error_code(lambda raw=raw: RaterInvocation.from_json(raw))
-            == "duplicate_object_member"
+    ) == "invalid_category_set"
+
+    payload = _criterion("criterion")
+    categories = dict(payload["categories"])
+    categories["third"] = _category("c_category", 1)
+    payload["categories"] = categories
+    assert _code(
+        lambda: CriterionExecutionBinding.from_mapping(
+            payload, criterion_ref="criterion"
         )
+    ) == "duplicate_order_index"
+
+    payload = _criterion("criterion")
+    categories = dict(payload["categories"])
+    categories["criterion_supported"]["order_index"] = 3
+    payload["categories"] = categories
+    assert _code(
+        lambda: CriterionExecutionBinding.from_mapping(
+            payload, criterion_ref="criterion"
+        )
+    ) == "non_contiguous_order_index"
+
+    assert _code(
+        lambda: CategoryExecutionBinding.from_mapping(
+            {"definition_ref": "x", "definition_sha256": "a" * 64},
+            category_ref="category",
+        )
+    ) == "missing_field"
 
 
-def test_deep_json_is_rejected_as_a_domain_error() -> None:
-    raw = "[" * 10_000 + "0" + "]" * 10_000
-    assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
+def test_criterion_binding_rejects_unsafe_types_references_and_indexes() -> None:
+    """Transport aliases and invalid category indexes fail closed."""
+    payload = _criterion("criterion")
+    payload["definition_ref"] = " criterion"
+    assert _code(
+        lambda: CriterionExecutionBinding.from_mapping(
+            payload, criterion_ref="criterion"
+        )
+    ) == "invalid_reference"
+
+    payload = _criterion("criterion")
+    payload["definition_sha256"] = object()
+    assert _code(
+        lambda: CriterionExecutionBinding.from_mapping(
+            payload, criterion_ref="criterion"
+        )
+    ) == "invalid_sha256"
+
+    assert _code(
+        lambda: CategoryExecutionBinding.from_mapping(
+            {
+                "definition_ref": "definition",
+                "definition_sha256": "a" * 64,
+                "order_index": True,
+            },
+            category_ref="category",
+        )
+    ) == "invalid_order_index"
+
+    binding = CriterionSetExecutionBinding.from_mapping(_criterion_set())
+    assert _code(lambda: binding.criterion("not-registered")) == (
+        "criterion_not_registered"
+    )
 
 
-def test_json_depth_scan_ignores_container_characters_inside_strings() -> None:
+def test_rater_invocation_round_trip_requires_exact_run_item_and_criterion_set() -> None:
+    """A provider result cannot exist without the evaluated criterion meaning."""
     payload = _invocation()
-    payload["invocation_ref"] = "[" * 256
+    invocation = RaterInvocation.from_mapping(payload)
+    assert invocation.to_payload() == payload
+    assert invocation.evaluation_run_snapshot_ref == "run-snapshot-1"
+    assert invocation.item_instance_ref == "item-instance-1"
 
-    assert RaterInvocation.from_json(json.dumps(payload)).invocation_ref == "[" * 256
-
-
-def test_huge_json_integer_is_rejected_as_a_domain_error() -> None:
-    raw = '{"value":' + "9" * 10_000 + "}"
-    assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
-
-
-def test_observation_schema_is_exact_and_status_is_bounded() -> None:
-    unknown = _observed()
-    unknown["model_reasoning"] = "hidden"
-    assert _error_code(lambda: CriterionObservation.from_mapping(unknown)) == (
-        "unknown_field"
-    )
-
-    decision = _observed()
-    decision["final_score"] = 7
-    assert _error_code(lambda: CriterionObservation.from_mapping(decision)) == (
-        "decision_leakage"
-    )
-
-    missing = _observed()
-    del missing["uncertainty"]
-    assert _error_code(lambda: CriterionObservation.from_mapping(missing)) == (
-        "missing_field"
-    )
-
-    invalid_status = _observed()
-    invalid_status["status"] = "failed"
-    assert _error_code(lambda: CriterionObservation.from_mapping(invalid_status)) == (
-        "invalid_status"
-    )
-
-    invalid_uncertainty = _observed()
-    invalid_uncertainty["uncertainty"] = "certain"
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(invalid_uncertainty)
-    ) == ("invalid_uncertainty")
-
-    for invalid_value in ([], {}):
-        invalid_status = _observed()
-        invalid_status["status"] = invalid_value
-        assert _error_code(
-            lambda invalid_status=invalid_status: CriterionObservation.from_mapping(
-                invalid_status
-            )
-        ) == ("invalid_status")
-
-        invalid_uncertainty = _observed()
-        invalid_uncertainty["uncertainty"] = invalid_value
-        assert (
-            _error_code(
-                lambda invalid_uncertainty=invalid_uncertainty: (
-                    CriterionObservation.from_mapping(invalid_uncertainty)
-                )
-            )
-            == "invalid_uncertainty"
+    for field in (
+        "evaluation_run_snapshot_ref",
+        "item_instance_ref",
+        "criterion_set",
+    ):
+        missing = _invocation()
+        del missing[field]
+        assert _code(lambda missing=missing: RaterInvocation.from_mapping(missing)) == (
+            "missing_field"
         )
 
-    assert (
-        _error_code(lambda: CriterionObservation.from_mapping([])) == "invalid_object"
+
+def test_invocation_rejects_missing_extra_or_duplicate_criteria() -> None:
+    """Every declared criterion is observed or explicitly abstained exactly once."""
+    missing = _invocation()
+    missing["observations"].pop("criterion_safety")
+    assert _code(lambda: RaterInvocation.from_mapping(missing)) == (
+        "criterion_coverage_mismatch"
+    )
+
+    extra = _invocation()
+    extra["observations"]["criterion_invented"] = _abstained()
+    assert _code(lambda: RaterInvocation.from_mapping(extra)) == (
+        "criterion_coverage_mismatch"
+    )
+
+    configuration = RaterConfigurationIdentity.from_mapping(_configuration())
+    binding = CriterionSetExecutionBinding.from_mapping(_criterion_set())
+    duplicate = CriterionObservation.from_mapping(
+        _observed(), criterion_ref="criterion_evidence_support"
+    )
+    assert _code(
+        lambda: RaterInvocation(
+            invocation_ref="invocation",
+            configuration=configuration,
+            evaluation_run_snapshot_ref="run",
+            item_instance_ref="item",
+            task_revision_ref="task",
+            rubric_revision_ref="rubric_revision_1",
+            criterion_set=binding,
+            response_evidence_ref="response",
+            observations=(duplicate, duplicate),
+        )
+    ) == "duplicate_criterion"
+
+
+def test_invocation_rejects_category_and_rubric_substitution() -> None:
+    """A result cannot borrow a category or rubric from another criterion set."""
+    category = _invocation()
+    category["observations"]["criterion_evidence_support"] = _observed(
+        "criterion_safety_supported"
+    )
+    assert _code(lambda: RaterInvocation.from_mapping(category)) == (
+        "category_not_admitted"
+    )
+
+    rubric = _invocation()
+    rubric["rubric_revision_ref"] = "rubric_revision_2"
+    assert _code(lambda: RaterInvocation.from_mapping(rubric)) == (
+        "criterion_set_rubric_mismatch"
     )
 
 
-def test_observed_state_requires_unique_bounded_evidence_and_no_reason() -> None:
+def test_invocation_json_rejects_duplicate_members_depth_and_invalid_json() -> None:
+    """Raw provider JSON cannot exploit duplicate-member or nesting ambiguity."""
+    payload = _invocation()
+    parsed = RaterInvocation.from_json(json.dumps(payload))
+    assert parsed.to_payload() == payload
+
+    duplicate = '{"contract_id":"a","contract_id":"b"}'
+    assert _code(lambda: RaterInvocation.from_json(duplicate)) == (
+        "duplicate_object_member"
+    )
+
+    nested = "[" * 65 + "0" + "]" * 65
+    assert _code(lambda: RaterInvocation.from_json(nested)) == "invalid_json"
+    assert _code(lambda: RaterInvocation.from_json("{")) == "invalid_json"
+    assert _code(lambda: RaterInvocation.from_json(object())) == "invalid_json"
+
+
+def test_observed_and_abstained_states_preserve_evidence_semantics() -> None:
+    """Observed evidence and abstention reasons remain mutually exclusive."""
+    observed = CriterionObservation.from_mapping(_observed(), criterion_ref="criterion")
+    assert observed.to_payload() == _observed()
+    abstained = CriterionObservation.from_mapping(
+        _abstained(), criterion_ref="criterion"
+    )
+    assert abstained.to_payload() == _abstained()
+
     no_evidence = _observed()
     no_evidence["evidence_reference_ids"] = []
-    assert _error_code(lambda: CriterionObservation.from_mapping(no_evidence)) == (
-        "invalid_references"
-    )
+    assert _code(
+        lambda: CriterionObservation.from_mapping(
+            no_evidence, criterion_ref="criterion"
+        )
+    ) == "invalid_references"
 
-    duplicate_evidence = _observed()
-    duplicate_evidence["evidence_reference_ids"] = ["same", "same"]
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(duplicate_evidence)
-    ) == ("duplicate_reference")
+    with_reason = _observed()
+    with_reason["reason_ref"] = "reason"
+    assert _code(
+        lambda: CriterionObservation.from_mapping(
+            with_reason, criterion_ref="criterion"
+        )
+    ) == "invalid_observed_state"
 
-    bad_evidence_type = _observed()
-    bad_evidence_type["evidence_reference_ids"] = "not-an-array"
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(bad_evidence_type)
-    ) == ("invalid_references")
+    with_category = _abstained()
+    with_category["category_anchor_ref"] = "category"
+    assert _code(
+        lambda: CriterionObservation.from_mapping(
+            with_category, criterion_ref="criterion"
+        )
+    ) == "invalid_abstention_state"
 
-    oversized_evidence = _observed()
-    oversized_evidence["evidence_reference_ids"] = [
+    no_reason = _abstained()
+    no_reason["reason_ref"] = None
+    assert _code(
+        lambda: CriterionObservation.from_mapping(
+            no_reason, criterion_ref="criterion"
+        )
+    ) == "invalid_reference"
+
+
+def test_reference_and_collection_boundaries_fail_closed() -> None:
+    """References, evidence, review signals, and observations remain bounded."""
+    for value in ("", " ref", "ref ", "\ufeffref", "ref\ufeff", "a\nb", "\ud800"):
+        assert _code(
+            lambda value=value: CriterionObservation.from_mapping(
+                {**_observed(), "criterion_ref": value}
+            )
+        ) == "invalid_reference"
+
+    evidence = _observed()
+    evidence["evidence_reference_ids"] = [
         f"evidence-{index}" for index in range(MAX_RATER_EVIDENCE_REFERENCES + 1)
     ]
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(oversized_evidence)
-    ) == ("invalid_references")
+    assert _code(
+        lambda: CriterionObservation.from_mapping(evidence, criterion_ref="criterion")
+    ) == "invalid_references"
 
-    reason = _observed()
-    reason["reason_ref"] = "should-not-exist"
-    assert _error_code(lambda: CriterionObservation.from_mapping(reason)) == (
-        "invalid_observed_state"
-    )
-
-
-def test_abstention_has_reason_but_no_category_or_evidence() -> None:
-    assert CriterionObservation.from_mapping(_abstained()).status == "abstained"
-
-    category = _abstained()
-    category["category_anchor_ref"] = "category-1"
-    assert _error_code(lambda: CriterionObservation.from_mapping(category)) == (
-        "invalid_abstention_state"
-    )
-
-    evidence = _abstained()
-    evidence["evidence_reference_ids"] = ["evidence"]
-    assert _error_code(lambda: CriterionObservation.from_mapping(evidence)) == (
-        "invalid_abstention_state"
-    )
-
-    missing_reason = _abstained()
-    missing_reason["reason_ref"] = None
-    assert _error_code(lambda: CriterionObservation.from_mapping(missing_reason)) == (
-        "invalid_reference"
-    )
-
-    duplicate_signals = _abstained()
-    duplicate_signals["review_signal_refs"] = ["review", "review"]
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(duplicate_signals)
-    ) == ("duplicate_reference")
-
-    wrong_signal_type = _abstained()
-    wrong_signal_type["review_signal_refs"] = "review"
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(wrong_signal_type)
-    ) == ("invalid_references")
-
-    oversized_signals = _abstained()
-    oversized_signals["review_signal_refs"] = [
+    signals = _abstained()
+    signals["review_signal_refs"] = [
         f"signal-{index}" for index in range(MAX_RATER_REVIEW_SIGNALS + 1)
     ]
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(oversized_signals)
-    ) == ("invalid_references")
-
-
-def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> None:
-    incompatible = _invocation()
-    incompatible["contract_id"] = "other/v1"
-    assert _error_code(lambda: RaterInvocation.from_mapping(incompatible)) == (
-        "contract_incompatible"
-    )
+    assert _code(
+        lambda: CriterionObservation.from_mapping(signals, criterion_ref="criterion")
+    ) == "invalid_references"
 
     empty = _invocation()
     empty["observations"] = {}
-    assert _error_code(lambda: RaterInvocation.from_mapping(empty)) == (
+    assert _code(lambda: RaterInvocation.from_mapping(empty)) == (
         "invalid_observations"
     )
 
     oversized = _invocation()
     oversized["observations"] = {
-        f"criterion-{index}": _observed() for index in range(MAX_RATER_OBSERVATIONS + 1)
+        f"criterion-{index}": _observed()
+        for index in range(MAX_RATER_OBSERVATIONS + 1)
     }
-    assert _error_code(lambda: RaterInvocation.from_mapping(oversized)) == (
+    assert _code(lambda: RaterInvocation.from_mapping(oversized)) == (
         "invalid_observations"
     )
 
-    wrong_container = _invocation()
-    wrong_container["observations"] = "observation"
-    assert _error_code(lambda: RaterInvocation.from_mapping(wrong_container)) == (
-        "invalid_object"
+
+def test_configuration_and_acl_reject_unknown_decision_and_wrong_types() -> None:
+    """Only closed provider-neutral configuration and observation fields pass."""
+    config = _configuration()
+    config["unknown"] = "x"
+    assert _code(lambda: RaterConfigurationIdentity.from_mapping(config)) == (
+        "unknown_field"
     )
 
-
-def test_collection_limits_are_checked_before_untrusted_values_are_traversed() -> None:
-    invocation = _invocation()
-    invocation["observations"] = {
-        f"criterion-{index}": None for index in range(MAX_RATER_OBSERVATIONS + 1)
-    }
-    assert _error_code(lambda: RaterInvocation.from_mapping(invocation)) == (
-        "invalid_observations"
+    decision = _invocation()
+    decision["score"] = 1
+    assert _code(lambda: RaterInvocation.from_mapping(decision)) == (
+        "decision_leakage"
     )
 
-    oversized_evidence = _observed()
-    oversized_evidence["evidence_reference_ids"] = _OversizedList(
-        [None] * (MAX_RATER_EVIDENCE_REFERENCES + 1)
-    )
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(oversized_evidence)
-    ) == ("invalid_references")
+    wrong = _invocation()
+    wrong["configuration"] = []
+    assert _code(lambda: RaterInvocation.from_mapping(wrong)) == "invalid_object"
 
-    oversized_signals = _abstained()
-    oversized_signals["review_signal_refs"] = _OversizedList(
-        [None] * (MAX_RATER_REVIEW_SIGNALS + 1)
-    )
-    assert _error_code(
-        lambda: CriterionObservation.from_mapping(oversized_signals)
-    ) == ("invalid_references")
-
-    wrong_observation = _invocation()
-    wrong_observation["observations"] = {"criterion": "observation"}
-    assert _error_code(lambda: RaterInvocation.from_mapping(wrong_observation)) == (
-        "invalid_object"
-    )
-
-    wrong_configuration = _invocation()
-    wrong_configuration["configuration"] = []
-    assert _error_code(lambda: RaterInvocation.from_mapping(wrong_configuration)) == (
-        "invalid_object"
-    )
-
-
-def test_direct_domain_construction_rejects_wrong_types() -> None:
     configuration = RaterConfigurationIdentity.from_mapping(_configuration())
-    observation = CriterionObservation.from_mapping(_observed())
-
-    assert (
-        _error_code(
-            lambda: RaterInvocation(
-                invocation_ref="invocation",
-                configuration="wrong",  # type: ignore[arg-type]
-                task_revision_ref="task",
-                rubric_revision_ref="rubric",
-                response_evidence_ref="response",
-                observations=(observation,),
-            )
-        )
-        == "invalid_configuration"
+    binding = CriterionSetExecutionBinding.from_mapping(_criterion_set())
+    observation = CriterionObservation.from_mapping(
+        _observed(), criterion_ref="criterion_evidence_support"
     )
-
-    assert (
-        _error_code(
-            lambda: RaterInvocation(
-                invocation_ref="invocation",
-                configuration=configuration,
-                task_revision_ref="task",
-                rubric_revision_ref="rubric",
-                response_evidence_ref="response",
-                observations=("wrong",),  # type: ignore[arg-type]
-            )
+    assert _code(
+        lambda: RaterInvocation(
+            invocation_ref="invocation",
+            configuration=object(),
+            evaluation_run_snapshot_ref="run",
+            item_instance_ref="item",
+            task_revision_ref="task",
+            rubric_revision_ref="rubric_revision_1",
+            criterion_set=binding,
+            response_evidence_ref="response",
+            observations=(observation,),
         )
-        == "invalid_observation"
-    )
+    ) == "invalid_configuration"
+    assert _code(
+        lambda: RaterInvocation(
+            invocation_ref="invocation",
+            configuration=configuration,
+            evaluation_run_snapshot_ref="run",
+            item_instance_ref="item",
+            task_revision_ref="task",
+            rubric_revision_ref="rubric_revision_1",
+            criterion_set=object(),
+            response_evidence_ref="response",
+            observations=(observation,),
+        )
+    ) == "invalid_criterion_set"
 
 
-def test_mapping_inputs_are_snapshotted_into_immutable_domain_values() -> None:
+def test_mapping_inputs_are_detached_from_caller_mutation() -> None:
+    """The invocation keeps the exact criterion and observation snapshot."""
     payload = _invocation()
-    original = deepcopy(payload)
+    expected = deepcopy(payload)
     invocation = RaterInvocation.from_mapping(payload)
-
-    payload["configuration"]["provider_ref"] = "mutated"  # type: ignore[index]
-    payload["observations"]["criterion-a"]["evidence_reference_ids"].append("mutated")  # type: ignore[index,union-attr]
-
-    assert invocation.to_payload() == original
+    payload["criterion_set"]["criteria"]["criterion_safety"]["definition_ref"] = (
+        "mutated"
+    )
+    payload["observations"]["criterion_evidence_support"][
+        "evidence_reference_ids"
+    ].append("mutated")
+    assert invocation.to_payload() == expected
