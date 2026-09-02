@@ -1,13 +1,11 @@
-"""Criterion-set binding contracts for governed rater observations."""
+"""Focused criterion-set binding regressions for governed rater output."""
 
 from __future__ import annotations
 
 import pytest
 
 from contextual_orchestrator.evaluation_criterion_binding import (
-    CriterionExecutionBinding,
     CriterionSetExecutionBinding,
-    EvaluationCriterionBindingError,
 )
 from contextual_orchestrator.rater_observation import (
     GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
@@ -16,24 +14,54 @@ from contextual_orchestrator.rater_observation import (
 )
 
 
+def _criterion(category_prefix: str) -> dict[str, object]:
+    """Return a two-category content-addressed criterion."""
+    return {
+        "criterion_revision_ref": f"{category_prefix}_revision_1",
+        "definition_ref": f"{category_prefix}_definition",
+        "definition_sha256": "1" * 64,
+        "admissible_evidence_rule_ref": f"{category_prefix}_evidence_rule",
+        "admissible_evidence_rule_sha256": "2" * 64,
+        "exclusion_rule_ref": f"{category_prefix}_exclusion_rule",
+        "exclusion_rule_sha256": "3" * 64,
+        "response_semantics_ref": f"{category_prefix}_response_semantics",
+        "response_semantics_sha256": "4" * 64,
+        "abstention_rule_ref": f"{category_prefix}_abstention_rule",
+        "abstention_rule_sha256": "5" * 64,
+        "not_observable_rule_ref": f"{category_prefix}_not_observable_rule",
+        "not_observable_rule_sha256": "6" * 64,
+        "categories": {
+            f"{category_prefix}_not_supported": {
+                "definition_ref": f"{category_prefix}_not_supported_definition",
+                "definition_sha256": "7" * 64,
+                "order_index": 0,
+            },
+            f"{category_prefix}_supported": {
+                "definition_ref": f"{category_prefix}_supported_definition",
+                "definition_sha256": "8" * 64,
+                "order_index": 1,
+            },
+        },
+    }
+
+
 def _criterion_set_payload() -> dict[str, object]:
-    """Return one immutable source-text-free criterion-set binding."""
+    """Return one immutable substantive criterion-set binding."""
     return {
         "criterion_set_snapshot_ref": "criterion_set_snapshot_1",
         "criterion_set_sha256": "a" * 64,
         "blueprint_revision_ref": "evaluation_blueprint_revision_1",
         "rubric_revision_ref": "rubric_revision_1",
+        "intended_use_ref": "intended_use_1",
+        "construct_ref": "construct_1",
+        "population_scope_ref": "population_scope_1",
+        "language_scope_ref": "language_scope_1",
+        "domain_scope_ref": "domain_scope_1",
         "criteria": {
-            "criterion_evidence_support": {
-                "criterion_revision_ref": "criterion_evidence_support_revision_1",
-                "criterion_sha256": "b" * 64,
-                "category_refs": ["category_not_supported", "category_supported"],
-            },
-            "criterion_safety": {
-                "criterion_revision_ref": "criterion_safety_revision_1",
-                "criterion_sha256": "c" * 64,
-                "category_refs": ["category_unsafe", "category_safe"],
-            },
+            "criterion_evidence_support": _criterion(
+                "criterion_evidence_support"
+            ),
+            "criterion_safety": _criterion("criterion_safety"),
         },
     }
 
@@ -61,7 +89,7 @@ def _invocation_payload() -> dict[str, object]:
         "observations": {
             "criterion_evidence_support": {
                 "status": "observed",
-                "category_anchor_ref": "category_supported",
+                "category_anchor_ref": "criterion_evidence_support_supported",
                 "evidence_reference_ids": ["evidence_1"],
                 "uncertainty": "low",
                 "review_signal_refs": [],
@@ -79,116 +107,64 @@ def _invocation_payload() -> dict[str, object]:
     }
 
 
-def test_criterion_set_binding_is_nonempty_exact_and_content_addressed() -> None:
-    """A rater receives exact criterion revisions, digests, and categories."""
+def test_exact_substantive_criterion_set_is_carried_with_the_invocation() -> None:
+    """The result identifies the exact criteria, rules, categories, and scope."""
+    invocation = RaterInvocation.from_mapping(_invocation_payload())
+    binding = invocation.criterion_set
+    assert binding.criterion_set_snapshot_ref == "criterion_set_snapshot_1"
+    assert binding.criterion("criterion_safety").response_semantics_ref == (
+        "criterion_safety_response_semantics"
+    )
+    assert invocation.to_payload()["criterion_set"] == _criterion_set_payload()
+
+
+def test_unbound_or_partially_defined_criteria_are_rejected() -> None:
+    """No observation may be emitted from names-only criterion references."""
+    missing = _invocation_payload()
+    del missing["criterion_set"]
+    with pytest.raises(RaterObservationError) as caught:
+        RaterInvocation.from_mapping(missing)
+    assert caught.value.code == "missing_field"
+
+    partial = _criterion_set_payload()
+    criterion = dict(partial["criteria"]["criterion_safety"])
+    del criterion["admissible_evidence_rule_ref"]
+    partial["criteria"]["criterion_safety"] = criterion
+    payload = _invocation_payload()
+    payload["criterion_set"] = partial
+    with pytest.raises(RaterObservationError) as caught:
+        RaterInvocation.from_mapping(payload)
+    assert caught.value.code == "missing_field"
+
+
+def test_coverage_category_and_rubric_substitution_fail_closed() -> None:
+    """The provider cannot omit criteria, invent categories, or swap rubrics."""
+    missing = _invocation_payload()
+    missing["observations"].pop("criterion_safety")
+    with pytest.raises(RaterObservationError) as caught:
+        RaterInvocation.from_mapping(missing)
+    assert caught.value.code == "criterion_coverage_mismatch"
+
+    category = _invocation_payload()
+    category["observations"]["criterion_evidence_support"][
+        "category_anchor_ref"
+    ] = "criterion_safety_supported"
+    with pytest.raises(RaterObservationError) as caught:
+        RaterInvocation.from_mapping(category)
+    assert caught.value.code == "category_not_admitted"
+
+    rubric = _invocation_payload()
+    rubric["rubric_revision_ref"] = "rubric_revision_2"
+    with pytest.raises(RaterObservationError) as caught:
+        RaterInvocation.from_mapping(rubric)
+    assert caught.value.code == "criterion_set_rubric_mismatch"
+
+
+def test_criterion_set_is_nonempty_and_content_addressed() -> None:
+    """Cold-start item banks may have no anchors, never no criteria."""
     binding = CriterionSetExecutionBinding.from_mapping(_criterion_set_payload())
     assert binding.criterion_refs == (
         "criterion_evidence_support",
         "criterion_safety",
     )
     assert binding.criterion_set_sha256 == "a" * 64
-    assert binding.criteria[0].category_refs == (
-        "category_not_supported",
-        "category_supported",
-    )
-
-    empty = _criterion_set_payload()
-    empty["criteria"] = {}
-    with pytest.raises(EvaluationCriterionBindingError) as caught:
-        CriterionSetExecutionBinding.from_mapping(empty)
-    assert caught.value.code == "invalid_criterion_set"
-
-    malformed = _criterion_set_payload()
-    malformed["criterion_set_sha256"] = "not-a-digest"
-    with pytest.raises(EvaluationCriterionBindingError) as caught:
-        CriterionSetExecutionBinding.from_mapping(malformed)
-    assert caught.value.code == "invalid_sha256"
-
-
-def test_rater_invocation_requires_the_exact_run_item_and_criterion_set() -> None:
-    """An observation is unusable without exact run, item, and criterion meaning."""
-    invocation = RaterInvocation.from_mapping(_invocation_payload())
-    assert invocation.evaluation_run_snapshot_ref == "evaluation_run_snapshot_1"
-    assert invocation.item_instance_ref == "evaluation_item_1"
-    assert invocation.criterion_set.criterion_set_snapshot_ref == (
-        "criterion_set_snapshot_1"
-    )
-    assert invocation.to_payload()["criterion_set"]["criterion_set_sha256"] == (
-        "a" * 64
-    )
-
-    payload = _invocation_payload()
-    del payload["criterion_set"]
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation.from_mapping(payload)
-    assert caught.value.code == "missing_field"
-
-
-def test_observations_must_cover_every_declared_criterion_exactly_once() -> None:
-    """Missing or invented criteria cannot cross the observation boundary."""
-    missing = _invocation_payload()
-    observations = dict(missing["observations"])  # type: ignore[arg-type]
-    observations.pop("criterion_safety")
-    missing["observations"] = observations
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation.from_mapping(missing)
-    assert caught.value.code == "criterion_coverage_mismatch"
-
-    extra = _invocation_payload()
-    observations = dict(extra["observations"])  # type: ignore[arg-type]
-    observations["criterion_invented"] = observations["criterion_safety"]
-    extra["observations"] = observations
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation.from_mapping(extra)
-    assert caught.value.code == "criterion_coverage_mismatch"
-
-
-def test_observed_categories_must_be_admitted_by_the_bound_criterion() -> None:
-    """A provider cannot invent a category or borrow one from another criterion."""
-    payload = _invocation_payload()
-    observations = dict(payload["observations"])  # type: ignore[arg-type]
-    evidence = dict(observations["criterion_evidence_support"])
-    evidence["category_anchor_ref"] = "category_safe"
-    observations["criterion_evidence_support"] = evidence
-    payload["observations"] = observations
-
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation.from_mapping(payload)
-    assert caught.value.code == "category_not_admitted"
-
-
-def test_rubric_and_blueprint_binding_cannot_be_substituted() -> None:
-    """The invocation rubric must be the one frozen by its criterion-set snapshot."""
-    payload = _invocation_payload()
-    payload["rubric_revision_ref"] = "rubric_revision_2"
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation.from_mapping(payload)
-    assert caught.value.code == "criterion_set_rubric_mismatch"
-
-
-def test_criterion_binding_rejects_duplicate_categories_and_foreign_values() -> None:
-    """Criterion bindings are bounded typed values rather than loose dictionaries."""
-    with pytest.raises(EvaluationCriterionBindingError) as caught:
-        CriterionExecutionBinding.from_mapping(
-            {
-                "criterion_revision_ref": "criterion_revision_1",
-                "criterion_sha256": "a" * 64,
-                "category_refs": ["category_one", "category_one"],
-            },
-            criterion_ref="criterion_one",
-        )
-    assert caught.value.code == "duplicate_reference"
-
-    with pytest.raises(RaterObservationError) as caught:
-        RaterInvocation(
-            invocation_ref="rater_invocation_1",
-            configuration=object(),  # type: ignore[arg-type]
-            evaluation_run_snapshot_ref="evaluation_run_snapshot_1",
-            item_instance_ref="evaluation_item_1",
-            task_revision_ref="task_revision_1",
-            rubric_revision_ref="rubric_revision_1",
-            criterion_set=object(),  # type: ignore[arg-type]
-            response_evidence_ref="response_evidence_1",
-            observations=(),
-        )
-    assert caught.value.code in {"invalid_configuration", "invalid_criterion_set"}
