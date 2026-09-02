@@ -157,8 +157,9 @@ OpenRouter. (2026). *Zero data retention enforcement*. https://openrouter.ai/doc
 
 Trusted sidecars sometimes possess stronger current failure evidence than the
 gateway's process-local measurements. For one virtual-model request they may
-pin an exact private agent ID with `routing.candidate_id` and exclude at most 32
-unique IDs with `routing.exclude_candidate_ids`. The controls are validated
+pin an exact private agent ID with `routing.candidate_id` and exclude unique exact
+IDs with `routing.exclude_candidate_ids`. Candidate membership has no repository-authored
+cardinality cutoff; normal authenticated request-size controls remain the resource boundary. The controls are validated
 before execution, never persisted, never expand `/v1/models`, and apply to the
 same selection boundary for plain, structured, and streamed requests. A pin
 that is unknown, disabled, non-chat, excluded, or incompatible with active ZDR
@@ -193,3 +194,14 @@ OpenRouter. (2026). *Submit a rerank request*. https://openrouter.ai/docs/api/ap
 OpenRouter. (2026). *Submit a video generation request*. https://openrouter.ai/docs/api/api-reference/video-generation/create-videos
 
 Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark for multimodal LLM routing* [Preprint]. arXiv. https://arxiv.org/abs/2601.17814
+
+### No-heuristics amendment — 2026-09-02
+
+The original request-local control used a fixed 32-ID exclusion ceiling and legacy
+serving-identity recovery from output equality/trace position. Neither decision rule
+was identified by RouteLLM, FrugalGPT, an API standard, or measured deployment
+evidence. The cardinality ceiling is removed; authenticated request-size enforcement
+is the resource boundary. Serving identity is now reported only from exact
+`answering_step_id` or an explicit `served_agent_id`; historical rows without either
+remain attempt provenance and omit `served_candidate_id`. This is a fail-closed
+identity rule rather than an inferred ranking/tie-break.

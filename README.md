@@ -266,7 +266,7 @@ is read from a **KV config store**, never `os.getenv`.
   or bulk requests are dispatched to a batch backend.
 - **Stateless candidate control.** Trusted callers may add
   `routing.candidate_id` to pin one private agent ID and
-  `routing.exclude_candidate_ids` (at most 32 unique IDs) to omit known-bad
+  `routing.exclude_candidate_ids` (unique exact IDs) to omit evidence-ineligible
   candidates for one virtual-model request. The gateway validates the full set
   before any provider call, forces synchronous execution, and returns
   requested, excluded, attempted, and served IDs under

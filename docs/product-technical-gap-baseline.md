@@ -2680,3 +2680,15 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-02 — PR #983 candidate-control no-heuristics repair
+
+Live RCA found two decision-affecting rules in the request-local candidate-control
+owner: a repository-authored 32-ID exclusion ceiling and serving-candidate inference
+from output equality/trace position when exact identity was absent. Neither had an
+identified mathematical, standards, experimental, or research basis. The canonical
+repair removes the cardinality rule, retaining normal authenticated request-size
+controls, and makes serving identity fail closed unless exact `answering_step_id` or
+explicit `served_agent_id` evidence exists. Regression coverage exercises more than
+32 exclusions, missing identity, and explicit identity provenance. Exact-head hosted
+checks remain authoritative before merge.

@@ -1267,3 +1267,4 @@ This is the current development baseline, not a published release. It
 provides the OpenAI-compatible gateway, route/conduct orchestration, workflow
 and access evidence, provider credential boundaries, cost and readiness
 reporting, and security-focused contract tests.
+- Candidate routing controls no longer impose an unsupported 32-ID exclusion cutoff or infer serving identity from output text/trace order; serving identity now requires explicit provenance and otherwise fails closed.

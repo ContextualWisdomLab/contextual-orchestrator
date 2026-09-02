@@ -1834,11 +1834,8 @@ def test_run_persists_answering_step_id_for_candidate_routing_evidence(
     assert evidence["served_candidate_id"] == "synth_agent"
 
 
-def test_candidate_routing_evidence_falls_back_to_text_match_without_answering_step_id() -> None:
-    """A workflow record persisted before ``answering_step_id`` existed (or
-    any other caller that omits it) must still resolve routing evidence via
-    the prior text-matching/last-row heuristics rather than crashing or
-    silently returning no evidence."""
+def test_candidate_routing_evidence_fails_closed_without_answering_step_id() -> None:
+    """A historical workflow without explicit serving identity must not infer one."""
 
     orchestrator = TaskOrchestrator(
         [
@@ -1861,7 +1858,7 @@ def test_candidate_routing_evidence_falls_back_to_text_match_without_answering_s
         )
 
     assert evidence is not None
-    assert evidence["served_candidate_id"] == "worker_agent"
+    assert "served_candidate_id" not in evidence
 
 
 def test_orchestrated_provider_completion_answering_step_id_identifies_synthesis_over_duplicate_internal_step() -> None:

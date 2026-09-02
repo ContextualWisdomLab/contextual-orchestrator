@@ -4040,7 +4040,7 @@ class TaskOrchestrator:
         if "candidate_id" in routing and not isinstance(candidate_id, str):
             raise ValueError("candidate_id must be a non-empty agent ID")
         if "exclude_candidate_ids" in routing and not isinstance(excluded, (list, tuple)):
-            raise ValueError("exclude_candidate_ids must contain at most 32 agent IDs")
+            raise ValueError("exclude_candidate_ids must contain agent IDs")
         if candidate_id is None and not excluded:
             yield
             return
@@ -4052,8 +4052,8 @@ class TaskOrchestrator:
             or candidate_id != candidate_id.strip()
         ):
             raise ValueError("candidate_id must be a non-empty agent ID")
-        if not isinstance(excluded, (list, tuple)) or len(excluded) > 32:
-            raise ValueError("exclude_candidate_ids must contain at most 32 agent IDs")
+        if not isinstance(excluded, (list, tuple)):
+            raise ValueError("exclude_candidate_ids must contain agent IDs")
         normalized = tuple(value.strip() for value in excluded if isinstance(value, str))
         if len(normalized) != len(excluded) or any(not value for value in normalized):
             raise ValueError("exclude_candidate_ids must contain non-empty agent IDs")
@@ -4196,17 +4196,12 @@ class TaskOrchestrator:
                 for value in [row.get("agent_id")]
                 if isinstance(value, str) and value
             ]
-        # conduct() records the id of the step whose output actually became
-        # ``answer`` as ``answering_step_id`` (a non-final step when the
-        # verifier rejects and falls back to the worker's output). Resolving
-        # the served row by that identity is unambiguous even when a later,
-        # genuinely-served step's output happens to duplicate an earlier
-        # step's text byte-for-byte -- text equality alone cannot tell a
-        # fallback-to-earlier-step apart from a later step that coincidentally
-        # repeats an earlier step's text (#983 finding 6). Callers that never
-        # run a multi-step workflow, or a workflow record persisted before
-        # this field existed, fall back to the text-matched/last-row
-        # heuristics below.
+        # Serving identity is evidence, not an inference target. Multi-step
+        # workflows record the exact answering_step_id; provider-shaped paths
+        # may record served_agent_id explicitly. Historical records lacking
+        # either identity remain auditable for attempts but fail closed for
+        # served_candidate_id. Output equality and trace position are not
+        # admissible serving-identity evidence.
         answering_step_id = result.get("answering_step_id")
         answering_rows = (
             [
@@ -4217,52 +4212,23 @@ class TaskOrchestrator:
             if isinstance(answering_step_id, int)
             else []
         )
-        if not answering_rows:
-            # conduct() can serve a non-final step's output as the answer (the
-            # verifier-required fallback to the worker's output, or the
-            # verifier's own output when a synthesizer step is not required) --
-            # the trace still records every step's provider call, so the *last*
-            # row is not reliably the one that produced ``answer``. Prefer the
-            # row(s) whose recorded output actually match the served answer;
-            # fall back to the last-row heuristic for callers (plain passthrough,
-            # cache hits) that never populate "answer"/"output" at all.
-            answer = result.get("answer")
-            answering_rows = (
-                [
-                    row
-                    for row in rows
-                    if isinstance(row, Mapping) and row.get("output") == answer
-                ]
-                if isinstance(answer, str)
-                else []
-            )
-        served_rows = answering_rows or rows
-        # Among *text* matches (no ``answering_step_id`` evidence available),
-        # prefer the earliest row: this ordering is a best-effort fallback
-        # only, kept for workflow records persisted before
-        # ``answering_step_id`` existed. It cannot by itself distinguish a
-        # fallback-to-earlier-step from a later step that coincidentally
-        # duplicates an earlier one's text -- exactly why the
-        # ``answering_step_id`` lookup above takes priority whenever it is
-        # available (#983 finding 6). When nothing matched by text (the
-        # plain-passthrough/cache-hit callers that never populate
-        # answer/output), fall back to the prior last-row heuristic over the
-        # full, unfiltered trace (#983 finding 3).
-        ordered_rows = served_rows if answering_rows else reversed(served_rows)
-        served = (
-            None
-            if tracked_attempts == []
-            else next(
-                (
-                    value
-                    for row in ordered_rows
-                    if isinstance(row, Mapping)
-                    for value in [row.get("served_agent_id") or row.get("agent_id")]
-                    if isinstance(value, str) and value
-                ),
-                None,
-            )
-        )
+        served: str | None = None
+        if len(answering_rows) == 1:
+            row = answering_rows[0]
+            value = row.get("served_agent_id") or row.get("agent_id")
+            if isinstance(value, str) and value:
+                served = value
+        elif tracked_attempts != []:
+            explicit_served = [
+                value
+                for row in rows
+                if isinstance(row, Mapping)
+                for value in [row.get("served_agent_id")]
+                if isinstance(value, str) and value
+            ]
+            distinct_served = tuple(dict.fromkeys(explicit_served))
+            if len(distinct_served) == 1:
+                served = distinct_served[0]
         evidence: dict[str, Any] = {
             "exclude_candidate_ids": excluded,
             "attempted_candidate_ids": list(dict.fromkeys(attempted)),
@@ -5631,6 +5597,7 @@ class TaskOrchestrator:
             "access": [],
             "latency_ms": round(latency_seconds * 1000, 2),
             "output": answer,
+            "served_agent_id": agent.id,
         }
         if isinstance(usage, dict):
             trace_step["usage"] = usage
@@ -6710,8 +6677,8 @@ class TaskOrchestrator:
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
+            row["served_agent_id"] = attempt_served_id
             if attempt_served_id != candidate.id:
-                row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(

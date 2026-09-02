@@ -3247,11 +3247,11 @@ def _validate_routing(
         cleaned["candidate_id"] = candidate_id.strip()
     excluded = routing.get("exclude_candidate_ids")
     if excluded is not None:
-        if not isinstance(excluded, list) or len(excluded) > 32:
+        if not isinstance(excluded, list):
             raise RequestError(
                 400,
                 "invalid_routing",
-                "routing.exclude_candidate_ids must be an array of at most 32 agent IDs",
+                "routing.exclude_candidate_ids must be an array of agent IDs",
             )
         if any(
             not isinstance(value, str)
