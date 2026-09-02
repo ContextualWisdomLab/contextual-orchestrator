@@ -104,27 +104,14 @@ jobs:
         id: tag_state
         run: |
           set -euo pipefail
-          # The commits API dereferences an annotated or lightweight tag to
-          # its target commit in one call, and needs no local git fetch or
-          # push credential -- this step runs with contents: read only. One
-          # `gh api` call captures both stdout (the SHA, via --jq) and
-          # stderr (2>&1) together, so a failure never needs a second,
-          # separate call just to read the error text -- that would double
-          # the API/rate-limit cost and open a race where state changes
-          # between the two calls.
-          #
-          # A failed lookup is NOT automatically "tag absent" (Devin
-          # finding): only a confirmed HTTP 404 means that. Any other
-          # failure -- rate limit, auth, network blip, a GitHub 5xx -- must
-          # fail this step closed instead, so a bad transient result never
-          # gets treated as "safe to create fresh" (which could then race
-          # `git tag` itself failing with a confusing "already exists", or
-          # worse, silently proceed on a wrong assumption). `gh`'s HTTP
-          # error wrapper reliably renders as "... (HTTP <code>)" on
-          # stderr; grep for the specific 404 rendering rather than
-          # inferring absence from any nonzero exit.
-          if ! tag_lookup_output="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}" --jq .sha 2>&1)"; then
-            if printf '%s' "${tag_lookup_output}" | grep -q "HTTP 404"; then
+          # Tag existence is checked only in GitHub's refs/tags namespace.
+          # The commits endpoint accepts arbitrary refs, so a branch named
+          # v${RELEASE_VERSION} could otherwise impersonate a release tag.
+          # The exact tag ref points either directly at a commit (lightweight)
+          # or at one annotated-tag object, which is then peeled to a commit.
+          tag_ref_endpoint="repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}"
+          if ! tag_ref_output="$(gh api "${tag_ref_endpoint}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
+            if printf '%s' "${tag_ref_output}" | grep -q "HTTP 404"; then
               echo "::notice::Tag v${RELEASE_VERSION} does not exist yet (confirmed 404); this is a fresh publish."
               echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
               echo "release_resume=false" >> "${GITHUB_OUTPUT}"
@@ -132,10 +119,32 @@ jobs:
               echo "TARGET_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
               exit 0
             fi
-            echo "::error::Could not determine whether tag v${RELEASE_VERSION} already exists: the lookup failed with an error other than a confirmed 404, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${tag_lookup_output}" >&2
+            echo "::error::Could not determine whether tag v${RELEASE_VERSION} already exists: the exact tag-ref lookup failed with an error other than a confirmed 404, so absence is NOT confirmed. Failing closed; re-dispatch after the transient failure clears. Raw error: ${tag_ref_output}" >&2
             exit 1
           fi
-          tag_commit="${tag_lookup_output}"
+
+          IFS=$'\t' read -r tag_object_type tag_object_sha <<< "${tag_ref_output}"
+          case "${tag_object_type}" in
+            commit)
+              tag_commit="${tag_object_sha}"
+              ;;
+            tag)
+              if ! tag_object_output="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
+                echo "::error::Could not dereference annotated tag v${RELEASE_VERSION}; failing closed. Raw error: ${tag_object_output}" >&2
+                exit 1
+              fi
+              IFS=$'\t' read -r peeled_type peeled_sha <<< "${tag_object_output}"
+              if [ "${peeled_type}" != "commit" ]; then
+                echo "::error::Tag v${RELEASE_VERSION} does not resolve directly to a commit after one annotated-tag dereference (resolved type: ${peeled_type}); refusing an ambiguous release identity." >&2
+                exit 1
+              fi
+              tag_commit="${peeled_sha}"
+              ;;
+            *)
+              echo "::error::Tag v${RELEASE_VERSION} points at unsupported Git object type '${tag_object_type}'; refusing an ambiguous release identity." >&2
+              exit 1
+              ;;
+          esac
 
           if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
             # main may simply have advanced past the tag's target commit
@@ -175,29 +184,23 @@ jobs:
           # left to resume: creating a Release can publish the Release
           # object and then fail partway through uploading its assets, in
           # which case the tag and the Release both already exist but a
-          # release asset (the SBOM) can still be missing. A Release already
-          # existing for TARGET_SHA's tag is a safe resume that still
-          # attempts the best-effort asset attach in `publish`, never a
-          # reject -- see Devin's follow-up finding on this PR.
+          # release asset can still be missing. A Release already existing
+          # for TARGET_SHA's tag remains a safe resume, but the publish job
+          # must restore and verify every mandatory release asset before it
+          # can report success.
           #
           # As with the tag lookup above, a failed `gh release view` is NOT
-          # automatically "Release absent" (Devin finding): only a
-          # confirmed 404 means that. `gh`'s release-specific lookup
-          # renders a missing release as the literal "release not found"
-          # (its generic HTTP error wrapper, "... (HTTP 404)", is matched
-          # too as a defensive fallback); any other failure must fail this
-          # step closed rather than risking a wrongful create attempt
-          # against an unknown state.
+          # automatically "Release absent": only a confirmed 404 means that.
           if ! release_view_error="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" 2>&1 >/dev/null)"; then
             if printf '%s' "${release_view_error}" | grep -qiE "release not found|HTTP 404"; then
               echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} with no published GitHub Release yet (confirmed absent); resuming publication instead of re-tagging."
               echo "release_resume=false" >> "${GITHUB_OUTPUT}"
             else
-              echo "::error::Could not determine whether a GitHub Release already exists for v${RELEASE_VERSION}: gh release view failed with an error other than a confirmed absence, so absence is NOT confirmed -- a transient rate-limit/auth/network/5xx failure must never be treated as 'safe to create'. Failing closed; re-dispatch to retry once the transient failure clears. Raw error: ${release_view_error}" >&2
+              echo "::error::Could not determine whether a GitHub Release already exists for v${RELEASE_VERSION}: gh release view failed with an error other than a confirmed absence, so absence is NOT confirmed. Failing closed; re-dispatch after the transient failure clears. Raw error: ${release_view_error}" >&2
               exit 1
             fi
           else
-            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming to attach any still-missing release assets rather than treating this as nothing left to resume."
+            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming to verify or attach any still-missing mandatory release assets."
             echo "release_resume=true" >> "${GITHUB_OUTPUT}"
           fi
 
@@ -265,20 +268,22 @@ jobs:
             --commit-sha "${TARGET_SHA}" \
             --output release-notes.md
 
-      - name: Fetch the CycloneDX SBOM for this commit, best-effort
+      - name: Fetch the required CycloneDX SBOM for this commit
         run: |
-          set -uo pipefail
-          run_id=""
-          if ! run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"; then
-            echo "::warning::Could not query Security workflow runs for commit ${TARGET_SHA} (permission or API error); publishing without an SBOM asset."
-            run_id=""
+          set -euo pipefail
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "${run_id}" ]; then
+            echo "::error::No successful Security workflow run with CycloneDX evidence is available for exact commit ${TARGET_SHA}; refusing to publish without the required SBOM." >&2
+            exit 1
           fi
-          if [ -n "${run_id}" ]; then
-            if ! gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download; then
-              echo "::warning::Security workflow run ${run_id} has no downloadable cyclonedx-sbom artifact; publishing without it."
-            fi
-          else
-            echo "::warning::No successful Security workflow run found for commit ${TARGET_SHA}; publishing without an SBOM asset."
+          if ! gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download; then
+            echo "::error::Security workflow run ${run_id} does not expose the required cyclonedx-sbom artifact; refusing to publish." >&2
+            exit 1
+          fi
+          sbom_file="sbom-download/cyclonedx-sbom.json"
+          if [ ! -s "${sbom_file}" ]; then
+            echo "::error::Downloaded CycloneDX SBOM is missing or empty at ${sbom_file}; refusing to publish." >&2
+            exit 1
           fi
 
       - name: Upload rendered notes and SBOM for the publish job
@@ -288,7 +293,7 @@ jobs:
           path: |
             release-notes.md
             sbom-download/**
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 1
 
   publish:
@@ -335,6 +340,12 @@ jobs:
         with:
           name: release-publish-inputs
 
+      - name: Verify mandatory release inputs
+        run: |
+          set -euo pipefail
+          test -s release-notes.md
+          test -s sbom-download/cyclonedx-sbom.json
+
       - name: Create the annotated release tag
         if: env.TAG_RESUME != 'true'
         run: |
@@ -343,6 +354,21 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
           git push origin "refs/tags/v${RELEASE_VERSION}"
+
+      - name: Verify the exact remote release tag exists and targets this commit
+        run: |
+          set -euo pipefail
+          if ! remote_tag_ref="$(git ls-remote --exit-code --refs origin "refs/tags/v${RELEASE_VERSION}")"; then
+            echo "::error::Remote refs/tags/v${RELEASE_VERSION} does not exist; refusing to let GitHub synthesize a release tag implicitly." >&2
+            exit 1
+          fi
+          remote_tag_object_sha="${remote_tag_ref%%$'\t'*}"
+          local_tag_object_sha="$(git rev-parse "refs/tags/v${RELEASE_VERSION}")"
+          local_tag_commit="$(git rev-list -n 1 "refs/tags/v${RELEASE_VERSION}")"
+          if [ "${remote_tag_object_sha}" != "${local_tag_object_sha}" ] || [ "${local_tag_commit}" != "${TARGET_SHA}" ]; then
+            echo "::error::Remote release-tag identity does not match the verified local tag/target commit; refusing publication." >&2
+            exit 1
+          fi
 
       - name: Create the GitHub Release
         if: env.RELEASE_RESUME != 'true'
@@ -353,18 +379,25 @@ jobs:
             --title "v${RELEASE_VERSION}" \
             --notes-file release-notes.md
 
-      - name: Attach any still-missing release assets, best-effort
+      - name: Attach required release SBOM
         run: |
-          set -uo pipefail
+          set -euo pipefail
           sbom_file="sbom-download/cyclonedx-sbom.json"
-          if [ ! -f "${sbom_file}" ]; then
-            echo "::notice::No SBOM artifact was fetched for this commit; nothing to attach."
-            exit 0
+          if [ ! -s "${sbom_file}" ]; then
+            echo "::error::Required CycloneDX SBOM is missing or empty; release completion is not allowed." >&2
+            exit 1
           fi
-          if attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null)" && printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
-            echo "::notice::cyclonedx-sbom.json is already attached to v${RELEASE_VERSION}; nothing to do."
+          attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
+            echo "::notice::cyclonedx-sbom.json is already attached to v${RELEASE_VERSION}; mandatory asset is present."
             exit 0
           fi
           if ! gh release upload "v${RELEASE_VERSION}" "${sbom_file}" --repo "${GITHUB_REPOSITORY}" --clobber; then
-            echo "::warning::Could not attach cyclonedx-sbom.json to v${RELEASE_VERSION}; the release is published without it. Re-dispatch the workflow to retry the attach."
+            echo "::error::Could not attach mandatory cyclonedx-sbom.json to v${RELEASE_VERSION}; release workflow is failing closed. Re-dispatch to resume the asset attachment without moving the tag." >&2
+            exit 1
+          fi
+          attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
+            echo "::error::GitHub Release does not report the mandatory cyclonedx-sbom.json after upload; release workflow is failing closed." >&2
+            exit 1
           fi
