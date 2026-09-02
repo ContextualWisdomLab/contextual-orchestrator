@@ -1492,6 +1492,23 @@ def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_erro
     )
 
 
+def _capability_provider_endpoint(agent: ModelAgent, endpoint: str) -> str:
+    """Return the declared image-generation endpoint override when applicable.
+
+    ``TaskOrchestrator.proxy_capability``'s immediate-race and sequential-
+    failover paths both compute this identical rewrite once their retry loop
+    ends up selecting an agent. It used to be duplicated verbatim in both
+    branches; extracting it here (mirroring ``_log_retry_outcome`` below,
+    added for the same reason) makes it impossible for the two call sites to
+    diverge if this condition is ever revised.
+    """
+    return (
+        agent.image_generation_endpoint
+        if agent.image_generation_endpoint and endpoint == "images/generations"
+        else endpoint
+    )
+
+
 def _log_retry_outcome(
     agent: ModelAgent,
     attempt: int,
@@ -7600,11 +7617,7 @@ class TaskOrchestrator:
                     if key not in self._ORCHESTRATION_ONLY_KEYS
                 }
                 payload["model"] = agent.model
-                provider_endpoint = (
-                    agent.image_generation_endpoint
-                    if agent.image_generation_endpoint and endpoint == "images/generations"
-                    else endpoint
-                )
+                provider_endpoint = _capability_provider_endpoint(agent, endpoint)
                 return (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary else self.client.proxy_send(agent, provider_endpoint, payload)
@@ -7656,11 +7669,7 @@ class TaskOrchestrator:
                 if key not in self._ORCHESTRATION_ONLY_KEYS
             }
             payload["model"] = agent.model
-            provider_endpoint = (
-                agent.image_generation_endpoint
-                if agent.image_generation_endpoint and endpoint == "images/generations"
-                else endpoint
-            )
+            provider_endpoint = _capability_provider_endpoint(agent, endpoint)
             started_at = time.perf_counter()
             try:
                 result = (

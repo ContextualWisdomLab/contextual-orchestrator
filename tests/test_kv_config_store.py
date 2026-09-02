@@ -14,6 +14,7 @@ from contextual_orchestrator import (
     RoutingPolicy,
     TaskOrchestrator,
 )
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator.kv_config import (
     _LEGACY_CATEGORY_MIGRATIONS,
     InMemoryConfigStore,
@@ -348,7 +349,7 @@ def test_cost_routing_coordinator_migrates_a_directly_injected_store() -> None:
     integration check, since that is the real production entry point an
     injected store actually arrives through.
     """
-    legacy_category, (replacement_category, config_keys) = next(
+    legacy_category, (replacement_category, _config_keys) = next(
         iter(_LEGACY_CATEGORY_MIGRATIONS.items())
     )
     injected_config_store = InMemoryConfigStore(
@@ -379,7 +380,7 @@ def test_cost_routing_coordinator_migrates_for_a_caller_supplied_routing_policy(
     own batch_job_retention_seconds read and any later embedding-category
     read against the same shared self.config object.
     """
-    legacy_category, (replacement_category, config_keys) = next(
+    legacy_category, (replacement_category, _config_keys) = next(
         iter(_LEGACY_CATEGORY_MIGRATIONS.items())
     )
     injected_config_store = InMemoryConfigStore(
@@ -402,3 +403,46 @@ def test_cost_routing_coordinator_migrates_for_a_caller_supplied_routing_policy(
     assert (
         coordinator.config.get(replacement_category, "batch_job_retention_seconds") == 3600
     )
+
+
+def test_cost_routing_coordinator_migrates_with_both_custom_policy_and_registry() -> None:
+    """Neither RoutingPolicy nor build_job_registry runs when both are custom-supplied.
+
+    CodeRabbit/Devin-review follow-up finding on #1017: RoutingPolicy is only
+    constructed (and only then migrates) when routing_policy is None;
+    build_job_registry is only called (and only then migrates) when
+    job_registry is None. A caller supplying BOTH a custom routing_policy AND
+    a custom job_registry therefore triggered neither migration path, leaving
+    self.config unmigrated for CostRoutingCoordinator's own
+    _embedding_request_limits(), which reads self.config directly rather than
+    through either of those objects.
+    """
+    legacy_category, (replacement_category, _config_keys) = next(
+        iter(_LEGACY_CATEGORY_MIGRATIONS.items())
+    )
+    injected_config_store = InMemoryConfigStore(
+        seed={legacy_category: {"embedding_max_tokens_per_request": 12345}}
+    )
+    assert (
+        injected_config_store.get(
+            replacement_category, "embedding_max_tokens_per_request", "unset"
+        )
+        == "unset"
+    )
+    prebuilt_policy = RoutingPolicy(InMemoryConfigStore())  # unrelated store
+    prebuilt_registry = JobRegistryFactory(None)  # never touches self.config at all
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_worker", "mock-model", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        injected_config_store,
+        routing_policy=prebuilt_policy,
+        job_registry=prebuilt_registry,
+    )
+
+    assert coordinator.policy is prebuilt_policy
+    assert coordinator.job_registry is prebuilt_registry
+    max_tokens, _max_chars, _max_inputs = coordinator._embedding_request_limits()
+    assert max_tokens == 12345

@@ -42,7 +42,7 @@ from .batch_routing import (
 )
 from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook, PriceEntry
-from .kv_config import InMemoryConfigStore
+from .kv_config import InMemoryConfigStore, migrate_legacy_categories
 from .model_discovery import _currency_is_comparable
 from .token_counting import (
     TokenCountUnavailable,
@@ -91,6 +91,13 @@ class CostRoutingCoordinator:
     ) -> None:
         self.orchestrator = orchestrator
         self.config = config_store or InMemoryConfigStore()
+        # Unconditional, not left to RoutingPolicy.__init__/build_job_registry:
+        # this coordinator's own _embedding_request_limits() reads
+        # self.config directly, and a caller supplying BOTH a custom
+        # routing_policy AND a custom job_registry would otherwise construct
+        # neither of those (each only built when its own kwarg is unset),
+        # leaving self.config never migrated at all for that combination.
+        migrate_legacy_categories(self.config)
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
         self._race_usage_context = _RACE_USAGE_CONTEXT

@@ -863,7 +863,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   agent config or discovery path set the old hardcoded name today, so this is
   not a behavior change for any current deployment -- a future OpenRouter (or
   any other provider's) image-capable agent must declare
-  `image_generation_endpoint` explicitly to get the endpoint rewrite.
+  `image_generation_endpoint` explicitly to get the endpoint rewrite. The
+  identical rewrite condition was duplicated verbatim at both call sites
+  inside `proxy_capability` (the immediate-race `call()` closure and the
+  sequential-failover loop); CodeRabbit's review flagged the duplication and
+  a new module-level `_capability_provider_endpoint(agent, endpoint)` helper
+  now backs both, following this file's own established precedent
+  (`_log_retry_outcome`, extracted for the same reason: two near-identical
+  branches that must not be allowed to silently diverge) rather than the
+  `@staticmethod` shape CodeRabbit's own suggested diff used.
 - `batch_routing.py` and `cost_router.py` shared a single-word KV config
   category (`"routing"`) for feature flags -- both module constants
   (`_ROUTING_CATEGORY`, `_EMBEDDING_CONFIG_CATEGORY`) and
@@ -955,6 +963,43 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   deployment restarting at the same moment an operator reconfigures the
   exact same key) tracked alongside gap G-17 in `ContextualWisdomLab/
   .github`'s `docs/product-technical-gap-baseline.md`.
+  **Fifth review round found two more defects, one of them a real
+  regression from the third round's fix.** (1) `build_job_registry()`'s
+  unconditional `migrate_legacy_categories(config_store)` call (added in
+  the third round) crashed with `AttributeError` on the function's own
+  documented "injectable test path": config-store doubles that expose only
+  `get_secret` (no full `get`/`set` surface), a shape
+  `tests/test_batch_job_registry_boundaries.py` already exercised and
+  passed before that change. Confirmed by direct reproduction -- reverting
+  just the guard failed exactly 4 pre-existing tests in that file with the
+  same `AttributeError` -- before restoring it. Both Devin Review and
+  CodeRabbit flagged this independently in the same round; reviewer
+  `seonghobae` also independently pushed a fix straight to this PR branch
+  while this round's fix was in progress here. Reconciled by merging (not
+  force-pushing) and keeping `seonghobae`'s version, which reuses the
+  existing `get` probe already computed a few lines below instead of a
+  second `getattr` lookup: `build_job_registry()` now runs the migration
+  only when `config_store` exposes callable `get` and `set`, the same
+  "inapplicable, not an error" contract the rest of the function already
+  applies to a duck-typed secret-only store. (2) a caller supplying *both*
+  a pre-built `routing_policy` and a pre-built `job_registry` to
+  `CostRoutingCoordinator` bypassed the migration entirely: neither
+  `RoutingPolicy(self.config)` nor `build_job_registry(self.config)` is
+  constructed when its own keyword argument is already supplied, so
+  `self.config` -- read directly by `CostRoutingCoordinator._embedding_request_limits()`
+  -- never got migrated for that specific combination. This exact edge
+  case had been reasoned through and consciously deferred in the third
+  round (no current production caller supplies both); Devin Review and
+  CodeRabbit both re-flagged it independently in this round, which raised
+  confidence it was worth closing rather than continuing to defer.
+  `CostRoutingCoordinator.__init__` now also calls
+  `migrate_legacy_categories(self.config)` unconditionally, immediately
+  after `self.config` is set and before either optional object is
+  constructed -- independent of, and in addition to, the
+  `RoutingPolicy.__init__`-level call. New test
+  (`test_cost_routing_coordinator_migrates_with_both_custom_policy_and_registry`)
+  confirmed genuinely RED (asserted the migrated `12345` token limit, got
+  the unmigrated default `280000`) before the fix.
 - `ALLOWED_AGENT_PATCH_KEYS`/`ALLOWED_AGENT_CREATE_KEYS` in `server.py` --
   the HTTP-layer request-validation allowlists, entirely separate from
   `patch_agent`/`add_agent`'s own field handling in `orchestrator.py` --
