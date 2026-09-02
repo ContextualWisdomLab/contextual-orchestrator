@@ -164,6 +164,54 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Field encryption and audited release" not in ADMIN_HTML
 
 
+def test_model_groups_save_and_delete_refresh_audit_events_and_color_code_feedback() -> None:
+    # Regression test for the model_groups counterpart of the model_timeouts
+    # audit-staleness bug fixed in PR #1010: a successful save/delete records
+    # an audit event server-side, but the Audit tab only ever populated
+    # state.recent_audit_events from load()'s initial /admin/state fetch, so
+    # it stayed stale until a full page reload. Mirrors the refreshAuditEvents
+    # helper #1010 added for the model_timeouts panel's save/clear handlers.
+    assert "async function refreshAuditEvents() {" in ADMIN_HTML
+    assert 'const response = await apiFetch("/admin/state");' in ADMIN_HTML
+    assert "state.recent_audit_events = payload.recent_audit_events || [];" in ADMIN_HTML
+
+    save_group_start = ADMIN_HTML.index("async function saveModelGroup(event) {")
+    save_group_end = ADMIN_HTML.index("\n    }", save_group_start)
+    save_group_body = ADMIN_HTML[save_group_start:save_group_end]
+    assert "await refreshModelGroups();" in save_group_body
+    assert "await refreshAuditEvents();" in save_group_body
+    # refreshModelGroups (existing list refresh) must run before the newly
+    # added audit refresh, matching the #1010 ordering.
+    assert save_group_body.index("await refreshModelGroups();") < save_group_body.index(
+        "await refreshAuditEvents();"
+    )
+
+    delete_handler_start = ADMIN_HTML.index('els.modelGroups.addEventListener("click"')
+    delete_handler_end = ADMIN_HTML.index("});", delete_handler_start)
+    delete_handler_body = ADMIN_HTML[delete_handler_start:delete_handler_end]
+    assert 'method: "DELETE"' in delete_handler_body
+    assert "return refreshModelGroups();" in delete_handler_body
+    assert ".then(() => refreshAuditEvents())" in delete_handler_body
+    assert delete_handler_body.index("return refreshModelGroups();") < delete_handler_body.index(
+        ".then(() => refreshAuditEvents())"
+    )
+
+    # Success/error feedback is now color-coded (pre-existing gap noted
+    # alongside the audit-staleness fix), scoped to the model_groups panel
+    # this change already touches.
+    assert 'id="modelGroupFeedback" class="feedback" role="status" aria-live="polite"' in ADMIN_HTML
+    assert ".feedback.green { color: var(--green); }" in ADMIN_HTML
+    assert ".feedback.red { color: var(--red); }" in ADMIN_HTML
+    assert "function setModelGroupFeedback(message, isError) {" in ADMIN_HTML
+    assert 'setModelGroupFeedback(t("group_saved"), false);' in ADMIN_HTML
+    assert 'setModelGroupFeedback(t("group_deleted"), false);' in ADMIN_HTML
+    assert "setModelGroupFeedback(error.message, true);" in ADMIN_HTML
+    # The only direct textContent write is inside setModelGroupFeedback
+    # itself -- every call site routes through it so the color class always
+    # stays in sync with the message.
+    assert ADMIN_HTML.count("els.modelGroupFeedback.textContent") == 1
+
+
 def test_admin_state_exposes_agents_without_secrets() -> None:
     state = TaskOrchestrator(
         [ModelAgent("worker_agent", "gpt-example", "https://example.test/v1", "SECRET_ENV", tags=("coding",))]
@@ -177,5 +225,6 @@ def test_admin_state_exposes_agents_without_secrets() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     test_admin_surface_exists_for_enterprise_operations()
+    test_model_groups_save_and_delete_refresh_audit_events_and_color_code_feedback()
     test_admin_state_exposes_agents_without_secrets()
     print("ok")

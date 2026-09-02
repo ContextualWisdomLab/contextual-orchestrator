@@ -714,6 +714,8 @@ ADMIN_HTML = r"""<!doctype html>
     .chip.green { background: #e7f6ec; color: var(--green); }
     .chip.amber { background: var(--amber-soft); color: var(--amber); }
     .chip.red { background: #ffe8e5; color: var(--red); }
+    .feedback.green { color: var(--green); }
+    .feedback.red { color: var(--red); }
     .bar { width: 90px; height: 4px; border-radius: 999px; background: #d9eeeb; overflow: hidden; margin-top: 5px; }
     .bar span { display: block; height: 100%; background: var(--teal); }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -941,7 +943,7 @@ ADMIN_HTML = r"""<!doctype html>
               <select id="modelGroupMembers" multiple required size="5"></select>
             </label>
             <div class="actions"><button class="btn primary" type="submit" data-i18n="save_group">Save group</button></div>
-            <p id="modelGroupFeedback" role="status" aria-live="polite"></p>
+            <p id="modelGroupFeedback" class="feedback" role="status" aria-live="polite"></p>
             <ul id="modelGroups" class="policy-list"></ul>
           </form>
         </section>
@@ -1186,6 +1188,12 @@ Summarize this research thread and verify claims.</textarea>
       renderModelGroups();
     }
 
+    function setModelGroupFeedback(message, isError) {
+      els.modelGroupFeedback.textContent = message;
+      els.modelGroupFeedback.classList.toggle("red", !!isError);
+      els.modelGroupFeedback.classList.toggle("green", !isError);
+    }
+
     async function saveModelGroup(event) {
       event.preventDefault();
       const groupName = els.modelGroupName.value.trim();
@@ -1198,8 +1206,9 @@ Summarize this research thread and verify claims.</textarea>
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
-      els.modelGroupFeedback.textContent = t("group_saved");
+      setModelGroupFeedback(t("group_saved"), false);
       await refreshModelGroups();
+      await refreshAuditEvents();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1573,6 +1582,13 @@ Summarize this research thread and verify claims.</textarea>
         <tr><td>${escapeHtml(event.event_type)}</td><td><pre>${escapeHtml(JSON.stringify(event.event_detail))}</pre></td><td>${escapeHtml(event.created_at)}</td></tr>
       `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
     }
+    async function refreshAuditEvents() {
+      const response = await apiFetch("/admin/state");
+      if (!response.ok) return;
+      const payload = await response.json();
+      state.recent_audit_events = payload.recent_audit_events || [];
+      renderAudit();
+    }
     function renderSecondaryViews() {
       if (!state.policy) return;
       renderDatasets();
@@ -1747,7 +1763,7 @@ Summarize this research thread and verify claims.</textarea>
     els.agentSettings.addEventListener("click", () => showView("settings"));
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
-      els.modelGroupFeedback.textContent = error.message;
+      setModelGroupFeedback(error.message, true);
     }));
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
@@ -1755,10 +1771,11 @@ Summarize this research thread and verify claims.</textarea>
       fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
         .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
         .then(() => {
-          els.modelGroupFeedback.textContent = t("group_deleted");
+          setModelGroupFeedback(t("group_deleted"), false);
           return refreshModelGroups();
         })
-        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+        .then(() => refreshAuditEvents())
+        .catch(error => { setModelGroupFeedback(error.message, true); });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
