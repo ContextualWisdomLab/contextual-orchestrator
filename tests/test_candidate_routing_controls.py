@@ -297,6 +297,48 @@ def test_candidate_controls_reject_an_unserviceable_worker_pool() -> None:
                 pass
 
 
+def test_candidate_routing_policy_rejects_present_but_falsy_malformed_controls() -> None:
+    """A direct Python-API caller who passes a present-but-falsy malformed
+    control (empty string, False, explicit None, an empty mapping) must get
+    a loud ValueError, not a silent "no control" no-op -- the HTTP layer's
+    own ``_validate_routing`` already rejects these shapes with a 400
+    before candidate_routing_policy ever sees them, but a caller who talks
+    to the orchestrator directly has no such gate (#983 finding 2)."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("candidate_a", "model-a"),
+            ModelAgent("candidate_b", "model-b"),
+        ]
+    )
+
+    malformed_exclude_candidate_ids = ("", False, None, {})
+    for value in malformed_exclude_candidate_ids:
+        with pytest.raises(ValueError, match="exclude_candidate_ids"):
+            with orchestrator.candidate_routing_policy(
+                {"exclude_candidate_ids": value}
+            ):
+                pass
+
+    for value in (False, 0, 1.5, [], {}):
+        with pytest.raises(ValueError, match="candidate_id"):
+            with orchestrator.candidate_routing_policy({"candidate_id": value}):
+                pass
+
+    # Absent fields, an explicit None routing mapping, an explicit None
+    # candidate_id, and an explicit empty list exclude_candidate_ids all
+    # remain no-ops -- the existing contract for "no control requested".
+    with orchestrator.candidate_routing_policy(None):
+        pass
+    with orchestrator.candidate_routing_policy({}):
+        pass
+    with orchestrator.candidate_routing_policy({"candidate_id": None}):
+        pass
+    with orchestrator.candidate_routing_policy({"exclude_candidate_ids": []}):
+        pass
+    with orchestrator.candidate_routing_policy({"exclude_candidate_ids": ()}):
+        pass
+
+
 def test_candidate_pin_preflight_checks_conduct_roles_and_required_tags() -> None:
     orchestrator = TaskOrchestrator(
         [
@@ -684,6 +726,87 @@ def test_candidate_pin_is_honored_by_responses_json_and_stream_paths() -> None:
 
     assert json_status == 200
     assert isinstance(json_body, dict)
+    assert json_body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert stream_status == 200
+    assert isinstance(stream_events, list)
+    completed = next(event for event in stream_events if event["type"] == "response.completed")
+    assert completed["response"]["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert set(client.calls) == {"candidate_b"}
+
+
+def test_responses_with_active_candidate_pin_normalizes_batch_channel_to_sync() -> None:
+    """An active candidate_id pin forces sync execution instead of the flat
+    "routing.channel=batch is not supported on /v1/responses" rejection, for
+    both the JSON and streaming Responses paths -- matching the same
+    precedence already applied to structured chat (#983 finding 1)."""
+    server, thread, token, client = _serve()
+    routing = {
+        "candidate_id": "candidate_b",
+        "exclude_candidate_ids": ["candidate_a"],
+        "channel": "batch",
+    }
+    try:
+        json_status, json_body = _post_responses(
+            server.server_address[1],
+            token,
+            {"model": "orchestrator/auto", "input": "short", "routing": routing},
+        )
+        stream_status, stream_events = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "input": "short",
+                "stream": True,
+                "routing": routing,
+            },
+            stream=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert json_status == 200, json_body
+    assert isinstance(json_body, dict)
+    assert "job_id" not in json_body
+    assert json_body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert stream_status == 200
+    assert isinstance(stream_events, list)
+    completed = next(event for event in stream_events if event["type"] == "response.completed")
+    assert completed["response"]["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert set(client.calls) == {"candidate_b"}
+
+
+def test_responses_with_active_candidate_exclusion_normalizes_latency_tolerant_to_sync() -> None:
+    """An active exclude_candidate_ids control forces sync execution instead
+    of rejecting routing.latency_tolerant=true outright, for both the JSON
+    and streaming Responses paths (#983 finding 1)."""
+    server, thread, token, client = _serve()
+    routing = {"exclude_candidate_ids": ["candidate_a"], "latency_tolerant": True}
+    try:
+        json_status, json_body = _post_responses(
+            server.server_address[1],
+            token,
+            {"model": "orchestrator/auto", "input": "short", "routing": routing},
+        )
+        stream_status, stream_events = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "input": "short",
+                "stream": True,
+                "routing": routing,
+            },
+            stream=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert json_status == 200, json_body
+    assert isinstance(json_body, dict)
+    assert "job_id" not in json_body
     assert json_body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
     assert stream_status == 200
     assert isinstance(stream_events, list)
@@ -1262,5 +1385,78 @@ def test_served_candidate_id_matches_generated_worker_fallback(monkeypatch) -> N
         "verifier_agent",
         "synth_agent",
     ]
+    assert result["answer"] == "worker_agent output"
+    assert evidence["served_candidate_id"] == "worker_agent"
+
+
+def test_served_candidate_id_prefers_earliest_row_on_duplicate_fallback_text(
+    monkeypatch,
+) -> None:
+    """When a *later* synthesizer step happens to emit byte-identical text to
+    the worker's already-served fallback answer, routing evidence must still
+    name the worker (the candidate actually served) and not the synthesizer,
+    whose trace row merely duplicates the text after the fact. The fallback
+    worker step always runs -- and is recorded in the trace -- strictly
+    before any step whose output could coincidentally match it, so preferring
+    the earliest text match is safe (#983 finding 3, the minimal fix: the
+    prior ``reversed()`` walk preferred the *latest* text match and could
+    misidentify a coincidental duplicate as the served candidate)."""
+
+    class _CollidingClient(ModelClient):
+        def chat(self, agent, messages, effort_profile=None):
+            if agent.id == "synth_agent":
+                # Deliberately duplicate the worker's fallback text so two
+                # trace rows share the exact same "output" as `answer`.
+                return "worker_agent output"
+            return f"{agent.id} output"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("thinker_agent", "model-thinker"),
+            ModelAgent("worker_agent", "model-worker"),
+            ModelAgent("verifier_agent", "model-verifier"),
+            ModelAgent("synth_agent", "model-synth"),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=_CollidingClient(),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_plan",
+        lambda task, *, model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL: [
+            WorkflowStep(0, "thinker", "thinker_agent", "decompose"),
+            WorkflowStep(1, "worker", "worker_agent", "work", (0,)),
+            WorkflowStep(2, "verifier", "verifier_agent", "verify", (0, 1)),
+            WorkflowStep(3, "synthesizer", "synth_agent", "synthesize", (0, 1, 2)),
+        ],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *args, **kwargs: {
+            "accepted": False,
+            "reason": "test forces rejection",
+            "verifier_output": "verifier_agent output",
+            "judge": "model",
+        },
+    )
+
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["excluded_agent"]}
+    ):
+        result = orchestrator.conduct([{"role": "user", "content": "task"}])
+        evidence = orchestrator._candidate_routing_evidence(result)
+
+    assert [row["agent_id"] for row in result["trace"]] == [
+        "thinker_agent",
+        "worker_agent",
+        "verifier_agent",
+        "synth_agent",
+    ]
+    # Both the worker row (index 1) and the synthesizer row (index 3) now
+    # carry output == "worker_agent output" -- the fallback answer -- but
+    # only the worker was actually served.
+    assert result["trace"][1]["output"] == "worker_agent output"
+    assert result["trace"][3]["output"] == "worker_agent output"
     assert result["answer"] == "worker_agent output"
     assert evidence["served_candidate_id"] == "worker_agent"

@@ -4023,6 +4023,22 @@ class TaskOrchestrator:
         routing = routing or {}
         candidate_id = routing.get("candidate_id")
         excluded = routing.get("exclude_candidate_ids", ())
+        # A present-but-malformed control must fail validation even when its
+        # value is falsy (empty string, False, None, an empty mapping, ...)
+        # -- only a field that is entirely *absent*, or an explicit empty
+        # list/tuple, is a no-op. The HTTP layer's own _validate_routing
+        # already rejects these shapes with a 400 before they reach here;
+        # this closes the same gap for direct Python-API callers, who would
+        # otherwise have a malformed control silently treated as "no
+        # control" instead of surfacing the caller bug (#983 finding 2).
+        if (
+            "candidate_id" in routing
+            and candidate_id is not None
+            and not isinstance(candidate_id, str)
+        ):
+            raise ValueError("candidate_id must be a non-empty agent ID")
+        if "exclude_candidate_ids" in routing and not isinstance(excluded, (list, tuple)):
+            raise ValueError("exclude_candidate_ids must contain at most 32 agent IDs")
         if candidate_id is None and not excluded:
             yield
             return
@@ -4157,13 +4173,23 @@ class TaskOrchestrator:
             else []
         )
         served_rows = answering_rows or rows
+        # Among *text* matches, prefer the earliest row: conduct()'s only
+        # fallback path serves an earlier step's already-produced output
+        # (the worker's, once the verifier rejects a later step), so the
+        # served step is never later in the trace than a row that merely
+        # happens to duplicate its text (e.g. a synthesizer that
+        # independently produces byte-identical output). When nothing
+        # matched by text (the plain-passthrough/cache-hit callers that
+        # never populate answer/output), fall back to the prior last-row
+        # heuristic over the full, unfiltered trace (#983 finding 3).
+        ordered_rows = served_rows if answering_rows else reversed(served_rows)
         served = (
             None
             if tracked_attempts == []
             else next(
                 (
                     value
-                    for row in reversed(served_rows)
+                    for row in ordered_rows
                     if isinstance(row, Mapping)
                     for value in [row.get("served_agent_id") or row.get("agent_id")]
                     if isinstance(value, str) and value

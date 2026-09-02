@@ -7748,13 +7748,34 @@ def build_server(
                     if "routing" in body:
                         routing = responses_routing_control
                         # Responses passthrough has no batch channel plane yet.
-                        if routing and routing.get("channel") == "batch":
+                        # Candidate controls force synchronous execution the
+                        # same way CostRoutingCoordinator.complete() and
+                        # structured chat do (cost_router.py
+                        # has_candidate_controls); only reject deferred batch
+                        # hints when no candidate control is active to pin or
+                        # exclude a candidate (#983 finding 1).
+                        responses_has_candidate_controls = bool(
+                            routing
+                            and (
+                                routing.get("candidate_id")
+                                or routing.get("exclude_candidate_ids")
+                            )
+                        )
+                        if (
+                            not responses_has_candidate_controls
+                            and routing
+                            and routing.get("channel") == "batch"
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_routing",
                                 "routing.channel=batch is not supported on /v1/responses",
                             )
-                        if routing and routing.get("latency_tolerant") is True:
+                        if (
+                            not responses_has_candidate_controls
+                            and routing
+                            and routing.get("latency_tolerant") is True
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_routing",
