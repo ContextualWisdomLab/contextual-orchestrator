@@ -3,14 +3,15 @@
 from pathlib import Path
 
 
-def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() -> None:
+def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() -> None:
     """Keep scheduled agent traffic on the seeded gateway and required key set."""
     workflow = Path(".github/workflows/opencode-hourly-loop.yml").read_text()
     prompt = Path(".github/opencode/hourly-loop-prompt.md").read_text()
 
     assert 'cron: "23 * * * *"' in workflow
     assert "--auto-discover-model-agents" in workflow
-    assert workflow.count("contextual_orchestrator_gateway/orchestrator/auto") == 2
+    assert workflow.count("contextual_orchestrator_gateway/orchestrator/free") == 2
+    assert "contextual_orchestrator_gateway/orchestrator/auto" not in workflow
     for credential_name in (
         "BYTEZ_API_KEY",
         "NVIDIA_NIM_API_KEY",
