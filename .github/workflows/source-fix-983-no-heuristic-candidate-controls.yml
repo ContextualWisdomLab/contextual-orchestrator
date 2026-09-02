@@ -1,0 +1,88 @@
+name: Source fix PR983 no-heuristic candidate controls
+
+on:
+  push:
+    branches:
+      - feat/stateless-candidate-controls
+    paths:
+      - .github/source-fix-983-no-heuristic-candidate-controls.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+          python -m pip install --disable-pip-version-check --no-deps -e .
+
+      - name: Prove candidate-control regressions are RED
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q tests/test_candidate_routing_no_heuristic_limits.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::No-heuristics candidate-control regressions were unexpectedly GREEN before repair."
+            exit 1
+          fi
+
+      - name: Apply exact guarded owner repair
+        run: python scripts/source_fix_983_no_heuristic_candidate_controls.py
+
+      - name: Verify candidate-control contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_candidate_routing_no_heuristic_limits.py \
+            tests/test_candidate_routing_controls.py \
+            tests/test_api_contract.py
+          git diff --check
+
+      - name: Remove completed one-shot machinery
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-983-no-heuristic-candidate-controls.yml \
+            .github/source-fix-983-no-heuristic-candidate-controls.trigger \
+            scripts/source_fix_983_no_heuristic_candidate_controls.py
+          git diff --check
+
+      - name: Commit verified owner repair
+        env:
+          EXPECTED_TRIGGER_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin feat/stateless-candidate-controls
+          remote_head="$(git rev-parse origin/feat/stateless-candidate-controls)"
+          if [ "$remote_head" != "$EXPECTED_TRIGGER_HEAD" ]; then
+            echo "::error::Canonical branch moved; refusing to overwrite or guess a merge."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::error::Source fix produced no publishable delta."
+            exit 1
+          fi
+          git commit -m "fix(routing): remove heuristic candidate-control limits"
+          git push origin HEAD:feat/stateless-candidate-controls
