@@ -1,6 +1,6 @@
 """Idempotent-retry and least-privilege contract for the release workflow.
 
-Covers the design that resolves four related Devin/CodeRabbit findings on
+Covers the design that resolves five related Devin/CodeRabbit findings on
 `.github/workflows/release.yml`, kept in one file because they share a root
 cause -- the tag (and, now, the Release object itself) is created before the
 fallible SBOM-asset step, so any failure after that must be safely
@@ -17,6 +17,14 @@ retryable without ever moving the tag or double-publishing:
   treated as "nothing left to do." `publish` always attempts the
   best-effort SBOM asset attach afterward, whether the Release was just
   created or already existed.
+- Confirmed-absence vs transient-failure classification for both lookups
+  (Devin's later finding, "API failures block release recovery"): a failed
+  tag lookup or `gh release view` call is *not* automatically "absent" --
+  only a confirmed HTTP 404 (tag) or "release not found" (Release) means
+  that; any other failure (rate limit, auth, network blip, a GitHub 5xx)
+  fails the step closed instead of risking a wrong fresh-create attempt
+  against unconfirmed state. See the real bash+stub-`gh` simulation near
+  the end of this file for end-to-end coverage beyond text assertions.
 - `actions: read` is granted at the `verify` job's scope (needed for the
   best-effort SBOM lookup) and nowhere else.
 - The two-job least-privilege split: `verify` (read-only, no persisted git
@@ -31,11 +39,17 @@ Uses plain text/index assertions on the same raw YAML text convention as
 Ponytail no-new-YAML-dependency rationale) -- but bounded to one job's own
 step block via `_job_block`, and to one step's own branch via explicit
 ordering assertions, so these prove real operational structure rather than
-loose text proximity.
+loose text proximity. The confirmed-absence-vs-transient-failure tests near
+the end of this file go further: they execute the tag_state step's actual,
+unmodified script under bash against a stubbed `gh`, the same
+real-execution technique `tests/test_release_workflow_contract.py` uses for
+the checks-green gate.
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,6 +59,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release.yml"
 
 _JOB_NAMES = ("verify", "publish")
+
+# Fixed, deterministic values for the hand-simulation tests near the end of
+# this file -- arbitrary, just stable and easy to eyeball in a failure.
+_SIM_GITHUB_REPOSITORY = "ContextualWisdomLab/contextual-orchestrator"
+_SIM_RELEASE_VERSION = "0.2.0"
+_SIM_GITHUB_SHA = "cf69dc39457829c351277aad8096c24115d3991c"
 
 
 def _workflow_text() -> str:
@@ -114,6 +134,41 @@ def test_absent_tag_is_a_fresh_publish_checked_before_any_reject_branch() -> Non
     assert fresh_index < points_elsewhere_index < tag_resume_true_index
 
 
+def test_tag_lookup_confirmed_404_is_a_fresh_publish_without_error() -> None:
+    """Devin finding ("API failures block release recovery"): only a
+    confirmed HTTP 404 from the tag lookup means "tag absent" -- that
+    branch must resume as a clean fresh publish, no error, no exit 1,
+    distinct from the non-404 fail-closed branch tested right below."""
+    step = _tag_state_step(_workflow_text())
+    lookup_index = step.index('if ! tag_lookup_output=')
+    confirmed_404_index = step.index('grep -q "HTTP 404"', lookup_index)
+    inner_fi_index = step.index('\n            fi\n', confirmed_404_index)
+    confirmed_404_branch = step[confirmed_404_index:inner_fi_index]
+    assert "::error::" not in confirmed_404_branch
+    assert 'echo "tag_resume=false" >> "${GITHUB_OUTPUT}"' in confirmed_404_branch
+    assert 'echo "release_resume=false" >> "${GITHUB_OUTPUT}"' in confirmed_404_branch
+    assert "exit 0" in confirmed_404_branch
+
+
+def test_tag_lookup_non_404_error_fails_closed_not_treated_as_absent() -> None:
+    """Devin finding ("API failures block release recovery"): a transient
+    rate-limit, auth, network, or 5xx failure from the tag lookup must
+    never be silently treated as 'tag absent' -- it must fail this step
+    closed (distinct exit 1, after the confirmed-404 short-circuit already
+    had its chance to `exit 0` first) so a later retry can resolve cleanly
+    instead of compounding a wrong assumption."""
+    step = _tag_state_step(_workflow_text())
+    lookup_index = step.index('if ! tag_lookup_output=')
+    confirmed_404_fi_index = step.index('\n            fi\n', lookup_index)
+    outer_fi_index = step.index('\n          fi\n', confirmed_404_fi_index)
+    fail_closed_branch = step[confirmed_404_fi_index:outer_fi_index]
+    assert "::error::" in fail_closed_branch
+    assert "exit 1" in fail_closed_branch
+    assert "NOT confirmed" in fail_closed_branch
+    assert "tag_resume=" not in fail_closed_branch
+    assert "release_resume=" not in fail_closed_branch
+
+
 def test_tag_pointing_at_a_different_commit_is_rejected_not_moved() -> None:
     """A tag that exists but targets a different commit must fail the run
     outright -- a release tag is never moved onto a new commit."""
@@ -145,18 +200,58 @@ def test_tag_matching_commit_with_existing_release_resumes_to_attach_missing_ass
     tag and the Release can both already exist while the SBOM asset is
     still missing. The earlier "nothing left to resume" rejection stranded
     that release forever (Devin's follow-up finding) -- `publish` must
-    still get a chance to attempt the best-effort asset attach."""
+    still get a chance to attempt the best-effort asset attach.
+
+    `gh release view` succeeding (exit 0) is now the *outer* `else` of a
+    three-way branch -- see the two tests below for the other two arms
+    (confirmed absent, and Devin's later "API failures block release
+    recovery" finding: any other lookup failure fails closed instead of
+    being treated as absence). Bounded to that outer branch specifically
+    via its 10-space indentation, which the branch's own inner if/else
+    (12-space indented) cannot be mistaken for."""
     step = _tag_state_step(_workflow_text())
     assert 'gh release view "v${RELEASE_VERSION}"' in step
     release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
-    # Bounded to the "release already exists" branch itself (up to its
-    # `else`), not an arbitrary character count -- the branch's own
-    # explanatory comment is long enough to overflow a fixed window.
-    else_index = step.index("\n          else\n", release_view_index)
-    branch = step[release_view_index:else_index]
+    outer_else_index = step.index("\n          else\n", release_view_index)
+    outer_fi_index = step.index("\n          fi\n", outer_else_index)
+    branch = step[outer_else_index:outer_fi_index]
     assert "::error::" not in branch
     assert "exit 1" not in branch
     assert 'echo "release_resume=true" >> "${GITHUB_OUTPUT}"' in branch
+
+
+def test_release_lookup_confirmed_absent_resumes_cleanly_without_error() -> None:
+    """The confirmed-absent inner arm (a genuine 'release not found', or
+    its raw HTTP-404 rendering as a defensive fallback) must resume
+    publication cleanly -- no error, no exit 1 -- and must be distinct from
+    the non-404 fail-closed arm right next to it (Devin finding: "API
+    failures block release recovery")."""
+    step = _tag_state_step(_workflow_text())
+    release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
+    inner_else_index = step.index("\n            else\n", release_view_index)
+    confirmed_absent_branch = step[release_view_index:inner_else_index]
+    assert 'grep -qiE "release not found|HTTP 404"' in confirmed_absent_branch
+    assert "::error::" not in confirmed_absent_branch
+    assert "exit 1" not in confirmed_absent_branch
+    assert 'echo "release_resume=false" >> "${GITHUB_OUTPUT}"' in confirmed_absent_branch
+
+
+def test_release_lookup_non_404_error_fails_closed_not_treated_as_absent() -> None:
+    """Devin finding ("API failures block release recovery"): a transient
+    rate-limit, auth, network, or 5xx failure from `gh release view` must
+    never be silently treated as 'Release absent' -- only a confirmed
+    absence may resume; anything else fails this step closed so a later
+    retry can resolve cleanly instead of compounding a wrong assumption."""
+    step = _tag_state_step(_workflow_text())
+    release_view_index = step.index('gh release view "v${RELEASE_VERSION}"')
+    inner_else_index = step.index("\n            else\n", release_view_index)
+    inner_fi_index = step.index("\n            fi\n", inner_else_index)
+    fail_closed_branch = step[inner_else_index:inner_fi_index]
+    assert "::error::" in fail_closed_branch
+    assert "exit 1" in fail_closed_branch
+    assert "NOT confirmed" in fail_closed_branch
+    assert "release_resume=false" not in fail_closed_branch
+    assert "release_resume=true" not in fail_closed_branch
 
 
 def test_tag_matching_commit_with_no_release_yet_resumes_without_retagging() -> None:
@@ -221,6 +316,214 @@ def test_release_asset_attach_always_runs_and_is_best_effort() -> None:
     assert "if ! gh release upload" in attach_step
     assert "::warning::" in attach_step
     assert "--clobber" in attach_step
+
+
+# --- Confirmed-absence vs transient-failure real-execution simulation
+# --- (Devin finding: "API failures block release recovery") ----------------
+#
+# The tests above prove the *branch structure* of the tag_state step's real
+# YAML text. These go further: they execute that exact, unmodified script
+# (never a hand-copied stand-in that could silently drift from it) under
+# bash, against a stub `gh` selected by GH_STUB_MODE, covering every branch
+# end-to-end -- exit code and the actual GITHUB_OUTPUT lines written -- the
+# same real-execution technique tests/test_release_workflow_contract.py
+# uses for the checks-green gate.
+
+
+def _tag_state_script(workflow: str) -> str:
+    """Return the tag_state step's real `run: |` script body, dedented.
+
+    Terminates at the first line that is not blank and does not carry this
+    workflow's fixed 10-space step-script indentation, mirroring YAML's own
+    block-scalar boundary rule (see the analogous helper's longer rationale
+    in tests/test_release_workflow_contract.py).
+    """
+    step = _tag_state_step(workflow)
+    marker = "run: |\n"
+    body = step[step.index(marker) + len(marker) :]
+    lines: list[str] = []
+    for line in body.splitlines():
+        if line.strip() == "":
+            lines.append("")
+            continue
+        if not line.startswith(" " * 10):
+            break
+        lines.append(line[10:])
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines) + "\n"
+
+
+_STUB_GH_TAG_RELEASE_LOOKUP = """#!/usr/bin/env bash
+# Stub gh CLI for hand-simulating the tag_state step's two lookups against
+# deliberately-crafted success/confirmed-absence/transient-failure cases,
+# selected via GH_STUB_TAG_MODE and GH_STUB_RELEASE_MODE.
+tag_mode="${GH_STUB_TAG_MODE:-}"
+release_mode="${GH_STUB_RELEASE_MODE:-}"
+
+if [ "$1" = "api" ]; then
+  case "${tag_mode}" in
+    tag_confirmed_404)
+      echo "gh: No commit found for SHA: v${RELEASE_VERSION} (HTTP 404)" >&2
+      exit 1
+      ;;
+    tag_rate_limited)
+      echo "gh: API rate limit exceeded for user ID 123. (HTTP 403)" >&2
+      exit 1
+      ;;
+    tag_network_error)
+      echo 'gh: Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' >&2
+      exit 1
+      ;;
+    tag_exists)
+      if printf '%s\\n' "$*" | grep -q -- '--jq'; then
+        echo "${SIM_GITHUB_SHA}"
+      else
+        echo "{\\"sha\\":\\"${SIM_GITHUB_SHA}\\"}"
+      fi
+      exit 0
+      ;;
+    *) echo "unhandled stub gh api tag mode: ${tag_mode}" >&2; exit 97 ;;
+  esac
+elif [ "$1" = "release" ] && [ "$2" = "view" ]; then
+  case "${release_mode}" in
+    release_confirmed_absent)
+      echo "release not found" >&2
+      exit 1
+      ;;
+    release_rate_limited)
+      echo "gh: API rate limit exceeded for user ID 123. (HTTP 403)" >&2
+      exit 1
+      ;;
+    release_exists)
+      echo "title: v${RELEASE_VERSION}"
+      exit 0
+      ;;
+    *) echo "unhandled stub gh release view mode: ${release_mode}" >&2; exit 97 ;;
+  esac
+else
+  echo "unhandled stub gh invocation: $*" >&2
+  exit 98
+fi
+"""
+
+
+def _run_tag_state_script(
+    tmp_path: Path, script: str, *, tag_mode: str, release_mode: str = ""
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    """Execute the real tag_state script against the stub gh above.
+
+    Returns the completed process plus the `GITHUB_OUTPUT` lines actually
+    written, parsed into a dict (empty if the step exited before writing
+    any, e.g. the fail-closed branches).
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh_stub = bin_dir / "gh"
+    gh_stub.write_text(_STUB_GH_TAG_RELEASE_LOOKUP, encoding="utf-8")
+    gh_stub.chmod(0o755)
+
+    script_path = tmp_path / "tag-state.sh"
+    script_path.write_text(script, encoding="utf-8")
+    output_path = tmp_path / "github_output"
+    output_path.write_text("", encoding="utf-8")
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["GITHUB_REPOSITORY"] = _SIM_GITHUB_REPOSITORY
+    env["RELEASE_VERSION"] = _SIM_RELEASE_VERSION
+    env["GITHUB_SHA"] = _SIM_GITHUB_SHA
+    env["SIM_GITHUB_SHA"] = _SIM_GITHUB_SHA
+    env["GITHUB_OUTPUT"] = str(output_path)
+    env["GH_STUB_TAG_MODE"] = tag_mode
+    env["GH_STUB_RELEASE_MODE"] = release_mode
+
+    result = subprocess.run(
+        ["bash", str(script_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outputs: dict[str, str] = {}
+    for line in output_path.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            outputs[key] = value
+    return result, outputs
+
+
+def test_simulated_tag_confirmed_404_resumes_as_fresh_publish(tmp_path: Path) -> None:
+    """End-to-end: a confirmed-404 tag lookup exits 0 with both resume flags
+    false, never reaching the release-view lookup at all."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_confirmed_404")
+    assert result.returncode == 0, result.stderr
+    assert outputs == {"tag_resume": "false", "release_resume": "false"}
+
+
+def test_simulated_tag_lookup_rate_limited_fails_closed(tmp_path: Path) -> None:
+    """End-to-end: a 403 rate-limit error from the tag lookup must fail the
+    step closed (nonzero exit, no outputs written) rather than being read
+    as tag-absent."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_rate_limited")
+    assert result.returncode != 0
+    assert "NOT confirmed" in result.stderr
+    assert outputs == {}
+
+
+def test_simulated_tag_lookup_network_error_fails_closed(tmp_path: Path) -> None:
+    """End-to-end: a transport-level failure from the tag lookup must also
+    fail closed, not be misread as tag-absent."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(tmp_path, script, tag_mode="tag_network_error")
+    assert result.returncode != 0
+    assert "NOT confirmed" in result.stderr
+    assert outputs == {}
+
+
+def test_simulated_release_confirmed_absent_resumes_publication(tmp_path: Path) -> None:
+    """End-to-end: tag exists at this commit, release lookup confirms
+    absence ('release not found') -- resumes with tag_resume=true,
+    release_resume=false, no error."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(
+        tmp_path, script, tag_mode="tag_exists", release_mode="release_confirmed_absent"
+    )
+    assert result.returncode == 0, result.stderr
+    assert outputs == {"tag_resume": "true", "release_resume": "false"}
+
+
+def test_simulated_release_lookup_rate_limited_fails_closed_after_tag_resume(tmp_path: Path) -> None:
+    """End-to-end: tag exists at this commit (tag_resume=true is safely
+    written), but the release lookup then hits a transient error -- must
+    fail closed rather than guessing the Release is absent."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(
+        tmp_path, script, tag_mode="tag_exists", release_mode="release_rate_limited"
+    )
+    assert result.returncode != 0
+    assert "NOT confirmed" in result.stderr
+    assert outputs == {"tag_resume": "true"}
+
+
+def test_simulated_release_already_exists_resumes_asset_attach(tmp_path: Path) -> None:
+    """End-to-end: both the tag and its Release already exist at this
+    commit -- the genuine safe-resume path, release_resume=true, no
+    error."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs = _run_tag_state_script(
+        tmp_path, script, tag_mode="tag_exists", release_mode="release_exists"
+    )
+    assert result.returncode == 0, result.stderr
+    assert outputs == {"tag_resume": "true", "release_resume": "true"}
 
 
 # --- `actions: read` scoping (Devin finding 2) -------------------------------

@@ -55,6 +55,13 @@ that separate system.
    re-runs the full test suite fresh, but it does not re-run CodeQL, Trivy,
    OSV, Scorecard, or the review bots — those already had to pass before this
    commit could exist on protected `main` at all.
+   - **If you dispatch moments after a merge lands**, the gate can fail
+     with "expected push-triggered check(s) ... have not registered yet" —
+     GitHub has not finished creating this new tip's Tests/Security/Fuzz
+     check-run entries yet. This is expected and safe: wait a few moments
+     for those workflows to actually start, then re-dispatch. It is
+     distinct from a genuine pending/failed check, which the same gate
+     reports as "not both complete and green" instead.
 
 ## Cutting a release
 
@@ -70,16 +77,24 @@ that separate system.
    - **`verify`** (read-only):
      - fails closed if the dispatched commit is not `main`'s current tip (a
        race with a concurrent merge);
-     - fails closed unless every check GitHub reports for this exact commit
-       is complete with a successful, skipped, or neutral conclusion (a
-       push-triggered workflow — Security, Fuzz, ... — still running or
-       having failed on this commit);
+     - fails closed unless every one of this repository's own known
+       push-triggered checks (Tests' two jobs, Fuzz's two jobs, Security's
+       two jobs — see `RELEASE_EXPECTED_PUSH_CHECKS` in `release.yml`) has
+       actually registered as a check-run for this exact commit *and* every
+       check GitHub reports for it is complete with a successful, skipped,
+       or neutral conclusion (a push-triggered workflow — Security, Fuzz,
+       ... — not yet registered, still running, or having failed on this
+       commit);
      - fails closed if the input version does not match `pyproject.toml`'s
        `[project]` table;
      - resolves any existing `vX.Y.Z` tag via the commit API: fails closed
        only if it points at a *different* commit; a tag at this commit
        proceeds as a resume (fresh publish, tag-only resume, or full
-       release-and-asset resume — see step 3 above);
+       release-and-asset resume — see step 3 above). A failed tag or
+       Release lookup is treated as "absent" only on a *confirmed* 404 /
+       "release not found"; any other lookup failure (rate limit, auth,
+       network, 5xx) fails this step closed instead of guessing — re-dispatch
+       once the transient failure clears;
      - runs the full test suite fresh (`uv run --locked --extra api --extra
        db --extra queue --group dev python -m pytest -q`);
      - renders release notes from `CHANGELOG.md`'s matching section

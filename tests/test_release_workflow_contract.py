@@ -23,6 +23,10 @@ step order and job scoping rather than incidental proximity.
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,6 +36,17 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release.yml"
 
 _JOB_NAMES = ("verify", "publish")
+
+# Fixed, deterministic values for the hand-simulation tests below --
+# arbitrary, just stable and, critically, *distinct* so a real check-run
+# from an earlier push-triggered workflow run is never accidentally
+# mistaken for one of this release run's own (which the gate's real filter
+# must exclude): _SIM_RUN_ID is the release workflow's own run id (the one
+# GITHUB_RUN_ID is set to); _SIM_PRIOR_RUN_ID is the unrelated, earlier
+# run id the stubbed push-triggered check-runs themselves carry.
+_SIM_GITHUB_SHA = "cf69dc39457829c351277aad8096c24115d3991c"
+_SIM_RUN_ID = "999999"
+_SIM_PRIOR_RUN_ID = "888888"
 
 
 def _workflow_text() -> str:
@@ -65,6 +80,120 @@ def _step_names(block: str) -> list[str]:
         for line in block.splitlines()
         if line.strip().startswith("- name:")
     ]
+
+
+def _step_script(block: str, step_heading: str) -> str:
+    """Return one step's real `run: |` script body, dedented to shell text.
+
+    Located by `step_heading` within `block` (matching this file's existing
+    index-bounded step-scoping convention), then sliced past the `run: |`
+    marker. Terminates at the first line that is not blank and does not
+    carry this workflow's fixed 10-space step-script indentation -- the
+    same block-scalar boundary rule YAML itself uses -- rather than a
+    second heading string, which a step name can appear inside of
+    mid-line (e.g. as a trailing substring of the *next* step's own `-
+    name:` line) and silently truncate the script wrong. This is the
+    literal script GitHub Actions would execute for that step -- not a
+    hand-copied stand-in that could silently drift from it -- so tests
+    below can execute it for real against stubbed `gh`/data rather than
+    only asserting on its source text.
+    """
+    start = block.index(step_heading)
+    marker = "run: |\n"
+    marker_index = block.index(marker, start)
+    body = block[marker_index + len(marker) :]
+    lines: list[str] = []
+    for line in body.splitlines():
+        if line.strip() == "":
+            lines.append("")
+            continue
+        if not line.startswith(" " * 10):
+            break
+        lines.append(line[10:])
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines) + "\n"
+
+
+def _expected_push_checks_json(workflow: str) -> str:
+    """Return the raw `RELEASE_EXPECTED_PUSH_CHECKS` JSON literal's text."""
+    marker = "RELEASE_EXPECTED_PUSH_CHECKS: '"
+    start = workflow.index(marker) + len(marker)
+    end = workflow.index("'", start)
+    return workflow[start:end]
+
+
+_STUB_GH_CHECK_RUNS = """#!/usr/bin/env bash
+# Stub gh CLI: answers the checks-green gate's one gh call --
+# `gh api repos/.../commits/$SHA/check-runs?... --paginate --slurp` -- with
+# the canned response file named by GH_STUB_CHECKS_JSON, so the gate's real
+# jq filters run against deliberately-crafted scenarios instead of a live
+# GitHub API.
+set -euo pipefail
+if [ "$1" = "api" ]; then
+    for arg in "$@"; do
+        case "$arg" in
+            *check-runs*) cat "${GH_STUB_CHECKS_JSON}"; exit 0 ;;
+        esac
+    done
+fi
+echo "unhandled stub gh invocation: $*" >&2
+exit 98
+"""
+
+
+def _run_checks_gate_script(
+    tmp_path: Path, script: str, checks_json: str, expected_json: str, run_id: str = _SIM_RUN_ID
+) -> subprocess.CompletedProcess[str]:
+    """Execute one checks-green step's real script against stubbed gh/data.
+
+    Builds the same environment GitHub Actions would provide
+    (`GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_RUN_ID`,
+    `RELEASE_EXPECTED_PUSH_CHECKS`) plus a stub `gh` on `PATH`, then runs
+    the real, unmodified step script (from `_step_script`) under bash.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh_stub = bin_dir / "gh"
+    gh_stub.write_text(_STUB_GH_CHECK_RUNS, encoding="utf-8")
+    gh_stub.chmod(0o755)
+
+    checks_file = tmp_path / "checks.json"
+    checks_file.write_text(checks_json, encoding="utf-8")
+
+    script_path = tmp_path / "checks-gate.sh"
+    script_path.write_text(script, encoding="utf-8")
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["GITHUB_REPOSITORY"] = "ContextualWisdomLab/contextual-orchestrator"
+    env["GITHUB_SHA"] = _SIM_GITHUB_SHA
+    env["GITHUB_RUN_ID"] = run_id
+    env["RELEASE_EXPECTED_PUSH_CHECKS"] = expected_json
+    env["GH_STUB_CHECKS_JSON"] = str(checks_file)
+
+    return subprocess.run(
+        ["bash", str(script_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _check_run(name: str, *, status: str = "completed", conclusion: str | None = "success", run_id: str = _SIM_PRIOR_RUN_ID, job: int = 1) -> dict:
+    """Build one check-run entry for a stubbed `check-runs` response page."""
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "details_url": f"https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/{run_id}/jobs/{job}",
+    }
+
+
+def _check_runs_response(entries: list[dict]) -> str:
+    """Render entries as one `--paginate --slurp` page, matching the real API shape."""
+    return json.dumps([{"total_count": len(entries), "check_runs": entries}])
 
 
 def test_release_workflow_file_exists() -> None:
@@ -280,6 +409,131 @@ def test_gate_verifies_every_check_for_the_commit_is_complete_and_green() -> Non
     # Excludes this release run's own check-runs -- otherwise a
     # workflow_dispatch run would always find itself unfinished and deadlock.
     assert "GITHUB_RUN_ID" in checks_block
+
+
+def test_expected_push_checks_matches_this_repositorys_actual_push_triggered_jobs() -> None:
+    """`RELEASE_EXPECTED_PUSH_CHECKS` (Devin finding: "Missing checks pass
+    release gate") must track the real job `name:` values `ci.yml`,
+    `fuzz.yml`, and `security.yml` declare for their push-triggered jobs --
+    not a hand-copied list that can silently drift once one of those jobs
+    is renamed, added, or removed."""
+    workflow = _workflow_text()
+    expected = json.loads(_expected_push_checks_json(workflow))
+    assert len(expected) == len(set(expected)), "expected-checks list has a duplicate"
+
+    def _job_names(path: Path) -> list[str]:
+        return re.findall(r"^ {4}name: (.+)$", path.read_text(encoding="utf-8"), re.MULTILINE)
+
+    push_triggered_job_names = (
+        _job_names(REPOSITORY_ROOT / ".github/workflows/ci.yml")
+        + _job_names(REPOSITORY_ROOT / ".github/workflows/fuzz.yml")
+        + _job_names(REPOSITORY_ROOT / ".github/workflows/security.yml")
+    )
+    assert set(expected) == set(push_triggered_job_names)
+    assert len(expected) == len(push_triggered_job_names), "a push-triggered job name is duplicated"
+
+
+def test_checks_gate_requires_expected_checks_before_checking_they_are_green() -> None:
+    """Both checks-green steps must reference the shared expected-checks
+    env var and compute `missing_checks`/`missing_count` *before* the
+    pre-existing `not_ready`/`not_ready_count` gate -- registration must be
+    confirmed before conclusions are even inspected."""
+    workflow = _workflow_text()
+    for job_name, heading in (("verify", "Verify every check"), ("publish", "Re-verify every check")):
+        block = _job_block(workflow, job_name)
+        step_index = block.index(heading)
+        next_step_index = block.index(
+            "Set up Python" if job_name == "verify" else "Download the release notes and SBOM", step_index
+        )
+        checks_block = block[step_index:next_step_index]
+        assert "RELEASE_EXPECTED_PUSH_CHECKS" in checks_block
+        missing_index = checks_block.index("missing_checks=")
+        missing_count_index = checks_block.index('if [ "${missing_count}" != "0" ]')
+        not_ready_index = checks_block.index("not_ready=")
+        not_ready_count_index = checks_block.index('if [ "${not_ready_count}" != "0" ]')
+        assert missing_index < missing_count_index < not_ready_index < not_ready_count_index
+
+
+def test_checks_gate_zero_registered_checks_fails_closed(tmp_path: Path) -> None:
+    """Devin finding: dispatching moments after a merge, before GitHub has
+    registered ANY of this new tip's push-triggered check-runs, must not
+    vacuously pass -- an empty `check-runs` report is "not ready", not
+    "nothing to block on". Executes the real, unmodified step script."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    script = _step_script(verify_block, "Verify every check reported for this commit is complete and green")
+    expected_json = _expected_push_checks_json(workflow)
+
+    result = _run_checks_gate_script(tmp_path, script, _check_runs_response([]), expected_json)
+
+    assert result.returncode != 0, result.stderr
+    assert "6 expected push-triggered check(s)" in result.stderr
+    assert "have not registered yet" in result.stderr
+
+
+def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_path: Path) -> None:
+    """Some, but not all, of the expected push-triggered checks have
+    registered, and every one that has is green -- must still fail: the
+    still-missing ones could be pending, failing, or not yet dispatched at
+    all, and a partial report must never be read as sufficient."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    script = _step_script(verify_block, "Verify every check reported for this commit is complete and green")
+    expected_json = _expected_push_checks_json(workflow)
+
+    partial = _check_runs_response(
+        [_check_run("Full unit and contract suite", job=1), _check_run("CodeQL analysis", job=2)]
+    )
+    result = _run_checks_gate_script(tmp_path, script, partial, expected_json)
+
+    assert result.returncode != 0, result.stderr
+    assert "4 expected push-triggered check(s)" in result.stderr
+    assert "NIM benchmark coverage, docstrings, and package smoke" in result.stderr
+    assert "Hypothesis property tests" in result.stderr
+    assert "Atheris coverage-guided" in result.stderr
+    assert "Python supply chain" in result.stderr
+
+
+def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: Path) -> None:
+    """All six expected push-triggered checks are registered and green
+    (plus this release run's own still-in-flight check-runs, correctly
+    excluded via GITHUB_RUN_ID) -- the gate must pass."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    script = _step_script(verify_block, "Verify every check reported for this commit is complete and green")
+    expected_json = _expected_push_checks_json(workflow)
+    expected_names = json.loads(expected_json)
+
+    entries = [_check_run(name, job=i) for i, name in enumerate(expected_names, start=1)]
+    # This release run's own check-runs (verify's and publish's), which
+    # share GITHUB_RUN_ID and must be excluded rather than deadlocking the
+    # gate on itself.
+    entries.append(_check_run("Verify release preconditions (read-only)", status="in_progress", conclusion=None, run_id=_SIM_RUN_ID, job=7))
+    entries.append(_check_run("Publish canonical immutable release", status="queued", conclusion=None, run_id=_SIM_RUN_ID, job=8))
+
+    result = _run_checks_gate_script(tmp_path, script, _check_runs_response(entries), expected_json)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_checks_gate_all_expected_registered_but_one_still_pending_fails_closed(tmp_path: Path) -> None:
+    """All six expected checks have registered (so the new missing-checks
+    gate passes), but one is still in flight -- the pre-existing
+    not-ready/green gate must still catch it."""
+    workflow = _workflow_text()
+    verify_block = _job_block(workflow, "verify")
+    script = _step_script(verify_block, "Verify every check reported for this commit is complete and green")
+    expected_json = _expected_push_checks_json(workflow)
+    expected_names = json.loads(expected_json)
+
+    entries = [_check_run(name, job=i) for i, name in enumerate(expected_names, start=1)]
+    entries[-1] = _check_run(expected_names[-1], status="in_progress", conclusion=None, job=len(expected_names))
+
+    result = _run_checks_gate_script(tmp_path, script, _check_runs_response(entries), expected_json)
+
+    assert result.returncode != 0, result.stderr
+    assert "have not registered yet" not in result.stderr
+    assert "not both complete and green" in result.stderr
 
 
 def test_final_checks_green_recheck_happens_right_after_the_final_tip_check() -> None:

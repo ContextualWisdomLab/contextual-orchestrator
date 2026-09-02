@@ -171,14 +171,36 @@ Before any tag or Release is created, the release job:
    checks) is complete with an acceptable conclusion — guards against
    dispatching while a push-triggered workflow on the new `main` tip is
    still in flight or has failed (see the Non-goals note on this and "Known
-   limitations" below). Needs `checks: read`.
+   limitations" below). Needs `checks: read`. A dispatch fired moments
+   after a merge can race GitHub's own registration of those push-triggered
+   check-runs, so this report can legitimately come back empty or partial
+   before they exist as entries at all — filtering an empty/partial list for
+   "not complete+green" is vacuously empty too (a later Devin finding,
+   "Missing checks pass release gate"). The gate additionally requires every
+   one of `RELEASE_EXPECTED_PUSH_CHECKS` — this repository's own known
+   push-triggered job names from `ci.yml`, `fuzz.yml`, and `security.yml`,
+   kept in sync by `tests/test_release_workflow_contract.py` — to already be
+   a registered check-run for the commit, so a not-yet-registered state is
+   correctly "not ready", never "nothing to block on". This is still the
+   same no-ruleset, `checks: read`-only approach: a fixed, repository-owned
+   name list, not a call to the branch-ruleset API.
 3. Parses `pyproject.toml`'s `version = "..."` and fails closed unless it is
    byte-for-byte equal to the `version` input. A release never redefines what
    version a commit is; the version bump is a normal, already-reviewed PR
    that must land first.
 4. Fails closed if git tag `v${version}` already exists locally or on the
    remote — an existing tag is never moved, deleted, or overwritten
-   (immutability).
+   (immutability) — except a tag/Release resume at this exact commit, a safe
+   retry of a previously-interrupted run (see `docs/RELEASING.md`). Both the
+   tag-existence and Release-existence lookups distinguish a *confirmed*
+   absence (an HTTP 404 from the commits API; a "release not found" from
+   `gh release view`) from every other lookup failure — rate limit, auth,
+   network blip, a GitHub 5xx (a later Devin finding, "API failures block
+   release recovery"). Only a confirmed absence proceeds as a fresh
+   publish or resume; any other failure fails the step closed instead of
+   guessing "absent" and risking a wrong create attempt against unconfirmed
+   state — a later dispatch then retries and resolves cleanly once the
+   transient failure clears.
 5. Runs this repository's own full test suite fresh, on the exact commit
    about to be tagged (`uv run --locked --extra api --extra db --extra queue
    --group dev python -m pytest -q`, the same invocation `ci.yml`'s "Full

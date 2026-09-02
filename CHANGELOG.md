@@ -17,28 +17,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   push/schedule/merge), split into a read-only, credential-less `verify` job
   and a write-scoped `publish` job for least privilege. `verify` checks the
   dispatched commit is protected `main`'s untampered current tip and that
-  every check GitHub reports for that exact commit is complete with an
-  acceptable conclusion (excluding this release run's own checks), checks
-  the requested version against `pyproject.toml`'s `[project]` table (table-
-  boundary aware, so a same-named `version` key in an unrelated table can
-  never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
+  every one of this repository's own known push-triggered checks (Tests,
+  Fuzz, Security's jobs — `RELEASE_EXPECTED_PUSH_CHECKS`) has actually
+  registered as a check-run for that exact commit *and* every check GitHub
+  reports for it is complete with an acceptable conclusion (excluding this
+  release run's own checks) — a dispatch fired moments after a merge, before
+  GitHub has finished registering those push-triggered check-runs at all,
+  is correctly "not ready" rather than a vacuous pass on an empty report —
+  checks the requested version against `pyproject.toml`'s `[project]` table
+  (table-boundary aware, so a same-named `version` key in an unrelated table
+  can never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
   GitHub commits API (rejecting only one that points at a different commit;
   a tag at this commit is always a safe idempotent resume, whether or not
-  its Release already exists — see below), re-runs the full test suite
-  fresh, renders release notes from this file's matching `## [X.Y.Z]`
-  section via the tested `scripts/ci/release_notes.py`, and best-effort
-  looks up a CycloneDX SBOM (a missing SBOM or failed lookup warns, never
-  blocks). `publish` re-verifies `main`'s tip has not advanced and every
-  check is still green since `verify` started testing — immediately before
-  it creates anything — then creates the annotated `vX.Y.Z` tag (skipped on
-  a tag resume) and the GitHub Release (skipped on a Release resume, e.g. a
-  prior run whose asset upload failed after the Release itself was already
-  created), always attempting the best-effort SBOM asset attach afterward
-  either way. Gives downstream consumers
-  (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the Wardnet
-  consumer-owner handoff, all recorded on `contextual-orchestrator#971`) an
-  immutable pin target (`.../releases/tag/vX.Y.Z` — not the mutable
-  `.../releases/latest` alias) instead of a vendored source SHA. See
+  its Release already exists — see below; a failed tag or Release lookup is
+  read as "absent" only on a confirmed 404 / "release not found" — any other
+  lookup failure, e.g. a rate limit or transient network/5xx error, fails
+  the step closed instead of guessing, so a later dispatch retries and
+  resolves cleanly rather than compounding a wrong assumption), re-runs the
+  full test suite fresh, renders release notes from this file's matching
+  `## [X.Y.Z]` section via the tested `scripts/ci/release_notes.py`, and
+  best-effort looks up a CycloneDX SBOM (a missing SBOM or failed lookup
+  warns, never blocks). `publish` re-verifies `main`'s tip has not advanced
+  and every expected check is still registered and green since `verify`
+  started testing — immediately before it creates anything — then creates
+  the annotated `vX.Y.Z` tag (skipped on a tag resume) and the GitHub
+  Release (skipped on a Release resume, e.g. a prior run whose asset upload
+  failed after the Release itself was already created), always attempting
+  the best-effort SBOM asset attach afterward either way. Gives downstream
+  consumers (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the
+  Wardnet consumer-owner handoff, all recorded on
+  `contextual-orchestrator#971`) an immutable pin target
+  (`.../releases/tag/vX.Y.Z` — not the mutable `.../releases/latest` alias)
+  instead of a vendored source SHA. See
   `docs/planning/adrs/0129-canonical-immutable-release.md` and
   `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
   and dispatching the first `v0.2.0` release are deliberately separate
