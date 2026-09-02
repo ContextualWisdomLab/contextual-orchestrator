@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from typing import Any
 import urllib.request
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -38,6 +39,10 @@ MAX_RESULTS = 20
 DEFAULT_MAX_RESULTS = 10
 #: Hard ceiling on the search response body this module will read into memory.
 MAX_RESPONSE_BYTES = 1024 * 1024
+#: Bounds on the caller-supplied ``timeout`` (seconds), mirroring the pattern in
+#: :func:`contextual_orchestrator.orchestrator._validate_provider_probe_timeout`.
+MIN_TIMEOUT_SECONDS = 0.1
+MAX_TIMEOUT_SECONDS = 60.0
 
 #: KV credential name for the SearXNG (or SearXNG-API-compatible) instance's base URL.
 SEARXNG_URL_CREDENTIAL = "SEARXNG_URL"
@@ -80,7 +85,10 @@ def _searxng_origins() -> tuple[str, str]:
     is fed to :meth:`ModelClient._validate_provider` for the SSRF-safe host
     check (HTTPS is required unless the host is an explicit loopback address,
     mirroring the Wardnet policy-fetch boundary). ``request_base_url`` is the
-    real origin used to build the outgoing request URL.
+    real origin -- including any deployment path prefix (e.g. an instance
+    reverse-proxied under ``/searxng``) -- used to build the outgoing request
+    URL, so a subpath-deployed instance is queried at its own ``/search``
+    rather than at the host root.
     """
     configured = get_credential(SEARXNG_URL_CREDENTIAL)
     if not configured:
@@ -95,7 +103,7 @@ def _searxng_origins() -> tuple[str, str]:
         or parsed.fragment
     ):
         raise ValueError("SEARXNG_URL is invalid")
-    request_base_url = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    request_base_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     if parsed.scheme == "http":
         # Loopback-only local:// mapping, same boundary crawl_policy_document
         # uses for a plaintext Wardnet URL: ModelClient._validate_provider only
@@ -179,6 +187,15 @@ def web_search(
         raise ValueError("language must be a non-empty string")
     if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= MAX_RESULTS:
         raise ValueError(f"max_results must be an integer between 1 and {MAX_RESULTS}")
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or not MIN_TIMEOUT_SECONDS <= timeout <= MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            f"timeout must be a finite number between {MIN_TIMEOUT_SECONDS:g} and {MAX_TIMEOUT_SECONDS:g} seconds"
+        )
 
     agent_base_url, request_base_url = _searxng_origins()
     agent = ModelAgent("web_search_searxng", "web-search-searxng", base_url=agent_base_url, credential_key="")

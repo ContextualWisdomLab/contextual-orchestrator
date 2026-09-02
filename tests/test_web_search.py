@@ -15,6 +15,7 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.web_search import (
     MAX_RESPONSE_BYTES,
     MAX_RESULTS,
+    MAX_TIMEOUT_SECONDS,
     WebSearchResult,
     web_search,
 )
@@ -72,6 +73,26 @@ def test_rejects_non_string_language() -> None:
 def test_rejects_out_of_range_max_results(bad: object) -> None:
     with pytest.raises(ValueError, match="max_results"):
         web_search("q", max_results=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        True,
+        False,
+        0,
+        -1.0,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        MAX_TIMEOUT_SECONDS + 1,
+        "10",
+        None,
+    ],
+)
+def test_rejects_invalid_timeout(bad: object) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        web_search("q", timeout=bad)  # type: ignore[arg-type]
 
 
 def test_rejects_unsupported_engine() -> None:
@@ -233,6 +254,49 @@ def test_works_over_loopback_http() -> None:
 
     request = opened.call_args.args[0]
     assert request.full_url.startswith("http://127.0.0.1:8080/search?")
+
+
+def test_queries_configured_deployment_subpath() -> None:
+    """A SearXNG instance reverse-proxied under a path prefix must keep it.
+
+    Regression: ``_searxng_origins`` used to build ``request_base_url`` from
+    only the scheme and host, discarding ``SEARXNG_URL``'s path component.
+    ``https://host/searxng`` was therefore queried at ``https://host/search``
+    (the host root) instead of ``https://host/searxng/search``.
+    """
+    register_credential("SEARXNG_URL", "https://searxng.example/searxng")
+    with (
+        patch(
+            "contextual_orchestrator.web_search.ModelClient._open_provider",
+            return_value=_Response(_searxng_response([])),
+        ) as opened,
+        patch(
+            "contextual_orchestrator.web_search.ModelClient._resolve_addresses",
+            return_value=[(2, ("93.184.216.34", 443))],
+        ),
+    ):
+        assert web_search("q") == []
+
+    request = opened.call_args.args[0]
+    assert request.full_url.startswith("https://searxng.example/searxng/search?")
+
+
+def test_queries_configured_deployment_subpath_with_trailing_slash() -> None:
+    register_credential("SEARXNG_URL", "https://searxng.example/searxng/")
+    with (
+        patch(
+            "contextual_orchestrator.web_search.ModelClient._open_provider",
+            return_value=_Response(_searxng_response([])),
+        ) as opened,
+        patch(
+            "contextual_orchestrator.web_search.ModelClient._resolve_addresses",
+            return_value=[(2, ("93.184.216.34", 443))],
+        ),
+    ):
+        assert web_search("q") == []
+
+    request = opened.call_args.args[0]
+    assert request.full_url.startswith("https://searxng.example/searxng/search?")
 
 
 def test_web_search_result_as_dict_round_trip() -> None:
