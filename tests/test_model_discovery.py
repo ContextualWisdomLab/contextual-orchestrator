@@ -1450,6 +1450,77 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     assert discovered[0].is_free is False
 
 
+def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
+    """OpenCode Go mirrors Zen's join contract at its own distinct endpoint/catalog."""
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+    assert source.list_url == "https://opencode.ai/zen/go/v1/models"
+    assert source.chat_base_url == "https://opencode.ai/zen/go/v1"
+    assert source.credential_name == "OPENCODE_ZEN_API_KEY"
+    assert source.bootstrap_required is False
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            assert request.get_header("Authorization") is None
+            return _Response(
+                {
+                    "opencode-go": {
+                        "models": {
+                            "kimi-k3": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "minimax-m3": {
+                                "cost": {"input": 2, "output": 12},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                        }
+                    }
+                }
+            )
+        return _Response({"data": [{"id": "kimi-k3"}, {"id": "minimax-m3"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].provider_name == "opencode_go"
+    assert discovered[0].is_free is True
+    assert discovered[1].is_free is False
+    assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
+    assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
+
+
+def test_opencode_go_metadata_failure_keeps_availability_but_not_free() -> None:
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "kimi-k3"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
+def test_opencode_go_and_zen_share_one_credential_but_query_distinct_catalogs() -> None:
+    """Same credential (owner-confirmed), distinct endpoints and Models.dev provider ids."""
+    sources = {item.provider_name: item for item in PROVIDER_MODEL_SOURCES}
+
+    assert sources["opencode_go"].credential_name == sources["opencode_zen"].credential_name
+    assert sources["opencode_go"].list_url != sources["opencode_zen"].list_url
+    assert sources["opencode_go"].models_dev_provider_id == "opencode-go"
+    assert sources["opencode_zen"].models_dev_provider_id == "opencode"
+
+
 def test_non_text_models_without_unit_price_evidence_are_not_classified_free() -> None:
     """A zero token price alone cannot prove a non-text model is free."""
     source = ProviderModelSource(
@@ -1610,7 +1681,7 @@ def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None
 
 
 def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() -> None:
-    """opencode_zen + nvidia_nim + nvidia_nim_sub share one Models.dev fetch."""
+    """opencode_zen + opencode_go + nvidia_nim + nvidia_nim_sub share one Models.dev fetch."""
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
     register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
@@ -1622,6 +1693,14 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
             return _Response(
                 {
                     "opencode": {"models": {}},
+                    "opencode-go": {
+                        "models": {
+                            "kimi-k3": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    },
                     "nvidia": {
                         "models": {
                             "meta/llama-3.1-8b-instruct": {
@@ -1632,12 +1711,14 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
                     },
                 }
             )
+        if request.full_url == "https://opencode.ai/zen/go/v1/models":
+            return _Response({"data": [{"id": "kimi-k3"}]})
         return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
 
     sources = tuple(
         item
         for item in PROVIDER_MODEL_SOURCES
-        if item.provider_name in {"opencode_zen", "nvidia_nim", "nvidia_nim_sub"}
+        if item.provider_name in {"opencode_zen", "opencode_go", "nvidia_nim", "nvidia_nim_sub"}
     )
     with patch(
         "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
@@ -1653,6 +1734,11 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
         for model in discovered
         if model.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
     ] == [("nvidia_nim", True), ("nvidia_nim_sub", True)]
+    assert [
+        (model.provider_name, model.is_free)
+        for model in discovered
+        if model.provider_name == "opencode_go"
+    ] == [("opencode_go", True)]
 
 
 def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false() -> None:
@@ -1778,6 +1864,8 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
     assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
+    assert sources["opencode_go"].list_url == "https://opencode.ai/zen/go/v1/models"
+    assert sources["opencode_go"].bootstrap_required is False
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 

@@ -416,6 +416,26 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         models_dev_provider_id="opencode",
     ),
     ProviderModelSource(
+        # A separate paid subscription on top of Zen, at a distinct endpoint
+        # (/zen/go/v1/... vs Zen's own /zen/v1/...) with its own models.dev
+        # catalog ("opencode-go", 34 models, verified live -- distinct from
+        # "opencode"/Zen's 97). The credential is *not* separate: subscribing
+        # to Go unlocks these endpoints for the same OpenCode Zen account key
+        # (owner-confirmed 2026-09-03; see docs/product-technical-gap-baseline.md's
+        # "OpenCode Go endpoint is not registered" entry for the corrected
+        # investigation trail). `bootstrap_required=False` matches Zen's own
+        # optional-integration treatment -- not every OpenCode Zen account has
+        # a Go subscription, so a missing/failing Go catalog must not block
+        # startup any more than a missing Zen one does.
+        provider_name="opencode_go",
+        credential_name="OPENCODE_ZEN_API_KEY",
+        list_url="https://opencode.ai/zen/go/v1/models",
+        chat_base_url="https://opencode.ai/zen/go/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
+        models_dev_provider_id="opencode-go",
+    ),
+    ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
         list_url="https://integrate.api.nvidia.com/v1/models",
@@ -586,7 +606,7 @@ def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
     """Fetch the shared Models.dev catalog with a small bounded retry.
 
     Every ``models_dev_provider_id``-joined source (``opencode_zen``,
-    ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
+    ``opencode_go``, ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
     unauthenticated, best-effort, third-party fetch for its free-cost
     evidence; none of those providers report their own pricing, so a lone
     transient failure here (a timeout, a reset connection, or the
@@ -1663,8 +1683,8 @@ def discover_all_models(
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
 
-    Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
-    ``openai``) each want the same Models.dev catalog. When any registered
+    Up to five sources (``opencode_zen``, ``opencode_go``, ``nvidia_nim``,
+    ``nvidia_nim_sub``, ``openai``) each want the same Models.dev catalog. When any registered
     source declares ``models_dev_provider_id``, fetch it here exactly once
     (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
     hand every source the identical parsed payload, instead of each source
