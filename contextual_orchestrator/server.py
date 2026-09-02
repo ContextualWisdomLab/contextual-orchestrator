@@ -7275,48 +7275,54 @@ def build_server(
                                     },
                                 )
                             return
-                    if include_trace:
-                        self._authorize_trace_access()
-                    # stream + stream_options already coerced/validated before passthrough.
-                    attribution = _validate_attribution(body.get("attribution"))
-                    routing = request_routing
-                    # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the caller selected on the chat Completions path.
-                    # The pool was validated before the structured/passthrough
-                    # branch so every chat shape shares the same client-error contract.
-                    attribution = dict(attribution or {})
-                    # OpenAI chat ``user`` → account when unset.
-                    # Same fail-closed rules as Completions: present key must be a
-                    # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
-                    end_user_id = _validate_completions_user(body)
-                    if end_user_id is not None and not attribution.get("account"):
-                        attribution["account"] = end_user_id
-                    if model_name and not attribution.get("model_name"):
-                        attribution["model_name"] = model_name
-                    if not attribution.get("service"):
-                        attribution["service"] = "chat_completions_api"
-                    # sampling/controls already validated before passthrough branch.
-                    if "metadata" in body:
-                        _validate_openai_metadata(body)
-                    with model_client.request_settings(
-                        max_output_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        presence_penalty=presence_penalty,
-                        frequency_penalty=frequency_penalty,
-                    ):
-                        result = self._run(lambda: coordinator.complete(
-                            messages,
-                            mode=mode,
-                            attribution=attribution,
-                            hints=routing,
-                            model_name=model_name,
-                            workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
-                            cache_partition=cache_partition,
-                            owner_id=security.principal_id(self.headers),
-                            zdr_only=zdr_only,
-                        ))
+                        if include_trace:
+                            self._authorize_trace_access()
+                        # stream + stream_options already coerced/validated before passthrough.
+                        attribution = _validate_attribution(body.get("attribution"))
+                        routing = request_routing
+                        # Require model — silent default to contextual-orchestrator hid
+                        # which deployment the caller selected on the chat Completions path.
+                        # The pool was validated before the structured/passthrough
+                        # branch so every chat shape shares the same client-error contract.
+                        attribution = dict(attribution or {})
+                        # OpenAI chat ``user`` → account when unset.
+                        # Same fail-closed rules as Completions: present key must be a
+                        # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
+                        end_user_id = _validate_completions_user(body)
+                        if end_user_id is not None and not attribution.get("account"):
+                            attribution["account"] = end_user_id
+                        if model_name and not attribution.get("model_name"):
+                            attribution["model_name"] = model_name
+                        if not attribution.get("service"):
+                            attribution["service"] = "chat_completions_api"
+                        # sampling/controls already validated before passthrough branch.
+                        if "metadata" in body:
+                            _validate_openai_metadata(body)
+                        with model_client.request_settings(
+                            max_output_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            presence_penalty=presence_penalty,
+                            frequency_penalty=frequency_penalty,
+                        ):
+                            # candidate_scope_open=True: this whole branch (including
+                            # the would_route triage call above) runs inside the one
+                            # candidate_routing_policy scope opened at the top of this
+                            # block, so the triage attempt is not lost when it decides
+                            # to conduct instead of route (#983).
+                            result = self._run(lambda: coordinator.complete(
+                                messages,
+                                mode=mode,
+                                attribution=attribution,
+                                hints=routing,
+                                model_name=model_name,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                                owner_id=security.principal_id(self.headers),
+                                zdr_only=zdr_only,
+                                candidate_scope_open=True,
+                            ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(

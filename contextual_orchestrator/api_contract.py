@@ -60,6 +60,42 @@ OPENAPI_SPEC = {
                 },
                 "additionalProperties": False,
             },
+            "CandidateRoutingEvidence": {
+                "type": "object",
+                "description": (
+                    "Per-response disclosure of how active candidate controls "
+                    "were applied. Present only when the request supplied "
+                    "routing.candidate_id and/or routing.exclude_candidate_ids."
+                ),
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Echoes the request's routing.candidate_id, when pinned.",
+                    },
+                    "exclude_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The request's routing.exclude_candidate_ids, sorted.",
+                    },
+                    "attempted_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Every private agent ID a provider call was attempted "
+                            "against while serving this request, in first-attempt order."
+                        ),
+                    },
+                    "served_candidate_id": {
+                        "type": "string",
+                        "description": (
+                            "The private agent ID whose output was actually returned "
+                            "to the caller, when determinable."
+                        ),
+                    },
+                },
+                "required": ["exclude_candidate_ids", "attempted_candidate_ids"],
+                "additionalProperties": False,
+            },
             "AuthoritativeUsage": {
                 "type": ["object", "null"],
                 "required": ["prompt_tokens", "completion_tokens"],
@@ -112,7 +148,12 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
-                    "orchestration": {"type": "object"},
+                    "orchestration": {
+                        "type": "object",
+                        "properties": {
+                            "routing": {"$ref": "#/components/schemas/CandidateRoutingEvidence"},
+                        },
+                    },
                 },
             },
             "ModelGroupWrite": {

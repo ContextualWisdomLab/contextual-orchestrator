@@ -18,6 +18,7 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 from contextvars import ContextVar
@@ -543,6 +544,7 @@ class CostRoutingCoordinator:
         provider_request: Optional[Dict[str, Any]] = None,
         provider_endpoint: str = "chat/completions",
         zdr_only: bool = False,
+        candidate_scope_open: bool = False,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -554,6 +556,16 @@ class CostRoutingCoordinator:
         Each trace step backed by valid provider token counts is ``measured``.
         A missing count is recorded with an ``unavailable`` status and numeric
         storage sentinels; API usage and cost remain null.
+
+        ``candidate_scope_open=True`` tells the ``messages``-based sync path
+        (``provider_request is None``) that the caller already has a
+        ``candidate_routing_policy`` scope open -- e.g. because it ran
+        :meth:`TaskOrchestrator.would_route`'s triage call under that scope
+        before deciding to conduct rather than route -- so this call must not
+        open a second, independent scope that would discard the triage
+        attempt from ``attempted_candidate_ids`` (#983). Ignored on the
+        ``provider_request`` path, which always scopes itself around its own
+        ``proxy_completion`` call.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
@@ -754,13 +766,23 @@ class CostRoutingCoordinator:
         }
         race_token = self._race_usage_context.set(race_context)
         try:
-            with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
-                routing_controls,
-                model_name=model_name,
-                required_roles=self.orchestrator.candidate_pin_required_roles(
-                    mode, model_name
-                ),
-            ):
+            # candidate_scope_open=True means the caller already has a
+            # candidate_routing_policy scope open (see the docstring above);
+            # entering a second, independent one here would reset the
+            # attempted-candidate ContextVar and discard whatever the caller
+            # already recorded under it, so reuse a no-op context instead.
+            candidate_scope = (
+                contextlib.nullcontext()
+                if candidate_scope_open
+                else self.orchestrator.candidate_routing_policy(
+                    routing_controls,
+                    model_name=model_name,
+                    required_roles=self.orchestrator.candidate_pin_required_roles(
+                        mode, model_name
+                    ),
+                )
+            )
+            with self.orchestrator.request_policy(zdr_only), candidate_scope:
                 result = self.orchestrator.run(messages, **run_kwargs)
                 routing_evidence = self.orchestrator._candidate_routing_evidence(result)
                 if routing_evidence is not None:

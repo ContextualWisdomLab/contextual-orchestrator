@@ -943,6 +943,82 @@ def test_auto_stream_shares_candidate_scope_with_triage_when_triage_and_worker_d
     }
 
 
+class _StreamedConductTriageClient(ModelClient):
+    """Triage reports "needs conduct"; every subsequent conduct-step call
+    returns text distinguishable by agent id."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def chat(self, agent, messages, temperature=None, top_p=None, effort_profile=None):
+        self.calls.append(agent.id)
+        if messages and "workflow_required" in str(messages[0].get("content")):
+            return '{"workflow_required": true}'
+        return f"{agent.id} output"
+
+
+def test_auto_stream_shares_candidate_scope_with_triage_when_conducting() -> None:
+    """When a streamed auto-mode request's triage decides it needs the
+    conduct workflow (not the direct route), server.py falls through past
+    the ``with orchestrator.candidate_routing_policy(...)`` block that ran
+    the triage call and into ``CostRoutingCoordinator.complete()`` -- which,
+    absent ``candidate_scope_open=True``, would open its own independent
+    scope and silently discard the triage agent's already-recorded attempt.
+    This mirrors test_auto_stream_shares_candidate_scope_with_triage_when_triage_and_worker_differ
+    above, but for the conduct branch instead of the route branch (#983,
+    "Conducted streams omit triage attempts")."""
+    client = _StreamedConductTriageClient()
+    orchestrator = TaskOrchestrator(
+        [
+            # Lower priority than every conduct-role agent below, so the
+            # free-only triage ranking picks it (it's the only free_only
+            # candidate) while the general (non-free) ranking used for
+            # every conduct role always prefers the higher-priority agents
+            # instead -- otherwise triage_agent could win a conduct role
+            # too and appear in attempted_candidate_ids regardless of
+            # whether the scope-sharing fix under test is applied.
+            ModelAgent("triage_agent", "model-triage", tags=("cost:free",), priority=10),
+            ModelAgent("thinker_agent", "model-thinker", priority=20),
+            ModelAgent("worker_agent", "model-worker", priority=20),
+            ModelAgent("verifier_agent", "model-verifier", priority=20),
+            ModelAgent("synth_agent", "model-synth", priority=20),
+            ModelAgent("excluded_agent", "model-excluded", priority=20),
+        ],
+        client=client,
+    )
+    token = "conduct-triage-scope-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, events = _post_sse(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "please conduct this"}],
+                "stream": True,
+                "routing": {"exclude_candidate_ids": ["excluded_agent"]},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "triage_agent" in client.calls
+    terminal = next(
+        event
+        for event in events
+        if event.get("choices", [{}])[0].get("finish_reason") == "stop"
+    )
+    routing_evidence = terminal["orchestration"]["routing"]
+    assert "triage_agent" in routing_evidence["attempted_candidate_ids"]
+
+
 def test_core_rejects_file_affinity_that_conflicts_with_pin() -> None:
     orchestrator = TaskOrchestrator(
         [
