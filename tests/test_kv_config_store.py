@@ -8,11 +8,13 @@ from typing import Any
 
 import pytest
 
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.kv_config import (
     _LEGACY_CATEGORY_MIGRATIONS,
     InMemoryConfigStore,
     PostgresConfigStoreAdapter,
     get_config_store,
+    migrate_legacy_categories,
 )
 
 
@@ -231,3 +233,65 @@ def test_renamed_category_migration_also_backfills_the_in_memory_seed_path() -> 
 
     assert isinstance(store, InMemoryConfigStore)
     assert store.get(new_category, key) == "seeded_legacy_value"
+
+
+def test_cost_routing_coordinator_migrates_a_directly_injected_store(monkeypatch) -> None:
+    """A caller-constructed store bypassing get_config_store() is still migrated.
+
+    Devin-review finding on #1017: only the ``get_config_store()`` factory ran
+    the legacy-category backfill, so a caller building its own store (e.g. a
+    real Postgres-backed one already carrying persisted ``routing.<key>`` rows)
+    and injecting it straight into ``CostRoutingCoordinator`` never got it
+    migrated -- ``RoutingPolicy`` and ``build_job_registry`` would then silently
+    fall back to their hardcoded defaults for that legacy data. Uses the
+    in-memory store directly (not the factory) to prove the coordinator itself,
+    not the factory, is what now performs the migration.
+    """
+    legacy_category, (new_category, keys) = next(iter(_LEGACY_CATEGORY_MIGRATIONS.items()))
+    injected_store = InMemoryConfigStore(seed={legacy_category: {"batch_enabled": False}})
+    assert injected_store.get(new_category, "batch_enabled", "unset") == "unset"
+
+    orchestrator = TaskOrchestrator([ModelAgent("mock_worker", "mock-model", base_url="mock://a")])
+    coordinator = CostRoutingCoordinator(orchestrator, injected_store)
+
+    assert coordinator.config.get(new_category, "batch_enabled") is False
+    assert coordinator.policy._batch_enabled() is False
+
+
+class _AlwaysFailingConfigBackend:
+    """A pg_llm_batch-compatible double whose reads/writes always raise."""
+
+    def __init__(self, postgres_dsn: str) -> None:
+        self.postgres_dsn = postgres_dsn
+
+    def get(self, category: str, key: str, default: Any = None) -> Any:
+        """Simulate a live, connected store that fails on a read."""
+        raise RuntimeError("simulated transient migration read failure")
+
+    def set(self, category: str, key: str, value: Any) -> None:  # pragma: no cover
+        """Never reached in this test; present only to satisfy the protocol."""
+        raise RuntimeError("simulated transient migration write failure")
+
+
+def test_migration_failure_on_a_connected_store_is_not_swallowed_into_ephemeral_fallback(
+    monkeypatch,
+) -> None:
+    """A migration-specific failure must not silently discard real Postgres config.
+
+    Devin-review finding on #1017: the migration call originally sat inside the
+    same broad ``try/except Exception`` guarding "pg_llm_batch not installed" /
+    "Postgres unreachable at construction time." A transient failure purely in
+    the migration's own reads/writes -- on an otherwise successfully connected
+    adapter -- fell into that same except and silently returned a fresh, empty
+    ``InMemoryConfigStore``, discarding the caller's visibility into all of
+    their real, already-connected durable config for that process, not just
+    the migrated keys. The migration call now runs after that except block, so
+    this failure propagates instead of being absorbed.
+    """
+    module = types.ModuleType("pg_llm_batch")
+    module.PostgresConfigStore = _AlwaysFailingConfigBackend
+    module.SecretStore = _SecretBackend
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", module)
+
+    with pytest.raises(RuntimeError, match="simulated transient migration read failure"):
+        get_config_store("postgresql://example/config")

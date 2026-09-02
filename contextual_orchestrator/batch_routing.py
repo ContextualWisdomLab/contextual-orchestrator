@@ -84,7 +84,7 @@ class RoutingDecision:
 class RoutingPolicy:
     """Decides sync vs batch from hints + KV-configured thresholds.
 
-    Config (category ``routing``):
+    Config (category ``routing_config``):
 
     * ``batch_enabled`` (bool, default ``True``) — master switch. When off,
       everything runs sync.

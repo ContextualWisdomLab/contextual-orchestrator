@@ -898,6 +898,49 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   See `tests/test_kv_config_store.py`'s four new tests (backfill-from-legacy,
   new-value-precedence, idempotent-across-reconnects, in-memory-seed-path) for
   the RED-before-GREEN evidence.
+  **Second review round on #1017 found three further defects, all fixed:**
+  (1) the migration call originally sat inside the same broad
+  `try/except Exception` that falls back to an ephemeral `InMemoryConfigStore`
+  when `pg_llm_batch` is unavailable or Postgres is unreachable at
+  construction -- a transient failure purely in the migration's own reads on
+  an otherwise successfully connected store fell into that same except and
+  silently discarded visibility into *all* of the caller's real durable
+  config, not just the migrated keys. The migration call (renamed public,
+  `migrate_legacy_categories`) now runs after that except block so such a
+  failure propagates instead. (2) only the `get_config_store()` factory ran
+  the migration, so a caller injecting an already-constructed `ConfigStore`
+  directly into `CostRoutingCoordinator` (e.g. a real Postgres-backed store
+  already carrying legacy `routing.*` rows) never got it migrated;
+  `CostRoutingCoordinator.__init__` now also calls
+  `migrate_legacy_categories(self.config)` right after settling
+  `self.config`, covering `RoutingPolicy` and `build_job_registry` (both
+  built from that same instance) for the injected-store path too. (3) the
+  `RoutingPolicy` docstring still advertised the pre-rename `routing`
+  category. Five more tests added: injected-store migration, migration-
+  failure propagation (verified genuinely RED before the fix, GREEN after),
+  and the persistence/validation fixes described next.
+- `ModelAgent.image_generation_endpoint` (added above in this same PR) was
+  never wired into `_AgentPoolStore`, the durable `--state-db`/`agents_db`
+  SQLite persistence used across process restarts: the field was absent from
+  `_AGENT_COLUMNS`, the `agent_pool` schema, its `INSERT`/`UPDATE`
+  statements, and the restart-time `SELECT` -- an operator setting it via
+  `patch_agent` would see it silently vanish on the very next restart, and
+  `patch_agent`'s own field allowlist did not accept the key at all, so there
+  was no way to set it through the admin API in the first place. Fixed: the
+  column (nullable `TEXT`, non-empty-or-null `CHECK`) is now created for
+  fresh installs and added via the same guarded `ALTER TABLE` migration
+  pattern already used for `reasoning_effort_supported`/`max_output_tokens`/
+  `context_window`/`stream_usage_supported`; `_insert_agent`/`save`/`load_all`
+  all round-trip it; `patch_agent` accepts and clears it; the admin
+  `_agent_to_admin_payload` view surfaces it; and the `/api/v1/agents/*`
+  OpenAPI patch schema in `api_contract.py` documents it. Separately,
+  `ModelAgent.__post_init__` now rejects a non-string or empty
+  `image_generation_endpoint` at construction time (matching the existing
+  `auth_scheme` validation pattern) instead of letting a malformed value from
+  JSON survive construction and fail only on the first image request that
+  reaches it. New tests in `tests/test_agent_pool_db.py`: a full patch ->
+  restart -> clear -> restart round trip, and a rejected-blank-value/
+  no-mutation test.
 - `tests/test_psychometric_routing.py` no longer fails collection for the
   entire test suite in an environment without `numpy`/`fast_mlsirm`
   installed. Only the one test that exercises the real `fast_mlsirm`-backed

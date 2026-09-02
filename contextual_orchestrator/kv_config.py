@@ -53,7 +53,7 @@ _LEGACY_CATEGORY_MIGRATIONS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 }
 
 
-def _migrate_legacy_categories(store: "ConfigStore") -> None:
+def migrate_legacy_categories(store: "ConfigStore") -> None:
     """Backfill renamed KV categories so already-persisted values survive.
 
     Idempotent and additive only: a value already present under the new
@@ -63,6 +63,14 @@ def _migrate_legacy_categories(store: "ConfigStore") -> None:
     Only ``get``/``set`` are used, matching the minimal ``ConfigStore``
     protocol every backend (in-memory, the Postgres adapter, and test
     doubles) implements.
+
+    Public (not the factory's private implementation detail) because a
+    ``ConfigStore`` reaches its real consumers (``RoutingPolicy``,
+    ``CostRoutingCoordinator``, ``build_job_registry``) two ways: built by
+    :func:`get_config_store`, or injected directly by a caller that
+    constructed its own store. Only the factory path ran this before; an
+    injected store carrying legacy ``routing.*`` rows never got migrated.
+    Call this at every real consumer's construction boundary, not only here.
     """
     for legacy_category, (new_category, keys) in _LEGACY_CATEGORY_MIGRATIONS.items():
         for key in keys:
@@ -185,7 +193,7 @@ def get_config_store(
     """
     if not postgres_dsn:
         store = InMemoryConfigStore(seed=seed)
-        _migrate_legacy_categories(store)
+        migrate_legacy_categories(store)
         return store
     try:  # pragma: no cover - exercised only with pg_llm_batch + Postgres present
         from pg_llm_batch import PostgresConfigStore, SecretStore  # type: ignore
@@ -197,9 +205,14 @@ def get_config_store(
             for category, entries in seed.items():
                 for key, value in entries.items():
                     adapter.set(category, key, value)
-        _migrate_legacy_categories(adapter)
-        return adapter
     except Exception:  # pragma: no cover - fall back when deps/DB unavailable
         store = InMemoryConfigStore(seed=seed)
-        _migrate_legacy_categories(store)
+        migrate_legacy_categories(store)
         return store
+    # Deliberately outside the except above: once the adapter is connected
+    # and seeded, a migration failure is a real defect in a live backing
+    # store, not a "pg_llm_batch/DB unavailable" condition -- letting it
+    # propagate keeps a transient migration hiccup from silently discarding
+    # visibility into all of that store's durable Postgres-backed config.
+    migrate_legacy_categories(adapter)
+    return adapter

@@ -155,6 +155,68 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
         assert restored._agent(agent.id).stream_usage_supported is True
 
 
+def test_image_generation_endpoint_override_survives_restart() -> None:
+    """A declared image-endpoint override, set via admin patch, is not lost on reload.
+
+    Devin-review finding on ContextualWisdomLab/contextual-orchestrator#1017:
+    ``image_generation_endpoint`` was added to ``ModelAgent`` and ``patch_agent``'s
+    in-memory replace, but never reached the persisted ``agent_pool`` schema, its
+    INSERT/UPDATE statements, or the restart-time SELECT -- so a durable
+    (``agents_db``-backed) deployment would silently drop the override on the
+    very first restart, exactly the failure mode this class of test already
+    guards for every other patchable field.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent("persisted_agent", "model-x")
+        first = TaskOrchestrator([agent], agents_db=db)
+
+        updated = first.patch_agent(
+            "default", "persisted_agent", {"image_generation_endpoint": "images"}
+        )
+        assert updated["image_generation_endpoint"] == "images"
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT image_generation_endpoint FROM agent_pool WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone() == ("images",)
+
+        restored = TaskOrchestrator([agent], agents_db=db)
+        assert restored._agent(agent.id).image_generation_endpoint == "images"
+
+        cleared = restored.patch_agent(
+            "default", "persisted_agent", {"image_generation_endpoint": None}
+        )
+        assert cleared["image_generation_endpoint"] is None
+        reloaded_again = TaskOrchestrator([agent], agents_db=db)
+        assert reloaded_again._agent(agent.id).image_generation_endpoint is None
+
+
+def test_add_agent_rejects_blank_image_generation_endpoint_without_mutation() -> None:
+    """An empty-string override is rejected upfront, not accepted then failing late.
+
+    Devin-review finding: a non-string or empty ``image_generation_endpoint``
+    loaded from JSON previously survived ``ModelAgent`` construction and would
+    only fail the first time an image request actually tried to use it.
+    ``__post_init__`` now validates it the same way ``auth_scheme`` is validated.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=db)
+        with pytest.raises(TypeError, match="image_generation_endpoint must be"):
+            orchestrator.add_agent(
+                "default",
+                {
+                    "id": "bad_endpoint_agent",
+                    "model": "model-x",
+                    "base_url": "https://api.openai.com/v1",
+                    "credential_key": "OPENAI_API_KEY",
+                    "image_generation_endpoint": "",
+                },
+            )
+        assert "bad_endpoint_agent" not in {a.id for a in orchestrator.agents}
+
+
 def test_agent_pool_persists_limit_metadata_across_restart() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")

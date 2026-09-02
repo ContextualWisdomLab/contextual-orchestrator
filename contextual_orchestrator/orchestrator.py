@@ -633,6 +633,10 @@ class ModelAgent:
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
+        if self.image_generation_endpoint is not None and (
+            type(self.image_generation_endpoint) is not str or not self.image_generation_endpoint
+        ):
+            raise TypeError("image_generation_endpoint must be a non-empty string or null")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -3124,6 +3128,7 @@ class _AgentPoolStore:
             "context_window",
             "reasoning_effort_supported",
             "stream_usage_supported",
+            "image_generation_endpoint",
         }
     )
 
@@ -3163,7 +3168,10 @@ class _AgentPoolStore:
                 context_window INTEGER,
                 reasoning_effort_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
+                image_generation_endpoint TEXT,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
+                CONSTRAINT agent_pool_image_generation_endpoint_check
+                    CHECK (image_generation_endpoint IS NULL OR length(image_generation_endpoint) > 0),
                 CONSTRAINT agent_pool_max_output_tokens_check
                     CHECK (
                         max_output_tokens IS NULL
@@ -3222,8 +3230,9 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported,
+                image_generation_endpoint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -3240,6 +3249,7 @@ class _AgentPoolStore:
                 config["context_window"],
                 config["reasoning_effort_supported"],
                 int(config["stream_usage_supported"]),
+                config["image_generation_endpoint"],
             ),
         )
         conn.executemany(
@@ -3311,6 +3321,12 @@ class _AgentPoolStore:
                 "CHECK (stream_usage_supported IN (0, 1))"
             )
             columns.add("stream_usage_supported")
+        if "image_generation_endpoint" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN image_generation_endpoint TEXT "
+                "CHECK (image_generation_endpoint IS NULL OR length(image_generation_endpoint) > 0)"
+            )
+            columns.add("image_generation_endpoint")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -3406,7 +3422,8 @@ class _AgentPoolStore:
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
                         max_output_tokens = ?, context_window = ?,
-                        reasoning_effort_supported = ?, stream_usage_supported = ?
+                        reasoning_effort_supported = ?, stream_usage_supported = ?,
+                        image_generation_endpoint = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -3423,6 +3440,7 @@ class _AgentPoolStore:
                         config["context_window"],
                         config["reasoning_effort_supported"],
                         int(config["stream_usage_supported"]),
+                        config["image_generation_endpoint"],
                         agent.id,
                     ),
                 )
@@ -3519,7 +3537,8 @@ class _AgentPoolStore:
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
                            max_output_tokens, context_window,
-                           reasoning_effort_supported, stream_usage_supported
+                           reasoning_effort_supported, stream_usage_supported,
+                           image_generation_endpoint
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -3585,6 +3604,7 @@ class _AgentPoolStore:
                 context_window=row[11],
                 reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
                 stream_usage_supported=bool(row[13]),
+                image_generation_endpoint=row[14],
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -5999,6 +6019,10 @@ class TaskOrchestrator:
             patched = replace(
                 patched, stream_usage_supported=patch["stream_usage_supported"]
             )
+        if "image_generation_endpoint" in patch:
+            patched = replace(
+                patched, image_generation_endpoint=patch["image_generation_endpoint"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -8381,6 +8405,7 @@ class TaskOrchestrator:
             "max_output_tokens": agent.max_output_tokens,
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
+            "image_generation_endpoint": agent.image_generation_endpoint,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
