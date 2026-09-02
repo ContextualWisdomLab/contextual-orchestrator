@@ -1,33 +1,39 @@
+---
+title: Contextual Orchestrator
+---
+
 # Contextual Orchestrator
 
-Contextual Orchestrator provides one model-like API for governed multi-model orchestration. Applications keep an OpenAI-compatible interface while operators gain explicit control over worker pools, routing policy, provider boundaries, verification evidence, traces, and operating cost.
-
-[Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/contextual-orchestrator) · [Repository](https://github.com/ContextualWisdomLab/contextual-orchestrator) · [Releases](https://github.com/ContextualWisdomLab/contextual-orchestrator/releases)
+Contextual Orchestrator is a model-like control plane that routes, delegates, verifies, and synthesizes work across governed OpenAI-compatible model workers behind one API.
 
 ## Start here
 
-- [README and local evaluation paths](../README.md)
-- [Provider credentials and model discovery](kv-credentials.md)
-- [Product planning](product_planning.md)
-- [Security policy](../SECURITY.md)
-- [Contributing](../CONTRIBUTING.md)
+For a local evaluation, run the package with the repository's mock agent registry:
 
-## Product responsibility
+```bash
+python -m contextual_orchestrator "Summarize why model orchestration helps long coding tasks." \
+  --agents examples/agents.mock.json
+```
 
-The repository owns orchestration, routing, governed model pools, provider/model discovery, compatible inference interfaces, verification/synthesis, and trace/audit evidence. It keeps those concerns behind one public control-plane model so individual applications do not need to rebuild their own multi-model governance layer.
+For the full local stack, follow the Docker Compose and credential-bootstrap path in the [README](https://github.com/ContextualWisdomLab/contextual-orchestrator#readme). Provider credentials stay in the governed credential registry rather than request-time environment lookup.
 
-It does not claim ownership of every adjacent ecosystem concern. Identity, sandboxing, document systems, psychometrics, and enterprise architecture remain separate products or authorities and integrate through explicit contracts.
+## Product boundary
 
-## How it works
+The repository owns orchestration policy, worker-pool management, OpenAI-compatible request handling, routing and conduct workflows, verification, operational evidence, and the operator-facing control plane. It deliberately keeps provider credentials, external identity authority, and downstream product decisions behind explicit integration boundaries.
 
-Simple requests can route to one approved worker. Harder requests can enter a short conduct workflow that delegates work, verifies intermediate or final results, and synthesizes a response. Operators can manage candidates and groups using health, availability, cost evidence, priority, and exclusion metadata without treating transient discovery data as permanent truth.
+The public runtime exposes one model-like orchestration candidate while retaining the worker pool and orchestration machinery behind it. Local mock workers are available for evaluation; production-facing use requires the repository's documented authentication, credential, network, and persistence controls.
 
-Remote provider credentials are resolved through the product's governed credential path and missing credentials fail closed. Non-mock remote workers use approved HTTPS boundaries; local evaluation paths are explicitly separated from remote-provider behavior.
+## Architecture and operations
 
-## Evaluation
+- [Repository README](https://github.com/ContextualWisdomLab/contextual-orchestrator#readme) — installation, quick starts, security posture, API surface, and operational guidance.
+- [Product planning](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/product_planning.md) — product thesis, personas, product bets, and deliberate non-goals.
+- [Credential guidance](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/kv-credentials.md) — credential registry and provider-discovery boundaries.
+- [Architecture decisions](https://github.com/ContextualWisdomLab/contextual-orchestrator/tree/main/docs/planning/adrs) — durable design decisions and safety constraints.
+- [Releases](https://github.com/ContextualWisdomLab/contextual-orchestrator/releases) — published release history when available.
+- [Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/contextual-orchestrator) — repository-grounded questions and code navigation.
 
-The repository supports a full local Compose path and a lighter mock-worker path. The README is the canonical onboarding surface and includes the current commands, security boundaries, model-pool behavior, and admin entry point.
+## Ecosystem role
 
-## Releases and evidence
+Contextual Orchestrator is the orchestration control-plane layer in the ContextualWisdomLab ecosystem. It composes model workers and shared ecosystem capabilities without taking ownership of the bounded contexts that belong to those upstream or downstream repositories.
 
-Published releases are the versioned delivery record. Architecture, operational, credential, security, and product-planning material remains versioned with the source so claims can be reviewed against implementation and release evidence.
+For contribution and implementation details, use the repository documentation and current pull-request governance rather than this public landing page.
