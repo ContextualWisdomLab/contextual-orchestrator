@@ -630,12 +630,13 @@ def bootstrap_provider_catalog_runtime(
             raise ProviderBootstrapError(
                 "provider bootstrap selected no persisted chat-compatible model"
             )
-        selected_ids = tuple(agent_id_for(model) for model in selected)
+        generated_selected_ids = tuple(agent_id_for(model) for model in selected)
         enabled_ids = (
             _synchronize_durable_agent_pool(agents_db, selected)
             if agents_db
             else ()
         )
+        selected_ids = enabled_ids if agents_db else generated_selected_ids
         durable_registered_credentials = tuple(
             name for name in registered if get_credential(name) is not None
         )
