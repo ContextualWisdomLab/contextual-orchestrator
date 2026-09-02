@@ -77,6 +77,33 @@ verified against current-head code rather than trusted as stated.
   independent-provider model, pool size 2) failed against the pre-fix
   algorithm with the pool collapsed onto the single cheaper provider
   (`{'openrouter'} == {'openai', 'openrouter'}`) and passes with the fix.
+- While landing the above, a concurrently-pushed, staged (not-yet-applied)
+  self-modifying repair workflow was discovered on the same branch --
+  `.github/workflows/source-fix-971-review-quality.yml` and
+  `scripts/ci/source_fix_971_review_quality.py`, added by a parallel
+  session targeting these same two findings. Its proposed fix was weaker
+  and, for the second finding, targeted the wrong function: it would have
+  (a) simply set the pre-existing `DISCOVERY_TIMEOUT_SECONDS` to a fixed
+  15.0s per-HTTP-call socket timeout -- not a separately bounded/
+  cancellable per-provider mechanism, so it would not have caught a hang
+  that ignores that parameter (verified: this branch's own new
+  `test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`
+  mocks exactly that and would still fail against a mere socket-timeout
+  fix); and (b) added provider-diversity logic to
+  `provider_bootstrap.py`'s `select_model_group_diverse_models` -- the
+  function this repo's own tests deliberately keep price-honesty-over-
+  diversity for -- without updating its existing
+  `test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free`
+  contract, which its own proposed algorithm would have broken. Since its
+  own "revalidate exact unchanged writer head" step (queued run
+  `33618086791` on `170103c0`) fails closed the moment the branch head
+  moves, the ordinary commits above were pushed immediately to win that
+  race safely, and the now-fully-superseded temp workflow/script were
+  then deleted per the branch's standing "no purpose-complete self-
+  modifying/source-fix workflows" rule (it could never successfully run
+  again against the new head regardless) -- restoring `interrogate` to
+  100% (the deleted script's undocumented `main()` had briefly dropped it
+  to 99.9% after the merge that brought the staged files in).
 
 ## 2026-09-02 PR #971: embedding recovery/deadline and legacy-id quarantine review
 
