@@ -26,8 +26,6 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
         "group_saved": "Group saved. Send requests with this group name to use measured routing.",
         "group_deleted": "Group deleted. Its provider models remain available.",
-        "audit_refresh_warning": "The change was saved, but the Audit view could not be refreshed. Reload to see the latest event.",
-        "model_groups_refresh_warning": "The change was saved, but the model group list could not be refreshed. Reload to see the latest groups.",
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
@@ -289,8 +287,6 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
         "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
-        "audit_refresh_warning": "변경 사항은 저장했지만 감사 화면을 새로 고치지 못했습니다. 최신 이벤트를 보려면 새로 고침하세요.",
-        "model_groups_refresh_warning": "변경 사항은 저장했지만 모델 그룹 목록을 새로 고치지 못했습니다. 최신 그룹을 보려면 새로 고침하세요.",
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
@@ -1190,43 +1186,16 @@ Summarize this research thread and verify claims.</textarea>
       renderModelGroups();
     }
 
-    function showModelGroupRefreshWarning(message) {
-      const current = els.modelGroupFeedback.textContent.trim();
-      els.modelGroupFeedback.textContent = [current, message].filter(Boolean).join(" ");
-      els.modelGroupFeedback.style.color = "var(--amber)";
-    }
-
     async function refreshAuditEvents() {
-      try {
-        const response = await apiFetch("/admin/state");
-        if (!response.ok) {
-          throw new Error(`Audit state request failed with HTTP ${response.status}`);
-        }
-        const payload = await response.json();
-        state.recent_audit_events = payload.recent_audit_events || [];
-        renderAudit();
-        return true;
-      } catch (error) {
-        console.warn("Could not refresh audit events after model-group mutation", error);
-        return false;
-      }
-    }
-
-    async function refreshModelGroupViews() {
-      let modelGroupsRefreshed = true;
-      try {
-        await refreshModelGroups();
-      } catch (error) {
-        modelGroupsRefreshed = false;
-        console.warn("Could not refresh model groups after mutation", error);
-      }
-      const auditRefreshed = await refreshAuditEvents();
-      if (!modelGroupsRefreshed) {
-        showModelGroupRefreshWarning(t("model_groups_refresh_warning"));
-      }
-      if (!auditRefreshed) {
-        showModelGroupRefreshWarning(t("audit_refresh_warning"));
-      }
+      // recent_audit_events is only exposed on /admin/state, not a scoped
+      // endpoint, so this re-fetches the full state but only applies the
+      // audit slice — avoids the heavier full load() (readiness/simulate
+      // calls) for a plain model-group save/delete.
+      const response = await apiFetch("/admin/state");
+      if (!response.ok) return;
+      const payload = await response.json();
+      state.recent_audit_events = payload.recent_audit_events || [];
+      renderAudit();
     }
 
     async function saveModelGroup(event) {
@@ -1243,25 +1212,572 @@ Summarize this research thread and verify claims.</textarea>
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
       els.modelGroupFeedback.style.color = "var(--green)";
-      await refreshModelGroupViews();
+      await refreshModelGroups();
+      await refreshAuditEvents();
     }
-    
-    async function deleteModelGroup(groupName) {
-      const response = await fetch(`/api/v1/model_groups/${encodeURIComponent(groupName)}`, {method: "DELETE"});
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message || "Could not delete model group");
-      els.modelGroupFeedback.textContent = t("group_deleted");
-      els.modelGroupFeedback.style.color = "var(--green)";
-      await refreshModelGroupViews();
+    function renderTrace(result) {
+      els.traceMode.textContent = result.mode;
+      const trace = result.trace || [];
+      els.steps.innerHTML = trace.map(step => `
+        <article class="step">
+          <strong>${escapeHtml(step.role)}</strong>
+          <small>${escapeHtml(step.agent_id)}</small>
+          <p>${escapeHtml(step.subtask || "Direct route")}</p>
+          <div class="access">${(step.access || []).map(id => `<span class="chip">Step ${escapeHtml(id)}</span>`).join("") || '<span class="chip">No prior access</span>'}</div>
+        </article>`).join("");
+      if (!trace.length) {
+        els.steps.innerHTML = `<div class="empty" data-i18n="no_trace">${t("no_trace")}</div>`;
+      }
+      renderAccess(trace);
+      renderTraceTab(activeTraceTab);
+      els.traceJson.textContent = JSON.stringify(result, null, 2);
     }
-
+    function renderAccess(trace) {
+      const rows = trace.length ? trace.map(step => `
+        <div class="access-row">
+          <strong>${t("step_header")} ${escapeHtml(step.id)}<br><small>${escapeHtml(step.role)}</small></strong>
+          <div><b>${t("visible_context")}</b><br>${(step.access || []).map(id => `<span class="chip">Step ${escapeHtml(id)}</span>`).join("") || '<span class="chip">Original prompt only</span>'}</div>
+        </div>`).join("") : `<div class="empty">${t("no_trace")}</div>`;
+      els.accessPanel.innerHTML = rows;
+      els.accessPage.innerHTML = rows;
+      els.accessRunId.textContent = state.last?.workflow_run_id || "No run";
+    }
+    function renderTraceTab(name) {
+      activeTraceTab = name;
+      els.steps.hidden = name !== "timeline";
+      els.accessPanel.hidden = name !== "access";
+      els.traceJson.hidden = name !== "json";
+    }
+    function renderDatasets() {
+      els.datasetRows.innerHTML = datasets.map(item => `
+        <tr><td>${t(item.name)}</td><td>${escapeHtml(item.owner)}</td><td>${item.prompts}</td><td>${escapeHtml(item.policy)}</td></tr>
+      `).join("");
+    }
+    function renderIntegrations() {
+      els.integrationRows.innerHTML = state.agents.map(agent => `
+        <tr><td>${escapeHtml(agent.provider_name || agent.id)}</td><td>${escapeHtml(agent.base_url)}</td><td>${(agent.provider_exclusions || []).map(escapeHtml).join(", ") || "Allowed"}</td></tr>
+      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`;
+      renderDocumentViewer();
+    }
+    function renderDocumentViewer() {
+      const viewer = state.document_viewer;
+      const status = document.getElementById("docViewerStatus");
+      const actions = document.getElementById("docViewerActions");
+      const hint = document.getElementById("docViewerHint");
+      const open = document.getElementById("docViewerOpen");
+      if (!status || !actions) return;
+      if (viewer && viewer.url) {
+        status.textContent = viewer.provider + " · " + viewer.url;
+        status.classList.add("green");
+        actions.hidden = false;
+        if (hint) hint.hidden = true;
+        open.href = viewer.url;
+        const openDoc = document.getElementById("docViewerOpenDoc");
+        const docIdInput = document.getElementById("docViewerDocId");
+        if (openDoc && !openDoc.dataset.bound) {
+          openDoc.dataset.bound = "1";
+          openDoc.addEventListener("click", () => {
+            const docId = (docIdInput.value || "").trim();
+            if (docId) window.open(viewer.url + "/viewer/" + encodeURIComponent(docId), "_blank", "noopener");
+          });
+        }
+      } else {
+        status.textContent = t("doc_viewer_unset");
+        actions.hidden = true;
+        if (hint) hint.hidden = false;
+      }
+    }
+    function renderObservability() {
+      const runs = state.recent_workflow_runs || [];
+      const analytics = state.analytics || {};
+      const metricRows = [...(analytics.kpis || []), ...(analytics.guardrails || [])];
+      els.kpis.innerHTML = metricRows.map(metric => {
+        const rawValue = metric.value_percent ?? metric.value ?? metric.numerator ?? 0;
+        const suffix = metric.value_percent == null ? "" : "%";
+        return `<div class="kpi"><span>${escapeHtml(t(metric.metric_name) || metric.label)}</span><strong>${escapeHtml(rawValue)}${suffix}</strong></div>`;
+      }).join("") || [
+        ["Workflow runs", runs.length],
+        ["Enabled models", state.agents.length],
+        ["Verifier required", state.policy.verifier_required ? "Yes" : "No"]
+      ].map(([label, value]) => `<div class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+      els.runRows.innerHTML = runs.map(run => `
+        <tr><td>${escapeHtml(run.workflow_run_id)}</td><td>${escapeHtml(run.mode)}</td><td>${escapeHtml(run.policy_mode)}</td><td>${escapeHtml(run.created_at)}</td></tr>
+      `).join("") || `<tr><td colspan="4">${t("no_trace")}</td></tr>`;
+      renderSpend();
+      renderReadiness();
+    }
+    const MEASUREMENT_STATUS_KEYS = {
+      measured: "measurement_measured",
+      exact_tokenizer: "measurement_exact_tokenizer",
+      unavailable: "measurement_unavailable",
+      local_runtime_snapshot: "measurement_local_runtime_snapshot",
+      estimate: "measurement_estimate",
+      unknown: "measurement_unknown"
+    };
+    function statusLabel(raw) {
+      if (!raw) return t(MEASUREMENT_STATUS_KEYS.estimate);
+      if (MEASUREMENT_STATUS_KEYS[raw]) return t(MEASUREMENT_STATUS_KEYS[raw]);
+      if (String(raw).startsWith("local_")) return t("measurement_local_runtime");
+      return String(raw);
+    }
+    function renderSpend() {
+      const spend = state.spend || {};
+      const totals = spend.totals || {};
+      const statusEl = document.getElementById("spendStatus");
+      if (statusEl) statusEl.textContent = statusLabel(spend.measurement_status);
+      const totalsEl = document.getElementById("spendTotals");
+      if (totalsEl) {
+        const cost = totals.cost_usd == null ? "—" : ("$" + totals.cost_usd);
+        totalsEl.innerHTML = [
+          [t("spend_runs") || "Runs", totals.run_count ?? 0],
+          [t("spend_output_tokens") || "Output tokens", totals.output_tokens ?? "—"],
+          [t("spend_prompt_tokens") || "Prompt tokens", totals.prompt_tokens ?? "—"],
+          [t("spend_cost") || "Cost (USD)", cost]
+        ].map(([l, v]) => `<div class="kpi"><span>${escapeHtml(l)}</span><strong>${escapeHtml(v)}</strong></div>`).join("");
+      }
+      const rowsEl = document.getElementById("spendRows");
+      if (rowsEl) {
+        rowsEl.innerHTML = (spend.by_model || []).map(row => {
+          const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
+          const cost = row.cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.cost_usd));
+          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.output_tokens ?? "—")}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
+        }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
+      }
+      const noteEl = document.getElementById("spendNote");
+      if (noteEl) noteEl.textContent = spend.source_note || "";
+    }
+    function renderReadiness() {
+      const readiness = state.readiness || {};
+      const commercial = state.commercialReadiness || {};
+      const buyerManifest = state.buyerEvidenceManifest || {};
+      const handoffBundle = state.buyerHandoffBundle || {};
+      const saleability = state.saleabilityDecision || {};
+      const commercialExport = state.commercialEvidenceExport || {};
+      const commercialAcceptance = state.commercialAcceptanceCheck || {};
+      const commercialRelease = state.commercialReleaseCandidate || {};
+      const commercialGap = state.commercialGapRegister || {};
+      const commercialProcurement = state.commercialProcurementReadiness || {};
+      const commercialContract = state.commercialContractReadiness || {};
+      const commercialOnboarding = state.commercialOnboardingReadiness || {};
+      const commercialOperations = state.commercialOperationsReadiness || {};
+      const commercialSecurity = state.commercialSecurityAttestation || {};
+      const commercialValue = state.commercialValueReadiness || {};
+      const commercialClose = state.commercialCloseReadiness || {};
+      const commercialGtm = state.commercialGoToMarketReadiness || {};
+      const commercialLaunch = state.commercialLaunchReadiness || {};
+      const commercialCompletion = state.commercialCompletionScorecard || {};
+      const buyerAcceptanceWorkflow = state.commercialBuyerAcceptanceWorkflow || {};
+      const commercialDemo = state.commercialDemoScenarios || {};
+      const commercialProposal = state.commercialProposalPacket || {};
+      const commercialPurchaseApproval = state.commercialPurchaseApprovalPacket || {};
+      const commercialDueDiligence = state.commercialDueDiligenceRoom || {};
+      const commercialInvestmentCommittee = state.commercialInvestmentCommitteeMemo || {};
+      const status = readiness.readiness_status || "not_ready";
+      const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
+      const criteria = readiness.criteria || [];
+      const readinessSummary = readiness.readiness_summary || readiness.summary || {};
+      const commercialStatus = commercial.commercial_status || "not_commercial_ready";
+      const commercialStatusClass = commercialStatus === "commercial_ready" ? "green" : commercialStatus === "commercial_ready_with_warnings" ? "amber" : "red";
+      const commercialCriteria = commercial.criteria || [];
+      const commercialSummary = commercial.commercial_summary || commercial.summary || {};
+      const manifestStatus = buyerManifest.manifest_status || "buyer_review_blocked";
+      const manifestStatusClass = manifestStatus === "buyer_review_ready" ? "green" : manifestStatus === "buyer_review_ready_with_warnings" ? "amber" : "red";
+      const manifestSummary = buyerManifest.summary?.by_completion_state || {};
+      const handoffStatus = handoffBundle.bundle_status || "buyer_handoff_blocked";
+      const handoffStatusClass = handoffStatus === "buyer_handoff_ready" ? "green" : handoffStatus === "buyer_handoff_ready_with_warnings" ? "amber" : "red";
+      const handoffSummary = handoffBundle.summary?.by_completion_state || {};
+      const saleabilityStatus = saleability.saleability_status || "saleability_blocked";
+      const saleabilityStatusClass = saleabilityStatus === "saleability_ready" ? "green" : saleabilityStatus === "saleability_ready_with_warnings" ? "amber" : "red";
+      const saleabilitySummary = saleability.decision_summary || {};
+      const exportStatus = commercialExport.export_status || "commercial_export_blocked";
+      const exportStatusClass = exportStatus === "commercial_export_ready" ? "green" : exportStatus === "commercial_export_ready_with_warnings" ? "amber" : "red";
+      const exportSummary = commercialExport.export_summary || {};
+      const acceptanceStatus = commercialAcceptance.acceptance_status || "commercial_acceptance_blocked";
+      const acceptanceStatusClass = acceptanceStatus === "commercial_acceptance_ready" ? "green" : acceptanceStatus === "commercial_acceptance_ready_with_warnings" ? "amber" : "red";
+      const acceptanceSummary = commercialAcceptance.acceptance_summary || {};
+      const releaseStatus = commercialRelease.release_status || "commercial_release_blocked";
+      const releaseStatusClass = releaseStatus === "commercial_release_ready" ? "green" : releaseStatus === "commercial_release_ready_with_warnings" ? "amber" : "red";
+      const releaseSummary = commercialRelease.release_summary || {};
+      const gapStatus = commercialGap.gap_register_status || "commercial_gap_register_blocked";
+      const gapStatusClass = gapStatus === "commercial_gap_register_clear" ? "green" : gapStatus === "commercial_gap_register_open" ? "amber" : "red";
+      const gapSummary = commercialGap.gap_summary || {};
+      const procurementStatus = commercialProcurement.procurement_status || "commercial_procurement_blocked";
+      const procurementStatusClass = procurementStatus === "commercial_procurement_ready" ? "green" : procurementStatus === "commercial_procurement_ready_with_warnings" ? "amber" : "red";
+      const procurementSummary = commercialProcurement.procurement_summary || {};
+      const contractStatus = commercialContract.contract_status || "commercial_contract_blocked";
+      const contractStatusClass = contractStatus === "commercial_contract_ready" ? "green" : contractStatus === "commercial_contract_ready_with_warnings" ? "amber" : "red";
+      const contractSummary = commercialContract.contract_summary || {};
+      const onboardingStatus = commercialOnboarding.onboarding_status || "commercial_onboarding_blocked";
+      const onboardingStatusClass = onboardingStatus === "commercial_onboarding_ready" ? "green" : onboardingStatus === "commercial_onboarding_ready_with_warnings" ? "amber" : "red";
+      const onboardingSummary = commercialOnboarding.onboarding_summary || {};
+      const operationsStatus = commercialOperations.operations_status || "commercial_operations_blocked";
+      const operationsStatusClass = operationsStatus === "commercial_operations_ready" ? "green" : operationsStatus === "commercial_operations_ready_with_warnings" ? "amber" : "red";
+      const operationsSummary = commercialOperations.operations_summary || {};
+      const securityStatus = commercialSecurity.security_attestation_status || "commercial_security_attestation_blocked";
+      const securityStatusClass = securityStatus === "commercial_security_attestation_ready" ? "green" : securityStatus === "commercial_security_attestation_ready_with_warnings" ? "amber" : "red";
+      const securitySummary = commercialSecurity.security_attestation_summary || {};
+      const valueStatus = commercialValue.value_status || "commercial_value_blocked";
+      const valueStatusClass = valueStatus === "commercial_value_ready" ? "green" : valueStatus === "commercial_value_ready_with_warnings" ? "amber" : "red";
+      const valueSummary = commercialValue.value_summary || {};
+      const closeStatus = commercialClose.close_status || "commercial_close_blocked";
+      const closeStatusClass = closeStatus === "commercial_close_ready" ? "green" : closeStatus === "commercial_close_ready_with_warnings" ? "amber" : "red";
+      const closeSummary = commercialClose.close_summary || {};
+      const gtmStatus = commercialGtm.go_to_market_status || "commercial_go_to_market_blocked";
+      const gtmStatusClass = gtmStatus === "commercial_go_to_market_ready" ? "green" : gtmStatus === "commercial_go_to_market_ready_with_warnings" ? "amber" : "red";
+      const gtmSummary = commercialGtm.go_to_market_summary || {};
+      const launchStatus = commercialLaunch.launch_status || "commercial_launch_blocked";
+      const launchStatusClass = launchStatus === "commercial_launch_ready" ? "green" : launchStatus === "commercial_launch_ready_with_warnings" ? "amber" : "red";
+      const launchSummary = commercialLaunch.launch_summary || {};
+      const completionStatus = commercialCompletion.completion_status || "commercial_completion_blocked";
+      const completionStatusClass = completionStatus === "commercial_completion_ready" ? "green" : completionStatus === "commercial_completion_ready_with_warnings" ? "amber" : "red";
+      const completionSummary = commercialCompletion.completion_summary || {};
+      const workflowStatus = buyerAcceptanceWorkflow.workflow_status || "buyer_acceptance_workflow_blocked";
+      const workflowStatusClass = workflowStatus === "buyer_acceptance_workflow_ready" ? "green" : workflowStatus === "buyer_acceptance_workflow_ready_with_warnings" ? "amber" : "red";
+      const workflowSummary = buyerAcceptanceWorkflow.workflow_summary || {};
+      const demoStatus = commercialDemo.demo_status || "commercial_demo_blocked";
+      const demoStatusClass = demoStatus === "commercial_demo_ready" ? "green" : demoStatus === "commercial_demo_ready_with_warnings" ? "amber" : "red";
+      const demoSummary = commercialDemo.demo_summary || {};
+      const proposalStatus = commercialProposal.proposal_status || "commercial_proposal_blocked";
+      const proposalStatusClass = proposalStatus === "commercial_proposal_ready" ? "green" : proposalStatus === "commercial_proposal_ready_with_warnings" ? "amber" : "red";
+      const proposalSummary = commercialProposal.proposal_summary || {};
+      const purchaseApprovalStatus = commercialPurchaseApproval.purchase_approval_status || "commercial_purchase_approval_blocked";
+      const purchaseApprovalStatusClass = purchaseApprovalStatus === "commercial_purchase_approval_ready" ? "green" : purchaseApprovalStatus === "commercial_purchase_approval_ready_with_warnings" ? "amber" : "red";
+      const purchaseApprovalSummary = commercialPurchaseApproval.approval_summary || {};
+      const dueDiligenceStatus = commercialDueDiligence.due_diligence_status || "commercial_due_diligence_blocked";
+      const dueDiligenceStatusClass = dueDiligenceStatus === "commercial_due_diligence_ready" ? "green" : dueDiligenceStatus === "commercial_due_diligence_ready_with_warnings" ? "amber" : "red";
+      const dueDiligenceSummary = commercialDueDiligence.diligence_summary || {};
+      const investmentCommitteeStatus = commercialInvestmentCommittee.investment_committee_status || "commercial_investment_committee_blocked";
+      const investmentCommitteeStatusClass = investmentCommitteeStatus === "commercial_investment_committee_ready" ? "green" : investmentCommitteeStatus === "commercial_investment_committee_ready_with_warnings" ? "amber" : "red";
+      const investmentCommitteeSummary = commercialInvestmentCommittee.memo_summary || {};
+      els.salesReadiness.innerHTML = `
+        <div class="metric">
+          <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
+          <strong><span class="chip ${statusClass}">${escapeHtml(t(status))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_readiness_title">${t("commercial_readiness_title")}</span>
+          <strong><span class="chip ${commercialStatusClass}">${escapeHtml(t(commercialStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_contract_value">${t("commercial_contract_value")}</span>
+          <strong>${escapeHtml(commercial.target_contract_value_display || "KRW 2,000,000,000")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="buyer_evidence_manifest_title">${t("buyer_evidence_manifest_title")}</span>
+          <strong><span class="chip ${manifestStatusClass}">${escapeHtml(t(manifestStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="buyer_handoff_bundle_title">${t("buyer_handoff_bundle_title")}</span>
+          <strong><span class="chip ${handoffStatusClass}">${escapeHtml(t(handoffStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="saleability_decision_title">${t("saleability_decision_title")}</span>
+          <strong><span class="chip ${saleabilityStatusClass}">${escapeHtml(t(saleabilityStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_evidence_export_title">${t("commercial_evidence_export_title")}</span>
+          <strong><span class="chip ${exportStatusClass}">${escapeHtml(t(exportStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_acceptance_check_title">${t("commercial_acceptance_check_title")}</span>
+          <strong><span class="chip ${acceptanceStatusClass}">${escapeHtml(t(acceptanceStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_release_candidate_title">${t("commercial_release_candidate_title")}</span>
+          <strong><span class="chip ${releaseStatusClass}">${escapeHtml(t(releaseStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_gap_register_title">${t("commercial_gap_register_title")}</span>
+          <strong><span class="chip ${gapStatusClass}">${escapeHtml(t(gapStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_procurement_readiness_title">${t("commercial_procurement_readiness_title")}</span>
+          <strong><span class="chip ${procurementStatusClass}">${escapeHtml(t(procurementStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_contract_readiness_title">${t("commercial_contract_readiness_title")}</span>
+          <strong><span class="chip ${contractStatusClass}">${escapeHtml(t(contractStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_onboarding_readiness_title">${t("commercial_onboarding_readiness_title")}</span>
+          <strong><span class="chip ${onboardingStatusClass}">${escapeHtml(t(onboardingStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_operations_readiness_title">${t("commercial_operations_readiness_title")}</span>
+          <strong><span class="chip ${operationsStatusClass}">${escapeHtml(t(operationsStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_security_attestation_title">${t("commercial_security_attestation_title")}</span>
+          <strong><span class="chip ${securityStatusClass}">${escapeHtml(t(securityStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_value_readiness_title">${t("commercial_value_readiness_title")}</span>
+          <strong><span class="chip ${valueStatusClass}">${escapeHtml(t(valueStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_close_readiness_title">${t("commercial_close_readiness_title")}</span>
+          <strong><span class="chip ${closeStatusClass}">${escapeHtml(t(closeStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_go_to_market_readiness_title">${t("commercial_go_to_market_readiness_title")}</span>
+          <strong><span class="chip ${gtmStatusClass}">${escapeHtml(t(gtmStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_launch_readiness_title">${t("commercial_launch_readiness_title")}</span>
+          <strong><span class="chip ${launchStatusClass}">${escapeHtml(t(launchStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_completion_scorecard_title">${t("commercial_completion_scorecard_title")}</span>
+          <strong><span class="chip ${completionStatusClass}">${escapeHtml(t(completionStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_buyer_acceptance_workflow_title">${t("commercial_buyer_acceptance_workflow_title")}</span>
+          <strong><span class="chip ${workflowStatusClass}">${escapeHtml(t(workflowStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_demo_scenarios_title">${t("commercial_demo_scenarios_title")}</span>
+          <strong><span class="chip ${demoStatusClass}">${escapeHtml(t(demoStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_proposal_packet_title">${t("commercial_proposal_packet_title")}</span>
+          <strong><span class="chip ${proposalStatusClass}">${escapeHtml(t(proposalStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_purchase_approval_packet_title">${t("commercial_purchase_approval_packet_title")}</span>
+          <strong><span class="chip ${purchaseApprovalStatusClass}">${escapeHtml(t(purchaseApprovalStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_due_diligence_room_title">${t("commercial_due_diligence_room_title")}</span>
+          <strong><span class="chip ${dueDiligenceStatusClass}">${escapeHtml(t(dueDiligenceStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_investment_committee_memo_title">${t("commercial_investment_committee_memo_title")}</span>
+          <strong><span class="chip ${investmentCommitteeStatusClass}">${escapeHtml(t(investmentCommitteeStatus))}</span></strong>
+        </div>
+        <div class="metric source">
+          <span data-i18n="readiness_source">${t("readiness_source")}</span>
+          <strong>${escapeHtml(commercialInvestmentCommittee.source_note || commercialDueDiligence.source_note || commercialPurchaseApproval.source_note || commercialProposal.source_note || commercialDemo.source_note || buyerAcceptanceWorkflow.source_note || commercialCompletion.source_note || commercialLaunch.source_note || commercialGtm.source_note || commercialClose.source_note || commercialValue.source_note || commercialSecurity.source_note || commercialOperations.source_note || commercialOnboarding.source_note || commercialContract.source_note || commercialProcurement.source_note || commercialGap.source_note || commercialRelease.source_note || commercialAcceptance.source_note || commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
+          <strong>${escapeHtml(statusLabel(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown"))}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
+          <strong>${t("readiness_summary_text")
+            .replace("{pass}", String((readinessSummary.pass || 0) + (commercialSummary.pass || 0)))
+            .replace("{warn}", String((readinessSummary.warn || 0) + (commercialSummary.warn || 0)))
+            .replace("{fail}", String((readinessSummary.fail || 0) + (commercialSummary.fail || 0)))}</strong>
+        </div>
+        <div class="readiness-grid">
+          ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
+            const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
+            return `<div class="readiness-row">
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${{ pass: "ok", warn: "warning", fail: "failure" }[row.status]}`))}</span>
+              <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
+              <small>${escapeHtml(row.evidence)}</small>
+              <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
+            </div>`;
+          }).join("")}
+        </div>`;
+    }
+    function renderAudit() {
+      const events = state.recent_audit_events || [];
+      els.auditRows.innerHTML = events.map(event => `
+        <tr><td>${escapeHtml(event.event_type)}</td><td><pre>${escapeHtml(JSON.stringify(event.event_detail))}</pre></td><td>${escapeHtml(event.created_at)}</td></tr>
+      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
+    }
+    function renderSecondaryViews() {
+      if (!state.policy) return;
+      renderDatasets();
+      renderIntegrations();
+      renderObservability();
+      renderAudit();
+      renderAccess(state.last?.trace || []);
+    }
+    function showView(name, activeItem, sectionId) {
+      document.querySelectorAll(".view").forEach(view => view.hidden = view.dataset.view !== name);
+      document.querySelectorAll(".nav-item").forEach(item => {
+        item.removeAttribute("aria-current");
+      });
+      (activeItem || document.querySelector(`.nav-item[data-view="${name}"]`))?.setAttribute("aria-current", "page");
+      els.mobileView.value = name;
+      renderSecondaryViews();
+      if (sectionId) {
+        requestAnimationFrame(() => {
+          const target = document.getElementById(sectionId);
+          const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          target?.scrollIntoView({block: "start", behavior: reducedMotion ? "auto" : "smooth"});
+          target?.focus({preventScroll: true});
+        });
+      }
+    }
+    function applyI18n(lang) {
+      const dict = translations[lang] || translations.en;
+      currentLang = translations[lang] ? lang : "en";
+      document.documentElement.lang = lang;
+      document.querySelectorAll("[data-i18n]").forEach(node => {
+        const key = node.getAttribute("data-i18n");
+        if (dict[key]) node.textContent = dict[key];
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach(node => {
+        const key = node.getAttribute("data-i18n-placeholder");
+        if (dict[key]) node.setAttribute("placeholder", dict[key]);
+      });
+      localStorage.setItem("admin_lang", lang);
+      if (state.agents.length) renderAgents();
+      if (state.agents.length) renderModelGroups();
+      if (state.policy) renderSecondaryViews();
+    }
+    async function load() {
+      const res = await apiFetch("/admin/state");
+      if (!res.ok) {
+        if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
+        if (els.sessionAction) els.sessionAction.hidden = false;
+        return;
+      }
+      if (els.sessionAction) els.sessionAction.hidden = true;
+      state = await res.json();
+      await refreshModelGroups();
+      await refreshAnalytics();
+      await refreshReadiness();
+      renderAgents();
+      renderSecondaryViews();
+      await simulate();
+    }
+    async function refreshAnalytics() {
+      const analyticsRes = await apiFetch("/api/v1/analytics_snapshots/latest");
+      state.analytics = await analyticsRes.json();
+    }
+    async function refreshReadiness() {
+      const readinessRes = await apiFetch("/api/v1/sales_readiness/latest");
+      state.readiness = await readinessRes.json();
+      const commercialRes = await apiFetch("/api/v1/commercial_readiness/latest");
+      state.commercialReadiness = await commercialRes.json();
+      const buyerManifestRes = await apiFetch("/api/v1/commercial_evidence_manifests/latest");
+      state.buyerEvidenceManifest = await buyerManifestRes.json();
+      const handoffBundleRes = await apiFetch("/api/v1/commercial_handoff_bundles/latest");
+      state.buyerHandoffBundle = await handoffBundleRes.json();
+      const saleabilityRes = await apiFetch("/api/v1/saleability_decisions/latest");
+      state.saleabilityDecision = await saleabilityRes.json();
+      const commercialExportRes = await apiFetch("/api/v1/commercial_evidence_exports/latest");
+      state.commercialEvidenceExport = await commercialExportRes.json();
+      const commercialAcceptanceRes = await apiFetch("/api/v1/commercial_acceptance_checks/latest");
+      state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
+      const commercialReleaseRes = await apiFetch("/api/v1/commercial_release_candidates/latest");
+      state.commercialReleaseCandidate = await commercialReleaseRes.json();
+      const commercialGapRes = await apiFetch("/api/v1/commercial_gap_registers/latest");
+      state.commercialGapRegister = await commercialGapRes.json();
+      const commercialProcurementRes = await apiFetch("/api/v1/commercial_procurement_readiness/latest");
+      state.commercialProcurementReadiness = await commercialProcurementRes.json();
+      const commercialContractRes = await apiFetch("/api/v1/commercial_contract_readiness/latest");
+      state.commercialContractReadiness = await commercialContractRes.json();
+      const commercialOnboardingRes = await apiFetch("/api/v1/commercial_onboarding_readiness/latest");
+      state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
+      const commercialOperationsRes = await apiFetch("/api/v1/commercial_operations_readiness/latest");
+      state.commercialOperationsReadiness = await commercialOperationsRes.json();
+      const commercialSecurityRes = await apiFetch("/api/v1/commercial_security_attestations/latest");
+      state.commercialSecurityAttestation = await commercialSecurityRes.json();
+      const commercialValueRes = await apiFetch("/api/v1/commercial_value_readiness/latest");
+      state.commercialValueReadiness = await commercialValueRes.json();
+      const commercialCloseRes = await apiFetch("/api/v1/commercial_close_readiness/latest");
+      state.commercialCloseReadiness = await commercialCloseRes.json();
+      const commercialGtmRes = await apiFetch("/api/v1/commercial_go_to_market_readiness/latest");
+      state.commercialGoToMarketReadiness = await commercialGtmRes.json();
+      const commercialLaunchRes = await apiFetch("/api/v1/commercial_launch_readiness/latest");
+      state.commercialLaunchReadiness = await commercialLaunchRes.json();
+      const commercialCompletionRes = await apiFetch("/api/v1/commercial_completion_scorecards/latest");
+      state.commercialCompletionScorecard = await commercialCompletionRes.json();
+      const commercialBuyerAcceptanceWorkflowRes = await apiFetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
+      state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
+      const commercialDemoRes = await apiFetch("/api/v1/commercial_demo_scenarios/latest");
+      state.commercialDemoScenarios = await commercialDemoRes.json();
+      const commercialProposalRes = await apiFetch("/api/v1/commercial_proposal_packets/latest");
+      state.commercialProposalPacket = await commercialProposalRes.json();
+      const commercialPurchaseApprovalRes = await apiFetch("/api/v1/commercial_purchase_approval_packets/latest");
+      state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
+      const commercialDueDiligenceRes = await apiFetch("/api/v1/commercial_due_diligence_rooms/latest");
+      state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
+      const commercialInvestmentCommitteeRes = await apiFetch("/api/v1/commercial_investment_committee_memos/latest");
+      state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
+    }
+    async function simulate() {
+      const res = await apiFetch("/admin/simulate", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({prompt: els.prompt.value, mode: els.mode.value, include_orchestration_trace: true})
+      });
+      state.last = await res.json();
+      state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
+      await refreshAnalytics();
+      renderTrace(state.last);
+      renderSecondaryViews();
+    }
+    async function startSession(event) {
+      event.preventDefault();
+      const token = els.sessionToken.value;
+      try {
+        const res = await apiFetch("/admin/session", {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify({token})
+        });
+        const result = await res.json();
+        if (res.ok) {
+          els.sessionStatus.textContent = t("session_status_ready");
+          if (els.sessionAction) els.sessionAction.hidden = true;
+          await load();
+        } else {
+          els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
+        }
+      } finally {
+        els.sessionToken.value = "";
+      }
+    }
+    async function endSession() {
+      const res = await apiFetch("/admin/session", {
+        method: "DELETE"
+      });
+      els.sessionStatus.textContent = res.ok ? t("session_status_missing") : "Session logout failed";
+      if (res.ok && els.sessionAction) els.sessionAction.hidden = false;
+    }
+    async function runEvaluation() {
+      const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
+      const res = await apiFetch("/api/v1/evaluation_runs", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({prompts, run_mode: els.evaluationMode.value, include_orchestration_trace: true})
+      });
+      const result = await res.json();
+      els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
+      await refreshAnalytics();
+      renderSecondaryViews();
+    }
+    els.agentSearch.addEventListener("input", renderAgents);
+    els.statusFilter.addEventListener("change", renderAgents);
+    els.run.addEventListener("click", simulate);
+    els.runEvaluation.addEventListener("click", runEvaluation);
+    els.viewAudit.addEventListener("click", () => showView("audit"));
+    els.agentSettings.addEventListener("click", () => showView("settings"));
+    els.registerAgent.addEventListener("click", () => showView("integrations"));
+    els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
+      els.modelGroupFeedback.textContent = error.message;
+      els.modelGroupFeedback.style.color = "var(--red)";
+    }));
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
       if (!name) return;
-      deleteModelGroup(name).catch(error => {
-        els.modelGroupFeedback.textContent = error.message;
-        els.modelGroupFeedback.style.color = "var(--red)";
-      });
+      fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
+        .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
+        .then(() => {
+          els.modelGroupFeedback.textContent = t("group_deleted");
+          els.modelGroupFeedback.style.color = "var(--green)";
+          return refreshModelGroups().then(refreshAuditEvents);
+        })
+        .catch(error => {
+          els.modelGroupFeedback.textContent = error.message;
+          els.modelGroupFeedback.style.color = "var(--red)";
+        });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
