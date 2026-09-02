@@ -50,9 +50,9 @@ def patch_runtime() -> None:
     )
     replace_once(
         NIM,
-        '''    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,\n    max_eval_models: int = 7,\n    seed: int = 7,\n''',
-        '''    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,\n    max_eval_models: int | None = None,\n    seed: int = 7,\n''',
-        "NIM run cardinality default",
+        '''    max_output_tokens: int | None = None,\n    max_eval_models: int = 7,\n    seed: int = 7,\n''',
+        '''    max_output_tokens: int | None = None,\n    max_eval_models: int | None = None,\n    seed: int = 7,\n''',
+        "NIM run cardinality default after token-allocation repair",
     )
     replace_once(
         NIM,
