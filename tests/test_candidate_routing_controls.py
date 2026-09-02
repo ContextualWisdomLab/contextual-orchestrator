@@ -76,6 +76,26 @@ class _ConductTriageClient(_CandidateClient):
         return "candidate b"
 
 
+class _DivergentTriageClient(ModelClient):
+    """Route-forcing triage reply from whichever agent is asked -- used to make
+    the free-only triage pool and the full worker pool resolve to two
+    genuinely different agents (see #983 finding 2)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def chat(self, agent, messages, temperature=None, top_p=None, effort_profile=None):
+        self.calls.append(agent.id)
+        if messages and "workflow_required" in str(messages[0].get("content")):
+            return '{"workflow_required": false}'
+        return "unexpected chat() call"  # pragma: no cover - triage-only client
+
+    def stream_chat(self, agent, messages, **kwargs):
+        self.calls.append(agent.id)
+        yield "streamed worker output"
+
+
 def _post(port: int, token: str, body: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -579,6 +599,65 @@ def test_candidate_pin_is_honored_by_structured_and_streaming_chat_paths() -> No
     assert set(client.calls) == {"candidate_b"}
 
 
+def test_structured_chat_with_active_candidate_pin_normalizes_batch_channel_to_sync() -> None:
+    """An active candidate_id pin forces sync execution instead of the flat
+    "batch routing is not supported" rejection, matching
+    CostRoutingCoordinator.complete's own has_candidate_controls precedence
+    (#983 finding 1)."""
+    server, thread, token, client = _serve()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+                "routing": {
+                    "candidate_id": "candidate_b",
+                    "exclude_candidate_ids": ["candidate_a"],
+                    "channel": "batch",
+                },
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert "job_id" not in body
+    assert body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert set(client.calls) == {"candidate_b"}
+
+
+def test_structured_chat_with_active_candidate_exclusion_normalizes_latency_tolerant_to_sync() -> None:
+    """An active exclude_candidate_ids control forces sync execution instead
+    of rejecting routing.latency_tolerant=true outright (#983 finding 1)."""
+    server, thread, token, client = _serve()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+                "routing": {
+                    "exclude_candidate_ids": ["candidate_a"],
+                    "latency_tolerant": True,
+                },
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert "job_id" not in body
+    assert body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert set(client.calls) == {"candidate_b"}
+
+
 def test_candidate_pin_is_honored_by_responses_json_and_stream_paths() -> None:
     server, thread, token, client = _serve()
     routing = {"candidate_id": "candidate_b", "exclude_candidate_ids": ["candidate_a"]}
@@ -682,6 +761,63 @@ def test_auto_stream_triage_and_completion_both_honor_the_pin() -> None:
     assert events
     assert len(client.calls) >= 2
     assert set(client.calls) == {"candidate_b"}
+
+
+def test_auto_stream_shares_candidate_scope_with_triage_when_triage_and_worker_differ() -> None:
+    """The would_route triage decision and the streamed worker call must
+    share one candidate-routing scope so the free triage agent's attempt is
+    not discarded from terminal streamed evidence (#983 finding 2).
+
+    The free-only triage pool contains only ``triage_agent`` while the full
+    worker pool ranks ``worker_agent`` first (higher operator priority), so
+    the agent the triage call attempts and the agent that actually streams
+    the answer are genuinely different -- a shape
+    test_auto_stream_triage_and_completion_both_honor_the_pin cannot
+    exercise, since a candidate_id pin forces both calls onto one agent.
+    """
+    client = _DivergentTriageClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("triage_agent", "model-triage", tags=("cost:free",), priority=10),
+            ModelAgent("worker_agent", "model-worker", priority=20),
+            ModelAgent("excluded_agent", "model-excluded"),
+        ],
+        client=client,
+    )
+    token = "divergent-triage-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, events = _post_sse(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "short auto request"}],
+                "stream": True,
+                "routing": {"exclude_candidate_ids": ["excluded_agent"]},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert set(client.calls) == {"triage_agent", "worker_agent"}
+    terminal = next(
+        event
+        for event in events
+        if event.get("choices", [{}])[0].get("finish_reason") == "stop"
+    )
+    routing_evidence = terminal["orchestration"]["routing"]
+    assert routing_evidence["served_candidate_id"] == "worker_agent"
+    assert set(routing_evidence["attempted_candidate_ids"]) == {
+        "triage_agent",
+        "worker_agent",
+    }
 
 
 def test_core_rejects_file_affinity_that_conflicts_with_pin() -> None:

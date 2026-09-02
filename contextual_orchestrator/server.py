@@ -6983,9 +6983,12 @@ def build_server(
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
-                    request_routing = _validate_routing(
-                        body.get("routing"), allow_candidate_controls=True, allow_endpoint=True
-                    )
+                    # Reuse the routing already validated once for endpoint
+                    # scoping above instead of re-validating the same
+                    # body.get("routing") with identical args (#983) --
+                    # _validate_routing is pure, so this is behavior-preserving
+                    # and keeps the two call sites from drifting apart.
+                    request_routing = endpoint_routing
                     _validate_candidate_routing(orchestrator, request_routing, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -7093,9 +7096,25 @@ def build_server(
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
                             structured_routing = request_routing
-                            if structured_routing and (
-                                structured_routing.get("channel") == "batch"
-                                or structured_routing.get("latency_tolerant") is True
+                            # Candidate controls force synchronous execution the
+                            # same way CostRoutingCoordinator.complete() does for
+                            # ordinary chat (cost_router.py has_candidate_controls);
+                            # only reject deferred batch hints when no candidate
+                            # control is active to pin/exclude a candidate.
+                            structured_has_candidate_controls = bool(
+                                structured_routing
+                                and (
+                                    structured_routing.get("candidate_id")
+                                    or structured_routing.get("exclude_candidate_ids")
+                                )
+                            )
+                            if (
+                                not structured_has_candidate_controls
+                                and structured_routing
+                                and (
+                                    structured_routing.get("channel") == "batch"
+                                    or structured_routing.get("latency_tolerant") is True
+                                )
                             ):
                                 raise RequestError(
                                     400,
@@ -7191,21 +7210,56 @@ def build_server(
                             else ()
                         ),
                     )
+                    started_at = time.perf_counter()
+                    model_client = orchestrator.client
+                    # This scope stays open across both the would_route triage
+                    # decision and (for the streaming branch) the streamed
+                    # provider execution, so both share one attempted-candidate
+                    # list instead of the triage attempt being recorded in a
+                    # scope that closes before the stream starts (see #983).
                     with orchestrator.candidate_routing_policy(
                         request_routing, model_name=model_name
                     ):
                         route_stream = bool(
                             stream and orchestrator.would_route(messages, mode, model_name)
                         )
-                    if route_stream:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use Responses streaming",
-                            )
-                        include_trace = False
-                    elif include_trace:
+                        if route_stream:
+                            if explicit_trace:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use Responses streaming",
+                                )
+                            include_trace = False
+                            with model_client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                            ):
+                                self._stream_route_completion(
+                                    orchestrator,
+                                    security,
+                                    messages,
+                                    model_name,
+                                    routing=request_routing,
+                                    include_usage=include_usage,
+                                    candidate_scope_open=True,
+                                )
+                                orchestrator.record_analytics_event(
+                                    "chat_completion_requested",
+                                    {
+                                        "endpoint_path": "/v1/chat/completions",
+                                        "actor_scope": "inference",
+                                        "status_code": 200,
+                                        "run_mode": "route",
+                                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                        "response_streamed": True,
+                                    },
+                                )
+                            return
+                    if include_trace:
                         self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
@@ -7228,8 +7282,6 @@ def build_server(
                     # sampling/controls already validated before passthrough branch.
                     if "metadata" in body:
                         _validate_openai_metadata(body)
-                    started_at = time.perf_counter()
-                    model_client = orchestrator.client
                     with model_client.request_settings(
                         max_output_tokens=max_tokens,
                         temperature=temperature,
@@ -7237,27 +7289,6 @@ def build_server(
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
                     ):
-                        if route_stream:
-                            self._stream_route_completion(
-                                orchestrator,
-                                security,
-                                messages,
-                                model_name,
-                                routing=routing,
-                                include_usage=include_usage,
-                            )
-                            orchestrator.record_analytics_event(
-                                "chat_completion_requested",
-                                {
-                                    "endpoint_path": "/v1/chat/completions",
-                                    "actor_scope": "inference",
-                                    "status_code": 200,
-                                    "run_mode": "route",
-                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                    "response_streamed": True,
-                                },
-                            )
-                            return
                         result = self._run(lambda: coordinator.complete(
                             messages,
                             mode=mode,
@@ -7593,9 +7624,12 @@ def build_server(
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
                     model_name = _validate_responses_model(body)
-                    responses_routing_control = _validate_routing(
-                        body.get("routing"), allow_candidate_controls=True, allow_endpoint=True
-                    )
+                    # Reuse the routing already validated once for endpoint
+                    # scoping above instead of re-validating the same
+                    # body.get("routing") with identical args (#983) --
+                    # _validate_routing is pure, so this is behavior-preserving
+                    # and keeps the two call sites from drifting apart.
+                    responses_routing_control = endpoint_routing
                     _validate_candidate_routing(
                         orchestrator, responses_routing_control, model_name
                     )
@@ -8756,8 +8790,17 @@ def build_server(
             *,
             routing: dict[str, Any] | None = None,
             include_usage: bool = False,
+            candidate_scope_open: bool = False,
         ) -> None:
-            """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
+            """Pipe live provider deltas as OpenAI chat-completion SSE frames.
+
+            ``candidate_scope_open=True`` tells this method the caller already
+            has a ``candidate_routing_policy`` scope active (e.g. spanning the
+            auto-mode ``would_route`` triage decision) and it must not open a
+            second, independent scope here — doing so would silently discard
+            the triage attempt recorded in the caller's scope before the
+            streamed worker attempt is recorded in a fresh one (see #983).
+            """
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
             created = int(time.time())
@@ -8808,11 +8851,11 @@ def build_server(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
                     candidate_scope = (
-                        orchestrator.candidate_routing_policy(
+                        nullcontext()
+                        if candidate_scope_open or not routing
+                        else orchestrator.candidate_routing_policy(
                             routing, model_name=model_name
                         )
-                        if routing
-                        else nullcontext()
                     )
                     with candidate_scope:
                         for delta in orchestrator.stream_route(messages, **stream_kwargs):

@@ -334,6 +334,18 @@ _REQUEST_EXCLUDED_CANDIDATE_IDS: ContextVar[frozenset[str]] = ContextVar(
 _REQUEST_ATTEMPTED_CANDIDATE_IDS: ContextVar[list[str] | None] = ContextVar(
     "request_attempted_candidate_ids", default=None
 )
+# Invariant: once ``candidate_routing_policy`` binds this ContextVar to a list
+# (``.set([])``), every later write into it for that request MUST mutate that
+# same list object in place (see ``_record_candidate_attempt``) -- never
+# ``.set()`` a new list and never a compound read-then-reassign. A raced
+# ``race_first_valid`` attempt runs inside a ``copy_context().run(...)``
+# worker thread; ``copy_context()`` only isolates ``ContextVar.set()``/
+# ``reset()`` calls made inside the copy, so an in-place mutation of the
+# already-bound list is visible back in the parent request context, but a
+# rebind inside the worker thread would be invisible outside it and would
+# silently drop that candidate from ``orchestration.routing`` evidence. See
+# PR #983 and tests/test_endpoint_race.py::
+# test_race_attempts_all_reach_candidate_routing_evidence.
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -4097,6 +4109,13 @@ class TaskOrchestrator:
 
     @staticmethod
     def _record_candidate_attempt(agent_id: str) -> None:
+        # Must always mutate the bound list in place (``.append``) and never
+        # rebind the ContextVar with ``.set(...)`` here: a raced attempt runs
+        # inside a copy_context().run(...) worker thread, and a ``.set()``
+        # there would be invisible outside that thread once the race
+        # finishes, silently dropping this attempt from the parent request's
+        # ``orchestration.routing`` evidence. See the invariant comment on
+        # _REQUEST_ATTEMPTED_CANDIDATE_IDS above and PR #983.
         attempted = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get()
         if attempted is not None and agent_id not in attempted:
             attempted.append(agent_id)
