@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from contextual_orchestrator.kv_config import (
+    _LEGACY_CATEGORY_MIGRATIONS,
     InMemoryConfigStore,
     PostgresConfigStoreAdapter,
     get_config_store,
@@ -140,3 +141,93 @@ def test_config_store_factory_falls_back_when_postgres_is_unavailable(monkeypatc
 
     assert isinstance(store, InMemoryConfigStore)
     assert store.get("routing_policy", "quality_floor") == 0.8
+
+
+def _postgres_backed_store(monkeypatch, backend: "_ConfigBackend"):
+    """Return a ``get_config_store`` result backed by the given live-DSN double.
+
+    ``backend`` stands in for the persisted ``pg_llm_batch.PostgresConfigStore``
+    surface (``get``/``set`` over ``com_config``, keyed by ``category.key``
+    exactly as the real Postgres table's primary key is built), so a value
+    written into it before this call simulates a row a previous, unmigrated
+    deployment already persisted to production Postgres.
+    """
+    module = types.ModuleType("pg_llm_batch")
+    module.PostgresConfigStore = lambda dsn: backend
+    module.SecretStore = _SecretBackend
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", module)
+    return get_config_store("postgresql://example/config")
+
+
+def test_renamed_category_backfills_every_key_already_persisted_under_the_old_name(
+    monkeypatch,
+) -> None:
+    """A pre-existing Postgres row under a renamed category is not orphaned.
+
+    RED without the ContextualWisdomLab/contextual-orchestrator#1017 review
+    fix: renaming ``_ROUTING_CATEGORY``/``_EMBEDDING_CONFIG_CATEGORY`` from
+    ``"routing"`` to ``"routing_config"`` at the call sites alone leaves any
+    row a prior deployment already wrote under ``routing.<key>`` invisible to
+    readers that now ask for ``routing_config.<key>`` -- ``PostgresConfigStore``
+    keys ``com_config`` by the literal ``f"{category}.{key}"`` string, so the
+    lookup is an exact miss and every caller silently falls back to its
+    hardcoded Python default instead of the operator's persisted value.
+    """
+    legacy_category, (new_category, keys) = next(iter(_LEGACY_CATEGORY_MIGRATIONS.items()))
+    backend = _ConfigBackend("postgresql://example/config")
+    for index, key in enumerate(keys):
+        backend.set(legacy_category, key, index)
+
+    store = _postgres_backed_store(monkeypatch, backend)
+
+    for index, key in enumerate(keys):
+        assert store.get(new_category, key) == index
+
+
+def test_renamed_category_migration_never_overwrites_an_explicit_new_value(
+    monkeypatch,
+) -> None:
+    """An operator's explicit new-category value always wins over legacy backfill."""
+    legacy_category, (new_category, keys) = next(iter(_LEGACY_CATEGORY_MIGRATIONS.items()))
+    key = keys[0]
+    backend = _ConfigBackend("postgresql://example/config")
+    backend.set(legacy_category, key, "stale_legacy_value")
+    backend.set(new_category, key, "explicit_new_value")
+
+    store = _postgres_backed_store(monkeypatch, backend)
+
+    assert store.get(new_category, key) == "explicit_new_value"
+
+
+def test_renamed_category_migration_is_idempotent_across_reconnects(monkeypatch) -> None:
+    """Re-running the migration on every reconnect/restart is stable, not clobbering.
+
+    Simulates two process restarts against the same persisted backend: the
+    first restart backfills the legacy value, an operator then explicitly
+    reconfigures the new key, and a second restart must retain that explicit
+    reconfiguration rather than re-copying the now-stale legacy row forward.
+    """
+    legacy_category, (new_category, keys) = next(iter(_LEGACY_CATEGORY_MIGRATIONS.items()))
+    key = keys[0]
+    backend = _ConfigBackend("postgresql://example/config")
+    backend.set(legacy_category, key, "stale_legacy_value")
+
+    first_boot = _postgres_backed_store(monkeypatch, backend)
+    assert first_boot.get(new_category, key) == "stale_legacy_value"
+
+    backend.set(new_category, key, "operator_reconfigured_value")
+
+    second_boot = _postgres_backed_store(monkeypatch, backend)
+    assert second_boot.get(new_category, key) == "operator_reconfigured_value"
+    assert backend.get(legacy_category, key) == "stale_legacy_value"
+
+
+def test_renamed_category_migration_also_backfills_the_in_memory_seed_path() -> None:
+    """The same migration applies without a DSN, for seeded standalone/test runs."""
+    legacy_category, (new_category, keys) = next(iter(_LEGACY_CATEGORY_MIGRATIONS.items()))
+    key = keys[0]
+
+    store = get_config_store(seed={legacy_category: {key: "seeded_legacy_value"}})
+
+    assert isinstance(store, InMemoryConfigStore)
+    assert store.get(new_category, key) == "seeded_legacy_value"

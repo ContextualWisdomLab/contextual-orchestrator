@@ -872,7 +872,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (`conventions.require_object_name`) that already governs other configurable
   identifiers. This is one renamed, still-shared category (batch, embedding,
   and job-retention flags all still read/write the same category, as before)
-  -- not three separate categories -- so no key is orphaned by the rename.
+  -- not three separate categories.
+  **Migration contract (added after review on #1017):** on the Postgres-backed
+  boundary, `pg_llm_batch.PostgresConfigStore` keys `com_config` by the literal
+  `f"{category}.{key}"` string as its SQL primary key, so the call-site rename
+  alone *does* orphan any row a prior deployment already persisted under
+  `routing.<key>` -- readers now ask for `routing_config.<key>`, get an exact
+  miss, and silently fall back to their hardcoded Python default instead of the
+  operator's configured value. `kv_config.get_config_store()` now runs an
+  idempotent, additive-only backfill (`_migrate_legacy_categories`,
+  `_LEGACY_CATEGORY_MIGRATIONS["routing"] -> "routing_config"`) at every boot,
+  for the seven keys this codebase has ever written under the old category:
+  a value already present under `routing_config` always wins and is never
+  overwritten (so an operator's explicit reconfiguration after an earlier
+  backfill survives a later restart); a legacy `routing.<key>` value with no
+  `routing_config` counterpart yet is copied forward. This uses only the
+  `get`/`set` the minimal `ConfigStore` protocol guarantees, so it applies
+  identically to the in-memory/seeded path and the real Postgres adapter. The
+  legacy `routing.<key>` rows themselves are left in place, not deleted (the
+  protocol exposes no delete operation) -- they become harmless once every
+  reader has moved to `routing_config`, and removing `_LEGACY_CATEGORY_MIGRATIONS["routing"]`
+  is left as a bounded follow-up once every deployment has booted at least
+  once against the new category (tracked as gap G-17's residual item in
+  `ContextualWisdomLab/.github`'s `docs/product-technical-gap-baseline.md`).
+  See `tests/test_kv_config_store.py`'s four new tests (backfill-from-legacy,
+  new-value-precedence, idempotent-across-reconnects, in-memory-seed-path) for
+  the RED-before-GREEN evidence.
 - `tests/test_psychometric_routing.py` no longer fails collection for the
   entire test suite in an environment without `numpy`/`fast_mlsirm`
   installed. Only the one test that exercises the real `fast_mlsirm`-backed

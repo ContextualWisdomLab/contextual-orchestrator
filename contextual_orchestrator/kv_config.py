@@ -21,6 +21,57 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
 
+# Sentinel distinguishing "no value stored" from any real stored value
+# (including ``None``) when probing a category/key pair during migration.
+_MISSING = object()
+
+# Renamed KV categories that may already hold persisted rows under their old
+# name on a Postgres-backed deployment (``pg_llm_batch.PostgresConfigStore``
+# keys each value at the literal ``f"{category}.{key}"`` string as a SQL
+# PRIMARY KEY, so a bare category rename silently orphans any row already
+# written under the old identity -- see ContextualWisdomLab/contextual-orchestrator#1017
+# review discussion). Each entry names the finite, explicitly enumerated set
+# of keys this codebase has ever written under the old category; the
+# ``ConfigStore`` protocol has no category-enumeration method, so unknown
+# keys cannot be discovered automatically. Bounded removal condition: delete
+# an entry once every deployment has booted at least once against the
+# renamed category (tracked as a docs/product-technical-gap-baseline.md G-17
+# follow-up in ContextualWisdomLab/.github).
+_LEGACY_CATEGORY_MIGRATIONS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "routing": (
+        "routing_config",
+        (
+            "batch_enabled",
+            "interactive_forces_sync",
+            "batch_min_tokens",
+            "embedding_max_tokens_per_request",
+            "embedding_max_chars_per_part",
+            "embedding_max_inputs_per_request",
+            "batch_job_retention_seconds",
+        ),
+    ),
+}
+
+
+def _migrate_legacy_categories(store: "ConfigStore") -> None:
+    """Backfill renamed KV categories so already-persisted values survive.
+
+    Idempotent and additive only: a value already present under the new
+    category name always wins and is never overwritten by this migration,
+    so re-running it on every boot (including every reconnect/reload) is
+    safe and produces one deterministic outcome regardless of call order.
+    Only ``get``/``set`` are used, matching the minimal ``ConfigStore``
+    protocol every backend (in-memory, the Postgres adapter, and test
+    doubles) implements.
+    """
+    for legacy_category, (new_category, keys) in _LEGACY_CATEGORY_MIGRATIONS.items():
+        for key in keys:
+            if store.get(new_category, key, _MISSING) is not _MISSING:
+                continue
+            legacy_value = store.get(legacy_category, key, _MISSING)
+            if legacy_value is not _MISSING:
+                store.set(new_category, key, legacy_value)
+
 
 class ConfigStore(Protocol):
     """Minimal KV config contract shared by every backend."""
@@ -133,7 +184,9 @@ def get_config_store(
     in-memory store so the orchestrator never hard-depends on Postgres.
     """
     if not postgres_dsn:
-        return InMemoryConfigStore(seed=seed)
+        store = InMemoryConfigStore(seed=seed)
+        _migrate_legacy_categories(store)
+        return store
     try:  # pragma: no cover - exercised only with pg_llm_batch + Postgres present
         from pg_llm_batch import PostgresConfigStore, SecretStore  # type: ignore
 
@@ -144,6 +197,9 @@ def get_config_store(
             for category, entries in seed.items():
                 for key, value in entries.items():
                     adapter.set(category, key, value)
+        _migrate_legacy_categories(adapter)
         return adapter
     except Exception:  # pragma: no cover - fall back when deps/DB unavailable
-        return InMemoryConfigStore(seed=seed)
+        store = InMemoryConfigStore(seed=seed)
+        _migrate_legacy_categories(store)
+        return store
