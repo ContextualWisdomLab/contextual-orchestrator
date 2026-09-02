@@ -28,6 +28,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The published OpenAPI schema for `CandidateRoutingControls.exclude_candidate_ids`
+  no longer declares `maxItems: 32`. The runtime validator's own repository-authored
+  32-ID cardinality cutoff was already removed as unsupported; the schema still
+  publishing that limit meant generated/OpenAPI clients rejected exclusion lists the
+  runtime intentionally accepts, making the schema false at source. `uniqueItems`,
+  lexical ID constraints, and normal authenticated request-size bounds are
+  unchanged; no replacement cardinality heuristic was introduced.
 - `route_once` and `stream_route` no longer stamp `served_agent_id` on every
   trace row unconditionally. An earlier no-heuristics repair for candidate-
   routing evidence made that stamp unconditional to give

@@ -2714,3 +2714,23 @@ files plus the full local suite (3355 passed, 2 pre-existing sandbox-only failur
 clean. Lesson: a production fact-recording change made for one evidence consumer's
 sake must be checked against every other consumer of the same trace shape, not just
 the consumer it was written for.
+
+## 2026-09-02 — PR #983 follow-up: stale OpenAPI schema cardinality cutoff
+
+Owner-verified, exact-head finding: `contextual_orchestrator/api_contract.py`'s
+published `CandidateRoutingControls.exclude_candidate_ids` schema still declared
+`maxItems: 32` after the runtime's own repository-authored 32-ID cutoff had already
+been removed as unsupported (see the first 2026-09-02 entry above). The PR body,
+CHANGELOG, ADR direction, and Devin resolution all claimed the cutoff was gone, but
+the schema — the actual source generated/OpenAPI clients build against — still
+enforced it, so the documentation claim was false at the live source. Fixed by
+removing `maxItems: 32` from the schema (no replacement cardinality heuristic;
+`uniqueItems`, lexical ID constraints, and normal authenticated request-size bounds
+are untouched) and adding a RED-before/GREEN-after regression
+(`test_openapi_documents_compatibility_front_door` in `tests/test_api_contract.py`)
+validating a 64-ID exclusion list against the schema, which fails against the old
+`maxItems: 32` schema and passes against the corrected one. Verified the runtime
+validator (`server.py`'s `_validate_routing`) has no other hidden count-based
+cutoff on this field. Lesson: a schema/contract file is a second, independent
+publication surface for the same invariant as runtime code — removing a rule from
+one without checking the other leaves the claim false in whichever one still has it.

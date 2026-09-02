@@ -39,7 +39,6 @@ OPENAPI_SPEC = {
                     },
                     "exclude_candidate_ids": {
                         "type": "array",
-                        "maxItems": 32,
                         "uniqueItems": True,
                         "items": {
                             "type": "string",

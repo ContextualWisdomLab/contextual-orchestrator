@@ -64,7 +64,6 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert routing_schema["properties"]["candidate_id"]["pattern"] == exact_id_pattern
     assert routing_schema["properties"]["exclude_candidate_ids"] == {
         "type": "array",
-        "maxItems": 32,
         "uniqueItems": True,
         "items": {
             "type": "string",
@@ -78,6 +77,15 @@ def test_openapi_documents_compatibility_front_door() -> None:
     ):
         with pytest.raises(ValidationError):
             validate(instance=invalid, schema=routing_schema)
+    # exclude_candidate_ids has no repository-authored cardinality cutoff: the
+    # runtime accepts any number of unique exclusions bounded only by the
+    # normal authenticated request-body size limit, so the published schema
+    # must not reject a longer, otherwise-valid list either (#983).
+    long_exclusion_list = [f"candidate_{index}" for index in range(64)]
+    validate(
+        instance={"exclude_candidate_ids": long_exclusion_list},
+        schema=routing_schema,
+    )
     chat_response = OPENAPI_SPEC["components"]["schemas"]["ChatCompletionResponse"]
     assert chat_response["properties"]["usage"]["$ref"].endswith("AuthoritativeUsage")
     assert chat_response["properties"]["usage_measurement_status"]["enum"] == [
