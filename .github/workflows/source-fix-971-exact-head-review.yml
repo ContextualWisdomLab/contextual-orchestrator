@@ -118,19 +118,19 @@ jobs:
           if marker not in text:
               text += """
 
-## 2026-09-02 — PR #971 exact-head review repair
+          ## 2026-09-02 — PR #971 exact-head review repair
 
-Exact-head review of `fix/model-group-timeout-openrouter` found four actionable
-runtime defects plus two contract/documentation defects after the no-default-
-inference-timeout change. The repair imports `NotConfigured` where it is caught,
-keeps nullable discovery timeout typing honest, restores per-request `zdr_only`
-context from persisted embedding work after restart, rejects mixed privacy
-policies in one provider embedding batch, separates the durable execution-claim
-lease from model inference timeout with a positive configurable default, and
-routes non-exception embedding failures through the shared circuit-breaker/event
-failure recorder. Focused discovery, durable-registry, embedding-batch, routing,
-and server regressions are required before the one-shot repair publishes.
-"""
+          Exact-head review of `fix/model-group-timeout-openrouter` found four actionable
+          runtime defects plus two contract/documentation defects after the no-default-
+          inference-timeout change. The repair imports `NotConfigured` where it is caught,
+          keeps nullable discovery timeout typing honest, restores per-request `zdr_only`
+          context from persisted embedding work after restart, rejects mixed privacy
+          policies in one provider embedding batch, separates the durable execution-claim
+          lease from model inference timeout with a positive configurable default, and
+          routes non-exception embedding failures through the shared circuit-breaker/event
+          failure recorder. Focused discovery, durable-registry, embedding-batch, routing,
+          and server regressions are required before the one-shot repair publishes.
+          """
               baseline.write_text(text, encoding="utf-8")
           PY
 
