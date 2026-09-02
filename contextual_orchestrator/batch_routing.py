@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import math
+import queue
 import threading
 import time
 import uuid
@@ -771,6 +772,105 @@ class LocalEmbeddingBatchBackend:
         return self._results.get(job.job_id, [])
 
 
+class _DaemonWorkerPool:
+    """A fixed-size daemon worker pool with a `ThreadPoolExecutor`-shaped surface.
+
+    ``ProviderEmbeddingBatchBackend`` used to hand its long-lived, durable
+    job queue to a real :class:`concurrent.futures.ThreadPoolExecutor`. That
+    executor registers every worker thread it starts with
+    ``concurrent.futures.thread``'s own interpreter-exit ``atexit`` hook,
+    which unconditionally *joins* each still-running worker at shutdown
+    regardless of that worker's own daemon flag (the same verified failure
+    mode as ``endpoint_race.race_first_valid`` and
+    ``model_discovery._openrouter_free_model_endpoints`` elsewhere in this
+    PR). Combined with this org's default no-deadline
+    ``ModelClient.timeout=None`` policy -- and the fact that
+    ``execution_timeout_seconds`` here is only a *cooperative* deadline
+    checked after ``runner()`` returns, never a preemptive cancellation of
+    the in-flight call -- a provider embedding runner that never returns
+    would make that join, and therefore process shutdown, hang forever even
+    though ``close()`` had already been called.
+
+    This pool keeps the concurrency bound (a *fixed* number of persistent
+    daemon workers, not one raw thread per queued job -- durable recovery
+    can replay many pending jobs at once, and one native thread per job
+    would reintroduce the unbounded-thread-count problem the fixed-pool
+    fetch in ``model_discovery`` was written to avoid) while carrying no
+    exit-hook registration at all: an abandoned worker is silently dropped
+    at interpreter exit, exactly like every other raw ``daemon=True``
+    thread in this codebase's timeout-safe call sites.
+
+    ``submit()``/``shutdown()`` intentionally mirror
+    :class:`concurrent.futures.ThreadPoolExecutor`'s method names and
+    ``shutdown(wait=, cancel_futures=)`` signature so every existing
+    ``ProviderEmbeddingBatchBackend`` call site -- and the ``_executor``
+    attribute callers substitute test doubles into -- keeps working
+    unchanged. Workers are also spawned lazily, one per ``submit()`` up to
+    ``max_workers``, exactly like ``ThreadPoolExecutor._adjust_thread_count``:
+    each new worker's first ``queue.get()`` finds its triggering item
+    already queued rather than racing a ``Condition`` wakeup against an
+    already-idle worker, so callers that (like several existing tests)
+    observe a durable job's state immediately after ``submit()`` returns
+    keep the same effectively-synchronous-for-fast-runners timing the
+    ``ThreadPoolExecutor``-backed implementation had.
+    """
+
+    def __init__(self, max_workers: int, *, thread_name_prefix: str = "provider_embedding_worker") -> None:
+        self._max_workers = max_workers
+        self._thread_name_prefix = thread_name_prefix
+        self._queue: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...]] | None] = queue.Queue()
+        self._workers: list[threading.Thread] = []
+        self._workers_lock = threading.Lock()
+
+    def _drain(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:  # shutdown sentinel
+                return
+            fn, args = item
+            try:
+                fn(*args)
+            except BaseException:  # noqa: BLE001 - a worker task must never kill its worker
+                _LOGGER.exception("provider embedding worker task raised")
+
+    def submit(self, fn: Callable[..., Any], *args: Any) -> None:
+        """Queue ``fn(*args)`` for a pool worker. Fire-and-forget: no Future."""
+        self._queue.put((fn, args))
+        with self._workers_lock:
+            if len(self._workers) < self._max_workers:
+                worker = threading.Thread(
+                    target=self._drain,
+                    name=f"{self._thread_name_prefix}_{len(self._workers)}",
+                    daemon=True,
+                )
+                self._workers.append(worker)
+                worker.start()
+
+    def shutdown(self, *, wait: bool = True, cancel_futures: bool = False) -> None:
+        """Stop accepting new work; mirrors ``ThreadPoolExecutor.shutdown``.
+
+        ``cancel_futures=True`` drops anything still sitting in the queue
+        that no worker has picked up yet -- it never runs, exactly like
+        ``ThreadPoolExecutor``'s own ``cancel_futures``. It cannot, and does
+        not need to, interrupt a worker already inside ``fn(*args)``: that
+        worker is a daemon thread and is simply abandoned, not joined, when
+        ``wait=False``.
+        """
+        if cancel_futures:
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+        with self._workers_lock:
+            workers = list(self._workers)
+        for _ in workers:
+            self._queue.put(None)
+        if wait:
+            for worker in workers:
+                worker.join()
+
+
 class ProviderEmbeddingBatchBackend:
     """Queue provider embedding work and expose a durable polling lifecycle."""
 
@@ -789,7 +889,7 @@ class ProviderEmbeddingBatchBackend:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
         self._max_concurrency = max_concurrency
-        self._executor: ThreadPoolExecutor | None = None
+        self._executor: _DaemonWorkerPool | None = None
         self._executor_lock = threading.Lock()
         self._closed = threading.Event()
         self._registry = job_registry or JobRegistryFactory()
@@ -862,7 +962,7 @@ class ProviderEmbeddingBatchBackend:
             if self._states.get(job_id) in {"queued", "running"}
         ]
         if pending_job_ids:
-            self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+            self._executor = _DaemonWorkerPool(self._max_concurrency)
             for job_id in pending_job_ids:
                 self._terminal_events[job_id] = threading.Event()
                 self._executor.submit(copy_context().run, self._run_job, job_id)
@@ -921,7 +1021,7 @@ class ProviderEmbeddingBatchBackend:
             self._states[job.job_id] = "queued"
             self._terminal_events[job.job_id] = threading.Event()
             if self._executor is None:
-                self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+                self._executor = _DaemonWorkerPool(self._max_concurrency)
             self._executor.submit(copy_context().run, self._run_job, job.job_id)
 
     def _run_job(self, job_id: str) -> None:
