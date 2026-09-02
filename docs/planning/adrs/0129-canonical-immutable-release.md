@@ -242,12 +242,40 @@ add release-specific assurance.
   fresh regression run (step 5), both of which are simpler and do not need
   the `administration: read` permission the rulesets endpoint requires.
 
+## Research grounding
+
+This repository's convention (`CLAUDE.md`, `AGENTS.md`) asks substantive
+feature/process PRs to attach relevant grounding. This change is
+release-engineering/DevOps process tooling — how an existing, unreleased
+version number gets tagged and published — not a novel algorithm or a
+research contribution, so the correct grounding is the normative standards
+this mechanism implements, not an academic literature review:
+
+- Semantic Versioning 2.0.0 (<https://semver.org/spec/v2.0.0.html>) — already
+  the versioning scheme this repository's `CHANGELOG.md` preamble commits
+  to; this ADR's gate (`version` must equal `pyproject.toml` exactly, a
+  version is never redefined once tagged) is what makes that commitment
+  real instead of aspirational prose.
+- Keep a Changelog 1.1.0 (<https://keepachangelog.com/en/1.1.0/>) — also
+  already `CHANGELOG.md`'s stated format; `scripts/ci/release_notes.py`
+  extracts the `## [X.Y.Z]` section this format defines and renders it
+  verbatim as the GitHub Release body, rather than inventing a parallel
+  notes format.
+- The GitHub Releases API (<https://docs.github.com/en/rest/releases>) — the
+  mechanism's actual implementation surface: an annotated tag plus a Release
+  object created through `gh release create`, consumed by downstream
+  clients via `.../releases/tag/vX.Y.Z` (the immutable pin) and
+  `.../releases/latest` (a mutable discovery alias, not a pin — see
+  `docs/RELEASING.md`).
+
 ## Consequences
 
 - Consumers gain a real, immutable pin target:
-  `github.com/ContextualWisdomLab/contextual-orchestrator/releases/latest`
-  and `.../releases/tag/v0.2.0`, satisfying the owner's stated acceptance
-  criterion without any paid or provider-specific dependency.
+  `github.com/ContextualWisdomLab/contextual-orchestrator/releases/tag/v0.2.0`,
+  satisfying the owner's stated acceptance criterion without any paid or
+  provider-specific dependency. `.../releases/latest` also starts resolving
+  (no more 404) once the first tag is cut, but it is a mutable discovery
+  alias, not itself a pin target — see `docs/RELEASING.md`.
 - Releasing stays deliberate and rare (manual `workflow_dispatch`), matching
   `CHANGELOG.md`'s existing stated process instead of introducing a new,
   undocumented cadence.

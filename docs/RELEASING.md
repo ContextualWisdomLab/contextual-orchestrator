@@ -9,8 +9,16 @@ for the full design and its explicit non-goals.
 
 A release is a git tag `vX.Y.Z` and a GitHub Release built from it. It gives
 downstream consumers (Keyverse, BandScope, Wardnet, and others) an immutable,
-citable pin target — `.../releases/latest` and `.../releases/tag/vX.Y.Z` — so
-they never again need to vendor a mutable source SHA off `main`.
+citable pin target they never again need to vendor a mutable source SHA off
+`main` for. Those are two different URLs with two different guarantees:
+
+- `.../releases/tag/vX.Y.Z` is the actual immutable pin — always the same
+  commit, forever. **Consumers should pin this one.**
+- `.../releases/latest` is a **mutable discovery alias** that repoints to
+  whatever the newest release is; it is useful for finding "what's current"
+  in a human workflow, but a consumer pinning to it is *not* protected from
+  behavior changes across future releases and should not use it as a pin
+  target.
 
 A release is **not** the same thing as
 [`/api/v1/commercial_release_candidates/latest`](commercial_release_candidate.md)
@@ -28,10 +36,12 @@ that separate system.
    through the normal PR process (review, required checks, no exceptions).
 2. `CHANGELOG.md` has a `## [X.Y.Z]` section (an `- Unreleased` or dated
    suffix is fine) with real, non-empty content describing what changed.
-3. No git tag `vX.Y.Z` already exists (`git tag -l | grep vX.Y.Z` locally, or
-   check <https://github.com/ContextualWisdomLab/contextual-orchestrator/tags>).
-   A tag is never reused or moved onto a different commit — bump the version
-   again if you need to re-release.
+3. Either no git tag `vX.Y.Z` exists yet, or one does but points at the exact
+   commit you're dispatching and has no GitHub Release published yet (a safe
+   resume of a run that failed after pushing the tag but before publishing —
+   see step 4 below). A tag pointing at any *other* commit, or one whose
+   release already exists, is rejected: a tag is never reused or moved onto a
+   different commit — bump the version again if you need to re-release.
 4. `main` is currently green — its own required checks (Tests, Security,
    Fuzz, and the org-central Strix/OpenCode/security-scan/OSV/Scorecard
    checks from `ContextualWisdomLab/.github`) are passing. The release
@@ -47,21 +57,36 @@ that separate system.
 2. Select branch `main` (the workflow refuses to run against anything else).
 3. Enter the exact version, e.g. `0.2.0` — no leading `v`, must match
    `pyproject.toml` byte-for-byte.
-4. Dispatch. The workflow, in order:
-   - fails closed if the dispatched commit is not `main`'s current tip (a
-     race with a concurrent merge);
-   - fails closed if the input version does not match `pyproject.toml`;
-   - fails closed if the tag already exists, locally or on `origin`;
-   - runs the full test suite fresh (`uv run --locked --extra api --extra db
-     --extra queue --group dev python -m pytest -q`);
-   - renders release notes from `CHANGELOG.md`'s matching section
-     (`scripts/ci/release_notes.py`, tested in
-     `tests/test_release_notes.py`);
-   - creates and pushes an annotated tag `vX.Y.Z`;
-   - best-effort attaches the CycloneDX SBOM from the matching successful
-     `security.yml` run for this commit, if one exists (a missing SBOM warns,
-     it never blocks the release);
-   - publishes the GitHub Release.
+4. Dispatch. The workflow is two jobs, least-privilege: `verify` runs with no
+   write permission and no persisted git credential while it executes any
+   repository-controlled code; `publish` holds the write token and does
+   nothing but tag and publish. In order:
+   - **`verify`** (read-only):
+     - fails closed if the dispatched commit is not `main`'s current tip (a
+       race with a concurrent merge);
+     - fails closed if the input version does not match `pyproject.toml`'s
+       `[project]` table;
+     - resolves any existing `vX.Y.Z` tag via the commit API: fails closed if
+       it points at a different commit or its GitHub Release already exists;
+       otherwise proceeds (fresh publish, or a safe resume — see step 3
+       above);
+     - runs the full test suite fresh (`uv run --locked --extra api --extra
+       db --extra queue --group dev python -m pytest -q`);
+     - renders release notes from `CHANGELOG.md`'s matching section
+       (`scripts/ci/release_notes.py`, tested in
+       `tests/test_release_notes.py`);
+     - best-effort looks up and downloads the CycloneDX SBOM from the
+       matching successful `security.yml` run for this commit, if one exists
+       (a missing SBOM, or a failed lookup, warns — it never blocks the
+       release);
+     - uploads the rendered notes and any SBOM for `publish` to pick up.
+   - **`publish`** (write-scoped, only after `verify` succeeds):
+     - re-verifies `main`'s tip has not advanced while `verify` was testing
+       and rendering notes (a second, authoritative check right before
+       anything is created);
+     - creates and pushes an annotated tag `vX.Y.Z` — skipped when resuming
+       a run whose tag already exists at this commit;
+     - publishes the GitHub Release using the notes/SBOM `verify` produced.
 5. Confirm at
    <https://github.com/ContextualWisdomLab/contextual-orchestrator/releases/latest>.
 

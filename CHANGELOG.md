@@ -14,16 +14,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - A canonical, immutable release mechanism: `.github/workflows/release.yml`
   (`workflow_dispatch` only, explicit `version` input, never triggered by
-  push/schedule/merge) verifies the dispatched commit is protected `main`'s
-  untampered current tip, verifies the requested version matches
-  `pyproject.toml`, refuses to re-publish or move an existing tag, re-runs
-  the full test suite fresh, renders release notes from this file's matching
-  `## [X.Y.Z]` section via the new tested `scripts/ci/release_notes.py`, then
-  creates an annotated `vX.Y.Z` tag and a GitHub Release (best-effort
-  CycloneDX SBOM asset attached when available). Gives downstream consumers
+  push/schedule/merge), split into a read-only, credential-less `verify` job
+  and a write-scoped `publish` job for least privilege. `verify` checks the
+  dispatched commit is protected `main`'s untampered current tip, checks the
+  requested version against `pyproject.toml`'s `[project]` table (table-
+  boundary aware, so a same-named `version` key in an unrelated table can
+  never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
+  GitHub commits API (rejecting one that points at a different commit or
+  whose Release already exists, but permitting a safe idempotent resume when
+  it matches this commit with no Release published yet), re-runs the full
+  test suite fresh, renders release notes from this file's matching
+  `## [X.Y.Z]` section via the tested `scripts/ci/release_notes.py`, and
+  best-effort looks up a CycloneDX SBOM (a missing SBOM or failed lookup
+  warns, never blocks). `publish` re-verifies `main`'s tip has not advanced
+  since `verify` started testing — immediately before it creates anything —
+  then creates the annotated `vX.Y.Z` tag (skipped on a resumed run) and the
+  GitHub Release. Gives downstream consumers
   (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the Wardnet
   consumer-owner handoff, all recorded on `contextual-orchestrator#971`) an
-  immutable pin target instead of a vendored source SHA. See
+  immutable pin target (`.../releases/tag/vX.Y.Z` — not the mutable
+  `.../releases/latest` alias) instead of a vendored source SHA. See
   `docs/planning/adrs/0129-canonical-immutable-release.md` and
   `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
   and dispatching the first `v0.2.0` release are deliberately separate

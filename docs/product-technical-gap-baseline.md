@@ -119,6 +119,47 @@ protection already answered. Full reasoning:
 - `python -m interrogate -c pyproject.toml .` → `PASSED (minimum: 100.0%,
   actual: 100.0%)` — this repository's repo-wide docstring gate, unaffected
   by the new `scripts/ci/release_notes.py`.
+
+### Review-driven hardening (same PR, before merge)
+
+Devin Review and CodeRabbit found nine issues (five and four respectively,
+three overlapping) against the initial cut above, all fixed on the same
+branch before merge:
+
+- **Concurrent-merge staleness**: added a second, authoritative main-tip
+  check immediately before tag creation (after the fresh test run and note
+  rendering), alongside the original fast-fail early check.
+- **least privilege**: split `release.yml` into a read-only,
+  credential-less `verify` job (tests, note rendering, SBOM lookup —
+  `actions: read` lives here, scoped to just this job) and a write-scoped
+  `publish` job (tag + GitHub Release only), so repository-controlled test
+  code never runs alongside a write-scoped token.
+- **Idempotent retry**: an existing `vX.Y.Z` tag is now resolved via the
+  commits API into resume (same commit, unpublished Release — skip
+  re-tagging) vs. reject (different commit, or an already-published
+  Release), replacing the old any-existing-tag hard fail that stranded a
+  half-published release on any post-tag failure.
+- **SBOM lookup genuinely non-fatal**: `gh run list`/`gh run download`
+  failures are now each guarded by an explicit `if !`, instead of a bare
+  `set -e` that aborted the whole job on the `actions: read` permission gap.
+- **TOML table-boundary bug**: `read_declared_version` (and the workflow's
+  version-match step, via the same tested function) now bounds its search
+  to the `[project]` table's own body, so a same-named `version` key under
+  an earlier unrelated table can never be mistaken for the real one.
+- **`/releases/latest` mutability**: `docs/RELEASING.md` and this ADR's
+  Consequences section now correctly describe `/releases/tag/vX.Y.Z` as the
+  immutable pin and `/releases/latest` as a mutable discovery alias only.
+- **Research grounding**: ADR 0129 gained a section citing SemVer 2.0.0,
+  Keep a Changelog 1.1.0, and the GitHub Releases API — the normative
+  standards this process tooling implements, not an academic literature
+  review.
+- Test suite grew to `tests/test_release_notes.py` (13 tests),
+  `tests/test_release_workflow_contract.py` (17 tests), and a new
+  `tests/test_release_workflow_idempotency_contract.py` (12 tests) asserting
+  real step order and job-scoped permissions per job block, not just
+  substring presence. `python -m pytest tests -q` → 3390 passed (plus 3
+  pre-existing, unrelated failures confirmed present on the unmodified
+  branch too); `python -m interrogate -c pyproject.toml .` → 100.0%.
 - Full `python -m pytest tests -q` run for regression-freedom before landing
   the PR (see the PR body for the exact pass count from this run).
 
