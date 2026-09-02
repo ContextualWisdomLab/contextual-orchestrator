@@ -47,10 +47,10 @@ a valid general-purpose gateway pool for non-GitHub-Actions consumers.
    Credential/model discovery is broader than caller pool selection and stays
    owned by the gateway. In particular, receiving all configured credential
    sources does not authorize every discovered model for the free pool.
-3. No GitHub Actions exception to `orchestrator/free` is created here. A future
-   GitHub Actions model-backed caller must remain on `orchestrator/free`; a
-   missing required capability or eligible free candidate fails closed and is
-   repaired in contextual-orchestrator rather than bypassed through
+3. No GitHub Actions exception to `orchestrator/free` is created here. A
+   future GitHub Actions model-backed caller must remain on `orchestrator/free`;
+   a missing required capability or eligible free candidate fails closed and
+   is repaired in contextual-orchestrator rather than bypassed through
    `orchestrator/auto`, a direct provider identifier, a provider group, or a
    paid fallback.
 4. `tests/test_hourly_opencode_loop_contract.py` requires the free virtual model
