@@ -14,7 +14,9 @@ batch-backend endpoints, credentials — is read from a KV store, **never** from
 
 The ``get(category, key, default)`` / ``set(category, key, value)`` shape is
 deliberately identical to ``pg_llm_batch.PostgresConfigStore`` so the two are
-drop-in interchangeable.
+drop-in interchangeable. Those generic parameter names are therefore retained
+only at that external compatibility boundary; organization-owned internals use
+bounded-context names.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
 
 # Sentinel distinguishing "no value stored" from any real stored value
 # (including ``None``) when probing a category/key pair during migration.
-_MISSING = object()
+_MISSING_CONFIG_VALUE = object()
 
 # Renamed KV categories that may already hold persisted rows under their old
 # name on a Postgres-backed deployment (``pg_llm_batch.PostgresConfigStore``
@@ -53,7 +55,7 @@ _LEGACY_CATEGORY_MIGRATIONS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 }
 
 
-def _migrate_legacy_categories(store: "ConfigStore") -> None:
+def _migrate_legacy_categories(config_store: "ConfigStore") -> None:
     """Backfill renamed KV categories so already-persisted values survive.
 
     Idempotent and additive only: a value already present under the new
@@ -64,17 +66,37 @@ def _migrate_legacy_categories(store: "ConfigStore") -> None:
     protocol every backend (in-memory, the Postgres adapter, and test
     doubles) implements.
     """
-    for legacy_category, (new_category, keys) in _LEGACY_CATEGORY_MIGRATIONS.items():
-        for key in keys:
-            if store.get(new_category, key, _MISSING) is not _MISSING:
+    for legacy_category, (replacement_category, config_keys) in _LEGACY_CATEGORY_MIGRATIONS.items():
+        for config_key in config_keys:
+            if (
+                config_store.get(
+                    replacement_category,
+                    config_key,
+                    _MISSING_CONFIG_VALUE,
+                )
+                is not _MISSING_CONFIG_VALUE
+            ):
                 continue
-            legacy_value = store.get(legacy_category, key, _MISSING)
-            if legacy_value is not _MISSING:
-                store.set(new_category, key, legacy_value)
+            legacy_config_value = config_store.get(
+                legacy_category,
+                config_key,
+                _MISSING_CONFIG_VALUE,
+            )
+            if legacy_config_value is not _MISSING_CONFIG_VALUE:
+                config_store.set(
+                    replacement_category,
+                    config_key,
+                    legacy_config_value,
+                )
 
 
 class ConfigStore(Protocol):
-    """Minimal KV config contract shared by every backend."""
+    """Minimal KV config contract shared by every backend.
+
+    ``category``, ``key``, ``value`` and ``default`` intentionally mirror the
+    released ``pg_llm_batch.PostgresConfigStore`` protocol and are treated as
+    adapter-boundary vocabulary rather than organization-owned domain names.
+    """
 
     def get(self, category: str, key: str, default: Any = None) -> Any:
         """Return the configured value or ``default`` when unset."""
@@ -94,44 +116,44 @@ class InMemoryConfigStore:
     """
 
     def __init__(self, seed: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
-        self._tree: Dict[str, Dict[str, Any]] = {}
-        self._secrets: Dict[str, str] = {}
+        self._config_tree: Dict[str, Dict[str, Any]] = {}
+        self._secret_values: Dict[str, str] = {}
         if seed:
-            for category, entries in seed.items():
-                for key, value in entries.items():
-                    self.set(category, key, value)
+            for config_category, category_entries in seed.items():
+                for config_key, config_value in category_entries.items():
+                    self.set(config_category, config_key, config_value)
 
     def get(self, category: str, key: str, default: Any = None) -> Any:
         """Return the value stored under ``category``/``key`` or ``default``."""
-        return self._tree.get(category, {}).get(key, default)
+        return self._config_tree.get(category, {}).get(key, default)
 
     def set(self, category: str, key: str, value: Any) -> None:
         """Store ``value`` under ``category``/``key``."""
-        self._tree.setdefault(category, {})[key] = value
+        self._config_tree.setdefault(category, {})[key] = value
 
     def get_category(self, category: str) -> Dict[str, Any]:
         """Return a copy of every key/value pair under ``category``."""
-        return dict(self._tree.get(category, {}))
+        return dict(self._config_tree.get(category, {}))
 
     def show_config(self) -> Iterable[Tuple[str, str, Any]]:
         """Yield ``(category, key, value)`` for every configured entry."""
-        for category, entries in sorted(self._tree.items()):
-            for key, value in sorted(entries.items()):
-                yield category, key, value
+        for config_category, category_entries in sorted(self._config_tree.items()):
+            for config_key, config_value in sorted(category_entries.items()):
+                yield config_category, config_key, config_value
 
     def set_secret(self, secret_name: str, secret_value: str) -> None:
         """Store a secret (kept apart from plain config, never surfaced by show_config)."""
-        self._secrets[secret_name] = secret_value
+        self._secret_values[secret_name] = secret_value
 
     def get_secret(self, secret_name: str, default: Any = None) -> Any:
         """Return a stored secret or ``default`` when absent."""
-        return self._secrets.get(secret_name, default)
+        return self._secret_values.get(secret_name, default)
 
     def require_secret(self, secret_name: str) -> str:
         """Return a stored secret, raising when it is not configured."""
-        if secret_name not in self._secrets:
+        if secret_name not in self._secret_values:
             raise KeyError(f"secret {secret_name!r} is not configured")
-        return self._secrets[secret_name]
+        return self._secret_values[secret_name]
 
 
 class PostgresConfigStoreAdapter:
@@ -143,31 +165,31 @@ class PostgresConfigStoreAdapter:
     """
 
     def __init__(self, config_store: Any, secret_store: Any = None) -> None:
-        self._config = config_store
-        self._secret = secret_store
+        self._postgres_config_store = config_store
+        self._postgres_secret_store = secret_store
 
     def get(self, category: str, key: str, default: Any = None) -> Any:
         """Delegate reads to the underlying ``PostgresConfigStore``."""
-        return self._config.get(category, key, default)
+        return self._postgres_config_store.get(category, key, default)
 
     def set(self, category: str, key: str, value: Any) -> None:
         """Delegate writes to the underlying ``PostgresConfigStore``."""
-        self._config.set(category, key, value)
+        self._postgres_config_store.set(category, key, value)
 
     def get_secret(self, secret_name: str, default: Any = None) -> Any:
         """Return a secret from the backing ``SecretStore`` when configured."""
-        if self._secret is None:
+        if self._postgres_secret_store is None:
             return default
         try:
-            return self._secret.require_secret(secret_name)
+            return self._postgres_secret_store.require_secret(secret_name)
         except Exception:
             return default
 
     def require_secret(self, secret_name: str) -> str:
         """Return a required secret from the backing ``SecretStore``."""
-        if self._secret is None:
+        if self._postgres_secret_store is None:
             raise KeyError(f"secret {secret_name!r} is not configured")
-        return self._secret.require_secret(secret_name)
+        return self._postgres_secret_store.require_secret(secret_name)
 
 
 def get_config_store(
@@ -184,22 +206,25 @@ def get_config_store(
     in-memory store so the orchestrator never hard-depends on Postgres.
     """
     if not postgres_dsn:
-        store = InMemoryConfigStore(seed=seed)
-        _migrate_legacy_categories(store)
-        return store
+        in_memory_config_store = InMemoryConfigStore(seed=seed)
+        _migrate_legacy_categories(in_memory_config_store)
+        return in_memory_config_store
     try:  # pragma: no cover - exercised only with pg_llm_batch + Postgres present
         from pg_llm_batch import PostgresConfigStore, SecretStore  # type: ignore
 
-        config_store = PostgresConfigStore(postgres_dsn)
-        secret_store = SecretStore(postgres_dsn, fernet_key=fernet_key)
-        adapter = PostgresConfigStoreAdapter(config_store, secret_store)
+        postgres_config_store = PostgresConfigStore(postgres_dsn)
+        postgres_secret_store = SecretStore(postgres_dsn, fernet_key=fernet_key)
+        config_store_adapter = PostgresConfigStoreAdapter(
+            postgres_config_store,
+            postgres_secret_store,
+        )
         if seed:
-            for category, entries in seed.items():
-                for key, value in entries.items():
-                    adapter.set(category, key, value)
-        _migrate_legacy_categories(adapter)
-        return adapter
+            for config_category, category_entries in seed.items():
+                for config_key, config_value in category_entries.items():
+                    config_store_adapter.set(config_category, config_key, config_value)
+        _migrate_legacy_categories(config_store_adapter)
+        return config_store_adapter
     except Exception:  # pragma: no cover - fall back when deps/DB unavailable
-        store = InMemoryConfigStore(seed=seed)
-        _migrate_legacy_categories(store)
-        return store
+        in_memory_config_store = InMemoryConfigStore(seed=seed)
+        _migrate_legacy_categories(in_memory_config_store)
+        return in_memory_config_store
