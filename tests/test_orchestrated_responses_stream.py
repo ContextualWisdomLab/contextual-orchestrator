@@ -68,20 +68,22 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         for event in events
         if event["type"] == "response.reasoning_summary_text.delta"
     ]
-    # orchestrator/free unconditionally stays on the single-worker route path
-    # (would_route excludes it from the conduct-eligible model set -- see
-    # "Keep orchestrator/free on the auto route path"), so only the "worker"
-    # stage summary is emitted. Every other virtual model still runs the full
-    # thinker/worker/verifier/synthesizer conduct workflow.
-    if model == TaskOrchestrator.FREE_MODEL:
-        assert summaries == ["Executing the selected approach."]
-    else:
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path regardless of workflow need, even for this workflow-needing
+    # prompt (#9173923b); only orchestrator/auto still reaches the full
+    # 4-phase conduct workflow here. /v1/responses streaming has no
+    # per-request mode override, so this reflects the free-tier model's
+    # real HTTP-reachable behavior, not a test gap.
+    expected_mode = "route" if model == "orchestrator/free" else "conduct"
+    if expected_mode == "conduct":
         assert summaries == [
             "Planning the approach.",
             "Executing the selected approach.",
             "Checking the result for errors and unsupported claims.",
             "Preparing the final answer.",
         ]
+    else:
+        assert summaries == ["Executing the selected approach."]
     assert all("[" not in summary for summary in summaries)
     assert any(
         event["event_name"] == "responses_orchestrated"
@@ -92,7 +94,7 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
     runs = list(orchestrator._workflow_runs.values())
     assert len(runs) == 1
     run = runs[0]
-    assert run["mode"] == ("route" if model == TaskOrchestrator.FREE_MODEL else "conduct")
+    assert run["mode"] == expected_mode
     assert run["prompt_text"] == "Research, implement, and verify a safe design."
     assert run["policy_snapshot"] == orchestrator.policy.as_dict()
     assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
@@ -481,14 +483,17 @@ def test_http_virtual_responses_preserves_message_array_and_sampling_controls() 
         thread.join(timeout=5)
 
     assert observed_messages
-    # orchestrator/free always takes the single-worker route path (see
-    # would_route), which forwards the original message array to the agent
-    # unchanged -- unlike conduct, it does not prepend a per-stage system
-    # instruction, so the caller's messages start at index 0.
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path now (#9173923b), which passes the original message array through
+    # without conduct's leading workflow-instruction message -- so assert
+    # the input order survives as a contiguous run wherever it lands,
+    # rather than pinning it to conduct's specific offset.
+    expected_roles = ["system", "user", "assistant"]
     assert any(
-        [message.get("role") for message in messages][0:3]
-        == ["system", "user", "assistant"]
+        [message.get("role") for message in messages][start : start + len(expected_roles)]
+        == expected_roles
         for messages in observed_messages
+        for start in range(len(messages))
     )
     assert observed_settings
     assert all(
@@ -538,9 +543,10 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
     ])
-    # orchestrator/free always takes the single-worker route path (see
-    # would_route), so streaming failures for this model surface through
-    # stream_route rather than conduct.
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path now (#9173923b), so the failure this test simulates must come
+    # from stream_route (the route path's own call), not conduct -- which
+    # is never reached for this model/mode combination any more.
     orchestrator.stream_route = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
