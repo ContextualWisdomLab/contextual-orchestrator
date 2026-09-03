@@ -444,6 +444,12 @@ class _EmbeddingSpyClient:
         self.embed_calls.append(agent.id)
         return [[0.1, 0.2, 0.3] for _ in texts]
 
+    def embed_with_usage(
+        self, agent: ModelAgent, texts: list[str]
+    ) -> tuple[list[list[float]], int | None]:
+        """Same fixed vectors; no authoritative usage (mirrors the mock transport)."""
+        return self.embed(agent, texts), None
+
 
 def _pinned_pool() -> tuple[ModelAgent, ModelAgent]:
     """One pinnable chat model plus an embedding deployment on another provider."""
@@ -1466,6 +1472,12 @@ class _EmbeddingSpaceSpyClient:
         self.embed_calls.append(agent.id)
         return [list(self.VECTORS[agent.id]) for _ in texts]
 
+    def embed_with_usage(
+        self, agent: ModelAgent, texts: list[str]
+    ) -> tuple[list[list[float]], int | None]:
+        """Same vector space; no authoritative usage (mirrors the mock transport)."""
+        return self.embed(agent, texts), None
+
 
 def _embedding_space_pool() -> tuple[ModelAgent, ModelAgent, ModelAgent]:
     """One chat model plus two embedding deployments in one eligible set."""
@@ -1561,6 +1573,166 @@ def test_one_cosine_never_mixes_two_embedding_spaces() -> None:
     # Not one leftover call to the old embedder: a mixed pair would have
     # yielded a cosine of 0.0 between two orthogonal spaces.
     assert set(client.embed_calls) == {second_embedder.id}
+
+
+class _PricedEmbeddingClient:
+    """An embedder that reports authoritative ``prompt_tokens`` on every call.
+
+    Unlike ``_EmbeddingSpaceSpyClient``/``_EmbeddingSpyClient`` (which mirror
+    the ``mock://`` transport's ``prompt_tokens=None``), this fixture stands
+    in for a real, usage-reporting provider -- the case
+    ``_meter_embedding_spend`` exists to meter.
+    """
+
+    def __init__(self, prompt_tokens: int) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.embed_calls: list[str] = []
+
+    def embed_with_usage(
+        self, agent: ModelAgent, texts: list[str]
+    ) -> tuple[list[list[float]], int | None]:
+        self.embed_calls.append(agent.id)
+        return [[0.5, 0.5, 0.5] for _ in texts], self.prompt_tokens
+
+    def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:
+        vectors, _prompt_tokens = self.embed_with_usage(agent, texts)
+        return vectors
+
+
+def _paid_embedder() -> ModelAgent:
+    return ModelAgent(
+        "paid_embedder",
+        "paid-embed-model",
+        base_url="https://embed.example/v1",
+        tags=("embedding",),
+    )
+
+
+def test_cache_miss_with_paid_embedder_is_metered() -> None:
+    """A cache-miss embedding call with authoritative usage reaches the budget meter.
+
+    Before this fix, ``_embed_cached`` called ``client.embed()`` (discarding
+    usage) and never touched ``_workflow_runs`` at all: real, incurred
+    provider spend on routing-evidence embeddings was completely invisible
+    to ``spend_analytics``/``budget_status`` (Devin review on #1032).
+    """
+    embedder = _paid_embedder()
+    client = _PricedEmbeddingClient(prompt_tokens=37)
+    orchestrator = TaskOrchestrator([embedder], client=client)
+
+    vector = orchestrator._embed_cached("routing text")
+
+    assert vector == [0.5, 0.5, 0.5]
+    analytics = orchestrator.spend_analytics()
+    assert analytics["totals"]["prompt_tokens"] == 37
+    by_model = {row["model"]: row for row in analytics["by_model"]}
+    assert by_model["paid-embed-model"]["output_tokens"] == 0
+    assert by_model["paid-embed-model"]["step_count"] == 1
+
+
+def test_cache_hit_is_never_metered_again() -> None:
+    """A cache hit reuses the already-metered vector; it must not meter twice.
+
+    This is the fix's core safety property: metering sits strictly on the
+    miss branch, after the ``if cached is not None: return cached``
+    short-circuit, so a hit is never reachable from it.
+    """
+    embedder = _paid_embedder()
+    client = _PricedEmbeddingClient(prompt_tokens=37)
+    orchestrator = TaskOrchestrator([embedder], client=client)
+
+    assert orchestrator._embed_cached("routing text") == [0.5, 0.5, 0.5]
+    assert orchestrator._embed_cached("routing text") == [0.5, 0.5, 0.5]
+
+    assert client.embed_calls == [embedder.id]
+    assert orchestrator.spend_analytics()["totals"]["prompt_tokens"] == 37
+
+    assert orchestrator._descriptor_vector_cached(embedder) == [0.5, 0.5, 0.5]
+    assert orchestrator._descriptor_vector_cached(embedder) == [0.5, 0.5, 0.5]
+
+    assert client.embed_calls == [embedder.id, embedder.id]
+    assert orchestrator.spend_analytics()["totals"]["prompt_tokens"] == 74
+
+
+def test_select_model_group_members_meters_embedding_with_no_live_request() -> None:
+    """A request-independent caller still gets its embedding spend metered.
+
+    ``select_model_group_members`` is the confirmed real call site that
+    reaches ``_embed_cached``/``_descriptor_vector_cached`` with no
+    enclosing task, workflow record, or request-eligibility context at all
+    (no ``_request_eligibility_scope`` is entered anywhere in this test) --
+    ``_meter_embedding_spend`` must not assume any of those exist.
+    """
+    chat = ModelAgent(
+        "chat_agent", "chat-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    embedder = _paid_embedder()
+    client = _PricedEmbeddingClient(prompt_tokens=11)
+    orchestrator = TaskOrchestrator([chat, embedder], client=client)
+
+    selected = orchestrator.select_model_group_members(
+        [chat], text="classify ten items"
+    )
+
+    assert [agent.id for agent in selected] == [chat.id]
+    assert client.embed_calls  # the task text and/or a descriptor were embedded
+    expected_prompt_tokens = len(client.embed_calls) * 11
+    assert (
+        orchestrator.spend_analytics()["totals"]["prompt_tokens"]
+        == expected_prompt_tokens
+    )
+
+
+def test_unpriced_embedder_under_cost_budget_does_not_blind_meter() -> None:
+    """An unpriced embedder must never flip the whole meter to blocked_unavailable.
+
+    Isolates the exact gap: every *general-chat* model is priced (so
+    ``budget_status()``'s own ``candidate_prices_available`` check, which
+    only looks at ``_is_general_chat_agent`` models, already passes) but the
+    embedder -- structurally unable to need a price before this fix, since
+    embedding calls never produced a workflow run at all -- is not.
+    ``completion_tokens`` is always ``0`` for an embedding step, which
+    satisfies ``_replace_workflow_run``'s *per-step* availability check --
+    but its second, independent gate (every model appearing in the run must
+    be priced whenever ``budget_max_cost_usd`` is set) still fails on the
+    unpriced embedder. Before this guard, that added the synthetic run's id
+    to ``_budget_unavailable_run_ids`` and flipped
+    ``budget_status()["enforcement_status"]`` to ``"blocked_unavailable"``
+    for every request org-wide, even though this run's real contribution to
+    spend is mathematically $0 (an embedding call has no completion
+    tokens). The guard skips metering in that one case -- true zero-cost
+    either way -- instead of writing a row that blinds unrelated requests'
+    enforcement.
+    """
+    chat = ModelAgent(
+        "chat_agent", "chat-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    embedder = _paid_embedder()
+
+    unpriced_client = _PricedEmbeddingClient(prompt_tokens=37)
+    unpriced = TaskOrchestrator(
+        [chat, embedder],
+        client=unpriced_client,
+        budget_max_cost_usd=1.0,
+        price_per_million={"chat-model": 1.0},
+    )
+    unpriced._embed_cached("routing text")
+    assert unpriced.budget_status()["enforcement_status"] == "within_budget"
+    assert unpriced.spend_analytics()["totals"]["prompt_tokens"] == 0
+
+    # Scoped to the unpriced case only: once the embedder is priced too
+    # (even at $0), metering proceeds normally and the meter still reads
+    # within_budget -- this is not a blanket "budget enabled => never meter".
+    priced_client = _PricedEmbeddingClient(prompt_tokens=37)
+    priced = TaskOrchestrator(
+        [chat, embedder],
+        client=priced_client,
+        budget_max_cost_usd=1.0,
+        price_per_million={"chat-model": 1.0, "paid-embed-model": 0.0},
+    )
+    priced._embed_cached("routing text")
+    assert priced.spend_analytics()["totals"]["prompt_tokens"] == 37
+    assert priced.budget_status()["enforcement_status"] == "within_budget"
 
 
 if __name__ == "__main__":  # pragma: no cover

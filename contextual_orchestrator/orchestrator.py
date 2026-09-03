@@ -7564,6 +7564,91 @@ class TaskOrchestrator:
             None,
         )
 
+    def _meter_embedding_spend(
+        self, embedder: ModelAgent, prompt_tokens: int | None
+    ) -> None:
+        """Record one cache-miss embedding call's real provider spend.
+
+        Called only from the miss branch of ``_embed_cached`` and
+        ``_descriptor_vector_cached`` -- a cache hit reuses a vector this
+        already metered and must never be counted twice -- and only when
+        ``embed_with_usage`` returned an authoritative ``prompt_tokens``;
+        the mock transport and any provider that omits usage both return
+        None, and this stays a graceful no-op rather than guess a count
+        (Devin review on #1032).
+
+        These calls have no enclosing task, record, or workflow_run_id to
+        attach to -- the public ``select_model_group_members`` can trigger
+        one with none of those in scope at all -- so this mints its own run
+        and writes it straight onto the meter via
+        :meth:`_replace_workflow_run`, the same primitive every other
+        spend-recording path in this file uses; it works identically
+        whether or not a live request exists.
+
+        Reuses the ``pending_verification: True`` shape ``batch_route`` and
+        :meth:`_meter_unserved_spend` already established for exactly this
+        split: :meth:`_replace_workflow_run`/``spend_analytics`` iterate
+        ``_workflow_runs`` directly, so the real spend is always counted,
+        while the marker keeps this synthetic row out of ``_run_order`` and
+        every consumer that goes through :meth:`_completed_workflow_runs`
+        instead (run counts, analytics KPIs, admin listings) -- it was
+        never a request, so it must never look like one.
+        ``completion_tokens`` is explicit ``0`` (embeddings have no
+        completion), which keeps this row "reported" rather than
+        "unavailable" so it can never flip a real run's -- or the whole
+        meter's -- availability.
+
+        That per-step availability isn't the whole story: the budget
+        meter also requires every model appearing in *any* run to be
+        priced whenever ``budget_max_cost_usd`` is set, with no exception
+        for a model whose output is provably always zero tokens. An
+        operator who adds a cost budget without ever having priced their
+        embedder (embedding spend was invisible before this fix, so there
+        was never a reason to) would otherwise see the *entire* meter flip
+        to ``blocked_unavailable`` the first time this fires. Skip
+        metering in that one case -- true zero-cost either way -- instead
+        of writing a row that blinds unrelated requests' enforcement.
+        """
+        if prompt_tokens is None:
+            return
+        if (
+            self.budget_max_cost_usd is not None
+            and embedder.model not in self.price_per_million
+        ):
+            return
+        run_id = f"run_{uuid.uuid4().hex}"
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "embedding",
+                "policy_mode": "embedding",
+                "prompt_text": "",
+                "answer": "",
+                "cache_status": "bypass",
+                "trace": [
+                    {
+                        "id": 0,
+                        "role": "embedding",
+                        "agent_id": embedder.id,
+                        "subtask": "Routing-evidence embedding",
+                        "access": [],
+                        "output": "",
+                        "model_name": embedder.model,
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": 0,
+                        },
+                    }
+                ],
+                "policy_snapshot": self.policy.as_dict(),
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(record)
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, record)
+
     def _embed_cached(
         self, text: str, embedding_member: str | None = None
     ) -> list[float] | None:
@@ -7606,12 +7691,14 @@ class TaskOrchestrator:
         if cached is not None:
             return cached
         try:
-            vectors = self.client.embed(self._agent(embedding_member), [text])
+            embedder = self._agent(embedding_member)
+            vectors, prompt_tokens = self.client.embed_with_usage(embedder, [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
         if vector is not None:
             self._cache_put(self._task_vector_cache, digest, vector)
+            self._meter_embedding_spend(embedder, prompt_tokens)
         return vector
 
     def _descriptor_vector_cached(
@@ -7645,14 +7732,16 @@ class TaskOrchestrator:
         if cached is not None:
             return cached
         try:
-            vectors = self.client.embed(
-                self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+            embedder = self._agent(embedding_member)
+            vectors, prompt_tokens = self.client.embed_with_usage(
+                embedder, [self._agent_descriptor_text(agent)]
             )
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
         if vector is not None:
             self._cache_put(self._descriptor_vector_cache, fingerprint, vector)
+            self._meter_embedding_spend(embedder, prompt_tokens)
         return vector
 
     def _semantic_affinities(
