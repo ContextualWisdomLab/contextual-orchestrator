@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import shutil
 import subprocess
-from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -180,10 +180,12 @@ def test_model_group_mutations_refresh_audit_events() -> None:
     assert "model_groups_refresh_warning" in ADMIN_TRANSLATIONS["ko"]
 
     def source_between(start_marker: str, end_marker: str) -> str:
+        """Extract one function declaration's source, parenthesized into an
+        expression so ``eval()`` yields the function itself rather than
+        ``undefined`` (eval's completion value for a bare declaration
+        statement)."""
         start_index = ADMIN_HTML.index(start_marker)
         end_index = ADMIN_HTML.index(end_marker, start_index)
-        # Parenthesize so eval() yields the function value (a bare function
-        # declaration statement has no completion value of its own).
         return "(" + ADMIN_HTML[start_index:end_index].strip() + ")"
 
     node_script = "\n".join(
