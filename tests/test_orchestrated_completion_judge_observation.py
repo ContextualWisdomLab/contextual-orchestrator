@@ -220,5 +220,82 @@ def test_orchestrated_completion_observation_flows_into_psychometric_reordering(
     assert [candidate.id for candidate in reordered] == ["candidate_beta", "candidate_alpha"]
 
 
+def test_explicit_model_pin_constrains_realtime_judge_to_selected_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit model pin stays pinned through the observation-only judge too.
+
+    Devin review (PR #1032): ``_realtime_route_judge`` must forward the same
+    ``allowed_agent_ids`` the request's own synthesis was already constrained
+    to, so this extra call can never reach an unrelated, higher-ranked
+    verifier the caller never selected.
+    """
+    pinned = ModelAgent("pinned_agent", "mock", tags=("reasoning",), priority=1)
+    unrelated = ModelAgent("unrelated_verifier", "mock", tags=("reasoning",), priority=100)
+    orchestrator = TaskOrchestrator([pinned, unrelated])
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+
+    captured: dict[str, object] = {}
+
+    def _spy(
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        captured["allowed_agent_ids"] = allowed_agent_ids
+        return {
+            "accepted": True,
+            "reason": "stub verdict",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        }
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", _spy)
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world", "_required_agent_id": "pinned_agent"},
+        endpoint="responses",
+        single_agent=False,
+    )
+
+    assert result["output_text"] == "[pinned_agent] chat-mock"
+    assert captured["allowed_agent_ids"] == {"pinned_agent"}
+
+
+def test_exhausted_budget_skips_extra_realtime_judge_call_but_keeps_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exhausted budget skips the extra judge call, never the already-good answer.
+
+    Devin review (PR #1032): this purely observation-only call's own spend
+    must never discard the already-decided response above. Unlike
+    ``batch_route``'s pre-call gate (which blocks a not-yet-incurred worker
+    call before the caller has anything), this call happens after the
+    response is fully decided -- an exhausted budget skips it outright
+    instead of raising and losing an already-good answer.
+    """
+    agent = ModelAgent("worker_agent", "mock", tags=("reasoning",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator.budget_max_output_tokens = 1
+    monkeypatch.setattr(orchestrator, "budget_status", lambda: {"exceeded": True})
+
+    def _explode(*args: object, **kwargs: object) -> dict[str, Any]:
+        raise AssertionError("realtime judge must be skipped once budget is already exceeded")
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", _explode)
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world"}, endpoint="responses", single_agent=False
+    )
+
+    assert result["output_text"] == "[worker_agent] chat-mock"
+    assert orchestrator._quality_router.member_observation_count("worker_agent") == 0
+    assert orchestrator._psychometric_router.has_observations() is False
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__]))

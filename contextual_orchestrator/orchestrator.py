@@ -4945,15 +4945,41 @@ class TaskOrchestrator:
         # on here, since send_synthesis's own retry/failover already ran to
         # completion by this point.
         usage = (repair_step or synthesis_step).get("usage")
-        self._realtime_route_judge(
-            text=task,
-            answer=synthesis_output,
-            served_id=final_agent.id,
-            latency_seconds=synthesis_latency_seconds,
-            usage=usage,
-            free_only=free_only,
-            prompt_context=prompt_context,
+        # This call must stay pinned to the same eligibility constraint the
+        # request's own synthesis already honored (an explicit model pin,
+        # the free pool, a ZDR-only virtual request, or a file-replica
+        # subset) -- otherwise an observation-only judge call could reach a
+        # provider the caller's own request was never allowed to use
+        # (Devin review on #1032).
+        #
+        # The already-decided, already-served answer above must never be
+        # discarded just because this purely observation-only extra call
+        # would push spend over budget -- unlike batch_route's pre-call
+        # gate (which blocks a not-yet-incurred worker call before the
+        # caller has anything), this call happens after the response is
+        # fully decided, matching stream_route's own no-budget-check
+        # precedent for already-committed output. An exhausted budget skips
+        # the extra judge call outright instead of raising (Devin review on
+        # #1032).
+        judge_budget_exceeded = (
+            self.policy.realtime_judge
+            and (
+                self.budget_max_output_tokens is not None
+                or self.budget_max_cost_usd is not None
+            )
+            and self.budget_status()["exceeded"]
         )
+        if not judge_budget_exceeded:
+            self._realtime_route_judge(
+                text=task,
+                answer=synthesis_output,
+                served_id=final_agent.id,
+                latency_seconds=synthesis_latency_seconds,
+                usage=usage,
+                free_only=free_only,
+                prompt_context=prompt_context,
+                allowed_agent_ids=allowed_agent_ids,
+            )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
         echo = raw.get("echo")
@@ -6378,6 +6404,8 @@ class TaskOrchestrator:
         usage: dict[str, Any] | None,
         free_only: bool,
         prompt_context: str | None = None,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
 
@@ -6388,7 +6416,11 @@ class TaskOrchestrator:
         ``None`` when the caller has no single-attempt wall-clock timing to
         honestly attribute to this one answer (see
         ``ModelGroupRouter.observe_success``); the success/failure signal is
-        still recorded, just not a misleading latency sample.
+        still recorded, just not a misleading latency sample. ``allowed_agent_ids``/
+        ``excluded_agent_ids`` forward the caller's own synthesis eligibility
+        constraints (e.g. an explicit model pin) to the verifier selection so
+        this observation-only call cannot reach a provider the request itself
+        was never allowed to use.
         """
         output_tokens = self._usage_completion_tokens(usage)
 
@@ -6418,7 +6450,11 @@ class TaskOrchestrator:
             }
         fallback_report = {"verifier_output": answer}
         base = self._model_judge_verification(
-            text, fallback_report, free_only=free_only
+            text,
+            fallback_report,
+            free_only=free_only,
+            allowed_agent_ids=allowed_agent_ids,
+            excluded_agent_ids=excluded_agent_ids,
         )
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
