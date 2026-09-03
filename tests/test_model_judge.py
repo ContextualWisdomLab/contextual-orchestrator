@@ -633,6 +633,85 @@ def test_fast_mlsirm_judge_failover_honors_verifier_exclusions() -> None:
         )
 
 
+def test_model_judge_never_selects_a_verifier_excluded_sole_candidate() -> None:
+    """A verifier-excluded agent must never become the model judge even as
+    the *primary* selection, not only on failover (see the failover-only
+    guarantee just above). ``_ranked_agents`` deliberately still returns
+    role-ineligible members -- it appends them after every eligible one,
+    per its own docstring -- so a caller that wants only role-eligible
+    candidates must re-apply ``role not in agent.provider_exclusions``
+    itself, exactly as ``_plan_generated``/``_parse_workflow_plan`` already
+    do. The judge-selection ``next(...)`` in ``_model_judge_verification``
+    was missing that filter: with a single-candidate pool excluded from
+    "verifier" (e.g. a worker-only pinned candidate -- PR #983's
+    ``orchestrator/free`` provable-route carve-out), it picked that
+    ineligible agent as judge anyway, an extra unrequested live call the
+    no-heuristics candidate-controls contract does not allow (observed as
+    a spurious duplicate call in hosted CI, where fast-mlsirm is actually
+    importable, once #983 added the first single-candidate
+    verifier-excluded pool)."""
+    judge_constructed_with: list[str] = []
+
+    class _Judge:
+        def __init__(self, adapter, *, mode: str, accept_threshold: float) -> None:
+            del mode, accept_threshold
+            judge_constructed_with.append(adapter.judge)
+
+        def judge(self, **_: object) -> object:
+            raise AssertionError(
+                "judge() must never be called for an ineligible sole candidate"
+            )
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    calls: list[str] = []
+
+    class _Client(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            del messages, kwargs
+            calls.append(agent.id)
+            return "unexpected"
+
+        def proxy_send(self, agent: ModelAgent, endpoint: str, payload: dict) -> dict:  # type: ignore[override]
+            del endpoint, payload
+            calls.append(agent.id)
+            return {"choices": [{"message": {"content": "unexpected"}}]}
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                tags=("cost:free",),
+                provider_exclusions=("thinker", "verifier", "synthesizer"),
+            )
+        ],
+        client=_Client(),
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_Judge,
+            criterion_cls=_Criterion,
+            format_error=ValueError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification(
+            "task", {"verifier_output": "report"}
+        )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "model judge unavailable; verification failed closed"
+    assert judge_constructed_with == []
+    assert calls == []
+
+
 def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
     orchestrator, _ = _orch("unused")
     adapter = orchestrator_module._FastMLSIJudgeAdapter(

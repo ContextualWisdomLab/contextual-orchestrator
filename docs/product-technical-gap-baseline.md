@@ -2734,3 +2734,53 @@ validator (`server.py`'s `_validate_routing`) has no other hidden count-based
 cutoff on this field. Lesson: a schema/contract file is a second, independent
 publication surface for the same invariant as runtime code — removing a rule from
 one without checking the other leaves the claim false in whichever one still has it.
+
+## 2026-09-03 — PR #983 follow-up: base merge and a pre-existing judge-selection double-call
+
+Merged current `main` into the branch (clean, no conflicts) to pick up main's
+`test_admin_contract.py` `import json` fix (main PR #1035) that this PR's stale base
+predated. Hosted CI's "Full unit and contract suite" job (run `33692781067`) then
+showed two of this PR's own new tests failing with an extra `worker_only` call in
+`client.calls`: `test_http_auto_preflight_accepts_worker_only_pin_when_free_model_
+always_routes` and `test_coordinator_auto_route_only_pin_succeeds_for_free_model`
+(both in `tests/test_candidate_routing_controls.py`). Neither test failed locally in
+this or any earlier round, in isolation or full-suite, because this sandbox's
+blocked `fast-mlsirm` GitHub-archive download (documented since the first
+2026-09-02 entry above) always short-circuits `_model_judge_verification` to its
+"fast-mlsirm judge is unavailable" fail-closed return before any judge is selected
+or called — hiding a real, pre-existing (predates PR #983 entirely; present
+unchanged at merge-base `212ff437`) selection bug that only a hosted run with
+fast-mlsirm actually importable can exercise. Root cause: `_ranked_agents`
+deliberately still returns role-ineligible members — it appends them after every
+eligible one, per its own docstring — so a caller wanting only role-eligible
+candidates must re-apply `role not in agent.provider_exclusions` itself, exactly as
+`_plan_generated` and `_parse_workflow_plan` already do. `_model_judge_verification`'s
+judge-selection `next(...)` was missing that filter, so with a single-candidate pool
+excluded from `verifier` (PR #983's own new `orchestrator/free` worker-only
+provable-route fixture), it picked that ineligible agent as judge anyway instead of
+failing closed — an extra, unrequested live call. `_invoke`'s own failover path
+already enforced this same exclusion for a *backup* judge
+(`test_fast_mlsirm_judge_failover_honors_verifier_exclusions`); this closes the
+identical gap for the *primary* selection. Fixed by adding
+`if "verifier" not in agent.provider_exclusions` to the judge-selection generator in
+`_model_judge_verification` (`contextual_orchestrator/orchestrator.py`). RED-before
+confirmed by a stub `_resolve_fast_mlsirm_components` whose judge constructor
+records the selected agent id: before the fix it recorded the sole, role-excluded
+`worker_only` agent; after the fix `next(...)` raises `StopIteration` (caught by the
+existing broad fail-closed handler) and the judge is never constructed
+(`test_model_judge_never_selects_a_verifier_excluded_sole_candidate`,
+`tests/test_model_judge.py`). GREEN: that regression plus
+`test_fast_mlsirm_judge_failover_honors_verifier_exclusions` (2 passed);
+`test_model_judge.py` + `test_candidate_routing_controls.py` +
+`test_candidate_routing_no_heuristic_limits.py` + `test_api_contract.py` +
+`test_admin_contract.py` (98 passed); full local suite (Python 3.12, matching CI's
+`uv run` toolchain) 3441 passed, 2 pre-existing sandbox-only failures unrelated to
+this change and already documented above (`fast_mlsirm` unavailable;
+`test_spend_analytics`'s local-tokenizer artifact — the same missing-fast-mlsirm
+mechanism, now also confirmed to flip an unrelated `spend_analytics` conduct-mode
+trace's `usage_source` from the expected `mixed` to `tokenizer` when the judge step
+never runs). `interrogate` on `orchestrator.py`: 100%. Lesson: a fail-closed branch
+that this sandbox can only reach one way (dependency unavailable) can mask a real
+selection bug in the branch that never runs locally; a caller of a "still includes
+ineligible members, ranked last" helper must re-apply the eligibility filter at
+every call site, not assume it inherited from one.

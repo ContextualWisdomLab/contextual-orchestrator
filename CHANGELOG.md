@@ -35,6 +35,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   runtime intentionally accepts, making the schema false at source. `uniqueItems`,
   lexical ID constraints, and normal authenticated request-size bounds are
   unchanged; no replacement cardinality heuristic was introduced.
+- The real-time model judge no longer selects a verifier-excluded agent as
+  the judge when it is the sole candidate. `_ranked_agents` deliberately
+  still returns role-ineligible members (appended after every eligible one),
+  so a caller that wants only role-eligible candidates must re-apply
+  `role not in agent.provider_exclusions` itself — `_plan_generated` and
+  `_parse_workflow_plan` already do; `_model_judge_verification`'s judge
+  selection did not. With a single-candidate pool excluded from `verifier`
+  (e.g. a worker-only pinned agent under PR #983's `orchestrator/free`
+  provable-route carve-out), that judge selection picked the ineligible
+  agent anyway, producing an extra, unrequested live call once fast-mlsirm
+  is actually importable (observed as a duplicate served-candidate call in
+  hosted CI, which every earlier sandboxed verification round of this PR
+  could not reproduce locally because the sandbox's blocked fast-mlsirm
+  archive download always short-circuits the judge to its fail-closed path
+  first). `_invoke`'s own failover already enforced this exclusion for a
+  *backup* judge; this closes the same gap for the *primary* selection.
 - `route_once` and `stream_route` no longer stamp `served_agent_id` on every
   trace row unconditionally. An earlier no-heuristics repair for candidate-
   routing evidence made that stamp unconditional to give

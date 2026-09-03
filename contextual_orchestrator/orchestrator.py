@@ -8551,9 +8551,26 @@ class TaskOrchestrator:
             }
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
+            # _ranked_agents deliberately still returns role-ineligible
+            # members (it appends them after every eligible one -- see its
+            # own docstring), so every other caller in this module that
+            # wants only role-eligible candidates re-applies
+            # `role not in agent.provider_exclusions` itself
+            # (_plan_generated, _parse_workflow_plan). This selection was
+            # missing that filter: with a single-candidate pool excluded
+            # from "verifier" (e.g. a worker-only pinned agent), `next(...)`
+            # picked that ineligible agent as judge anyway, so a live judge
+            # call could still land on an agent the pool operator explicitly
+            # declared unfit to verify -- an extra, unrequested provider
+            # call the no-heuristics candidate-controls contract on #983
+            # does not allow. `_invoke`'s own failover path already enforces
+            # this exclusion for a *backup* judge (see
+            # test_fast_mlsirm_judge_failover_honors_verifier_exclusions);
+            # this closes the same gap for the *primary* selection here.
             judge = next(
                 agent
                 for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                if "verifier" not in agent.provider_exclusions
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )
