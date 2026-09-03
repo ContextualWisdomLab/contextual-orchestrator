@@ -1,6 +1,7 @@
 """Public package exports for the contextual orchestration runtime."""
 
 from .batch_routing import (
+    BatchDownloadError,
     BatchJob,
     BatchRequest,
     BatchResultItem,
@@ -10,6 +11,7 @@ from .batch_routing import (
     LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
     PgLlmBatchEmbeddingBackend,
+    ProviderEmbeddingBatchBackend,
     RoutingDecision,
     RoutingHints,
     RoutingPolicy,
@@ -48,6 +50,19 @@ from .cefr_language_observation import (
     TaskOrchestratorCefrGateway,
     observe_language_response_criteria,
 )
+from .evaluation_criterion_binding import (
+    CategoryExecutionBinding,
+    CriterionExecutionBinding,
+    CriterionSetExecutionBinding,
+    EvaluationCriterionBindingError,
+)
+from .rater_observation import (
+    GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
+    CriterionObservation,
+    RaterConfigurationIdentity,
+    RaterInvocation,
+    RaterObservationError,
+)
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
@@ -60,7 +75,14 @@ from .reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import (
+    NativeCl100kTokenCounter,
+    NativeExactTokenCounter,
+    TokenCountUnavailable,
+    UnavailableTokenCounter,
+    build_embedding_token_counter,
+    build_token_counter,
+)
 from .response_cache import (
     RedisResponseCacheProvider,
     ResponseCacheProvider,
@@ -123,7 +145,11 @@ __all__ = [
     # config / tokens
     "InMemoryConfigStore",
     "get_config_store",
-    "HeuristicTokenCounter",
+    "NativeCl100kTokenCounter",
+    "NativeExactTokenCounter",
+    "TokenCountUnavailable",
+    "UnavailableTokenCounter",
+    "build_embedding_token_counter",
     "build_token_counter",
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",
@@ -138,6 +164,7 @@ __all__ = [
     "BatchRequest",
     "BatchJob",
     "BatchResultItem",
+    "BatchDownloadError",
     "LocalBatchBackend",
     "PgLlmBatchBackend",
     # embeddings batch
@@ -145,10 +172,23 @@ __all__ = [
     "EmbeddingBatchResultItem",
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
+    "ProviderEmbeddingBatchBackend",
     "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    # immutable evaluation-criterion binding
+    "CategoryExecutionBinding",
+    "CriterionExecutionBinding",
+    "CriterionSetExecutionBinding",
+    "EvaluationCriterionBindingError",
+    # generic governed-rater observation context
+    "GOVERNED_RATER_OBSERVATION_CONTRACT_V1",
+    "CriterionObservation",
+    "RaterConfigurationIdentity",
+    "RaterInvocation",
+    "RaterObservationError",
+    # compatibility CEFR profile boundary
     "CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1",
     "FAST_MLSIRM_SCORING_SCHEMA_VERSION",
     "CefrContractAdapter",

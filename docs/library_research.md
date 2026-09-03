@@ -19,6 +19,11 @@ primitives use maintained libraries when the enterprise target requires them.
 | Rendered policy browser | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | Keep as a pinned deployment-provided optional package for the existing Camoufox MCP transport; do not claim a repository `policy-browser` extra until this project owns that lock and publish contract. | Reuses the protocol client and Streamable HTTP lifecycle instead of implementing a second transport; static policy analysis does not install it. |
 | Structured-output validation | `jsonschema` | Use the maintained validator for provider-returned JSON against caller-supplied JSON Schema; keep parsing and the single repair policy in the existing orchestrator. | Reusing `validator_for`, schema checks, and bounded validation avoids an incomplete custom JSON Schema implementation. Provider output and schemas remain untrusted and fail closed. |
 | SSE usage capture | Python stdlib streaming parser already used by `ModelClient._stream_send` | Reuse the existing line-delimited SSE parser and capture only provider-declared usage frames; do not add an SSE or provider SDK dependency. | OpenAI's Responses and Chat Completions references define terminal usage fields, while interrupted streams may omit the final usage frame. |
+| Verbose/debug logging | Python stdlib `logging` (researched: `structlog`, `loguru`) | Use stdlib `logging` exclusively -- `logging.basicConfig(..., force=True)` for one configuration entrypoint, a `logging.Filter` on the installed handler for redaction, `%`-style lazy formatting for cost-free DEBUG below its threshold. `structlog`/`loguru` add structured/prettier output this repo's existing `print(json.dumps(...))` CLI-report convention and `_LOGGER = logging.getLogger(__name__)` precedent (3 modules) do not need yet. | Python's own `logging` HOWTO documents `basicConfig`'s one-shot-unless-`force` behavior, handler-level `Filter`s, and that `isEnabledFor` gates expensive argument construction, not just formatting -- covering every requirement (level control, lazy evaluation, a redaction hook) with zero new dependency surface. |
+| Distributed tracing | [OpenTelemetry Python](https://github.com/open-telemetry/opentelemetry-python) (already a runtime dependency since ADR 0122; recorded here for completeness -- this row was missing when that ADR shipped) | Keep as the request-correlation/span backend for cross-provider tracing (`telemetry.py`); it stays a separate system from stdlib logging (verbose/debug logging row above) -- two systems, not one, because OTel's span/attribute model and stdlib `logging`'s line-oriented model solve different problems and merging them would require a third abstraction neither currently needs. | OpenTelemetry's Python SDK and OTLP HTTP exporter are the maintained reference implementation for the vendor-neutral tracing API this repo's GenAI span conventions already target (see ADR 0122's References). |
+| Provider-embedding claim ownership | Existing `redis-py` lock token plus one Valkey Lua transaction | Propagate renewal loss, compare the live execution token, and atomically write terminal state with result/usage/error. A live worker retries claim acquisition until terminal state or deadline; provider-side exactly-once execution is not claimed. | Redis's official distributed-lock guidance requires ownership-safe release/extension and recommends fencing when correctness depends on exclusive work. Reused the existing registry and skipped a new coordination dependency, forced cancellation of synchronous provider I/O, and an unsupported provider-idempotency claim. |
+| Provider-embedding token accounting | Existing PyO3 + `tiktoken-rs` extension, with configured `pg_tiktoken` first | Load the packaged Rust extension in the production embedding path for the exact OpenAI-published cl100k embedding model IDs. Missing/failing native code and unknown tokenizers are explicitly unavailable; splitting, provider dispatch, usage, and cost fail closed instead of estimating. | OpenAI's public encoding table maps `text-embedding-ada-002`, `text-embedding-3-small`, and `text-embedding-3-large` to cl100k; PyO3 publishes the existing module in-package. Skipped tokenizer-name inference, a second tokenizer implementation, a provider SDK, and heuristic fallback. ADR 0006 now governs chat accounting separately. |
+| Chat token accounting | Existing provider usage fields plus the packaged PyO3 + `tiktoken-rs` extension | Treat valid provider usage as authoritative. Use Rust only for raw textual output from exact model IDs declared by ADR 0006; prompt framing, tools, multimodal input, unknown models, missing native code, and missing stream usage are explicitly unavailable. Enabled budgets fail closed and token-threshold routing remains synchronous when the required count is unavailable. | OpenAI's Chat Completions contract carries provider usage and notes streamed usage can be absent; OpenAI's public tiktoken model table separates exact mappings from unsafe prefix matching. Reused the existing extension and storage status seam. Skipped a provider SDK, prompt-serialization reimplementation, prefix/name inference, heuristic estimates, and fabricated zero-cost reporting. |
 
 ## Ponytail Decision
 
@@ -79,8 +84,21 @@ returns true.
 
 | Area | Researched | Decision | Skipped |
 |---|---|---|---|
-| Shared replay store | Existing stdlib `sqlite3`; repository `state_db`; ADR 0039 routing-observation contract | Keep the opt-in routing-observation store on stdlib SQLite and persist a database-wide maximum retention window in metadata so transactional pruning stays physically bounded without letting a short-window process delete a longer-window peer's evidence. | WAL tuning, a second queue/service, active-lease coordination, or a speculative PostgreSQL migration for this bounded slice. |
+| Shared replay store | Existing stdlib `sqlite3`; repository `state_db`; ADR 0042 routing-observation contract | Keep the opt-in routing-observation store on stdlib SQLite and persist a database-wide maximum retention window in metadata so transactional pruning stays physically bounded without letting a short-window process delete a longer-window peer's evidence. | WAL tuning, a second queue/service, active-lease coordination, or a speculative PostgreSQL migration for this bounded slice. |
 | Replay/prune policy | Existing router `window_seconds` replay boundary; SQLite transaction semantics | Reuse per-router `window_seconds` for logical replay, but prune rows by the shared maximum registered window during writes. This preserves completion-order replay and cross-process safety while keeping storage bounded. | Unbounded history, calibrated decay, row-count heuristics, and inferred provider equivalence. |
+
+## Discovery output ceilings and context windows (2026-08-31)
+
+Issue #927 needs real per-model output-ceiling and context-window metadata from
+discovery. Provider docs were re-checked against live public sources on
+2026-08-31 rather than recalled from memory because these schemas drift.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| OpenRouter metadata | Live `https://openrouter.ai/openapi.yaml`; current `Model.context_length`; current `TopProviderInfo.max_completion_tokens` | Parse `context_window` from `context_length` and `max_output_tokens` from `top_provider.max_completion_tokens`. Keep them separate because OpenRouter documents them as different limits. | Inferring output ceiling from `context_length` alone. |
+| Models.dev-enriched providers | Live `https://models.dev/api.json`; current `limit.context`; current `limit.output` | Merge `models.dev` `limit.context` into `context_window` and `limit.output` into `max_output_tokens` for providers already enriched from Models.dev (`openai`, `opencode_zen`, `nvidia_nim`, `nvidia_nim_sub`). | Guessing limits from modality, family, or price metadata. |
+| Configured gateway model info | Existing LiteLLM-style `model/info` merge in `model_discovery.py` | Accept only explicit completion-ceiling fields (`max_output_tokens` / `max_completion_tokens`) and explicit context-window fields (`context_window` / `context_length`) when every deployment for one logical model agrees. | Treating ambiguous `max_tokens` or `max_input_tokens` as an output ceiling. |
+| Runtime enforcement | Existing stdlib `ModelClient` request assembly | Clamp only provider-bound outgoing token-budget fields when an agent carries a known `max_output_tokens`; otherwise preserve caller and client defaults. | New provider SDKs, tokenizer packages, or substituting `context_window` when the output ceiling is unknown. |
 
 ## Required For New Designs
 
@@ -107,6 +125,7 @@ missing or invalid.
 | What may an observation claim? | Council of Europe CEFR Companion Volume and linking manual | Preserve criterion-level evidence and transparent linking inputs; do not emit a CEFR level or placement decision. | A local CEFR scale or standard-setting algorithm. |
 | What makes an assessment result defensible? | AERA, APA, and NCME Standards for Educational and Psychological Testing | Keep task, rubric, criterion, anchor, evidence, rater, prompt, workflow, parse, verifier, and replay provenance explicit. | Calling provider success or a model label validity evidence. |
 | How should provider calls be governed? | Existing `TaskOrchestrator`, KV credential registry, model discovery, and structured-output passthrough | Reuse the existing gateway; require exact external contract compatibility and fail closed on missing capability or provider failure. | Direct provider SDK calls or a second credential path. |
+| What proves a discovered configured-gateway chat row is usable? | The existing provider-error boundary distinguishes catalog metadata from runtime success. | Require one bounded synthetic structured-output probe before activation and share missing-model exclusions across the full virtual request. | Treating list membership as readiness or retrying the same missing model in later workflow roles. |
 
 Official references:
 
@@ -124,3 +143,29 @@ Official references:
 
 The cited standards are linked rather than vendored because redistribution
 permission for their PDFs is not assumed.
+
+## Web search / metasearch client (2026-09-02)
+
+ADR 0123 needs a grounded web-search tool. Metasearch and browser-automation
+options were checked live against their current repositories rather than
+recalled from training data, because license and maintenance status drift.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Metasearch engine | [SearXNG](https://github.com/searxng/searxng) (license: AGPL-3.0, confirmed live); its documented `/search?format=json` HTTP API | Call a self-hosted SearXNG instance's JSON API as a plain HTTP dependency (no SearXNG code vendored — same sidecar-service boundary this repo already uses for Wardnet/Camoufox). AGPL-3.0 governs SearXNG's own source, not a caller that only sends it HTTP requests. | Vendoring SearXNG or its plugins into this repository. |
+| Metasearch alternative #1 | [Whoogle](https://github.com/benbusby/whoogle-search) (license: MIT) | Rejected. The repository is archived (2026-08-14): Google closed the last scraping workaround Whoogle depended on in 2024, and the maintainer states search is non-functional. A permissive license does not offset a dead upstream. | Implementing a client for a defunct search backend. |
+| Metasearch alternative #2 | [YaCy](https://github.com/yacy/yacy_search_server) (license: GPL-2.0-or-later, confirmed live); built-in JSON/XML search API | Documented as the next self-hosted engine to support (own crawled P2P index, not dependent on scraping another engine's HTML — architecturally different from SearXNG's federation model, which is what "plural" engines is actually for). Not implemented this slice; add a second `_ENGINE_HANDLERS`-style entry in `web_search.py` when a real deployment exists to test against. | Implementing against an engine with no deployment to verify. |
+| Metasearch fallback (commercial) | Brave Search API (independent index, official JSON API, has a free tier) | Documented as the fallback if self-hosted engine coverage/quality proves insufficient later; not implemented — no product requirement to pay for search yet. | Any commercial search integration in this slice. |
+| Browser automation (for a later, separate slice) | [Camoufox](https://github.com/daijro/camoufox) (license: MPL-2.0, confirmed live) | Confirmed: MPL-2.0, Playwright-API-compatible Firefox fork, no *official* MCP server. This repository already consumes a third-party MCP wrapper (`ghcr.io/redf0x1/camofox-mcp`, pinned by digest) for one narrow use (`privacy_policy_analysis.py`'s Wardnet-proxied policy rendering) — reuse that existing, reviewed integration for the web-search follow-up rather than adding a second Camoufox transport. | Building a first-party Camoufox MCP server, or a second parallel browser-automation dependency. |
+| Transport / SSRF boundary | Existing `ModelClient._validate_provider` / `ModelClient._open_provider` (already reused by `privacy_policy_analysis.crawl_policy_document` for Wardnet) | Reuse the existing validated-HTTP primitive for the SearXNG call: HTTPS-only unless the host is an explicit loopback address, private/loopback/link-local/reserved destination IPs rejected, no vendored HTTP client. | A new HTTP client dependency, or a second hand-rolled SSRF check. |
+
+Session-isolation note: `ContextualWisdomLab/quarantine-sandbox-runtime`'s
+`develop` branch has no HTTP/CLI entrypoint or container backend yet (real
+work is an unmerged Draft PR stack #1→#6→#9→#10→#13, externally blocked on
+`ContextualWisdomLab/.github#1590`, no LSM-capable CI runner). Camoufox
+browsing already ships in this repository today gated behind **Wardnet**
+(DNS-pinned egress proxy + authenticated CONNECT boundary, see
+`compose.camoufox-wardnet.yaml` and the "Web-search boundary" /
+"Wardnet policy-document boundary" sections of `docs/kv-credentials.md`), not
+`quarantine-sandbox-runtime`. ADR 0123 records this as an open reconciliation
+question rather than silently picking one.

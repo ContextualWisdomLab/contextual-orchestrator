@@ -49,9 +49,17 @@ _SENSITIVE_PROVIDER_MESSAGE = _re.compile(
     r"(?ix)(?:"
     r"https?://|"
     r"(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)|"
-    r"\b(?:api[_ -]?key|authorization|bearer|password|secret|token|prompt|input|messages?)\b"
+    r"\b(?:api[_ -]?key|authorization|bearer|password|secret|token|prompt|input|messages?|content)\b"
     r")"
 )
+_SAFE_SCHEMA_DIAGNOSTIC = _re.compile(
+    r"['\"]?messages['\"]? must contain the word ['\"]?json['\"]?"
+    r"(?: in some form,)? to use "
+    r"(?:['\"]?response_format['\"]? of type ['\"]?json_object['\"]?|json_object)"
+    r"(?:\.|$)",
+    _re.IGNORECASE,
+)
+_SAFE_SCHEMA_ERROR_SUMMARY = "messages must mention json when response_format is json_object"
 
 #: Upstream HTTP status -> ``(client_status, error_code, retryable)`` surface.
 #: The client status is what this gateway returns; ``error_code`` follows the
@@ -117,6 +125,8 @@ def _sanitize_provider_message_text(raw: object) -> str | None:
         for char in str(raw)
     ).strip()
     collapsed = collapsed[:MAX_SAFE_MESSAGE_CHARS]
+    if _SAFE_SCHEMA_DIAGNOSTIC.search(collapsed):
+        return _SAFE_SCHEMA_ERROR_SUMMARY
     if not collapsed or _SENSITIVE_PROVIDER_MESSAGE.search(collapsed):
         return None
     return collapsed
@@ -217,7 +227,18 @@ def classify_provider_failure(
     secrets) can never reach callers or logs.
     """
     if isinstance(exc, ProviderUpstreamError):
-        return exc
+        if exc.transport == transport:
+            return exc
+        return ProviderUpstreamError(
+            agent_id=exc.agent_id,
+            model=exc.model,
+            error_code=exc.error_code,
+            message=str(exc),
+            client_status=exc.client_status,
+            provider_status=exc.provider_status,
+            retryable=exc.retryable,
+            transport=transport,
+        )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code
         client_status, error_code, retryable = PROVIDER_STATUS_SURFACES.get(

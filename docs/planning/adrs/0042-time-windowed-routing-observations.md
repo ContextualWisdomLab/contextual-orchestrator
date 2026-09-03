@@ -1,5 +1,5 @@
 ---
-id: "0039"
+id: "0042"
 title: "Opt-in time-windowed routing observations"
 status: proposed
 proposed_date: "2026-08-29"
