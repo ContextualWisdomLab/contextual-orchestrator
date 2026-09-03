@@ -2,9 +2,30 @@ name: OpenCode hourly maintenance loop
 
 # Hourly autonomous maintenance: an OpenCode agent whose model traffic is
 # served by THIS repository's gateway (contextual-orchestrator) with
-# auto-discovered providers and operator-managed model-group routing.
+# auto-discovered providers and governed orchestrator/free candidate admission.
 # The agent works the PR queue (review -> fix -> recheck -> merge), root-causes
 # failing checks, and advances docs/product-technical-gap-baseline.md items.
+#
+# The agent requests the fixed virtual pool id "orchestrator/free" (zero-cost,
+# ZDR-first), not "orchestrator/auto" -- "auto-discovered providers" above is
+# the gateway's own provider/credential discovery (--auto-discover-model-agents),
+# a separate concern from which pool OpenCode routes through. This mirrors
+# every other OpenCode/Noema review consumer across the ecosystem
+# (ContextualWisdomLab/.github ADR-0003: "OpenCode and Noema admit only
+# zero-priced routes"; Strix originally had a documented, evidence-tiered
+# exception onto "orchestrator/auto", but that ADR's own 2026-08-30 amendment
+# superseded it, moving Strix onto "orchestrator/free" too -- no central
+# .github review workflow has a live "auto" exception any more). This repo's
+# own hourly loop -- general review/fix/merge maintenance, not security
+# analysis -- previously used "orchestrator/auto" with no ADR justifying the
+# divergence; see docs/adr/0007-hourly-loop-orchestrator-free-pool-pin.md.
+#
+# The job also carries no repository-authored elapsed-time deadline on the
+# model/gateway-backed steps: this org's standing policy is that model/
+# inference timeouts default to null, and only user cancellation, provider
+# termination, or an explicit audited admin timeout may end a call. GitHub's
+# implicit ~360-minute hosted-runner ceiling is accepted as an external
+# platform fact, not converted into a caller-owned model-timeout policy.
 
 on:
   schedule:
@@ -51,7 +72,6 @@ jobs:
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
-    timeout-minutes: 55
     permissions:
       contents: write # required for reviewed branch fixes; scoped to this job
       pull-requests: write
@@ -78,7 +98,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node for the OpenCode CLI
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node@v7.0.0
         with:
           node-version: "22"
 
@@ -124,7 +144,7 @@ jobs:
           cat > ~/.config/opencode/opencode.json <<JSON
           {
             "\$schema": "https://opencode.ai/config.json",
-            "model": "contextual_orchestrator_gateway/orchestrator/auto",
+            "model": "contextual_orchestrator_gateway/orchestrator/free",
             "provider": {
               "contextual_orchestrator_gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -134,7 +154,7 @@ jobs:
                   "apiKey": "${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "orchestrator/auto": { "name": "measured automatic orchestration" }
+                  "orchestrator/free": { "name": "governed free-pool orchestration" }
                 }
               }
             }
@@ -153,7 +173,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/auto \
+          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/free \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
