@@ -4931,6 +4931,18 @@ class TaskOrchestrator:
                     and not isinstance(exc, EffortProfileError)
                 ):
                     self._group_router.observe_failure(final_agent.id)
+                # A transport failure here (as opposed to the schema-violation
+                # exits below, already fixed in round 6) still raises before
+                # any later budget_checkpoint runs -- so conduct()'s workflow
+                # spend and any earlier candidates' failed_attempts in this
+                # same loop would otherwise vanish from the meter exactly like
+                # budget_checkpoint's own except-clause guards against
+                # (Devin review on #1032, round 7).
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts],
+                    workflow.get("verification"),
+                )
                 raise
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
@@ -4985,6 +4997,17 @@ class TaskOrchestrator:
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
                     self._group_router.observe_failure(final_agent.id)
+                # synthesis_step is a real, paid-for call that produced the
+                # schema-violating output prompting this repair -- it has not
+                # yet reached failed_attempts (that only happens further
+                # below, once a repair response exists to check). No
+                # attempted_repair_step exists to add: this call itself never
+                # returned a response (Devin review on #1032, round 7).
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, synthesis_step],
+                    workflow.get("verification"),
+                )
                 raise
             repaired_output = provider_output(final_agent, repaired)
             repair_error = _structured_output_error(repaired_output, response_format)

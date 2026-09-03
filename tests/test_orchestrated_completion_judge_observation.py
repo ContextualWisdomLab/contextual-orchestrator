@@ -1321,6 +1321,135 @@ def test_pool_exhausted_schema_failure_meters_the_spend_it_already_incurred() ->
     assert orchestrator.count_workflow_runs() == 0
 
 
+class _TransportFailureClient:
+    """Every synthesis attempt raises before any provider response exists."""
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Simulate a transport failure: no response, nothing to meter here."""
+        del agent, endpoint, payload
+        raise RuntimeError("connection reset by peer")
+
+    proxy_send = proxy_send_once
+
+
+_TRACED_CONDUCT = {
+    "mode": "conduct",
+    "answer": "evidence",
+    "trace": [
+        {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_agent",
+            "subtask": "do the work",
+            "access": [],
+            "output": "worker output",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 9, "total_tokens": 11},
+        }
+    ],
+    "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+}
+
+
+def test_synthesis_transport_failure_meters_the_spend_it_already_incurred() -> None:
+    """A transport failure on synthesis still meters ``conduct``'s prior spend.
+
+    Devin review (PR #1032, round 7): distinct from round 6's two
+    schema-violation exits below this same ``except Exception`` clause -- a
+    transport failure (a raised ``ProviderUpstreamError`` or similar, as
+    opposed to a schema-violating response) raises before any
+    ``budget_checkpoint`` in this loop ever runs, so ``conduct()``'s
+    already-completed workflow trace vanished from the meter exactly like the
+    post-conduct checkpoint's own except-clause guards against.
+    """
+    agent = ModelAgent(
+        "pinned_agent", "pinned-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _TransportFailureClient()
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_TRACED_CONDUCT)  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion(
+            {
+                "model": agent.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 9
+    assert orchestrator.count_workflow_runs() == 0
+
+
+class _RepairTransportFailureClient:
+    """Schema-violating synthesis, then a transport failure on the repair."""
+
+    SYNTHESIS_TOKENS = 11
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """First call: completed but schema-violating. Second: raises."""
+        del endpoint, payload
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "choices": [{"message": {"role": "assistant", "content": '{"input_count": 6}'}}],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": self.SYNTHESIS_TOKENS,
+                    "total_tokens": 5 + self.SYNTHESIS_TOKENS,
+                },
+            }
+        del agent
+        raise RuntimeError("connection reset by peer")
+
+    proxy_send = proxy_send_once
+
+
+def test_repair_transport_failure_meters_the_completed_synthesis_spend() -> None:
+    """A transport failure on repair still meters the synthesis it repairs.
+
+    Devin review (PR #1032, round 7): ``synthesis_step`` is a real, paid-for
+    call that produced the schema-violating output prompting this repair. It
+    has not yet reached ``failed_attempts`` (only added once a repair
+    response exists to check), so a transport failure on the repair call
+    itself dropped it from the meter along with everything else in
+    ``workflow["trace"]``/``failed_attempts``.
+    """
+    agent = ModelAgent(
+        "pinned_agent", "pinned-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _RepairTransportFailureClient()
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion(
+            {
+                "model": agent.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+        )
+
+    assert client.calls == 2
+    assert (
+        orchestrator.budget_status()["spent_output_tokens"]
+        == _RepairTransportFailureClient.SYNTHESIS_TOKENS
+    )
+    assert orchestrator.count_workflow_runs() == 0
+
+
 class _EmbeddingSpaceSpyClient:
     """One distinct unit vector per embedding deployment, every call recorded."""
 
