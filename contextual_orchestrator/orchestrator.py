@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
@@ -182,6 +182,32 @@ def _request_endpoint_partition() -> str:
     if identity is None:
         return "endpoint:auto"
     return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _request_evidence_partition() -> str:
+    """Return a cache partition for every restriction that picks the embedder.
+
+    A routing-evidence vector is produced by whichever provider
+    :meth:`TaskOrchestrator._embedding_agent_id` resolves under the active
+    request's own restrictions, so a cached vector may only be reused by a
+    later request whose restrictions resolve the same way. Keyed on the
+    restrictions themselves (rather than on the resolved agent id, which
+    would cost a ranking pass on every cache *hit*), a restricted request can
+    never read a vector an unrestricted -- or differently restricted -- one
+    produced, while repeated same-shape requests (the common free-tier/ZDR
+    path) keep sharing their entries (Devin review on #1032). ZDR is part of
+    it because :meth:`TaskOrchestrator._zdr_agent_allowed` narrows the same
+    ranking, matching what ``_cache_key`` and ``_triage_workflow_required``
+    already partition on.
+    """
+    eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
+    return "\x1f".join(
+        (
+            _request_endpoint_partition(),
+            "zdr_only" if _REQUEST_ZDR_ONLY.get() else "zdr_any",
+            "eligible:*" if eligible is None else "eligible:" + ",".join(sorted(eligible)),
+        )
+    )
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -4585,7 +4611,14 @@ class TaskOrchestrator:
             _excluded_agent_ids=request_exclusions,
             _allowed_agent_ids=None if virtual_model else {final_agent.id},
         )
-        in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
+        # conduct()'s own verifier-role judge is a completed provider call
+        # that never appears in workflow["trace"], so every checkpoint on
+        # this request's not-yet-persisted spend has to fold it in the same
+        # way the persisted meter does (Devin review on #1032).
+        in_flight_judges = self._run_judge_accounting_blocks(workflow)
+        in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+            workflow["trace"], completed_judges=in_flight_judges
+        )
         self._raise_if_spend_budget_exceeded(
             additional_output_tokens=in_flight_tokens,
             additional_cost_usd=in_flight_cost,
@@ -4889,7 +4922,8 @@ class TaskOrchestrator:
                 break
 
             in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], synthesis_step]
+                [*workflow["trace"], synthesis_step],
+                completed_judges=in_flight_judges,
             )
             self._raise_if_spend_budget_exceeded(
                 additional_output_tokens=in_flight_tokens,
@@ -5013,9 +5047,9 @@ class TaskOrchestrator:
         # precedent for already-committed output. An exhausted budget skips
         # the extra judge call outright instead of raising (Devin review on
         # #1032). The gate reuses _raise_if_spend_budget_exceeded so this
-        # request's own not-yet-persisted spend (workflow trace + synthesis
-        # + repair) counts, exactly as the pre-synthesis checkpoint above
-        # already counts the workflow trace.
+        # request's own not-yet-persisted spend (workflow trace + conduct's
+        # own verifier-role judge + synthesis + repair) counts, exactly as
+        # the pre-synthesis checkpoint above already counts it.
         #
         # Accepted limitation (Devin review on #1032, informational): this is
         # a pre-call gate, not a reservation, so the one judge call it permits
@@ -5036,7 +5070,9 @@ class TaskOrchestrator:
             self.budget_max_output_tokens is not None
             or self.budget_max_cost_usd is not None
         ):
-            in_flight_tokens, in_flight_cost = self._trace_budget_spend(trace)
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                trace, completed_judges=in_flight_judges
+            )
             try:
                 self._raise_if_spend_budget_exceeded(
                     additional_output_tokens=in_flight_tokens,
@@ -5555,9 +5591,24 @@ class TaskOrchestrator:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
 
     def _trace_budget_spend(
-        self, trace: list[dict[str, Any]]
+        self,
+        trace: list[dict[str, Any]],
+        *,
+        completed_judges: Sequence[Mapping[str, Any]] = (),
     ) -> tuple[int | None, float | None]:
-        """Return completed provider-call spend for a workflow budget checkpoint."""
+        """Return completed provider-call spend for a workflow budget checkpoint.
+
+        ``completed_judges`` carries judge calls this request has already made
+        whose spend lives *outside* ``trace``: ``conduct``'s own verifier-role
+        judge records itself in ``workflow["verification"]``, never as a trace
+        row, so a checkpoint counting trace rows alone lets a request that has
+        already consumed its whole allowance admit yet another provider call
+        (Devin review on #1032). Callers pass
+        :meth:`_run_judge_accounting_blocks`, the same presence test the
+        persisted-run meter uses, and each block is priced through the same
+        :meth:`_judge_block_output_tokens` -- so both the token and the cost
+        budget fail closed when that first judge's usage is unavailable.
+        """
         model_by_agent = {agent.id: agent.model for agent in self.agents}
         counts: list[tuple[int, str]] = []
         for step in trace:
@@ -5568,6 +5619,13 @@ class TaskOrchestrator:
             if count is None:
                 return None, None
             counts.append((count, model))
+        for verification in completed_judges:
+            judge_model, judge_count = self._judge_block_output_tokens(
+                verification, model_by_agent
+            )
+            if judge_count is None:
+                return None, None
+            counts.append((judge_count, judge_model))
         output_tokens = sum(count for count, _model in counts)
         if any(model not in self.price_per_million for _count, model in counts):
             return output_tokens, None
@@ -7330,9 +7388,17 @@ class TaskOrchestrator:
         )
 
     def _embed_cached(self, text: str) -> list[float] | None:
-        """Embedding vector for text via the configured embedding member; None on failure."""
+        """Embedding vector for text via the configured embedding member; None on failure.
+
+        Partitioned by :func:`_request_evidence_partition` so a cache hit can
+        only ever return a vector some provider *this* request may itself
+        reach produced: without it a restricted request read the cache before
+        :meth:`_embedding_agent_id` was consulted at all, and an earlier
+        unrestricted request's vector -- the routing evidence baked into it
+        included -- crossed the isolation boundary (Devin review on #1032).
+        """
         digest = hashlib.sha256(
-            f"{_request_endpoint_partition()}\x1f{text}".encode("utf-8")
+            f"{_request_evidence_partition()}\x1f{text}".encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
@@ -7351,11 +7417,17 @@ class TaskOrchestrator:
         return vector
 
     def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
-        """Cached embedding of one agent's operator-declared metadata document."""
+        """Cached embedding of one agent's operator-declared metadata document.
+
+        Partitioned exactly like :meth:`_embed_cached`: both halves of a
+        semantic affinity have to come from a provider the active request may
+        reach, or the restricted request still routes on an ineligible
+        provider's evidence (Devin review on #1032).
+        """
         fingerprint = hashlib.sha256(
             "\x1f".join(
                 [
-                    _request_endpoint_partition(),
+                    _request_evidence_partition(),
                     agent.id,
                     self._agent_descriptor_text(agent),
                 ]
@@ -8772,29 +8844,8 @@ class TaskOrchestrator:
                 return {}, False
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
         for verification in self._run_judge_accounting_blocks(record):
-            # A completed judge call (judge_agent_id is only ever set
-            # once one has) whose response carried no valid usage must
-            # still count toward the budget meter, or a run of
-            # unmeasured judge calls could exceed a spend cap this
-            # conservative-by-design check exists to enforce. Fall back
-            # to the same estimate-from-real-text _step_output_tokens
-            # already applies to worker steps with no reported usage
-            # (Devin review on #961: an earlier revision of this fix
-            # fabricated a "reported" zero-token dict instead). Estimate
-            # from judge_output_text (the judge's own generated
-            # rationale), not verifier_output (the worker answer it was
-            # judging) -- a second Devin review on this same fallback
-            # caught estimating from the wrong side of the call.
-            judge_model = verification.get("judge_model") or model_by_agent.get(
-                verification["judge_agent_id"], "unknown"
-            )
-            completion_tokens, _judge_reported = _step_output_tokens(
-                {
-                    "usage": verification.get("judge_usage"),
-                    "output": verification.get("judge_output_text", ""),
-                },
-                self.token_counter,
-                judge_model,
+            judge_model, completion_tokens = self._judge_block_output_tokens(
+                verification, model_by_agent
             )
             if completion_tokens is None:
                 return {}, False
@@ -8802,6 +8853,42 @@ class TaskOrchestrator:
                 output_by_model.get(judge_model, 0) + completion_tokens
             )
         return output_by_model, True
+
+    def _judge_block_output_tokens(
+        self, verification: Mapping[str, Any], model_by_agent: Mapping[str, str]
+    ) -> tuple[str, int | None]:
+        """Return one completed judge call's model and authoritative output tokens.
+
+        A completed judge call (``judge_agent_id`` is only ever set once one
+        has) whose response carried no valid usage must still count toward
+        the budget meter, or a run of unmeasured judge calls could exceed a
+        spend cap this conservative-by-design check exists to enforce. Fall
+        back to the same estimate-from-real-text ``_step_output_tokens``
+        already applies to worker steps with no reported usage (Devin review
+        on #961: an earlier revision of this fix fabricated a "reported"
+        zero-token dict instead). Estimate from ``judge_output_text`` (the
+        judge's own generated rationale), not ``verifier_output`` (the worker
+        answer it was judging) -- a second Devin review on this same fallback
+        caught estimating from the wrong side of the call.
+
+        Shared by the persisted-run meter (:meth:`_run_budget_output_by_model`)
+        and the in-flight checkpoint (:meth:`_trace_budget_spend`), so a judge
+        call already made by *this* request is accounted exactly as the same
+        call is once persisted. ``None`` tokens means unmeasurable; both
+        callers fail closed on it.
+        """
+        judge_model = verification.get("judge_model") or model_by_agent.get(
+            verification["judge_agent_id"], "unknown"
+        )
+        output_tokens, _judge_reported = _step_output_tokens(
+            {
+                "usage": verification.get("judge_usage"),
+                "output": verification.get("judge_output_text", ""),
+            },
+            self.token_counter,
+            judge_model,
+        )
+        return judge_model, output_tokens
 
     @staticmethod
     def _run_judge_accounting_blocks(

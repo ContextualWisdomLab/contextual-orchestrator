@@ -635,5 +635,113 @@ def test_realtime_judge_spend_reaches_budget_meter_and_spend_analytics() -> None
     assert rows["mock-model"]["output_tokens"] == 13 + 29
 
 
+def test_conduct_verification_judge_spend_counts_toward_realtime_judge_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """conduct's own verifier judge is current-request spend the gate must see.
+
+    Devin review (PR #1032): ``conduct`` runs its own verifier-role judge and
+    records it in ``workflow["verification"]``, never as a trace row. A gate
+    built from trace rows plus synthesis/repair therefore missed it, so a
+    request whose allowance was already consumed by that first judge fired
+    the optional second one anyway.
+
+    The budget here (64 judge tokens + 1) is crossed only by summing *both*
+    completed calls: the 13-token synthesis alone stays well inside it, which
+    is exactly why counting trace rows alone let the judge through.
+    """
+    agent = ModelAgent("worker_agent", "mock-model", tags=("reasoning",))
+    client = _ResponsesUsageClient(
+        content="final answer",
+        usage={"input_tokens": 7, "output_tokens": 13, "total_tokens": 20},
+    )
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        **_STUB_CONDUCT,
+        "verification": {
+            "accepted": True,
+            "reason": "test",
+            "verifier_output": "",
+            "judge": "model",
+            "judge_agent_id": "worker_agent",
+            "judge_model": "mock-model",
+            "judge_usage": {"prompt_tokens": 3, "completion_tokens": 64, "total_tokens": 67},
+        },
+    }
+    orchestrator.budget_max_output_tokens = 65
+    # Nothing is persisted yet: the whole overrun is this request's own
+    # in-flight spend, which budget_status() alone cannot see.
+    assert orchestrator.budget_status()["exceeded"] is False
+
+    def _explode(*args: object, **kwargs: object) -> dict[str, Any]:
+        raise AssertionError("realtime judge must be skipped once budget is already exceeded")
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", _explode)
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world"}, endpoint="responses", single_agent=False
+    )
+
+    # The already-decided answer is still served; only the optional second
+    # judge is skipped.
+    assert result["output_text"] == "final answer"
+    assert orchestrator._quality_router.member_observation_count("worker_agent") == 0
+    run = next(iter(orchestrator._workflow_runs.values()))
+    assert run["realtime_verification"] is None
+
+
+def test_restricted_request_cannot_read_an_incompatible_scopes_cached_evidence() -> None:
+    """A cached routing vector never crosses the request-eligibility boundary.
+
+    Devin review (PR #1032): the evidence caches were keyed on text and
+    endpoint alone and were read *before* ``_embedding_agent_id`` validated
+    anything, so a restricted request hitting a key an earlier unrestricted
+    request had filled inherited that ineligible provider's vector -- and the
+    routing evidence baked into it -- straight past the isolation boundary
+    the scope exists to draw.
+
+    The cache still has to work for the restricted path it exists to make
+    cheap, so a second request under the *same* scope must still hit.
+    """
+    chat = ModelAgent(
+        "chat_agent",
+        "chat-model",
+        base_url="https://chat.example/v1",
+        tags=("reasoning",),
+    )
+    unrelated_embedder = ModelAgent(
+        "unrelated_embedder",
+        "embed-model",
+        base_url="https://unrelated.example/v1",
+        tags=("embedding",),
+    )
+    client = _EmbeddingSpyClient()
+    orchestrator = TaskOrchestrator([chat, unrelated_embedder], client=client)
+
+    # An earlier unrestricted request fills the cache from a provider a
+    # chat_agent-scoped request may not reach.
+    assert orchestrator._embed_cached("confidential prompt") == [0.1, 0.2, 0.3]
+    assert orchestrator._descriptor_vector_cached(chat) == [0.1, 0.2, 0.3]
+    assert client.embed_calls == ["unrelated_embedder", "unrelated_embedder"]
+
+    with _request_eligibility_scope({"chat_agent"}):
+        assert orchestrator._embed_cached("confidential prompt") is None
+        assert orchestrator._descriptor_vector_cached(chat) is None
+    # No eligible embedder, so no provider call either -- the restricted
+    # request degrades to declaration-only evidence, it does not borrow.
+    assert client.embed_calls == ["unrelated_embedder", "unrelated_embedder"]
+
+    # Same scope twice still hits the cache: the fix partitions the cache, it
+    # does not disable it.
+    with _request_eligibility_scope({"chat_agent", "unrelated_embedder"}):
+        assert orchestrator._embed_cached("confidential prompt") == [0.1, 0.2, 0.3]
+        assert orchestrator._embed_cached("confidential prompt") == [0.1, 0.2, 0.3]
+    assert client.embed_calls == [
+        "unrelated_embedder",
+        "unrelated_embedder",
+        "unrelated_embedder",
+    ]
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__]))
