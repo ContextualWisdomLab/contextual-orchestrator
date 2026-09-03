@@ -7608,6 +7608,31 @@ class TaskOrchestrator:
         to ``blocked_unavailable`` the first time this fires. Skip
         metering in that one case -- true zero-cost either way -- instead
         of writing a row that blinds unrelated requests' enforcement.
+
+        :meth:`_replace_workflow_run` is pure in-memory dict/Decimal
+        arithmetic under ``_budget_spend_lock`` -- nothing that plausibly
+        raises in normal operation, and shared by every other of its call
+        sites, so it is left unguarded here: a real bug in it should stay
+        loud, not get mislabeled a durability issue. ``self._store.save``
+        is a real sqlite3 write, so a state-store outage there is caught
+        and logged rather than propagated -- reusing the same
+        ``except Exception: _LOGGER.warning(..., exc_info=True)``
+        best-effort-write convention :meth:`_observe_contextual_quality`
+        already established for its own ``self._store.save`` call. The
+        failure is deliberately *not* routed through
+        ``_budget_unavailable_run_ids``: that flag means "this record's
+        usage is not derivable," which is a measurement gap, not a
+        durability one -- an embedding row's ``completion_tokens`` is
+        always the explicit ``0`` above, so its usage is always fully
+        known regardless of whether the write behind it later succeeds,
+        and by the time the write is attempted :meth:`_replace_workflow_run`
+        has already updated the in-process spend meter, so enforcement is
+        never blind to it. ``_budget_unavailable_run_ids`` is a blunt,
+        global switch -- flipping it here would freeze real
+        chat-completion budget enforcement org-wide over one transient
+        disk hiccup on a best-effort, zero-completion-token routing-evidence
+        row. The only thing actually lost on a write failure is *restart*
+        survivability of that one row; logging it is the honest response.
         """
         if prompt_tokens is None:
             return
@@ -7647,7 +7672,15 @@ class TaskOrchestrator:
         )
         self._replace_workflow_run(record)
         if self._store is not None:
-            self._store.save("workflow_run", run_id, record)
+            try:
+                self._store.save("workflow_run", run_id, record)
+            except Exception:  # noqa: BLE001 - durable write is best-effort here
+                _LOGGER.warning(
+                    "embedding spend persistence for run %s failed; in-memory "
+                    "meter already updated, spend not durable across a restart",
+                    run_id,
+                    exc_info=True,
+                )
 
     def _embed_cached(
         self, text: str, embedding_member: str | None = None

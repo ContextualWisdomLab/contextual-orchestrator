@@ -30,6 +30,7 @@ and psychometric routing evidence), never branching on the verdict:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import time
@@ -1733,6 +1734,65 @@ def test_unpriced_embedder_under_cost_budget_does_not_blind_meter() -> None:
     priced._embed_cached("routing text")
     assert priced.spend_analytics()["totals"]["prompt_tokens"] == 37
     assert priced.budget_status()["enforcement_status"] == "within_budget"
+
+
+def test_embedding_spend_persistence_failure_never_aborts_model_selection(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A durable-write failure behind an embedding spend never propagates.
+
+    Devin review (PR #1032, comment 3921362518): ``_meter_embedding_spend``
+    ends with an unguarded ``self._store.save("workflow_run", ...)`` -- a
+    real sqlite3 write. Any failure there (a state-store outage) propagated
+    straight through ``_embed_cached``/``_descriptor_vector_cached``,
+    through ``_semantic_affinities``, through every one of
+    ``_ranked_agents``'s call sites, and into model selection: a disk
+    hiccup on a best-effort routing-evidence row could abort real request
+    handling.
+    """
+    embedder = _paid_embedder()
+    client = _PricedEmbeddingClient(prompt_tokens=37)
+    orchestrator = TaskOrchestrator(
+        [embedder], client=client, state_db=str(tmp_path / "state.db")
+    )
+    assert orchestrator._store is not None
+    healthy_save = orchestrator._store.save
+
+    def _failing_save(
+        kind: str, key: str | None, payload: dict[str, Any], **options: Any
+    ) -> None:
+        """Fail exactly the workflow_run write; leave everything else working."""
+        if kind == "workflow_run":
+            raise sqlite3.OperationalError("disk I/O error")
+        healthy_save(kind, key, payload, **options)
+
+    orchestrator._store.save = _failing_save  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING):
+        vector = orchestrator._embed_cached("routing text")
+
+    # (a) the caller never sees the exception -- it gets its vector back.
+    assert vector == [0.5, 0.5, 0.5]
+
+    # (b) the failure doesn't poison the cache: a second call is a cache
+    # hit, not a second provider call.
+    vector_again = orchestrator._embed_cached("routing text")
+    assert vector_again == [0.5, 0.5, 0.5]
+    assert client.embed_calls == [embedder.id]
+
+    # (c) the failure isn't silently discarded -- it's logged.
+    assert any(
+        record.levelno == logging.WARNING and "embedding spend" in record.getMessage()
+        for record in caplog.records
+    )
+
+    # Caveat 3: the durability failure never blinds the in-memory meter --
+    # _replace_workflow_run already ran before the guarded write, so the
+    # spend is real and enforcement stays exact, not "unavailable".
+    assert orchestrator.spend_analytics()["totals"]["prompt_tokens"] == 37
+    status = orchestrator.budget_status()
+    assert status["enforcement_status"] == "within_budget"
+    assert status["measurement_status"] == "measured"
 
 
 if __name__ == "__main__":  # pragma: no cover
