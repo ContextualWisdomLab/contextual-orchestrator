@@ -877,6 +877,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   evidence (attempt count and stop reason) the same way the 413 and other
   provider-upstream handlers already do, without exposing any raw
   malformed-response text.
+- `_failover_attempt_record` misclassified a raw or exception-chain-wrapped
+  provider 413 that never became a typed `ProviderUpstreamError` as
+  `error_code="unknown"`/`provider_status=None`, even though
+  `_is_request_too_large_error` already recognized the same shape via its
+  bounded cause-before-context traversal. That traversal is now shared
+  (`_find_request_too_large_error` returns the matching chain node) so a
+  raw/wrapped 413 records `error_code="request_too_large"`,
+  `provider_status=413`, `retryable=False`; a nested typed
+  `ProviderRequestTooLargeError` still preserves its own `provider_status`;
+  and an oversized-tool-description rejection preserves its real HTTP 400
+  status instead of a synthesized 413.
 
 ### Added
 

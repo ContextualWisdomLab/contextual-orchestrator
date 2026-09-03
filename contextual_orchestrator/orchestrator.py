@@ -1626,13 +1626,21 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
     return False
 
 
-def _is_request_too_large_error(exc: BaseException) -> bool:
-    """Recognize request-size rejection through a bounded exception chain."""
+def _find_request_too_large_error(exc: BaseException) -> BaseException | None:
+    """Return the chain node proving a request-size rejection, if any.
+
+    Shared bounded cause-before-context traversal (cycle guard,
+    ``__suppress_context__``, ``_PROVIDER_ERROR_CHAIN_LIMIT``) for every
+    caller that needs to know *both* whether a request-size rejection
+    occurred *and* which node in the chain proved it -- e.g. attempt
+    telemetry, which must report the node's own HTTP status rather than
+    assume 413 (an oversized-tool-description rejection carries HTTP 400).
+    """
     current: BaseException | None = exc
     seen: set[int] = set()
     for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
         if current is None or id(current) in seen:
-            return False
+            return None
         seen.add(id(current))
         if isinstance(current, ProviderRequestTooLargeError) or (
             isinstance(current, urllib.error.HTTPError)
@@ -1641,14 +1649,19 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
                 or _is_oversized_tool_description_error(current)
             )
         ):
-            return True
+            return current
         if current.__cause__ is not None:
             current = current.__cause__
         elif current.__suppress_context__:
-            return False
+            return None
         else:
             current = current.__context__
-    return False
+    return None
+
+
+def _is_request_too_large_error(exc: BaseException) -> bool:
+    """Recognize request-size rejection through a bounded exception chain."""
+    return _find_request_too_large_error(exc) is not None
 
 
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
@@ -7972,16 +7985,27 @@ class TaskOrchestrator:
 
         Only already-classified, already-redacted evidence ever populates a
         record: a :class:`ProviderUpstreamError`'s own typed attributes for a
-        transport failure, or a tool-fallback decision's stable
-        ``reason_code``/``retry_safe`` for anything else -- never the raw
-        exception text, which can carry secrets, prompts, or upstream
+        transport failure, the same bounded exception-chain request-size
+        classifier ``_is_request_too_large_error`` uses for a raw or wrapped
+        provider 413 (or oversized-tool-description 400) that never became a
+        typed :class:`ProviderUpstreamError`, or a tool-fallback decision's
+        stable ``reason_code``/``retry_safe`` for anything else -- never the
+        raw exception text, which can carry secrets, prompts, or upstream
         diagnostics (CWE-209). This mirrors :meth:`_record_tool_fallback`'s
         existing secret-free audit-event shape.
         """
+        request_too_large_node = _find_request_too_large_error(exc)
         if isinstance(exc, ProviderUpstreamError):
             error_code = exc.error_code
             provider_status = exc.provider_status
             retryable = exc.retryable
+        elif request_too_large_node is not None:
+            error_code = "request_too_large"
+            retryable = False
+            if isinstance(request_too_large_node, ProviderUpstreamError):
+                provider_status = request_too_large_node.provider_status
+            else:
+                provider_status = request_too_large_node.code
         elif decision is not None:
             error_code = decision.reason_code
             provider_status = None
