@@ -193,6 +193,11 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
+                *(
+                    (f"image_generation_endpoint:{model.image_generation_endpoint}",)
+                    if model.image_generation_endpoint
+                    else ()
+                ),
             )
         )
     )

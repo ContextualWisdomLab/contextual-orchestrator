@@ -1063,6 +1063,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   again this round does not change that a real fix needs a conditional-write
   primitive neither the `ConfigStore` protocol nor
   `pg_llm_batch.PostgresConfigStore.set()` currently exposes.
+- **Seventh review round found the same regression's other half.** The
+  sixth round's fix threaded `image_generation_endpoint` through direct,
+  in-process discovery, but the durable catalog-persistence boundary
+  (`provider_catalog_store.normalize_discovered_model`/
+  `_restore_model_semantics`, reached via `record_success`/
+  `serving_models`) still reconstructed `DiscoveredModel` without the
+  field, so a refresh-then-restart round trip through either catalog
+  backend silently dropped an OpenRouter model's image-generation routing
+  again. Devin Review caught this immediately after the sixth-round fix
+  landed. Fixed without a schema migration: `provider_bootstrap.
+  serving_tags_for_discovered` now emits an
+  `image_generation_endpoint:<value>` generic serving tag (the same
+  mechanism already round-tripping capabilities/modalities through the
+  existing `model_serving_tag` table on both the in-memory and Postgres
+  backends), `normalize_discovered_model` passes the field straight
+  through for the live in-flight path, and `_restore_model_semantics`
+  parses the tag back out on restore. New regression test in
+  `tests/test_provider_catalog_store.py` runs an OpenRouter model through
+  `record_success`/`serving_models` and confirms the restored model's
+  `image_generation_endpoint` survives the round trip.
 
 ### Added
 
