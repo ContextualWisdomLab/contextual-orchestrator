@@ -361,13 +361,24 @@ class ModelGroupRouter:
     def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
         return self._members.setdefault(member_id, self._blank_state(member_id))
 
+    @staticmethod
+    def _outcome_count(total: float, prior: float) -> int:
+        """Recover an integer observed-outcome count from floating prior mass."""
+        return int(round(max(total - prior, 0.0)))
+
     def _observation_count_locked(self, member_id: str) -> int:
         state = self._members.get(member_id)
         if state is None:
             return 0
-        alpha = float(state["alpha"]) - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
-        beta = float(state["beta"]) - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
-        return int(max(alpha, 0.0)) + int(max(beta, 0.0))
+        alpha = self._outcome_count(
+            float(state["alpha"]),
+            float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT)),
+        )
+        beta = self._outcome_count(
+            float(state["beta"]),
+            float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT)),
+        )
+        return alpha + beta
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
@@ -410,7 +421,13 @@ class ModelGroupRouter:
             "max_observed_rpm": self._max_observed_rpm.get(member_id, 0),
             "max_observed_tpm": self._max_observed_tpm.get(member_id, 0),
             "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
-            "success_count": int(alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))),
-            "failure_count": int(beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))),
+            "success_count": self._outcome_count(
+                alpha,
+                float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT)),
+            ),
+            "failure_count": self._outcome_count(
+                beta,
+                float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT)),
+            ),
             "score": round(self._score_locked(member_id), 9),
         }
