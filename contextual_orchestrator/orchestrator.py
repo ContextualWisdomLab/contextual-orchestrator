@@ -5132,11 +5132,7 @@ class TaskOrchestrator:
         cheap_decision = self._would_route_without_triage(mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
-            route_decision = (
-                cheap_decision
-                if cheap_decision is not None
-                else self.would_route(messages, mode, model_name)
-            )
+            route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
             result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "bypass" if bypass_cache else "disabled"
             return result
@@ -5152,11 +5148,7 @@ class TaskOrchestrator:
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
-            route_decision = (
-                cheap_decision
-                if cheap_decision is not None
-                else self.would_route(messages, mode, model_name)
-            )
+            route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
             result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
             result["cache_status"] = "miss"
             return result
@@ -5173,9 +5165,7 @@ class TaskOrchestrator:
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
             return result
-        route_decision = (
-            cheap_decision if cheap_decision is not None else self.would_route(messages, mode, model_name)
-        )
+        route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
         result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
         try:
             cache.put(key, result)
@@ -5214,6 +5204,16 @@ class TaskOrchestrator:
                 return True
             return None
         return False
+
+    def _resolved_route_decision(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str,
+        cheap_decision: bool | None,
+    ) -> bool:
+        """Prefer an already-resolvable decision; only call would_route() when needed."""
+        return cheap_decision if cheap_decision is not None else self.would_route(messages, mode, model_name)
 
     def would_route(
         self,
