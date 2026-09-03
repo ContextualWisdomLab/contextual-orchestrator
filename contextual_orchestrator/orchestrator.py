@@ -4992,10 +4992,14 @@ class TaskOrchestrator:
             repair_started = time.perf_counter()
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
-            except ProviderUpstreamError as exc:
-                if not _is_request_too_large_error(exc):
+            except Exception as exc:
+                if not _is_request_too_large_error(exc) and not isinstance(exc, EffortProfileError):
                     self._record_failure(final_agent.id)
-                if final_agent.group_name and not _is_request_too_large_error(exc):
+                if (
+                    final_agent.group_name
+                    and not _is_request_too_large_error(exc)
+                    and not isinstance(exc, EffortProfileError)
+                ):
                     self._group_router.observe_failure(final_agent.id)
                 # synthesis_step is a real, paid-for call that produced the
                 # schema-violating output prompting this repair -- it has not

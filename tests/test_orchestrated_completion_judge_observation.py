@@ -46,8 +46,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
+    EffortProfileError,
     ProviderResponseError,
     ProviderUpstreamError,
+    ReasoningEffortProfile,
     _request_eligibility_scope,
     _request_evidence_partition,
 )
@@ -1455,6 +1457,116 @@ def test_repair_transport_failure_meters_the_completed_synthesis_spend() -> None
         == _RepairTransportFailureClient.SYNTHESIS_TOKENS
     )
     assert orchestrator.count_workflow_runs() == 0
+
+
+class _RepairEffortProfileFailureClient:
+    """Schema-violating synthesis, then an unconverted ``EffortProfileError`` on repair.
+
+    ``apply_effort_profile`` runs before ``send_synthesis``'s own inner
+    ``try:`` in the structured-synthesis loop, so an ``EffortProfileError`` it
+    raises is never passed through ``classify_provider_failure`` -- it leaves
+    ``send_synthesis`` as a raw, unconverted exception. ``EffortProfileError``
+    does not inherit from ``ProviderUpstreamError``, so the repair call site's
+    own ``except ProviderUpstreamError`` could never catch it either
+    (CodeRabbit review, PR #1032, round 10).
+    """
+
+    SYNTHESIS_TOKENS = 11
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.effort_calls = 0
+
+    def apply_effort_profile(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
+    ) -> dict[str, Any]:
+        """First call (initial synthesis): pass through. Second (repair): raise."""
+        del agent, profile, api_surface
+        self.effort_calls += 1
+        if self.effort_calls == 1:
+            return payload
+        raise EffortProfileError("provider reasoning_effort support is unproven")
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The only provider call that ever completes: schema-violating synthesis."""
+        del agent, endpoint, payload
+        self.calls += 1
+        return {
+            "choices": [{"message": {"role": "assistant", "content": '{"input_count": 6}'}}],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": self.SYNTHESIS_TOKENS,
+                "total_tokens": 5 + self.SYNTHESIS_TOKENS,
+            },
+        }
+
+    proxy_send = proxy_send_once
+
+
+def test_repair_effort_profile_error_still_meters_the_completed_synthesis_spend() -> None:
+    """An unconverted ``EffortProfileError`` on repair still meters synthesis spend.
+
+    CodeRabbit review (PR #1032, round 10): the repair call site's
+    ``except ProviderUpstreamError`` is narrower than the initial-call site's
+    own ``except Exception``, so an ``EffortProfileError`` from the repair
+    attempt (raised by ``apply_effort_profile``, which ``send_synthesis`` calls
+    before its own ``except Exception`` could ever convert it) skipped both
+    the accounting exclusion *and* the ``_meter_unserved_spend`` call entirely
+    -- the already-incurred synthesis spend silently vanished, exactly the
+    "spend lost" class rounds 4/6/7 already fixed for other exception types.
+    A misconfigured effort profile is also not the agent's fault, so it must
+    stay excluded from routing penalties exactly like the initial-call site
+    already excludes it.
+    """
+    agent = ModelAgent(
+        "pinned_agent",
+        "pinned-model",
+        base_url="mock://pool",
+        tags=("reasoning",),
+        group_name="repair_pool",
+    )
+    client = _RepairEffortProfileFailureClient()
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    prior_beta = orchestrator._group_router._members[agent.id]["beta"]
+
+    with pytest.raises(EffortProfileError):
+        orchestrator.proxy_completion(
+            {
+                "model": agent.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+            effort_profile=ReasoningEffortProfile(),
+        )
+
+    # (a) the EffortProfileError itself propagates -- the fix does not
+    # swallow it, it only ensures accounting runs first.
+    assert client.calls == 1
+    assert client.effort_calls == 2
+    # (b) the synthesis call's spend, already incurred before repair failed,
+    # reached the budget meter.
+    assert (
+        orchestrator.budget_status()["spent_output_tokens"]
+        == _RepairEffortProfileFailureClient.SYNTHESIS_TOKENS
+    )
+    assert orchestrator.spend_analytics()["totals"]["output_tokens"] == (
+        _RepairEffortProfileFailureClient.SYNTHESIS_TOKENS
+    )
+    assert orchestrator.count_workflow_runs() == 0
+    # (c) neither the circuit breaker nor the group router's stability
+    # posterior recorded a failure for this agent.
+    assert agent.id not in orchestrator._circuit
+    assert orchestrator._group_router._members[agent.id]["beta"] == prior_beta
 
 
 class _EmbeddingSpaceSpyClient:
