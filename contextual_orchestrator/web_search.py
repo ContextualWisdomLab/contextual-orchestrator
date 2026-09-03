@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import math
 from typing import Any
 import urllib.request
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -190,7 +189,10 @@ def web_search(
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
-        or not math.isfinite(timeout)
+        # A bounds check against finite MIN/MAX already excludes NaN and
+        # +/-infinity (every comparison with them is False), and unlike
+        # math.isfinite() it never raises OverflowError on an int too large
+        # to convert to a C double.
         or not MIN_TIMEOUT_SECONDS <= timeout <= MAX_TIMEOUT_SECONDS
     ):
         raise ValueError(

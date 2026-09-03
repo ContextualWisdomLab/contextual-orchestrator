@@ -88,6 +88,7 @@ def test_rejects_out_of_range_max_results(bad: object) -> None:
         MAX_TIMEOUT_SECONDS + 1,
         "10",
         None,
+        10**400,  # too large for float(): math.isfinite() would raise OverflowError
     ],
 )
 def test_rejects_invalid_timeout(bad: object) -> None:
