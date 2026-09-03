@@ -436,6 +436,45 @@ def test_last_known_good_restores_verified_tool_call_support() -> None:
     assert store.serving_models(source) == [model]
 
 
+def test_last_known_good_restores_verified_unsupported_tool_calls() -> None:
+    """A catalog round trip preserves verified *negative* tool-calling evidence.
+
+    A provider row whose ``supported_parameters`` list is present but omits
+    ``"tools"``/``"tool_choice"`` sets ``supports_tool_calls=False`` -- real
+    evidence, distinct from "no evidence at all". Without the paired
+    ``tool_call:unsupported`` tag (mirroring ``privacy:no_zdr``'s negative
+    counterpart), that verified ``False`` would silently restore as ``None``
+    on every restart or catalog refresh through the durable store.
+    """
+    source = _source(provider="nvidia_nim", credential="NVIDIA_NIM_API_KEY")
+    model = replace(
+        _model(source, "verified-no-tool-call-model", 0),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        currency_code="USD",
+        is_free=True,
+        supports_tool_calls=False,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={
+            model.model_id: (
+                "discovered",
+                "cost:free",
+                "input:text",
+                "input:image",
+                "output:text",
+                "tool_call:unsupported",
+            )
+        },
+    )
+
+    assert store.serving_models(source) == [model]
+
+
 def test_last_known_good_leaves_unverified_tool_call_support_unknown() -> None:
     """No ``tool_call:supported`` tag at all restores to the unknown default."""
     source = _source(provider="nvidia_nim", credential="NVIDIA_NIM_API_KEY")

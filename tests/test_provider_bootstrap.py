@@ -379,16 +379,23 @@ def test_serving_tags_preserve_explicit_no_zdr_evidence():
 
 
 def test_serving_tags_carry_verified_tool_call_support_only_when_true():
-    """``tool_call:supported`` appears only for verified-true evidence, never for unknown/false."""
+    """Each tool-call tag appears only for its own verified evidence; unknown writes neither."""
     base = _model("opencode_zen", "OPENCODE_ZEN_API_KEY", "temporary-name", 0.0)
 
     verified_supported = replace(base, supports_tool_calls=True)
     verified_unsupported = replace(base, supports_tool_calls=False)
     unknown = replace(base, supports_tool_calls=None)
 
-    assert "tool_call:supported" in provider_bootstrap.serving_tags_for_discovered(verified_supported)
-    assert "tool_call:supported" not in provider_bootstrap.serving_tags_for_discovered(verified_unsupported)
-    assert "tool_call:supported" not in provider_bootstrap.serving_tags_for_discovered(unknown)
+    supported_tags = provider_bootstrap.serving_tags_for_discovered(verified_supported)
+    unsupported_tags = provider_bootstrap.serving_tags_for_discovered(verified_unsupported)
+    unknown_tags = provider_bootstrap.serving_tags_for_discovered(unknown)
+
+    assert "tool_call:supported" in supported_tags
+    assert "tool_call:unsupported" not in supported_tags
+    assert "tool_call:unsupported" in unsupported_tags
+    assert "tool_call:supported" not in unsupported_tags
+    assert "tool_call:supported" not in unknown_tags
+    assert "tool_call:unsupported" not in unknown_tags
 
 
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(

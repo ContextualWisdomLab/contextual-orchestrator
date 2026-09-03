@@ -37,6 +37,7 @@ import certifi
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
+    declares_text_input,
     is_chat_compatible_model_id,
     is_general_chat_candidate,
     requires_non_text_input,
@@ -7106,11 +7107,19 @@ class TaskOrchestrator:
         :meth:`_agent_requires_non_text_input`'s exclusion when the agent's
         own declared input modalities *also* include ``text`` -- i.e. it is a
         "text-plus-something-else" model, not an "only something else" one.
+
+        Delegates the actual "what counts as text" classification to
+        ``chat_capability.declares_text_input``, the single evidence-based
+        rule shared with ``model_discovery._declares_text_input`` (which
+        reads ``DiscoveredModel.input_modalities`` directly) so the two
+        representations of the same catalog evidence cannot drift on this
+        question independently of each other -- mirroring how the sibling
+        pair :meth:`_agent_requires_non_text_input` /
+        ``model_discovery._requires_non_text_input`` already share
+        ``chat_capability.requires_non_text_input``.
         """
-        return any(
-            tag[len("input:"):].strip().casefold() == "text"
-            for tag in agent.tags
-            if tag.startswith("input:")
+        return declares_text_input(
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
         )
 
     def _is_free_agent(self, agent: ModelAgent) -> bool:

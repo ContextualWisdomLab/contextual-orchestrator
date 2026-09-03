@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
+    declares_text_input,
     is_general_chat_agent_model_id,
     is_general_chat_candidate,
     requires_non_text_input,
@@ -800,6 +801,15 @@ def _deduplicate_discovered_models(
     deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
+
+    Every claim that can differ between the two rows is withheld the same
+    way, ``supports_tool_calls`` included: two rows for one serving identity
+    that disagree are ambiguous evidence, and the ``None`` default is the
+    fail-closed reading everywhere it is consumed
+    (:func:`general_free_serving_candidates`'s exemption and the
+    ``tool_call:supported`` agent tag both require ``is True``). Retaining
+    the winning row's ``True`` here would let provider row order decide
+    whether a conflicted identity carries verified tool-call evidence.
     """
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
@@ -822,6 +832,7 @@ def _deduplicate_discovered_models(
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
+            supports_tool_calls=None,
             zdr_capable=False,
         )
     return list(unique.values())
@@ -1823,6 +1834,24 @@ def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     )
 
 
+def tool_call_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
+    """Translate only explicit provider tool-calling evidence into agent tags.
+
+    Both directions are recorded, mirroring
+    :func:`privacy_tags_for_discovered`'s positive/negative tag pairs: a
+    provider row whose ``supported_parameters`` list is present but omits
+    ``"tools"``/``"tool_choice"`` is verified *unsupported*, which is real
+    evidence and not the same claim as "no evidence at all". Emitting only
+    the positive tag would collapse ``False`` into ``None`` on every catalog
+    round trip through ``provider_catalog_store._restore_model_semantics``,
+    silently discarding it. Unknown (``None``) still writes no tag.
+    """
+    return (
+        *(("tool_call:supported",) if discovered.supports_tool_calls is True else ()),
+        *(("tool_call:unsupported",) if discovered.supports_tool_calls is False else ()),
+    )
+
+
 def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
     """Return whether a discovered row is chat-compatible before serving policy.
 
@@ -1878,7 +1907,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
-            *(("tool_call:supported",) if discovered.supports_tool_calls is True else ()),
+            *tool_call_tags_for_discovered(discovered),
         ),
         priority=priority,
         disabled=True,
@@ -1928,18 +1957,18 @@ def _declares_text_input(discovered: DiscoveredModel) -> bool:
 
     Verified tool-call support cannot substitute for text-input capability:
     an image-only model that also happens to accept tool-calling parameters
-    still cannot answer a blind text-only request. Mirrors
-    ``orchestrator.TaskOrchestrator._agent_declares_text_input`` (which reads
-    an agent's persisted ``input:<modality>`` tags instead of
+    still cannot answer a blind text-only request. Delegates the actual
+    "what counts as text" classification to
+    ``chat_capability.declares_text_input``, the single evidence-based rule
+    shared with ``orchestrator.TaskOrchestrator._agent_declares_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
     ``DiscoveredModel`` directly) so the two representations of the same
     catalog evidence cannot drift on this question independently of each
-    other.
+    other -- exactly the sharing arrangement the sibling pair
+    :func:`_requires_non_text_input` /
+    ``TaskOrchestrator._agent_requires_non_text_input`` already uses.
     """
-    return any(
-        modality.strip().casefold() == "text"
-        for modality in discovered.input_modalities
-        if isinstance(modality, str) and modality.strip()
-    )
+    return declares_text_input(discovered.input_modalities)
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:

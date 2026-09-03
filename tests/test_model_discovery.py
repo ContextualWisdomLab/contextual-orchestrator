@@ -339,6 +339,40 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
     assert discovered[0].zdr_capable is False
 
 
+def test_duplicate_discovery_withholds_conflicting_tool_call_support() -> None:
+    """Conflicting duplicate rows must not preserve verified tool-call evidence.
+
+    ``supports_tool_calls is True`` is what exempts a non-text-input model
+    from ``general_free_serving_candidates``'s exclusion and what writes the
+    ``tool_call:supported`` agent tag. Two rows for one serving identity that
+    disagree are ambiguous, so provider row order must not decide whether the
+    surviving record claims verified tool-call support.
+    """
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_tool_calls=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_tool_calls=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is None
+
+
 def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
     """Conflicting duplicate rows must not preserve one limit by row order."""
     discovered = _deduplicate_discovered_models(
