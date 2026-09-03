@@ -190,15 +190,20 @@ def _request_evidence_partition() -> str:
     A routing-evidence vector is produced by whichever provider
     :meth:`TaskOrchestrator._embedding_agent_id` resolves under the active
     request's own restrictions, so a cached vector may only be reused by a
-    later request whose restrictions resolve the same way. Keyed on the
-    restrictions themselves (rather than on the resolved agent id, which
-    would cost a ranking pass on every cache *hit*), a restricted request can
-    never read a vector an unrestricted -- or differently restricted -- one
-    produced, while repeated same-shape requests (the common free-tier/ZDR
-    path) keep sharing their entries (Devin review on #1032). ZDR is part of
-    it because :meth:`TaskOrchestrator._zdr_agent_allowed` narrows the same
+    later request whose restrictions resolve the same way: a restricted
+    request can never read a vector an unrestricted -- or differently
+    restricted -- one produced (Devin review on #1032). ZDR is part of it
+    because :meth:`TaskOrchestrator._zdr_agent_allowed` narrows the same
     ranking, matching what ``_cache_key`` and ``_triage_workflow_required``
     already partition on.
+
+    This is the *eligibility* half of an evidence cache key and is not
+    sufficient on its own: the same restriction shape can resolve to a
+    different embedding member (an agent-pool change, or a measured-member
+    reordering inside one group), whose vectors live in a different space
+    entirely. :meth:`TaskOrchestrator._embed_cached` and
+    :meth:`TaskOrchestrator._descriptor_vector_cached` therefore key on this
+    partition *and* the resolved embedding member's own identity.
     """
     eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
     return "\x1f".join(
@@ -4880,6 +4885,17 @@ class TaskOrchestrator:
 
         response_format = chat_body.get("response_format")
         synthesis_started = time.perf_counter()
+        # Provider calls this request already paid for and then walked away
+        # from: a model whose synthesis *and* repair both violated the
+        # caller's schema before a different member of the same virtual pool
+        # succeeded. `synthesis_step`/`repair_step` below are rebound on every
+        # pass of this loop, so without accumulating them the earlier model's
+        # two completed calls vanished from the final trace, from every later
+        # budget checkpoint, from the persisted run, and from spend analytics
+        # -- real provider spend, silently unmetered (Devin review on #1032).
+        # They are budget/analytics rows only: served-answer latency and usage
+        # stay bound to the successful attempt alone, below.
+        failed_attempts: list[dict[str, Any]] = []
         while True:
             synthesis_failure_recorded = False
             try:
@@ -4900,7 +4916,7 @@ class TaskOrchestrator:
                 raise
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
-                "id": len(workflow["trace"]),
+                "id": len(workflow["trace"]) + len(failed_attempts),
                 "role": "synthesizer",
                 "agent_id": final_agent.id,
                 "subtask": "Provider-facing structured synthesis",
@@ -4922,7 +4938,7 @@ class TaskOrchestrator:
                 break
 
             in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], synthesis_step],
+                [*workflow["trace"], *failed_attempts, synthesis_step],
                 completed_judges=in_flight_judges,
             )
             self._raise_if_spend_budget_exceeded(
@@ -4961,20 +4977,24 @@ class TaskOrchestrator:
                 raise
             repaired_output = provider_output(final_agent, repaired)
             repair_error = _structured_output_error(repaired_output, response_format)
+            # Built whether or not it satisfied the schema: this call reached
+            # the provider and consumed tokens either way, so it is a real
+            # accounting row even when its output is discarded below.
+            attempted_repair_step: dict[str, Any] = {
+                "id": synthesis_step["id"] + 1,
+                "role": "repair",
+                "agent_id": final_agent.id,
+                "subtask": "Strict JSON Schema repair",
+                "access": [synthesis_step["id"]],
+                "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
+                "output": repaired_output,
+            }
+            if isinstance(repaired.get("usage"), dict):
+                attempted_repair_step["usage"] = _canonical_provider_usage(
+                    repaired["usage"], responses=response_request
+                )
             if repair_error is None:
-                repair_step = {
-                    "id": synthesis_step["id"] + 1,
-                    "role": "repair",
-                    "agent_id": final_agent.id,
-                    "subtask": "Strict JSON Schema repair",
-                    "access": [synthesis_step["id"]],
-                    "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
-                    "output": repaired_output,
-                }
-                if isinstance(repaired.get("usage"), dict):
-                    repair_step["usage"] = _canonical_provider_usage(
-                        repaired["usage"], responses=response_request
-                    )
+                repair_step = attempted_repair_step
                 raw = repaired
                 synthesis_output = repaired_output
                 break
@@ -5002,6 +5022,17 @@ class TaskOrchestrator:
                 raise ProviderResponseError(
                     "every eligible model on the selected endpoint violated response_format"
                 )
+            # Only reached when another model is about to be tried, so these
+            # two completed calls are spend with no served answer attached.
+            # ``structured_output_error`` marks them so an auditor reading the
+            # persisted trace can tell a discarded attempt from the row that
+            # actually produced ``answer``.
+            failed_attempts.extend(
+                (
+                    {**synthesis_step, "structured_output_error": contract_error},
+                    {**attempted_repair_step, "structured_output_error": repair_error},
+                )
+            )
             final_agent = next_agent
             synthesis_started = time.perf_counter()
         synthesis_latency_seconds = time.perf_counter() - synthesis_started
@@ -5022,9 +5053,14 @@ class TaskOrchestrator:
         # before returning answers"; "Multi-layer simple-structure
         # measurement (fast-mlsirm)") and Baker (2001) in
         # docs/papers/README.md for the IRT ability fitting.
+        # Response-facing attribution stays on the served call alone: `usage`
+        # and `synthesis_latency_seconds` describe the attempt that actually
+        # produced the answer, never a discarded one. `trace` is the spend
+        # side, and carries every completed attempt.
         usage = (repair_step or synthesis_step).get("usage")
         trace = [
             *workflow["trace"],
+            *failed_attempts,
             synthesis_step,
             *([repair_step] if repair_step is not None else []),
         ]
@@ -7387,26 +7423,47 @@ class TaskOrchestrator:
             None,
         )
 
-    def _embed_cached(self, text: str) -> list[float] | None:
+    def _embed_cached(
+        self, text: str, embedding_member: str | None = None
+    ) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure.
 
-        Partitioned by :func:`_request_evidence_partition` so a cache hit can
-        only ever return a vector some provider *this* request may itself
-        reach produced: without it a restricted request read the cache before
-        :meth:`_embedding_agent_id` was consulted at all, and an earlier
-        unrestricted request's vector -- the routing evidence baked into it
-        included -- crossed the isolation boundary (Devin review on #1032).
+        Keyed on two independent things, because either alone leaks:
+
+        * :func:`_request_evidence_partition` -- the active request's own
+          restrictions, so a cache hit can only ever return a vector some
+          provider *this* request may itself reach produced. Without it a
+          restricted request read the cache before :meth:`_embedding_agent_id`
+          was consulted at all, and an earlier unrestricted request's vector
+          -- the routing evidence baked into it included -- crossed the
+          isolation boundary (Devin review on #1032).
+        * the resolved embedding member itself, which is the identity of the
+          *vector space* the entry lives in. An identical restriction shape
+          can still resolve to a different embedding model/deployment later
+          (an agent-pool change, or :meth:`_measured_member_order` reordering
+          the members of one eligible group), and a cosine between two
+          different embedding spaces is meaningless -- it would silently
+          corrupt affinity-based routing rather than fail (a later Devin
+          review on the same PR; a refinement of the eligibility partition
+          above, not a duplicate of it).
+
+        ``embedding_member`` lets a caller that makes several comparable
+        embeddings resolve the member once and pin every vector in one
+        comparison to the same space; ``None`` resolves it here.
         """
+        if embedding_member is None:
+            embedding_member = self._embedding_agent_id()
+            if embedding_member is None:
+                return None
         digest = hashlib.sha256(
-            f"{_request_evidence_partition()}\x1f{text}".encode("utf-8")
+            "\x1f".join(
+                (_request_evidence_partition(), f"embedder:{embedding_member}", text)
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
         if cached is not None:
             return cached
-        embedding_member = self._embedding_agent_id()
-        if embedding_member is None:
-            return None
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
@@ -7416,18 +7473,27 @@ class TaskOrchestrator:
             self._cache_put(self._task_vector_cache, digest, vector)
         return vector
 
-    def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
+    def _descriptor_vector_cached(
+        self, agent: ModelAgent, embedding_member: str | None = None
+    ) -> list[float] | None:
         """Cached embedding of one agent's operator-declared metadata document.
 
-        Partitioned exactly like :meth:`_embed_cached`: both halves of a
+        Keyed exactly like :meth:`_embed_cached`, on both the request's
+        restrictions and the resolved embedding member: both halves of a
         semantic affinity have to come from a provider the active request may
-        reach, or the restricted request still routes on an ineligible
-        provider's evidence (Devin review on #1032).
+        reach, *and* from the same vector space, or the restricted request
+        still routes on an ineligible provider's evidence -- or on a cosine
+        between two unrelated embedding spaces (Devin reviews on #1032).
         """
+        if embedding_member is None:
+            embedding_member = self._embedding_agent_id()
+            if embedding_member is None:
+                return None
         fingerprint = hashlib.sha256(
             "\x1f".join(
                 [
                     _request_evidence_partition(),
+                    f"embedder:{embedding_member}",
                     agent.id,
                     self._agent_descriptor_text(agent),
                 ]
@@ -7437,9 +7503,6 @@ class TaskOrchestrator:
             cached = self._descriptor_vector_cache.get(fingerprint)
         if cached is not None:
             return cached
-        embedding_member = self._embedding_agent_id()
-        if embedding_member is None:
-            return None
         try:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
@@ -7459,16 +7522,26 @@ class TaskOrchestrator:
         Returns ``{agent_id: float|None}``; all values are None whenever there
         is no task text, no embedding-capable member, or embedding transport
         fails -- callers then fall back to declaration-only ordering.
+
+        The embedding member is resolved once, here, and pinned into every
+        vector this comparison uses: a cosine is only meaningful between two
+        vectors from the same embedding space, and resolving per call would
+        both re-rank the pool once per candidate and leave the task vector
+        free to come from a different space than a descriptor vector when the
+        pool changes mid-comparison (Devin review on #1032).
         """
         stripped = text.strip() if isinstance(text, str) else ""
         if not stripped or not agents:
             return {agent.id: None for agent in agents}
-        task_vector = self._embed_cached(stripped)
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return {agent.id: None for agent in agents}
+        task_vector = self._embed_cached(stripped, embedding_member)
         if task_vector is None:
             return {agent.id: None for agent in agents}
         affinities: dict[str, float | None] = {}
         for agent in agents:
-            descriptor_vector = self._descriptor_vector_cached(agent)
+            descriptor_vector = self._descriptor_vector_cached(agent, embedding_member)
             affinities[agent.id] = (
                 None
                 if descriptor_vector is None

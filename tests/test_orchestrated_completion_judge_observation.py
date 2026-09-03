@@ -14,12 +14,19 @@ and psychometric routing evidence), never branching on the verdict:
   later ranking call, proving the routing gap this wiring closes;
 - a request pinned to one explicit model keeps that pin through the judge
   call *and* through the prompt embedding the observation performs, so
-  neither can reach a provider the request itself was never allowed to use.
+  neither can reach a provider the request itself was never allowed to use;
+- a model whose structured synthesis *and* repair both failed before a
+  different member of the same virtual pool succeeded still reaches every
+  accounting path (trace, budget checkpoint, persisted run, spend analytics)
+  without polluting the served answer's own latency/usage attribution;
+- a routing-evidence cache entry is never reused across a change of
+  embedding model, whose vectors live in a different space entirely.
 """
 
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
+    BudgetExceededError,
     ProviderUpstreamError,
     _request_eligibility_scope,
+    _request_evidence_partition,
 )
 
 _STUB_CONDUCT = {
@@ -741,6 +750,305 @@ def test_restricted_request_cannot_read_an_incompatible_scopes_cached_evidence()
         "unrelated_embedder",
         "unrelated_embedder",
     ]
+
+
+_EXACT_TEN = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "exact_count",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"input_count": {"const": 10}},
+            "required": ["input_count"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+class _SchemaFailoverClient:
+    """Violate the caller's schema on named members, satisfy it on the rest.
+
+    Every response reports usage, and a failing member's synthesis and repair
+    report *different* token counts, so each individual attempt is
+    identifiable in the budget meter's per-model totals.
+    """
+
+    FAILED_SYNTHESIS_TOKENS = 11
+    FAILED_REPAIR_TOKENS = 13
+    SERVED_TOKENS = 17
+
+    def __init__(self, *failing_agent_ids: str) -> None:
+        self._failing_agent_ids = frozenset(failing_agent_ids)
+        self.calls: list[str] = []
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return a schema-violating answer for the failing members only."""
+        del endpoint, payload
+        self.calls.append(agent.id)
+        if agent.id not in self._failing_agent_ids:
+            content, completion = '{"input_count": 10}', self.SERVED_TOKENS
+        else:
+            content = '{"input_count": 6}'
+            completion = (
+                self.FAILED_SYNTHESIS_TOKENS
+                if self.calls.count(agent.id) == 1
+                else self.FAILED_REPAIR_TOKENS
+            )
+        return {
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": completion,
+                "total_tokens": 5 + completion,
+            },
+        }
+
+    proxy_send = proxy_send_once
+
+
+def test_failed_schema_attempts_reach_every_spend_accounting_path() -> None:
+    """A discarded model's synthesis and repair are metered, not silently free.
+
+    Devin review (PR #1032): in the virtual same-endpoint retry loop
+    ``synthesis_step``/``repair_step`` are rebound on every pass, so when one
+    model failed structured synthesis *and* its repair before a different
+    member of the same pool succeeded, that first model's two completed
+    provider calls disappeared from the final trace -- and therefore from the
+    budget checkpoint, the persisted run, and buyer-facing spend analytics.
+    Genuine provider spend went unmetered.
+
+    Distinct from the rejected-request case an earlier round fixed: these are
+    attempts that completed and were *followed* by a successful one, not a
+    wholesale request rejection.
+    """
+    first = ModelAgent(
+        "first_agent", "first-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    second = ModelAgent(
+        "second_agent", "second-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _SchemaFailoverClient(first.id)
+    orchestrator = TaskOrchestrator([first, second], client=client)
+    # Isolate synthesis accounting: the optional observation-only judge has
+    # its own already-covered metering path (test above).
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator._select_agent = lambda *args, **kwargs: first  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *args, **kwargs: [first, second]  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "classify ten items"}],
+            "response_format": _EXACT_TEN,
+        },
+        single_agent=False,
+    )
+
+    assert result["choices"][0]["message"]["content"] == '{"input_count": 10}'
+    assert client.calls == [first.id, first.id, second.id]
+
+    run = next(iter(orchestrator._workflow_runs.values()))
+    trace = run["trace"]
+    assert [(step["role"], step["agent_id"]) for step in trace] == [
+        ("synthesizer", first.id),
+        ("repair", first.id),
+        ("synthesizer", second.id),
+    ]
+    # Unique, contiguous step ids: `access` indexes the trace positionally
+    # (see get_access_report), so a rebound id would misattribute evidence.
+    assert [step["id"] for step in trace] == [0, 1, 2]
+    assert trace[1]["access"] == [0]
+    # The discarded attempts are marked, so an auditor reading the persisted
+    # run can tell them from the row that actually produced `answer`.
+    assert trace[0]["structured_output_error"]
+    assert trace[1]["structured_output_error"]
+    assert "structured_output_error" not in trace[2]
+
+    # Every completed call reaches the meter and buyer-facing analytics.
+    failed_tokens = (
+        _SchemaFailoverClient.FAILED_SYNTHESIS_TOKENS
+        + _SchemaFailoverClient.FAILED_REPAIR_TOKENS
+    )
+    assert orchestrator._run_budget_output_by_model(run) == (
+        {
+            "first-model": failed_tokens,
+            "second-model": _SchemaFailoverClient.SERVED_TOKENS,
+        },
+        True,
+    )
+    assert orchestrator.budget_status()["spent_output_tokens"] == (
+        failed_tokens + _SchemaFailoverClient.SERVED_TOKENS
+    )
+    rows = {row["model"]: row for row in orchestrator.spend_analytics()["by_model"]}
+    assert rows["first-model"]["output_tokens"] == failed_tokens
+
+    # Response-facing attribution stays on the served call alone.
+    assert run["answer"] == '{"input_count": 10}'
+    assert result["usage"]["completion_tokens"] == _SchemaFailoverClient.SERVED_TOKENS
+
+
+def test_failed_schema_attempt_spend_gates_the_next_budget_checkpoint() -> None:
+    """The discarded attempts count against this request's own in-flight budget.
+
+    The same rebinding hid them from ``_trace_budget_spend``, so a request
+    that had already burned its allowance on a failed model kept firing
+    further provider calls. Both members violate the schema here, so the
+    second one's pre-repair checkpoint is reached with the first one's two
+    completed calls behind it: 11 + 13 + 11 = 35 crosses the 34-token
+    allowance, while the second member's own synthesis (11) alone does not --
+    which is precisely why counting the current attempt alone let it through.
+    """
+    first = ModelAgent(
+        "first_agent", "first-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    second = ModelAgent(
+        "second_agent", "second-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _SchemaFailoverClient(first.id, second.id)
+    orchestrator = TaskOrchestrator([first, second], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator._select_agent = lambda *args, **kwargs: first  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *args, **kwargs: [first, second]  # type: ignore[method-assign]
+    # Nothing persisted yet, so the whole overrun is in-flight spend.
+    orchestrator.budget_max_output_tokens = (
+        _SchemaFailoverClient.FAILED_SYNTHESIS_TOKENS * 2
+        + _SchemaFailoverClient.FAILED_REPAIR_TOKENS
+        - 1
+    )
+    assert orchestrator.budget_status()["exceeded"] is False
+
+    with pytest.raises(BudgetExceededError):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+        )
+
+    # The second member's synthesis ran (the checkpoint is pre-repair), and
+    # its repair was refused. Without the fix that fourth call is made.
+    assert client.calls == [first.id, first.id, second.id]
+
+
+class _EmbeddingSpaceSpyClient:
+    """One distinct unit vector per embedding deployment, every call recorded."""
+
+    VECTORS = {
+        "first_embedder": [1.0, 0.0, 0.0],
+        "second_embedder": [0.0, 1.0, 0.0],
+    }
+
+    def __init__(self) -> None:
+        self.embed_calls: list[str] = []
+
+    def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:
+        """Return this deployment's own vector space, recording the caller."""
+        self.embed_calls.append(agent.id)
+        return [list(self.VECTORS[agent.id]) for _ in texts]
+
+
+def _embedding_space_pool() -> tuple[ModelAgent, ModelAgent, ModelAgent]:
+    """One chat model plus two embedding deployments in one eligible set."""
+    return (
+        ModelAgent(
+            "chat_agent", "chat-model", base_url="mock://pool", tags=("reasoning",)
+        ),
+        ModelAgent(
+            "first_embedder",
+            "first-embed-model",
+            base_url="mock://pool",
+            tags=("embedding",),
+            priority=10,
+        ),
+        ModelAgent(
+            "second_embedder",
+            "second-embed-model",
+            base_url="mock://pool",
+            tags=("embedding",),
+            priority=1,
+        ),
+    )
+
+
+def test_evidence_cache_is_not_reused_across_a_change_of_embedding_model() -> None:
+    """A cached vector never survives the embedder that produced it changing.
+
+    Devin review (PR #1032): the eligibility partition
+    (``_request_evidence_partition``) is keyed on endpoint identity, ZDR mode
+    and the sorted allow-list -- the restrictions that *select* an embedder.
+    ``_embedding_agent_id`` can still resolve to a different embedding
+    model/deployment under an identical restriction shape (an agent-pool
+    change, or measured-member reordering inside one eligible group), and the
+    two evidence caches persist across that. A hit then returned a vector from
+    a different embedding space, and a cosine between two embedding spaces is
+    meaningless -- affinity-based routing was silently corrupted rather than
+    degraded.
+
+    This is a refinement of the eligibility partitioning, not a duplicate:
+    the restriction shape below is *identical* before and after, which is
+    exactly why that partition alone cannot catch it.
+    """
+    chat, first_embedder, second_embedder = _embedding_space_pool()
+    client = _EmbeddingSpaceSpyClient()
+    orchestrator = TaskOrchestrator([chat, first_embedder, second_embedder], client=client)
+
+    assert orchestrator._embedding_agent_id() == first_embedder.id
+    partition_before = _request_evidence_partition()
+    assert orchestrator._embed_cached("routing evidence text") == [1.0, 0.0, 0.0]
+    assert orchestrator._descriptor_vector_cached(chat) == [1.0, 0.0, 0.0]
+
+    # An operator re-ranks the pool. Same agents, same endpoint, same ZDR
+    # mode, no eligibility scope -- so the restriction shape does not move.
+    orchestrator.patch_agent("default", second_embedder.id, {"priority": 100})
+    assert orchestrator._embedding_agent_id() == second_embedder.id
+    assert _request_evidence_partition() == partition_before
+
+    assert orchestrator._embed_cached("routing evidence text") == [0.0, 1.0, 0.0]
+    assert orchestrator._descriptor_vector_cached(chat) == [0.0, 1.0, 0.0]
+    assert client.embed_calls == [
+        first_embedder.id,
+        first_embedder.id,
+        second_embedder.id,
+        second_embedder.id,
+    ]
+
+    # The cache still works: a repeat under the current embedder hits.
+    assert orchestrator._embed_cached("routing evidence text") == [0.0, 1.0, 0.0]
+    assert client.embed_calls[-1] == second_embedder.id
+    assert len(client.embed_calls) == 4
+
+
+def test_one_cosine_never_mixes_two_embedding_spaces() -> None:
+    """Both halves of an affinity come from one embedding member, resolved once.
+
+    The task vector and every descriptor vector in a single
+    ``_semantic_affinities`` call are pinned to the member resolved at its
+    start, so a pool change landing mid-comparison cannot make one cosine
+    span two embedding spaces.
+    """
+    chat, first_embedder, second_embedder = _embedding_space_pool()
+    client = _EmbeddingSpaceSpyClient()
+    orchestrator = TaskOrchestrator([chat, first_embedder, second_embedder], client=client)
+
+    affinities = orchestrator._semantic_affinities("classify ten items", [chat])
+    assert affinities[chat.id] == pytest.approx(1.0)
+    assert set(client.embed_calls) == {first_embedder.id}
+
+    orchestrator.patch_agent("default", second_embedder.id, {"priority": 100})
+    client.embed_calls.clear()
+    affinities = orchestrator._semantic_affinities("classify ten items", [chat])
+    assert affinities[chat.id] == pytest.approx(1.0)
+    # Not one leftover call to the old embedder: a mixed pair would have
+    # yielded a cosine of 0.0 between two orthogonal spaces.
+    assert set(client.embed_calls) == {second_embedder.id}
 
 
 if __name__ == "__main__":  # pragma: no cover
