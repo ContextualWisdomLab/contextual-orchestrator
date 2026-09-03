@@ -11,7 +11,10 @@ and psychometric routing evidence), never branching on the verdict:
   write entirely, exactly as the disabled route-path contract already does;
 - the observation genuinely reaches ``PsychometricRoutingEvidence`` and can
   move an evidenced candidate ahead of a higher-static-priority one on a
-  later ranking call, proving the routing gap this wiring closes.
+  later ranking call, proving the routing gap this wiring closes;
+- a request pinned to one explicit model keeps that pin through the judge
+  call *and* through the prompt embedding the observation performs, so
+  neither can reach a provider the request itself was never allowed to use.
 """
 
 from __future__ import annotations
@@ -26,7 +29,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ProviderUpstreamError,
+    _request_eligibility_scope,
+)
 
 _STUB_CONDUCT = {
     "mode": "conduct",
@@ -388,6 +394,205 @@ def test_realtime_judge_excludes_agents_this_request_already_proved_unavailable(
     # Without the exclusion the higher-priority broken agent wins verifier
     # ranking and would have taken the judge call.
     assert captured["judge"] == "healthy_agent"
+
+
+class _EmbeddingSpyClient:
+    """Serve a fixed Responses answer and record every embedding provider call."""
+
+    def __init__(self) -> None:
+        self.embed_calls: list[str] = []
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return one fixed provider-shaped response for any agent."""
+        del endpoint, payload
+        return {
+            "id": "resp_test",
+            "object": "response",
+            "model": agent.model,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "served answer"}],
+                }
+            ],
+        }
+
+    proxy_send = proxy_send_once
+
+    def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:
+        """Record which provider was asked to embed request-derived text."""
+        self.embed_calls.append(agent.id)
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+def _pinned_pool() -> tuple[ModelAgent, ModelAgent]:
+    """One pinnable chat model plus an embedding deployment on another provider."""
+    return (
+        ModelAgent(
+            "pinned_agent",
+            "pinned-model",
+            base_url="https://pinned.example/v1",
+            tags=("reasoning",),
+            priority=1,
+        ),
+        ModelAgent(
+            "unrelated_agent",
+            "unrelated-model",
+            base_url="https://unrelated.example/v1",
+            tags=("reasoning", "embedding"),
+            priority=100,
+        ),
+    )
+
+
+def test_explicit_structured_model_pin_constrains_realtime_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller-named explicit model pins the judge exactly like ``_required_agent_id``.
+
+    Devin review (PR #1032): the judge's allow-list is derived from
+    ``_required_agent_id`` alone, so an explicit structured model request --
+    which pins synthesis to that one agent just as hard -- left the judge
+    unrestricted and could send the prompt and served answer to an unrelated
+    provider.
+    """
+    pinned, unrelated = _pinned_pool()
+    orchestrator = TaskOrchestrator([pinned, unrelated], client=_EmbeddingSpyClient())
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+
+    captured: dict[str, object] = {}
+
+    def _spy(
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        captured["allowed_agent_ids"] = allowed_agent_ids
+        captured["judge"] = next(
+            (
+                agent.id
+                for agent in orchestrator._ranked_agents(task, "verifier")
+                if allowed_agent_ids is None or agent.id in allowed_agent_ids
+            ),
+            None,
+        )
+        return {
+            "accepted": True,
+            "reason": "stub verdict",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        }
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", _spy)
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world", "model": "pinned-model"},
+        endpoint="responses",
+        single_agent=False,
+    )
+
+    assert result["output_text"] == "served answer"
+    # No _required_agent_id anywhere -- the pin came from `model` alone.
+    assert captured["allowed_agent_ids"] == {"pinned_agent"}
+    # Without the pin the higher-priority unrelated provider wins verifier
+    # ranking and would have taken the judge call.
+    assert captured["judge"] == "pinned_agent"
+
+
+def test_explicit_structured_model_pin_blocks_ineligible_prompt_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The observation's prompt embedding honors the request's own eligibility.
+
+    Devin review (PR #1032): the contextual observation embeds the prompt for
+    routing evidence, and that embedding took no allow-list of its own -- so
+    a request pinned to one provider could still hand its prompt to an
+    unrelated embedding provider. The pinned request must reach no embedding
+    provider at all here; the same pool with an unpinned virtual request
+    still does, proving the block is the pin and not a missing deployment.
+    """
+    pinned, unrelated = _pinned_pool()
+
+    def _accept(
+        task: str, fallback: dict[str, Any], **_ignored: object
+    ) -> dict[str, Any]:
+        """Stand in for the judge verdict so only the embedding path is measured."""
+        del task
+        return {
+            "accepted": True,
+            "reason": "stub verdict",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        }
+
+    pinned_client = _EmbeddingSpyClient()
+    pinned_orchestrator = TaskOrchestrator([pinned, unrelated], client=pinned_client)
+    pinned_orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    monkeypatch.setattr(pinned_orchestrator, "_model_judge_verification", _accept)
+
+    pinned_orchestrator.proxy_completion(
+        {"input": "confidential prompt", "model": "pinned-model"},
+        endpoint="responses",
+        single_agent=False,
+    )
+    assert pinned_client.embed_calls == []
+    assert pinned_orchestrator._psychometric_router.has_observations() is True
+
+    open_client = _EmbeddingSpyClient()
+    open_orchestrator = TaskOrchestrator([pinned, unrelated], client=open_client)
+    open_orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    monkeypatch.setattr(open_orchestrator, "_model_judge_verification", _accept)
+
+    open_orchestrator.proxy_completion(
+        {"input": "confidential prompt"}, endpoint="responses", single_agent=False
+    )
+    assert "unrelated_agent" in open_client.embed_calls
+
+
+def test_eligibility_scope_narrows_embedding_to_reachable_providers() -> None:
+    """Embedding eligibility follows the provider, not the exact model id.
+
+    The narrowing must block an unrelated provider without silently killing
+    routing evidence for every restricted request: an embedding deployment
+    behind an endpoint the request already reaches stays usable, an empty
+    allow-list yields no embedding at all, and no scope keeps the
+    unrestricted pick.
+    """
+    chat = ModelAgent(
+        "chat_agent",
+        "chat-model",
+        base_url="https://same.example/v1",
+        tags=("reasoning",),
+    )
+    same_provider = ModelAgent(
+        "same_embedder",
+        "embed-model",
+        base_url="https://same.example/v1/",
+        tags=("embedding",),
+    )
+    other_provider = ModelAgent(
+        "other_embedder",
+        "other-embed-model",
+        base_url="https://other.example/v1",
+        tags=("embedding",),
+        priority=100,
+    )
+    orchestrator = TaskOrchestrator([chat, same_provider, other_provider])
+
+    unrestricted = orchestrator._embedding_agent_id()
+    assert unrestricted == "other_embedder"
+    with _request_eligibility_scope({"chat_agent"}):
+        assert orchestrator._embedding_agent_id() == "same_embedder"
+    with _request_eligibility_scope(set()):
+        assert orchestrator._embedding_agent_id() is None
+    with _request_eligibility_scope(None):
+        assert orchestrator._embedding_agent_id() == unrestricted
 
 
 def test_realtime_judge_spend_reaches_budget_meter_and_spend_analytics() -> None:

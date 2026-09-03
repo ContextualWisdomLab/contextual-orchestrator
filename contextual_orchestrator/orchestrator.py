@@ -95,6 +95,15 @@ _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
 _REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_request_endpoint_identity", default=None
 )
+#: Agent ids the active request is allowed to send its content to, or None when
+#: unrestricted. Set by :func:`_request_eligibility_scope` from the very same
+#: allow-list the request's own serving path is already constrained by, so
+#: request-scoped *side* calls that carry request content but take no
+#: ``allowed_agent_ids`` argument of their own -- today the routing-evidence
+#: embedding in :meth:`TaskOrchestrator._embedding_agent_id` -- honor it too.
+_REQUEST_ELIGIBLE_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
+    "contextual_orchestrator_request_eligible_agent_ids", default=None
+)
 _INVALID_REQUESTED_MODEL = object()
 
 
@@ -147,6 +156,24 @@ def _agent_matches_request_endpoint(agent: ModelAgent) -> bool:
     return agent.id in endpoint_ids and _configured_endpoint_matches(
         agent.base_url, endpoint_identity
     )
+
+
+@contextmanager
+def _request_eligibility_scope(allowed_agent_ids: Iterable[str] | None):
+    """Narrow request-scoped side calls to the agents this request may already reach.
+
+    Mirrors :meth:`TaskOrchestrator.routing_endpoint_scope`: ``None`` means
+    "no restriction to add" and leaves any enclosing scope untouched, so this
+    can only ever narrow, never widen.
+    """
+    if allowed_agent_ids is None:
+        yield
+        return
+    token = _REQUEST_ELIGIBLE_AGENT_IDS.set(frozenset(allowed_agent_ids))
+    try:
+        yield
+    finally:
+        _REQUEST_ELIGIBLE_AGENT_IDS.reset(token)
 
 
 def _request_endpoint_partition() -> str:
@@ -4633,29 +4660,38 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }
-        allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-            }
-            if free_only
+        # The one effective restriction this request's synthesis actually runs
+        # under, covering *every* way a request can be pinned rather than the
+        # `_required_agent_id` special case alone: a caller-named explicit
+        # model is exactly as pinned as a required file provider, because
+        # `synthesis_candidates` below is literally `[final_agent]` whenever
+        # `virtual_model` is false. Leaving that case unrestricted let an
+        # explicitly pinned request's prompt and served answer reach an
+        # unrelated -- possibly less trusted -- provider through the
+        # observation-only judge/embedding calls that reuse this set (Devin
+        # review on #1032). `free_only` implies `virtual_model` (FREE_MODEL is
+        # itself a virtual name), so the free pool and the ZDR-filtered
+        # virtual pool remain the only unpinned outcomes.
+        allowed_agent_ids = (
+            {final_agent.id}
+            if isinstance(required_agent_id, str) or not virtual_model
             else (
                 {
                     candidate.id
                     for candidate in self.agents
+                    if self._is_general_free_agent(candidate)
+                    and self._zdr_agent_allowed(candidate)
+                }
+                if free_only
+                else {
+                    candidate.id
+                    for candidate in self.agents
                     if self._zdr_agent_allowed(candidate)
                 }
-                if virtual_model
-                else None
             )
-        ))
+        )
         if replica_agent_ids is not None:
-            allowed_agent_ids = (
-                replica_agent_ids
-                if allowed_agent_ids is None
-                else allowed_agent_ids & replica_agent_ids
-            )
+            allowed_agent_ids = allowed_agent_ids & replica_agent_ids
         synthesis_candidates = (
             self._failover_candidates(
                 final_agent,
@@ -4980,6 +5016,21 @@ class TaskOrchestrator:
         # request's own not-yet-persisted spend (workflow trace + synthesis
         # + repair) counts, exactly as the pre-synthesis checkpoint above
         # already counts the workflow trace.
+        #
+        # Accepted limitation (Devin review on #1032, informational): this is
+        # a pre-call gate, not a reservation, so the one judge call it permits
+        # can still finish above the allowance by its own unknown output size.
+        # That is the gateway's budget contract everywhere -- every
+        # _raise_if_spend_budget_exceeded call site admits a call whose output
+        # length nobody knows yet -- and the judge is not special. The only
+        # available tightening, a hard max_output_tokens cap sized to the
+        # remaining allowance, would truncate the judge's structured verdict
+        # mid-JSON, which _model_judge_verification fails closed on: a
+        # false-negative quality/IRT observation would then be recorded
+        # against an answer that actually succeeded, corrupting the exact
+        # ledger this call exists to feed. Overshoot is bounded to one judge
+        # call admitted while spend was still inside the cap, and the next
+        # request's own pre-call gate stops there.
         judge_budget_exceeded = False
         if self.policy.realtime_judge and (
             self.budget_max_output_tokens is not None
@@ -6447,7 +6498,11 @@ class TaskOrchestrator:
         ``excluded_agent_ids`` forward the caller's own synthesis eligibility
         constraints (e.g. an explicit model pin) to the verifier selection so
         this observation-only call cannot reach a provider the request itself
-        was never allowed to use.
+        was never allowed to use. ``allowed_agent_ids`` additionally opens a
+        :func:`_request_eligibility_scope` around both the verdict call and
+        the ledger write, because the psychometric observation embeds the
+        prompt itself for routing evidence and that embedding takes no
+        allow-list argument of its own (Devin review on #1032).
         """
         output_tokens = self._usage_completion_tokens(usage)
 
@@ -6476,22 +6531,23 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         fallback_report = {"verifier_output": answer}
-        base = self._model_judge_verification(
-            text,
-            fallback_report,
-            free_only=free_only,
-            allowed_agent_ids=allowed_agent_ids,
-            excluded_agent_ids=excluded_agent_ids,
-        )
-        accepted = bool(base.get("accepted"))
-        raw_irt_row = base.get("judge_irt_row")
-        irt_row = (
-            tuple(raw_irt_row)
-            if isinstance(raw_irt_row, list)
-            and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
-            else ()
-        )
-        _record(accepted, irt_row)
+        with _request_eligibility_scope(allowed_agent_ids):
+            base = self._model_judge_verification(
+                text,
+                fallback_report,
+                free_only=free_only,
+                allowed_agent_ids=allowed_agent_ids,
+                excluded_agent_ids=excluded_agent_ids,
+            )
+            accepted = bool(base.get("accepted"))
+            raw_irt_row = base.get("judge_irt_row")
+            irt_row = (
+                tuple(raw_irt_row)
+                if isinstance(raw_irt_row, list)
+                and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
+                else ()
+            )
+            _record(accepted, irt_row)
         return base
 
     @staticmethod
@@ -7231,11 +7287,47 @@ class TaskOrchestrator:
                 cache.popitem(last=False)
 
     def _embedding_agent_id(self) -> str | None:
-        """First measured embedding-capable member id, or None when unconfigured."""
+        """First embedding-capable member this request may reach, or None.
+
+        Every embedding this gateway makes for routing evidence
+        (:meth:`_embed_cached`, :meth:`_descriptor_vector_cached`) sends
+        request-derived text -- the prompt itself, in the psychometric and
+        semantic-affinity paths -- to the returned provider. It therefore
+        honors the active request's own eligibility exactly like the serving
+        path does: an explicit model pin, the free pool, or a file-replica
+        subset all narrow this choice, and ZDR/endpoint pinning already
+        narrow it inside :meth:`_ranked_agents`. Without this, an
+        observation-only call could hand a restricted request's prompt to an
+        unrelated provider the caller was never allowed to use (Devin review
+        on #1032).
+
+        An eligible agent's own configured endpoint counts as reachable: that
+        provider is already serving this request's content, so an embedding
+        deployment behind the same endpoint discloses nothing new. Anything
+        else yields None, and every caller already degrades to
+        declaration-only evidence when embedding is unavailable.
+        """
         try:
-            return self.select_capability_agent("embedding").id
+            candidates = self._capability_agents("embedding")
         except (RuntimeError, ValueError):
             return None
+        eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
+        if eligible is None:
+            return candidates[0].id
+        endpoints = {
+            agent.base_url.rstrip("/").casefold()
+            for agent in self.agents
+            if agent.id in eligible
+        }
+        return next(
+            (
+                agent.id
+                for agent in candidates
+                if agent.id in eligible
+                or agent.base_url.rstrip("/").casefold() in endpoints
+            ),
+            None,
+        )
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure."""
