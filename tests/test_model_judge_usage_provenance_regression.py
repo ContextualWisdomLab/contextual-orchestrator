@@ -13,7 +13,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.orchestrator import _FastMLSIJudgeAdapter
+from contextual_orchestrator.orchestrator import ModelClient, _FastMLSIJudgeAdapter
 
 
 ZERO_USAGE = {
@@ -207,6 +207,99 @@ def test_structured_adapter_snapshots_mutable_usage_alias() -> None:
     reported_usage["prompt_tokens"] = 99
     reported_usage["total_tokens"] = 99
     assert adapter.served_usage == ZERO_USAGE
+
+
+def test_judge_usage_source_survives_concurrent_pool_replacement_provider_to_mock() -> None:
+    """A provider's genuine all-zero usage must not be reclassified as synthetic.
+
+    Simulates a concurrent admin pool update racing an in-flight judge call
+    (Devin review on PR #1002): while the provider's ``chat()`` request is
+    still executing, another thread replaces the served agent id's pool entry
+    with a ``mock://`` agent. ``_invoke``'s ``on_success`` callback captures
+    the exact (frozen) ``ModelAgent`` that served this call before that
+    replacement can be observed downstream, so the adapter's provenance
+    classification -- and therefore whether this call's zero usage is
+    honestly counted as measured spend -- must reflect what genuinely served
+    the call, never a fresh ``TaskOrchestrator.candidates`` lookup by id that
+    can race the replacement.
+    """
+    provider_agent = ModelAgent(
+        "judge_agent",
+        "judge-model",
+        base_url="https://provider.example/v1",
+        tags=("verification",),
+    )
+
+    class _ConcurrentReplacementClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float | None = None) -> str:  # type: ignore[override]
+            del messages, temperature
+            # The concurrent mutation: a same-id pool replacement landing
+            # while this provider call is still in flight, exactly like a
+            # different request thread patching the agent through the admin
+            # API. TaskOrchestrator never mutates self.candidates in place
+            # (only reassigns it), so this cannot retroactively change
+            # ``agent`` -- the point under test is whether the *adapter*
+            # still resolves provenance from that unaffected reference.
+            orchestrator.candidates = [
+                ModelAgent(
+                    "judge_agent",
+                    "judge-model",
+                    base_url="mock://replaced-concurrently",
+                    tags=("verification",),
+                )
+            ]
+            self._local.usage = dict(ZERO_USAGE)
+            return "judge rationale"
+
+    orchestrator = TaskOrchestrator([provider_agent], client=_ConcurrentReplacementClient())
+    adapter = _FastMLSIJudgeAdapter(orchestrator, "task", provider_agent.id)
+
+    adapter.complete([{"role": "user", "content": "judge"}])
+
+    assert adapter.served_usage_source == "provider_reported"  # type: ignore[attr-defined]
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+    assert fields["judge_usage"] == ZERO_USAGE
+
+
+def test_judge_usage_source_survives_concurrent_pool_replacement_mock_to_provider() -> None:
+    """The mock transport's synthetic zero fill must not become provider evidence.
+
+    Mirror of the provider-to-mock race above, in the other direction: the
+    agent that actually served this call was ``mock://``, but a concurrent
+    pool update replaces the same id with a real provider agent while the
+    call is (conceptually) still in flight. Without the atomic capture, a
+    post-hoc ``self._agent(served_id)`` lookup would observe the replacement
+    and mislabel synthetic mock usage as authoritative provider evidence.
+    """
+    mock_agent = ModelAgent(
+        "judge_agent",
+        "judge-model",
+        base_url="mock://catalog",
+        tags=("verification",),
+    )
+
+    class _ConcurrentReplacementClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float | None = None) -> str:  # type: ignore[override]
+            del messages, temperature
+            orchestrator.candidates = [
+                ModelAgent(
+                    "judge_agent",
+                    "judge-model",
+                    base_url="https://provider.replaced-concurrently/v1",
+                    tags=("verification",),
+                )
+            ]
+            self._local.usage = dict(ZERO_USAGE)
+            return "judge rationale"
+
+    orchestrator = TaskOrchestrator([mock_agent], client=_ConcurrentReplacementClient())
+    adapter = _FastMLSIJudgeAdapter(orchestrator, "task", mock_agent.id)
+
+    adapter.complete([{"role": "user", "content": "judge"}])
+
+    assert adapter.served_usage_source == "synthetic_mock"  # type: ignore[attr-defined]
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+    assert "judge_usage" not in fields
 
 
 def test_structured_adapter_marks_mock_zero_usage_as_synthetic() -> None:

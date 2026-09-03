@@ -397,6 +397,12 @@ class _FastMLSIJudgeAdapter:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
+        served_agent_at_call: ModelAgent | None = None
+
+        def _capture_serving_agent(agent: ModelAgent) -> None:
+            nonlocal served_agent_at_call
+            served_agent_at_call = agent
+
         output, served_id, served_model, usage = self.orchestrator._invoke(
             self._agent(),
             messages,
@@ -405,18 +411,36 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
             excluded_agent_ids=self.excluded_agent_ids,
+            on_success=_capture_serving_agent,
         )
-        # _invoke may fail over to a candidate outside this orchestrator's own
-        # pool (e.g. a test double standing in for the served agent);
-        # unresolvable provenance must fail closed to unknown (None, treated
-        # as unmeasured downstream) rather than raise and drop this
+        # Prefer the exact ModelAgent _invoke's on_success callback captured
+        # atomically at the moment it served this call. A concurrent admin
+        # request can replace TaskOrchestrator.candidates (add/patch/remove
+        # candidate) with a different base_url under the same served_id in the
+        # gap between that provider call completing and this method resolving
+        # provenance; since ModelAgent is frozen and pool mutation always
+        # reassigns self.candidates rather than mutating it in place, the
+        # captured reference is immune to that race, unlike a fresh
+        # self.orchestrator._agent(served_id) lookup against the live mutable
+        # pool (Devin review on PR #1002).
+        #
+        # _invoke may also fail over to a candidate outside this orchestrator's
+        # own pool (e.g. a test double standing in for the served agent), and a
+        # custom _invoke test double may not accept/call on_success at all;
+        # unresolvable provenance must fail closed to unknown (None, treated as
+        # unmeasured downstream) rather than raise and drop this
         # otherwise-successful call's accounting entirely.
-        try:
-            served_agent = self.orchestrator._agent(served_id)
-        except KeyError:
-            self.served_usage_source = None
+        if served_agent_at_call is not None:
+            self.served_usage_source = self._usage_source_for_agent(
+                served_agent_at_call, usage
+            )
         else:
-            self.served_usage_source = self._usage_source_for_agent(served_agent, usage)
+            try:
+                served_agent = self.orchestrator._agent(served_id)
+            except KeyError:
+                self.served_usage_source = None
+            else:
+                self.served_usage_source = self._usage_source_for_agent(served_agent, usage)
         return self._completion_payload(
             output, served_id, served_model, usage, self.mode if mode is None else mode
         )
@@ -7695,6 +7719,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        on_success: Callable[[ModelAgent], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -7705,6 +7730,21 @@ class TaskOrchestrator:
 
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
+
+        ``on_success``, when given, receives the exact ``ModelAgent`` that served
+        the winning call before this method returns. ``ModelAgent`` is a frozen
+        dataclass and ``candidates``/``race_members`` here are call-local lists
+        snapshotted before any provider transport; a pool-mutation API
+        (add/patch/remove candidate) only ever reassigns ``self.candidates`` to a
+        new list object and never mutates an existing one in place (see
+        ``_agent``), so this reference stays valid even if a concurrent request
+        replaces the same agent id in the live pool while this call is still in
+        flight or between this method returning and a caller's own follow-up
+        lookup. Callers that need serving-transport provenance (e.g. classifying
+        usage as provider-reported vs. synthetic) must prefer this over a
+        post-hoc ``self._agent(served_id)`` lookup, which reads the live mutable
+        pool and can silently resolve to a different agent (Devin review on
+        PR #1002).
         """
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
@@ -7787,6 +7827,11 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if on_success is not None:
+                    for candidate in race_members:
+                        if candidate.id == outcome.winner_endpoint_id:
+                            on_success(candidate)
+                            break
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
@@ -7906,6 +7951,8 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if on_success is not None:
+                    on_success(agent)
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
