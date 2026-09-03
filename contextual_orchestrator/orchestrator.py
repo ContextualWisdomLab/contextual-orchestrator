@@ -4621,13 +4621,31 @@ class TaskOrchestrator:
         # this request's not-yet-persisted spend has to fold it in the same
         # way the persisted meter does (Devin review on #1032).
         in_flight_judges = self._run_judge_accounting_blocks(workflow)
-        in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-            workflow["trace"], completed_judges=in_flight_judges
-        )
-        self._raise_if_spend_budget_exceeded(
-            additional_output_tokens=in_flight_tokens,
-            additional_cost_usd=in_flight_cost,
-        )
+
+        def budget_checkpoint(trace: list[dict[str, Any]]) -> None:
+            """Block the next provider call, metering what this one already spent.
+
+            ``_replace_workflow_run`` is the only path that moves spend onto
+            the budget meter, and this request persists nothing until it
+            succeeds -- so raising here used to drop every provider call
+            ``conduct`` had already made, including its verifier-role judge.
+            The next request was then admitted against understated spend and
+            could repeat that forever (Devin review on #1032). Metering the
+            completed work as an unserved run first makes the rejection cost
+            what it actually cost.
+            """
+            tokens, cost = self._trace_budget_spend(
+                trace, completed_judges=in_flight_judges
+            )
+            try:
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=tokens, additional_cost_usd=cost
+                )
+            except BudgetExceededError:
+                self._meter_unserved_spend(task, trace, workflow.get("verification"))
+                raise
+
+        budget_checkpoint(workflow["trace"])
 
         evidence = "\n\n".join(
             f"Workflow step {step['id']} ({step['role']}):\n{step['output']}"
@@ -4937,14 +4955,7 @@ class TaskOrchestrator:
             if contract_error is None:
                 break
 
-            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], *failed_attempts, synthesis_step],
-                completed_judges=in_flight_judges,
-            )
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_tokens,
-                additional_cost_usd=in_flight_cost,
-            )
+            budget_checkpoint([*workflow["trace"], *failed_attempts, synthesis_step])
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
                 "The prior synthesis violated the caller's strict JSON Schema "
@@ -5035,7 +5046,20 @@ class TaskOrchestrator:
             )
             final_agent = next_agent
             synthesis_started = time.perf_counter()
-        synthesis_latency_seconds = time.perf_counter() - synthesis_started
+        # The wall clock of the call whose output is actually served, not of
+        # the whole loop: on the schema-repair path `synthesis_started` still
+        # precedes the *rejected* first synthesis, so publishing that span
+        # would pair an inflated duration with the repair call's own (correct,
+        # smaller) usage and understate the serving model's real throughput in
+        # both measured ledgers -- the exact honesty this observation exists
+        # to provide (Devin review on #1032). `repair_step["latency_ms"]`
+        # times exactly the call that produced the answer and reported the
+        # usage published beside it.
+        synthesis_latency_seconds = (
+            repair_step["latency_ms"] / 1000
+            if repair_step is not None
+            else time.perf_counter() - synthesis_started
+        )
         self._record_success(final_agent.id)
         if final_agent.group_name:
             self._group_router.observe_success(final_agent.id, synthesis_latency_seconds)
@@ -5053,10 +5077,9 @@ class TaskOrchestrator:
         # before returning answers"; "Multi-layer simple-structure
         # measurement (fast-mlsirm)") and Baker (2001) in
         # docs/papers/README.md for the IRT ability fitting.
-        # Response-facing attribution stays on the served call alone: `usage`
-        # and `synthesis_latency_seconds` describe the attempt that actually
-        # produced the answer, never a discarded one. `trace` is the spend
-        # side, and carries every completed attempt.
+        # `usage` follows the same rule as the latency above: the served
+        # call's own numbers, never a discarded attempt's. `trace` is the
+        # spend side, and carries every completed attempt.
         usage = (repair_step or synthesis_step).get("usage")
         trace = [
             *workflow["trace"],
@@ -5670,6 +5693,51 @@ class TaskOrchestrator:
             for count, model in counts
         )
         return output_tokens, round(output_cost, 6)
+
+    def _meter_unserved_spend(
+        self,
+        prompt_text: str,
+        trace: list[dict[str, Any]],
+        verification: Mapping[str, Any] | None,
+    ) -> None:
+        """Meter provider calls a rejected request already made but never served.
+
+        Reuses ``batch_route``'s ``pending_verification`` shape (Devin review
+        on #961) for the same reason it exists there: ``_replace_workflow_run``
+        is the sole path onto the in-memory budget meter, so completed spend
+        that never reaches it silently vanishes and later requests are
+        admitted against understated totals. The marker keeps the row out of
+        ``_completed_workflow_runs``, and skipping ``_run_order``/audit/
+        analytics keeps it out of every user-visible listing -- a rejected
+        request must never surface as a finished workflow (Devin review on
+        #1032).
+
+        Spend this run cannot measure flips the meter to
+        ``blocked_unavailable`` through the same
+        ``_budget_unavailable_run_ids`` path any *served* run with the same
+        unmeasurable steps already takes: real money left the account either
+        way, and fail-closed is the budget contract's deliberate answer to
+        not knowing how much.
+        """
+        run_id = f"run_{uuid.uuid4().hex}"
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "conduct",
+                "policy_mode": "conduct",
+                "prompt_text": prompt_text,
+                "answer": "",
+                "cache_status": "bypass",
+                "trace": copy.deepcopy(trace),
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": dict(verification) if verification else {},
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(record)
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, record)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -6601,20 +6669,38 @@ class TaskOrchestrator:
         output_tokens = self._usage_completion_tokens(usage)
 
         def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
-            if accepted:
-                self._quality_router.observe_success(
-                    served_id, latency_seconds, output_tokens=output_tokens
-                )
-            else:
-                self._quality_router.observe_failure(served_id)
-            if prompt_context is not None:
-                self._observe_contextual_quality(
-                    prompt_context,
+            """Write the ledgers best-effort: evidence must never cost an answer.
+
+            Every caller runs this *after* its answer is already produced and
+            paid for, and the psychometric observation writes through
+            ``_StateStore.save``/``prune_keyed`` (and may embed the prompt),
+            so a storage or embedding failure here could discard a perfectly
+            good completed answer and, with it, the spend accounting that
+            depends on the caller reaching its own persistence step (Devin
+            review on #1032). Losing one routing observation is the cheaper
+            failure by far, so it is the one that happens.
+            """
+            try:
+                if accepted:
+                    self._quality_router.observe_success(
+                        served_id, latency_seconds, output_tokens=output_tokens
+                    )
+                else:
+                    self._quality_router.observe_failure(served_id)
+                if prompt_context is not None:
+                    self._observe_contextual_quality(
+                        prompt_context,
+                        served_id,
+                        accepted=accepted,
+                        latency_seconds=latency_seconds,
+                        output_tokens=output_tokens,
+                        irt_row=irt_row,
+                    )
+            except Exception:  # noqa: BLE001 - observation-only ledger write
+                _LOGGER.warning(
+                    "routing quality observation for %s failed; answer unaffected",
                     served_id,
-                    accepted=accepted,
-                    latency_seconds=latency_seconds,
-                    output_tokens=output_tokens,
-                    irt_row=irt_row,
+                    exc_info=True,
                 )
 
         if not self.policy.realtime_judge:

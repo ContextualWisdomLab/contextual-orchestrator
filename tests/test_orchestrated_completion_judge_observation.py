@@ -15,6 +15,11 @@ and psychometric routing evidence), never branching on the verdict:
 - a request pinned to one explicit model keeps that pin through the judge
   call *and* through the prompt embedding the observation performs, so
   neither can reach a provider the request itself was never allowed to use;
+- a budget rejection meters the provider calls this request already made
+  instead of forgetting them, an observation-ledger write failure never
+  costs the caller an already-generated answer, and a schema-repaired
+  answer publishes the repair call's own latency rather than a span that
+  also covers the synthesis attempt that was thrown away;
 - a model whose structured synthesis *and* repair both failed before a
   different member of the same virtual pool succeeded still reaches every
   accounting path (trace, budget checkpoint, persisted run, spend analytics)
@@ -25,7 +30,9 @@ and psychometric routing evidence), never branching on the verdict:
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -750,6 +757,240 @@ def test_restricted_request_cannot_read_an_incompatible_scopes_cached_evidence()
         "unrelated_embedder",
         "unrelated_embedder",
     ]
+
+
+_JUDGED_WORKFLOW = {
+    "mode": "conduct",
+    "answer": "evidence",
+    "trace": [
+        {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_agent",
+            "subtask": "do the work",
+            "access": [],
+            "output": "worker output",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 60, "total_tokens": 65},
+        }
+    ],
+    "verification": {
+        "accepted": True,
+        "reason": "test",
+        "verifier_output": "",
+        "judge": "model",
+        "judge_agent_id": "worker_agent",
+        "judge_model": "mock-model",
+        "judge_usage": {"prompt_tokens": 3, "completion_tokens": 45, "total_tokens": 48},
+    },
+}
+
+
+def test_budget_rejection_meters_the_spend_conduct_already_incurred() -> None:
+    """A rejected request still pays for the provider calls it already made.
+
+    Devin review (PR #1032): ``_replace_workflow_run`` is the only path onto
+    the budget meter and this request persists nothing until it succeeds, so
+    the post-conduct checkpoint's raise dropped every call ``conduct`` had
+    already completed -- its workflow trace *and* its verifier-role judge.
+    The next request was then admitted against understated spend, burned the
+    same allowance again, and forgot it again, with no bound on the repeat.
+
+    The 100-token cap here is crossed only by the two completed calls
+    together (60 worker + 45 judge), which is exactly the spend that used to
+    vanish.
+    """
+    agent = ModelAgent("worker_agent", "mock-model", tags=("reasoning",))
+    client = _ResponsesUsageClient(
+        content="never served",
+        usage={"input_tokens": 7, "output_tokens": 13, "total_tokens": 20},
+    )
+    orchestrator = TaskOrchestrator([agent], client=client)
+    conduct_calls: list[object] = []
+
+    def _conduct(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        """Return one already-completed workflow and count the attempt."""
+        conduct_calls.append(object())
+        return {**_JUDGED_WORKFLOW}
+
+    orchestrator.conduct = _conduct  # type: ignore[method-assign]
+    orchestrator.budget_max_output_tokens = 100
+
+    with pytest.raises(BudgetExceededError):
+        orchestrator.proxy_completion(
+            {"input": "hello world"}, endpoint="responses", single_agent=False
+        )
+
+    # The rejection never reached synthesis, but 60 + 45 output tokens had
+    # already left the wallet: the meter has to say so.
+    assert client.calls == []
+    assert orchestrator.budget_status()["spent_output_tokens"] == 60 + 45
+    assert orchestrator.budget_status()["exceeded"] is True
+
+    # ...without the failed request ever surfacing as a finished workflow.
+    assert orchestrator.count_workflow_runs() == 0
+    assert orchestrator.list_recent_runs() == []
+
+    # And the next request is stopped before it can burn the same allowance
+    # again -- against a meter that forgot, conduct ran once per request.
+    with pytest.raises(BudgetExceededError):
+        orchestrator.proxy_completion(
+            {"input": "hello again"}, endpoint="responses", single_agent=False
+        )
+    assert len(conduct_calls) == 1
+    assert orchestrator.budget_status()["spent_output_tokens"] == 60 + 45
+
+
+def test_observation_write_failure_never_discards_a_completed_answer(
+    tmp_path: Path,
+) -> None:
+    """A failed routing-evidence write costs the observation, never the answer.
+
+    Devin review (PR #1032): the observation-only judge runs after synthesis
+    has already succeeded but before the response and its workflow run are
+    persisted, and ``_observe_contextual_quality`` writes through the state
+    store. A store failure there therefore threw away a perfectly good
+    answer *and* kept the synthesis and judge spend it had already incurred
+    from ever reaching the ledger.
+    """
+    agent = ModelAgent("worker_agent", "mock-model", tags=("reasoning",))
+    client = _ResponsesUsageClient(
+        content="final answer",
+        usage={"input_tokens": 7, "output_tokens": 13, "total_tokens": 20},
+    )
+    orchestrator = TaskOrchestrator(
+        [agent], client=client, state_db=str(tmp_path / "state.db")
+    )
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator._model_judge_verification = lambda task, fallback, **_ignored: {  # type: ignore[method-assign]
+        "accepted": True,
+        "reason": "stub verdict",
+        "verifier_output": fallback.get("verifier_output", ""),
+        "judge": "model",
+        "judge_agent_id": "worker_agent",
+        "judge_model": "mock-model",
+        "judge_usage": {"prompt_tokens": 3, "completion_tokens": 29, "total_tokens": 32},
+    }
+    assert orchestrator._store is not None
+    healthy_save = orchestrator._store.save
+
+    def _failing_save(
+        kind: str, key: str | None, payload: dict[str, Any], **options: Any
+    ) -> None:
+        """Fail exactly the psychometric write; leave run persistence working."""
+        if kind == "psychometric_observation":
+            raise sqlite3.OperationalError("disk I/O error")
+        healthy_save(kind, key, payload, **options)
+
+    orchestrator._store.save = _failing_save  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world"}, endpoint="responses", single_agent=False
+    )
+
+    assert result["output_text"] == "final answer"
+    # Accounting still lands: the completed judge call and the synthesis both
+    # reach the run record and the budget meter.
+    run = next(iter(orchestrator._workflow_runs.values()))
+    assert run["realtime_verification"]["judge_agent_id"] == "worker_agent"
+    assert orchestrator.budget_status()["spent_output_tokens"] == 13 + 29
+    assert orchestrator._quality_router.member_report("worker_agent")["success_count"] == 1
+
+
+class _SchemaRepairClient:
+    """Answer one slow schema violation, then a fast valid repair."""
+
+    def __init__(self, *, first_delay: float) -> None:
+        self.first_delay = first_delay
+        self.calls = 0
+
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return the invalid first synthesis, then the valid repair."""
+        del agent, endpoint, payload
+        self.calls += 1
+        if self.calls == 1:
+            time.sleep(self.first_delay)
+            return {
+                "choices": [{"message": {"content": '{"input_count":6}'}}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            }
+        return {
+            "choices": [{"message": {"content": '{"input_count":10}'}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+        }
+
+    proxy_send_once = proxy_send
+
+
+def test_repaired_answer_publishes_only_the_repair_calls_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repaired answer's throughput sample times the call that produced it.
+
+    Devin review (PR #1032): ``synthesis_started`` precedes the *rejected*
+    first synthesis, so the published latency spanned both calls while the
+    usage published beside it covered only the repair -- understating the
+    serving model's real throughput in the very ledger this observation
+    exists to keep honest.
+    """
+    agent = ModelAgent("worker_agent", "mock-model", tags=("reasoning",))
+    client = _SchemaRepairClient(first_delay=0.05)
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda task, fallback, **_ignored: {
+            "accepted": True,
+            "reason": "stub verdict",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        },
+    )
+
+    captured: dict[str, Any] = {}
+    original_judge = TaskOrchestrator._realtime_route_judge
+
+    def _spy(self: TaskOrchestrator, **kwargs: Any) -> dict[str, Any]:
+        """Record the observation's arguments and run the real call."""
+        captured.update(kwargs)
+        return original_judge(self, **kwargs)
+
+    monkeypatch.setattr(TaskOrchestrator, "_realtime_route_judge", _spy)
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": "mock-model",
+            "messages": [{"role": "user", "content": "classify ten items"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "exact_count",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"input_count": {"const": 10}},
+                        "required": ["input_count"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+        single_agent=False,
+    )
+
+    assert client.calls == 2
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    repair_step = run["trace"][-1]
+    assert repair_step["role"] == "repair"
+    # The usage published beside the latency is the repair call's own, so the
+    # latency has to be the repair call's own too.
+    assert captured["usage"]["completion_tokens"] == 4
+    assert captured["latency_seconds"] == pytest.approx(repair_step["latency_ms"] / 1000)
+    # The thrown-away first synthesis alone took 50ms; it is not folded in.
+    assert captured["latency_seconds"] < client.first_delay
 
 
 _EXACT_TEN = {
