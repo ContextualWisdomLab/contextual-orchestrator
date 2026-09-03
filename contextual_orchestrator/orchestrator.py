@@ -7693,7 +7693,24 @@ class TaskOrchestrator:
             candidates = self._ranked_agents(text, "worker", free_only=True)
         except RuntimeError:
             candidates = []
-        if not candidates and not _REQUEST_ZDR_ONLY.get():
+        if not candidates:
+            # The free-only ranking is empty for two different reasons that
+            # must not be conflated: genuinely no evidence source exists at
+            # all, or (#983 Devin finding "ZDR pins skip workflow triage") a
+            # zdr_only request pinned/is scoped to a paid candidate, which
+            # can never appear in a free_only ranking regardless of ZDR
+            # eligibility. This fallback pool already re-derives every
+            # safety predicate itself per agent -- disabled, ZDR eligibility
+            # (_zdr_agent_allowed), the active pin/exclusion
+            # (_request_candidate_allowed), chat capability, and endpoint
+            # scope -- so it is correct and safe to build regardless of
+            # whether zdr_only is active: an active ZDR policy already
+            # narrows it to ZDR-eligible agents (or the ZDR-eligible pinned
+            # one) on its own, with zero risk of contacting a non-ZDR
+            # provider. Gating the whole fallback build behind "not
+            # zdr_only" therefore only ever discarded a genuine evidence
+            # source (the pinned candidate itself), silently defaulting the
+            # route-vs-conduct decision to "route" with no live triage call.
             candidates = [
                 agent
                 for agent in self.agents

@@ -1067,6 +1067,74 @@ def test_auto_stream_shares_candidate_scope_with_triage_when_conducting() -> Non
     assert "triage_agent" in routing_evidence["attempted_candidate_ids"]
 
 
+class _ZdrConductTriageClient(ModelClient):
+    """Triage always reports "needs conduct"; every subsequent conduct-step
+    call returns text distinguishable by agent id."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def chat(self, agent, messages, temperature=None, top_p=None, effort_profile=None):
+        self.calls.append(agent.id)
+        if messages and "workflow_required" in str(messages[0].get("content")):
+            return '{"workflow_required": true}'
+        return f"{agent.id} output"
+
+
+def test_auto_zdr_only_paid_pin_still_gets_a_live_triage_decision() -> None:
+    """#983 Devin finding "ZDR pins skip workflow triage":
+    ``_compute_triage_verdict``'s free-only ranking is always empty when
+    ``zdr_only`` pins a paid candidate -- the pin restricts every candidate
+    list to that one agent, and a paid agent never satisfies ``free_only``.
+    The old ``if not candidates and not _REQUEST_ZDR_ONLY.get()`` guard then
+    skipped the eligible-general-chat-pool fallback entirely just because
+    ZDR was active, even though that fallback's own per-agent filter
+    (``_zdr_agent_allowed`` + ``_request_candidate_allowed``) already makes
+    it safe to consult: it silently returned ``False`` (route, not conduct)
+    with zero provider calls and zero routing evidence instead of ever
+    asking the one legitimate ZDR-eligible, pin-matching candidate. This
+    pins mode="auto" actually reaching a live triage decision against the
+    pinned candidate, and the resulting conduct verdict being honored (a
+    full multi-step workflow runs, not the single-call route path)."""
+    client = _ZdrConductTriageClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_zdr_agent", "paid-zdr-model", tags=("privacy:zdr",))],
+        client=client,
+    )
+    token = "zdr-pin-triage-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "please conduct this"}],
+                "zdr_only": True,
+                "routing": {"candidate_id": "paid_zdr_agent"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    # Triage genuinely called the pinned candidate instead of being skipped.
+    assert "paid_zdr_agent" in client.calls
+    # The conduct verdict was honored: more than the one call route_once
+    # would have made, and the pinned candidate is the only one attempted
+    # (a single-candidate pool proves every conduct role also had to use it).
+    assert len(client.calls) > 1
+    routing_evidence = body["orchestration"]["routing"]
+    assert routing_evidence["candidate_id"] == "paid_zdr_agent"
+    assert routing_evidence["attempted_candidate_ids"] == ["paid_zdr_agent"]
+
+
 def test_core_rejects_file_affinity_that_conflicts_with_pin() -> None:
     orchestrator = TaskOrchestrator(
         [

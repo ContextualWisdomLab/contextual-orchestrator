@@ -28,6 +28,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Auto-mode triage now runs a live decision call even when `zdr_only` is
+  active and `routing.candidate_id` pins a paid ZDR-eligible candidate.
+  `_compute_triage_verdict`'s free-only ranking is always empty in that
+  shape (the pin restricts every candidate list to that one agent, and a
+  paid agent never satisfies `free_only`), and the empty-pool fallback was
+  gated behind `not zdr_only` even though the fallback's own per-agent
+  filter (`_zdr_agent_allowed` plus the active pin/exclusion) already makes
+  it safe to consult under an active ZDR policy. The gate discarded the one
+  legitimate evidence source instead of protecting against contacting a
+  non-ZDR provider, so the request silently took the direct route with zero
+  triage call and zero routing evidence regardless of task complexity
+  (Devin Review, PR #983: "ZDR pins skip workflow triage").
 - The published OpenAPI schema for `CandidateRoutingControls.exclude_candidate_ids`
   no longer declares `maxItems: 32`. The runtime validator's own repository-authored
   32-ID cardinality cutoff was already removed as unsupported; the schema still
