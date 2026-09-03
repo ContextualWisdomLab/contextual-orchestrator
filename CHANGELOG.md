@@ -863,6 +863,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `request_too_large` HTTP response also now includes the previously
   silently-dropped `error.detail` (agent/model/status) that
   `ProviderRequestTooLargeError` already carried.
+- Closed two more gaps in the same attempt-history fix: a candidate that
+  rejects a request as oversized (`_is_request_too_large_error`) now also
+  gets an attempt record before `_invoke` breaks out of its retry loop, so
+  an all-oversized pool's aggregate `ProviderRequestTooLargeError` and a
+  mixed oversized/other-failure pool's raised error both carry every
+  candidate, not just the non-oversized ones. `ProviderResponseError`
+  (previously a bare `RuntimeError` with no fields) now carries the same
+  optional `attempts`/`stop_reason`/`.detail` shape as
+  `ProviderUpstreamError`, and `_invoke` sets them when every allowed
+  candidate in a bounded pool returns malformed structured output; the
+  `invalid_structured_output` 502 handler in `server.py` now surfaces that
+  evidence (attempt count and stop reason) the same way the 413 and other
+  provider-upstream handlers already do, without exposing any raw
+  malformed-response text.
 
 ### Added
 

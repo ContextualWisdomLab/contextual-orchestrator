@@ -24,6 +24,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderRequestTooLargeError,
+    ProviderResponseError,
     is_transient_error,
 )
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -569,6 +570,58 @@ def test_chat_completions_413_response_carries_error_detail() -> None:
     assert "request_id" in detail
     assert "transport" in detail
     assert detail["stop_reason"] == "request_too_large"
+
+
+class _AllFreeRoutesMalformed(ModelClient):
+    """Chat client whose every candidate returns unusable structured output."""
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        raise ProviderResponseError(
+            f"provider {agent.id} response did not contain assistant content"
+        )
+
+
+def test_chat_completions_malformed_pool_502_response_carries_attempt_detail() -> None:
+    """An all-malformed bounded free pool still returns full attempt history.
+
+    Previously ``ProviderResponseError`` carried no ``attempts``/``stop_reason``
+    fields at all (unlike ``ProviderUpstreamError``/``ProviderRequestTooLargeError``),
+    so ``server.py``'s ``invalid_structured_output`` handler was 100% opaque:
+    the response body never named how many candidates were tried or why the
+    loop gave up. It must now carry the same machine-readable evidence the
+    413 case already does, without leaking any raw provider response text.
+    """
+    agents = [
+        ModelAgent("free_route_a", "free-model-a", tags=("reasoning", "cost:free")),
+        ModelAgent("free_route_b", "free-model-b", tags=("reasoning", "cost:free")),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=_AllFreeRoutesMalformed())
+    orchestrator._triage_fn = lambda text: False
+    orchestrator.tool_retry_attempts = 0  # exhaust on the first attempt per candidate
+    token = "taxonomy_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 502, body
+    error = body["error"]
+    assert error["code"] == "invalid_structured_output"
+    assert "did not contain assistant content" not in error["message"]
+    detail = error["detail"]
+    assert detail["stop_reason"] == "all_candidates_exhausted"
+    attempts = detail["attempts"]
+    assert len(attempts) == 2
+    assert {attempt["agent_id"] for attempt in attempts} == {"free_route_a", "free_route_b"}
 
 
 def test_guidance_table_covers_every_documented_code() -> None:

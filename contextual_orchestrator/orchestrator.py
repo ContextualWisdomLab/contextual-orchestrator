@@ -214,7 +214,43 @@ class BudgetExceededError(RuntimeError):
 
 
 class ProviderResponseError(RuntimeError):
-    """Raised for a provider response that cannot become a safe completion."""
+    """Raised for a provider response that cannot become a safe completion.
+
+    ``attempts``/``stop_reason`` mirror the same optional, caller-set fields
+    :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError`
+    carries: every existing construction site across this module passes only
+    a positional message, so they default to ``None`` and ``.detail`` stays
+    empty for those. Only ``TaskOrchestrator._invoke``'s bounded-pool
+    exhaustion path sets them, once every allowed candidate has raised this
+    error.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        attempts: list[dict[str, Any]] | None = None,
+        stop_reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.stop_reason = stop_reason
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        """Return caller-set attempts/stop_reason evidence, or an empty dict.
+
+        Never echoes the raw malformed-response text that produced this
+        error (CWE-209): only the same machine-readable
+        ``_failover_attempt_record`` fields (``reason_code``/``retry_safe``
+        and friends) a caller may have set here after construction, exactly
+        like :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError.detail`.
+        """
+        detail: dict[str, Any] = {}
+        if self.attempts or self.stop_reason is not None:
+            detail["attempts"] = self.attempts or []
+            detail["stop_reason"] = self.stop_reason or "unknown"
+        return detail
 
 
 class ProviderRequestTooLargeError(ProviderUpstreamError):
@@ -7785,6 +7821,17 @@ class TaskOrchestrator:
                     )
                 except Exception as exc:
                     if _is_request_too_large_error(exc):
+                        # This candidate rejected the request as oversized: it
+                        # still exhausted a route, so it must not vanish from
+                        # attempt history -- both when every candidate is
+                        # oversized (folded into the aggregate
+                        # ProviderRequestTooLargeError below) and when it is
+                        # mixed with other failure kinds (this record then
+                        # rides along inside `attempts` to whichever
+                        # exception actually gets raised on exhaustion).
+                        attempts.append(
+                            self._failover_attempt_record(agent, exc, None, retry_attempt)
+                        )
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
@@ -7896,11 +7943,14 @@ class TaskOrchestrator:
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
         ):
+            last_provider_response_error.attempts = attempts
+            last_provider_response_error.stop_reason = "all_candidates_exhausted"
             raise last_provider_response_error
         if candidates and every_failure_was_request_too_large:
             request_too_large_error = ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+            request_too_large_error.attempts = attempts
             request_too_large_error.stop_reason = "request_too_large"
             raise request_too_large_error
         if last_upstream_error is not None:
