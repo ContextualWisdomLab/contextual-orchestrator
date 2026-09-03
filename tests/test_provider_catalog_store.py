@@ -340,6 +340,38 @@ def test_last_known_good_restores_image_generation_endpoint() -> None:
     assert store.serving_models(source) == [model]
 
 
+def test_image_generation_endpoint_survives_tag_charset_restrictions() -> None:
+    """A slash/hyphen/uppercase endpoint round-trips through the tag store intact.
+
+    Regression test for a Devin Review follow-up on
+    ContextualWisdomLab/contextual-orchestrator#1017: the catalog store's
+    generic serving tags only persist ``[a-z][a-z0-9_]*(?::[a-z0-9_]+)?``
+    (``_normalize_tags``), so a naive ``image_generation_endpoint:<value>``
+    tag would have this store's own tag validation silently case-fold or
+    drop any endpoint containing a slash, hyphen, or uppercase letter on
+    restore -- corrupting or losing it rather than raising. Hex-encoding the
+    value (``encode_image_generation_endpoint_tag``/
+    ``decode_image_generation_endpoint_tag``) keeps it byte-for-byte intact.
+    """
+    source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
+    model = replace(
+        _model(source, "provider/image-model", 0),
+        capabilities=("image",),
+        currency_code="USD",
+        is_free=True,
+        image_generation_endpoint="v1/Images-Edits",
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: serving_tags_for_discovered(model)},
+    )
+
+    assert store.serving_models(source) == [model]
+
+
 def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> None:
     source = _source()
     known = replace(

@@ -47,8 +47,10 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_from_discovered,
     agent_id_for,
     apply_openrouter_spend_admission,
+    decode_image_generation_endpoint_tag,
     discover_all_models,
     discover_provider_models,
+    encode_image_generation_endpoint_tag,
     free_discovered_models,
     general_free_serving_candidates,
     is_routable_discovered_model,
@@ -2517,6 +2519,25 @@ def test_non_openrouter_discovery_leaves_image_generation_endpoint_unset() -> No
     )
 
     assert discovered[0].image_generation_endpoint is None
+
+
+def test_image_generation_endpoint_tag_round_trips_arbitrary_content() -> None:
+    """Hex encoding survives characters the tag store's own charset rejects.
+
+    Regression test for a Devin Review follow-up on
+    ContextualWisdomLab/contextual-orchestrator#1017: a naive
+    ``image_generation_endpoint:<value>`` tag would be silently case-folded
+    or dropped by the catalog store's ``[a-z][a-z0-9_]*(?::[a-z0-9_]+)?``
+    tag-validation regex for any value containing a slash, hyphen, or
+    uppercase letter.
+    """
+    for value in ("images", "v1/Images-Edits", "Images", "a/b-c_d"):
+        tag = encode_image_generation_endpoint_tag(value)
+        assert decode_image_generation_endpoint_tag(tag) == value
+
+
+def test_decode_image_generation_endpoint_tag_rejects_malformed_payload() -> None:
+    assert decode_image_generation_endpoint_tag("image_generation_endpoint:not_hex!") is None
 
 
 def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:

@@ -1083,6 +1083,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `tests/test_provider_catalog_store.py` runs an OpenRouter model through
   `record_success`/`serving_models` and confirms the restored model's
   `image_generation_endpoint` survives the round trip.
+- **Same round, one more edge on the fix above.** The naive
+  `image_generation_endpoint:<value>` serving tag from the previous bullet
+  would itself be silently case-folded or dropped by the catalog store's own
+  tag-validation charset (`[a-z][a-z0-9_]*(?::[a-z0-9_]+)?`) for any endpoint
+  value containing a slash, hyphen, or uppercase letter -- today's only real
+  value (`"images"`) happens to fit that charset, but nothing enforced that a
+  future provider's endpoint would. Devin Review flagged this immediately.
+  Fixed by hex-encoding the UTF-8 bytes (`model_discovery.
+  encode_image_generation_endpoint_tag`/`decode_image_generation_endpoint_tag`,
+  used by both `provider_bootstrap.serving_tags_for_discovered` and
+  `provider_catalog_store._restore_model_semantics`): hex output only ever
+  contains lowercase `0-9a-f`, so it always matches the tag charset
+  regardless of the source string's content, and a malformed persisted
+  payload decodes to `None` (fail closed) rather than raising and taking
+  down every other model's restore. New tests cover a
+  slash/hyphen/uppercase endpoint's full catalog-store round trip, the
+  encode/decode pair directly, and a malformed-payload decode.
 
 ### Added
 

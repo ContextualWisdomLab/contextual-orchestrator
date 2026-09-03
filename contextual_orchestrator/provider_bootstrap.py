@@ -33,6 +33,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    encode_image_generation_endpoint_tag,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
     refresh_price_book,
@@ -194,7 +195,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
                 *(
-                    (f"image_generation_endpoint:{model.image_generation_endpoint}",)
+                    (encode_image_generation_endpoint_tag(model.image_generation_endpoint),)
                     if model.image_generation_endpoint
                     else ()
                 ),

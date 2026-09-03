@@ -23,6 +23,7 @@ from .model_discovery import (
     DiscoveredModel,
     ModelUnitPrice,
     ProviderModelSource,
+    decode_image_generation_endpoint_tag,
 )
 
 if TYPE_CHECKING:
@@ -415,9 +416,10 @@ def _restore_model_semantics(
         zdr_capable=bool(model.zdr_capable),
         image_generation_endpoint=next(
             (
-                tag.removeprefix("image_generation_endpoint:")
+                decoded
                 for tag in normalized
                 if tag.startswith("image_generation_endpoint:")
+                and (decoded := decode_image_generation_endpoint_tag(tag)) is not None
             ),
             None,
         ),

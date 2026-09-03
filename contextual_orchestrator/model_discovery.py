@@ -1793,6 +1793,39 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
 
 
+def encode_image_generation_endpoint_tag(value: str) -> str:
+    """Return a serving tag carrying ``value`` losslessly through the tag charset.
+
+    The catalog store's generic serving-tag mechanism only persists tags
+    matching ``[a-z][a-z0-9_]*(?::[a-z0-9_]+)?`` (``provider_catalog_store.
+    _normalize_tags``): lowercase, underscore-separated words. An
+    ``image_generation_endpoint`` value is provider-declared free text (a
+    REST path such as OpenRouter's ``"images"`` today, but not guaranteed to
+    stay that simple) -- a slash, hyphen, or uppercase letter would otherwise
+    be silently case-folded or dropped by that filter on restore, corrupting
+    or losing the endpoint rather than raising. Hex-encoding the UTF-8 bytes
+    survives any string content while itself only ever producing lowercase
+    hex digits, so it always matches the tag charset.
+    """
+    return f"image_generation_endpoint:{value.encode('utf-8').hex()}"
+
+
+def decode_image_generation_endpoint_tag(tag: str) -> str | None:
+    """Return the endpoint value :func:`encode_image_generation_endpoint_tag` encoded.
+
+    ``None`` for a tag whose payload is not valid hex/UTF-8 rather than
+    raising: a persisted store's tag rows are trusted evidence today, but
+    treating a malformed value as absent (fail closed) rather than crashing
+    restoration keeps one corrupted row from taking down every other model's
+    restore.
+    """
+    encoded = tag.removeprefix("image_generation_endpoint:")
+    try:
+        return bytes.fromhex(encoded).decode("utf-8")
+    except ValueError:
+        return None
+
+
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
