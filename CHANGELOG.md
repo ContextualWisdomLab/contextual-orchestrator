@@ -1100,6 +1100,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   down every other model's restore. New tests cover a
   slash/hyphen/uppercase endpoint's full catalog-store round trip, the
   encode/decode pair directly, and a malformed-payload decode.
+- **Same round, a namespace collision in the fix above.** `model.capabilities`
+  values are stored as raw, unprefixed serving tags alongside the reserved
+  `image_generation_endpoint:<hex>` tag. A provider response is untrusted
+  evidence; if it ever declared a capability string that happened to start
+  with `"image_generation_endpoint:"` (adversarial or merely coincidental),
+  the restore path would read that raw capability as the real tag and
+  silently route every image request to whatever endpoint it encoded after
+  the next restart, with no endpoint ever legitimately configured.
+  CodeRabbit flagged this immediately after the hex-encoding fix landed.
+  Fixed by dropping any capability colliding with the reserved prefix
+  before `serving_tags_for_discovered` persists it (the namespaced
+  `capability:<value>` tag it also emits is unaffected and still
+  round-trips the capability normally). New regression test proves a
+  colliding capability cannot spoof the restored
+  `image_generation_endpoint`.
 
 ### Added
 

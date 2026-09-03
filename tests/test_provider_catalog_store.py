@@ -372,6 +372,50 @@ def test_image_generation_endpoint_survives_tag_charset_restrictions() -> None:
     assert store.serving_models(source) == [model]
 
 
+def test_colliding_capability_cannot_spoof_the_image_generation_endpoint() -> None:
+    """A provider-declared capability cannot masquerade as the reserved endpoint tag.
+
+    Regression test for a CodeRabbit finding on
+    ContextualWisdomLab/contextual-orchestrator#1017: ``model.capabilities``
+    values are stored as raw, unprefixed serving tags alongside the reserved
+    ``image_generation_endpoint:<hex>`` tag this module emits. A provider
+    response is untrusted evidence; if it ever declared a capability string
+    that happened to start with ``"image_generation_endpoint:"`` (whether
+    adversarial or merely coincidental), the restore path would read that
+    raw capability as the real tag and route every image request to
+    whatever endpoint it encoded -- silently, after a restart, with no
+    endpoint ever legitimately configured. ``serving_tags_for_discovered``
+    drops any capability colliding with the reserved prefix before it is
+    persisted, so restoration is untouched by it either way.
+    """
+    source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
+    spoofed_capability = "image_generation_endpoint:" + "foo".encode("utf-8").hex()
+    model = replace(
+        _model(source, "provider/spoofed-model", 0),
+        capabilities=("chat", spoofed_capability),
+        currency_code="USD",
+        is_free=True,
+        image_generation_endpoint=None,
+    )
+
+    tags = serving_tags_for_discovered(model)
+
+    # The reserved bare tag is never emitted for this capability -- it may
+    # still appear namespaced as "capability:<value>" (ordinary, harmless
+    # capability round-tripping), just never as the unprefixed collision
+    # the restore path treats as the real endpoint.
+    assert spoofed_capability not in tags
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: tags},
+    )
+    restored = store.serving_models(source)[0]
+    assert restored.image_generation_endpoint is None
+
+
 def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> None:
     source = _source()
     known = replace(
