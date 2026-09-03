@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
+    ProviderResponseError,
     ProviderUpstreamError,
     _request_eligibility_scope,
     _request_evidence_partition,
@@ -609,6 +610,72 @@ def test_eligibility_scope_narrows_embedding_to_reachable_providers() -> None:
         assert orchestrator._embedding_agent_id() is None
     with _request_eligibility_scope(None):
         assert orchestrator._embedding_agent_id() == unrestricted
+
+
+def test_free_scope_embedding_endpoint_fallback_requires_free_pricing() -> None:
+    """A free-scoped eligible set's endpoint fallback must stay free-priced.
+
+    Devin review (PR #1032, round 6): the endpoint-sharing fallback in
+    ``_embedding_agent_id`` is privacy-only -- it says nothing about cost.
+    ``free_only`` builds an eligible set that is entirely free (see the
+    ``allowed_agent_ids`` branch in ``_orchestrated_provider_completion``),
+    so admitting a *paid* embedding deployment purely because it shares an
+    endpoint with a free eligible agent lets a free request incur real,
+    unmetered spend outside every budget check.
+    """
+    free_chat = ModelAgent(
+        "chat_free",
+        "chat-free-model",
+        base_url="https://shared.example/v1",
+        tags=("reasoning", "cost:free"),
+    )
+    paid_embedder = ModelAgent(
+        "paid_embedder",
+        "paid-embed-model",
+        base_url="https://shared.example/v1/",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([free_chat, paid_embedder])
+    with _request_eligibility_scope({free_chat.id}):
+        assert orchestrator._embedding_agent_id() is None
+
+    # A genuinely free co-located embedder must still ride along -- the gate
+    # excludes the paid sibling, it does not over-block the free scope.
+    free_embedder = ModelAgent(
+        "free_embedder",
+        "free-embed-model",
+        base_url="https://shared.example/v1",
+        tags=("embedding", "cost:free"),
+    )
+    orchestrator_with_free = TaskOrchestrator([free_chat, paid_embedder, free_embedder])
+    with _request_eligibility_scope({free_chat.id}):
+        assert orchestrator_with_free._embedding_agent_id() == free_embedder.id
+
+
+def test_paid_pin_embedding_endpoint_fallback_stays_privacy_only() -> None:
+    """An explicit paid pin's endpoint fallback is unaffected by the cost gate.
+
+    The free-scope gate fires only when the *entire* eligible set is free.
+    An explicit paid pin's eligible set is a single paid agent, so its
+    endpoint-sharing fallback keeps admitting a co-located deployment
+    regardless of price -- the pre-existing privacy-only rationale, unchanged
+    by the fix above.
+    """
+    paid_chat = ModelAgent(
+        "chat_paid",
+        "chat-paid-model",
+        base_url="https://shared.example/v1",
+        tags=("reasoning",),
+    )
+    paid_embedder = ModelAgent(
+        "paid_embedder",
+        "paid-embed-model",
+        base_url="https://shared.example/v1/",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([paid_chat, paid_embedder])
+    with _request_eligibility_scope({paid_chat.id}):
+        assert orchestrator._embedding_agent_id() == paid_embedder.id
 
 
 def test_realtime_judge_spend_reaches_budget_meter_and_spend_analytics() -> None:
@@ -1177,6 +1244,81 @@ def test_failed_schema_attempt_spend_gates_the_next_budget_checkpoint() -> None:
     # The second member's synthesis ran (the checkpoint is pre-repair), and
     # its repair was refused. Without the fix that fourth call is made.
     assert client.calls == [first.id, first.id, second.id]
+
+
+def test_pinned_terminal_schema_failure_meters_the_spend_it_already_incurred() -> None:
+    """An explicitly pinned model's terminal schema failure still meters spend.
+
+    Devin review (PR #1032, round 6): when synthesis and repair both violate
+    the schema on an explicitly pinned model (``virtual_model`` is False,
+    ``synthesis_candidates == [final_agent]``), the loop raises
+    ``ProviderResponseError`` before ``failed_attempts.extend(...)`` ever
+    runs. Those two completed provider calls are real spend, but they never
+    reached the trace, the budget meter, or spend_analytics -- and no
+    workflow run is ever persisted for a request that never served an
+    answer, so ``count_workflow_runs`` must stay unaffected too.
+    """
+    agent = ModelAgent(
+        "pinned_agent", "pinned-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _SchemaFailoverClient(agent.id)
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderResponseError):
+        orchestrator.proxy_completion(
+            {
+                "model": agent.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+        )
+
+    assert client.calls == [agent.id, agent.id]
+    assert orchestrator.budget_status()["spent_output_tokens"] == (
+        _SchemaFailoverClient.FAILED_SYNTHESIS_TOKENS
+        + _SchemaFailoverClient.FAILED_REPAIR_TOKENS
+    )
+    assert orchestrator.count_workflow_runs() == 0
+
+
+def test_pool_exhausted_schema_failure_meters_the_spend_it_already_incurred() -> None:
+    """A virtual pool's same-endpoint exhaustion also meters its spend.
+
+    Devin review (PR #1032, round 6): distinct from the pinned-model case
+    above -- this exercises the ``next_agent is None`` exit, reached on a
+    virtual/``AUTO_MODEL`` request whose failover candidates yield no other
+    agent on the same endpoint. Same silent loss: the raise happened before
+    ``failed_attempts.extend(...)``.
+    """
+    agent = ModelAgent(
+        "pool_agent", "pool-model", base_url="mock://pool", tags=("reasoning",)
+    )
+    client = _SchemaFailoverClient(agent.id)
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator._select_agent = lambda *args, **kwargs: agent  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *args, **kwargs: [agent]  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderResponseError):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _EXACT_TEN,
+            },
+            single_agent=False,
+        )
+
+    assert client.calls == [agent.id, agent.id]
+    assert orchestrator.budget_status()["spent_output_tokens"] == (
+        _SchemaFailoverClient.FAILED_SYNTHESIS_TOKENS
+        + _SchemaFailoverClient.FAILED_REPAIR_TOKENS
+    )
+    assert orchestrator.count_workflow_runs() == 0
 
 
 class _EmbeddingSpaceSpyClient:

@@ -5014,7 +5014,24 @@ class TaskOrchestrator:
             self._record_failure(failed_agent.id)
             if failed_agent.group_name:
                 self._group_router.observe_failure(failed_agent.id)
+            # Tagged once and reused by every exit below -- fail closed on a
+            # pinned model, fail closed with no same-endpoint candidate left,
+            # or continue the failover loop -- so these two completed calls
+            # (real provider spend) always reach either the persisted trace
+            # (``failed_attempts``, below) or an unserved-spend meter row
+            # (``_meter_unserved_spend``) before this iteration ends. Only the
+            # continue path used to do so; both raises dropped them silently
+            # (Devin review on #1032, round 6).
+            rejected_attempts = (
+                {**synthesis_step, "structured_output_error": contract_error},
+                {**attempted_repair_step, "structured_output_error": repair_error},
+            )
             if not virtual_model:
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, *rejected_attempts],
+                    workflow.get("verification"),
+                )
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -5030,6 +5047,11 @@ class TaskOrchestrator:
                 None,
             )
             if next_agent is None:
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, *rejected_attempts],
+                    workflow.get("verification"),
+                )
                 raise ProviderResponseError(
                     "every eligible model on the selected endpoint violated response_format"
                 )
@@ -5038,12 +5060,7 @@ class TaskOrchestrator:
             # ``structured_output_error`` marks them so an auditor reading the
             # persisted trace can tell a discarded attempt from the row that
             # actually produced ``answer``.
-            failed_attempts.extend(
-                (
-                    {**synthesis_step, "structured_output_error": contract_error},
-                    {**attempted_repair_step, "structured_output_error": repair_error},
-                )
-            )
+            failed_attempts.extend(rejected_attempts)
             final_agent = next_agent
             synthesis_started = time.perf_counter()
         # The wall clock of the call whose output is actually served, not of
@@ -7486,6 +7503,16 @@ class TaskOrchestrator:
         deployment behind the same endpoint discloses nothing new. Anything
         else yields None, and every caller already degrades to
         declaration-only evidence when embedding is unavailable.
+
+        That endpoint-sharing allowance is privacy-only, though, and says
+        nothing about cost: when the eligible set is entirely free (exactly
+        what ``free_only`` builds -- see the ``allowed_agent_ids`` branch in
+        ``_orchestrated_provider_completion``), a *paid* embedding deployment
+        co-located with a free agent must not ride along, or a free request
+        incurs real, unmetered spend outside every budget check (Devin
+        review on #1032, round 6). An explicit paid pin's own eligible set is
+        never all-free, so its endpoint fallback keeps admitting a co-located
+        deployment regardless of price, unchanged from before this gate.
         """
         try:
             candidates = self._capability_agents("embedding")
@@ -7494,17 +7521,22 @@ class TaskOrchestrator:
         eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
         if eligible is None:
             return candidates[0].id
+        eligible_agents = [agent for agent in self.agents if agent.id in eligible]
         endpoints = {
-            agent.base_url.rstrip("/").casefold()
-            for agent in self.agents
-            if agent.id in eligible
+            agent.base_url.rstrip("/").casefold() for agent in eligible_agents
         }
+        free_scope = bool(eligible_agents) and all(
+            self._is_free_agent(agent) for agent in eligible_agents
+        )
         return next(
             (
                 agent.id
                 for agent in candidates
                 if agent.id in eligible
-                or agent.base_url.rstrip("/").casefold() in endpoints
+                or (
+                    agent.base_url.rstrip("/").casefold() in endpoints
+                    and (not free_scope or self._is_free_agent(agent))
+                )
             ),
             None,
         )
