@@ -30,13 +30,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `text` among its own input modalities. Both are required together: verified
   tool support alone cannot certify text capability, or an image-only model
   that merely accepts tool-calling parameters would pass despite being unable
-  to answer a blind text-only request. This is an
-  additive OR on top of ContextualWisdomLab/.github#1198's original
+  to answer a blind text-only request. This is an additive OR on top of
+  ContextualWisdomLab/.github#1198's original
   non-text-input exclusion, not a replacement: a model with no such evidence
   (`None`, the fail-closed default), verified *unsupported* (`False`), or no
   declared text input stays excluded exactly as before. NVIDIA NIM's
-  `/v1/models` never returns
-  `supported_parameters`, so the incident's own model
+  `/v1/models` never returns `supported_parameters`, so the incident's own model
   (`meta/llama-3.2-90b-vision-instruct`) always gets `supports_tool_calls=None`
   and remains excluded -- this narrowing does not reopen #1198. The durable
   provider-catalog store's tag-based restoration
