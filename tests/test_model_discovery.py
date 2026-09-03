@@ -2468,6 +2468,57 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     )
 
 
+def test_agent_from_discovered_threads_image_generation_endpoint() -> None:
+    """Discovery-carried image endpoint capability reaches the built agent.
+
+    Regression test for a gap Devin Review found on
+    ContextualWisdomLab/contextual-orchestrator#1017: removing the
+    ``agent.provider_name == "openrouter"`` hardcode from
+    ``TaskOrchestrator.proxy_capability`` in favor of the declarative
+    ``ModelAgent.image_generation_endpoint`` field silently broke every
+    auto-discovered OpenRouter agent's image-generation routing, because
+    ``agent_from_discovered`` never populated the new field from discovery
+    evidence.
+    """
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/image-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("image",),
+        image_generation_endpoint="images",
+    )
+
+    assert agent_from_discovered(discovered).image_generation_endpoint == "images"
+
+
+def test_openrouter_discovery_sets_images_generation_endpoint() -> None:
+    """``_parse_openai_compatible`` sets OpenRouter's image endpoint capability.
+
+    Mirrors the removed ``provider_name == "openrouter"`` hardcode 1:1 for
+    every OpenRouter-sourced row -- unconditional on that row's own
+    capabilities/modalities, exactly like the hardcode it replaces -- so a
+    freshly discovered OpenRouter agent keeps working the moment it is ever
+    proxied an ``images/generations`` capability request.
+    """
+    discovered = _parse_openai_compatible(
+        {"data": [{"id": "provider/chat-model"}]},
+        OPENROUTER_SOURCE,
+    )
+
+    assert discovered[0].image_generation_endpoint == "images"
+
+
+def test_non_openrouter_discovery_leaves_image_generation_endpoint_unset() -> None:
+    discovered = _parse_openai_compatible(
+        {"data": [{"id": "gpt-test"}]},
+        OPENAI_SOURCE,
+    )
+
+    assert discovered[0].image_generation_endpoint is None
+
+
 def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
     """Every persistence path receives the same provider-declared privacy tags."""
     discovered = DiscoveredModel(

@@ -13,5 +13,5 @@ def test_pg_batch_backends_expose_semantic_coroutine_runner_names() -> None:
     for batch_backend_type in (PgLlmBatchBackend, PgLlmBatchEmbeddingBackend):
         assert hasattr(batch_backend_type, "_run_batch_coroutine")
         assert not hasattr(batch_backend_type, "_run")
-        coroutine_runner = getattr(batch_backend_type, "_run_batch_coroutine")
+        coroutine_runner = batch_backend_type._run_batch_coroutine
         assert list(inspect.signature(coroutine_runner).parameters) == ["batch_coroutine"]

@@ -497,6 +497,7 @@ class DiscoveredModel:
     zdr_capable: bool = False
     evidence_only: bool = False
     spend_admitted: bool = True
+    image_generation_endpoint: str | None = None
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -1377,6 +1378,18 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     else None
                 ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
+                # OpenRouter's image-generation REST path ("images") differs
+                # from the generic OpenAI-compatible "images/generations"
+                # convention TaskOrchestrator.proxy_capability defaults to.
+                # This mirrors the removed provider_name == "openrouter"
+                # hardcode 1:1 for every OpenRouter-sourced model (not
+                # gated on this row's own capabilities/modalities) so a
+                # discovered OpenRouter agent keeps working the moment it is
+                # ever proxied an "images/generations" capability request,
+                # exactly like the hardcode it replaces.
+                image_generation_endpoint=(
+                    "images" if source.provider_name == "openrouter" else None
+                ),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1852,6 +1865,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         disabled=True,
         max_output_tokens=discovered.max_output_tokens,
         context_window=discovered.context_window,
+        image_generation_endpoint=discovered.image_generation_endpoint,
     )
 
 

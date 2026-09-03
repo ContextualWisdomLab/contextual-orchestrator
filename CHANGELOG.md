@@ -1038,6 +1038,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `psychometric_routing.py`'s own lazy, fail-closed-on-`ImportError` design);
   the other four tests in that module never needed either optional package
   and now run unconditionally.
+- **Sixth review round found a real regression from the first round's own
+  fix.** Removing `proxy_capability`'s `agent.provider_name == "openrouter"`
+  hardcode in favor of the declarative `ModelAgent.image_generation_endpoint`
+  field (first bullet above) never wired the new field into the discovery
+  path: `agent_from_discovered` built every auto-discovered agent with
+  `image_generation_endpoint=None`, so a freshly discovered OpenRouter model
+  silently lost image-generation routing the moment it was ever proxied an
+  `images/generations` capability request -- exactly the deployment the
+  removed hardcode used to cover, contradicting this PR's own earlier claim
+  that no current discovery path relied on it. Devin Review re-flagged this
+  independently on this round. Fixed: `DiscoveredModel` gained an
+  `image_generation_endpoint: str | None = None` field, `_parse_openai_compatible`
+  sets it to `"images"` unconditionally for every OpenRouter-sourced row
+  (mirroring the removed hardcode 1:1, not gated on that row's own
+  capabilities/modalities), and `agent_from_discovered` now threads
+  `discovered.image_generation_endpoint` into the built `ModelAgent`. New
+  regression tests in `tests/test_model_discovery.py` cover the
+  discovery-to-agent thread and confirm non-OpenRouter providers stay
+  unaffected. The companion concurrent-migration-write finding from the same
+  round (`kv_config.migrate_legacy_categories`'s check-then-set race) was
+  already investigated, narrowed, and tracked as gap G-17 in a prior round
+  (see this file's Devin-review concurrency note above); Devin re-flagging it
+  again this round does not change that a real fix needs a conditional-write
+  primitive neither the `ConfigStore` protocol nor
+  `pg_llm_batch.PostgresConfigStore.set()` currently exposes.
 
 ### Added
 
