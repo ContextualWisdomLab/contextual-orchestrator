@@ -786,6 +786,8 @@ ADMIN_HTML = r"""<!doctype html>
       color: var(--muted);
       background: #fbfcfc;
     }
+    .feedback-success { color: #0b6b2b; }
+    .feedback-error { color: #b00020; }
     .kpis {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1141,6 +1143,23 @@ Summarize this research thread and verify claims.</textarea>
       return fetch(url, {credentials: "same-origin", ...options});
     }
 
+    async function refreshAdminState() {
+      const response = await apiFetch("/admin/state");
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error?.message || "Could not load admin state");
+      }
+      state = payload;
+      return state;
+    }
+
+    function setModelGroupFeedback(message, isError) {
+      if (!els.modelGroupFeedback) return;
+      els.modelGroupFeedback.textContent = message;
+      els.modelGroupFeedback.classList.remove("feedback-success", "feedback-error");
+      els.modelGroupFeedback.classList.add(isError ? "feedback-error" : "feedback-success");
+    }
+
     function tags(tags) {
       return tags.map(tag => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
     }
@@ -1198,7 +1217,9 @@ Summarize this research thread and verify claims.</textarea>
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
-      els.modelGroupFeedback.textContent = t("group_saved");
+      setModelGroupFeedback(t("group_saved"), false);
+      await refreshAdminState();
+      renderAudit();
       await refreshModelGroups();
     }
     function renderTrace(result) {
@@ -1616,14 +1637,14 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await apiFetch("/admin/state");
-      if (!res.ok) {
+      try {
+        await refreshAdminState();
+      } catch (error) {
         if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
         if (els.sessionAction) els.sessionAction.hidden = false;
         return;
       }
       if (els.sessionAction) els.sessionAction.hidden = true;
-      state = await res.json();
       await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();
@@ -1747,7 +1768,7 @@ Summarize this research thread and verify claims.</textarea>
     els.agentSettings.addEventListener("click", () => showView("settings"));
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
-      els.modelGroupFeedback.textContent = error.message;
+      setModelGroupFeedback(error.message, true);
     }));
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
@@ -1755,10 +1776,14 @@ Summarize this research thread and verify claims.</textarea>
       fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
         .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
         .then(() => {
-          els.modelGroupFeedback.textContent = t("group_deleted");
-          return refreshModelGroups();
+          setModelGroupFeedback(t("group_deleted"), false);
+          return refreshAdminState()
+            .then(() => {
+              renderAudit();
+              return refreshModelGroups();
+            });
         })
-        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+        .catch(error => { setModelGroupFeedback(error.message, true); });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
