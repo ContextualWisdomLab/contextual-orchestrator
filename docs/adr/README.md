@@ -15,6 +15,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0005](0005-verbose-debug-logging.md) | Verbose/debug logging with a redaction safety net | Accepted | OWASP Logging Cheat Sheet; NIST SP 800-92 log management; Python `logging` HOWTO |
 | [0005](0005-provider-embedding-lease-and-token-accounting.md) | Provider-embedding lease and token-accounting boundary | Accepted | Redis distributed-lock ownership/fencing guidance; PyO3 modules; OpenAI public cl100k mappings |
 | [0006](0006-authoritative-chat-token-accounting.md) | Authoritative chat token accounting | Accepted | OpenAI Chat usage contract and exact tiktoken model mappings; PyO3 modules |
+| [0123](0123-web-search-mcp-a2a-gateway-foundation.md) | Web-search tool and the MCP/A2A gateway foundation | Partially accepted (web search shipped; MCP/A2A/Camoufox design-only) | Evans (2003) DDD; Fowler (2014) Bounded Context; Model Context Protocol spec; Agent2Agent protocol spec; SearXNG search API; Camoufox repository |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv
