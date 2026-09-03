@@ -2698,9 +2698,12 @@ inference-time cap and must not be added on this entry's authority alone.
 A follow-up investigation (`.github#1804`, root-causing the same `_invoke`
 serial-failover mechanism via four cross-repo stalls measured at
 649.5s/1332.6s/1462.9s/2161.9s) found the correct fix direction requires
-either (a) landing the unmerged, EWMA-based candidate-exclusion data from
-`contextual-orchestrator#911` so a known-failing candidate is skipped
-rather than serially retried, or (b) a documented, owner-approved policy
+either (a) a separate, not-yet-built durable candidate-exclusion/skip
+mechanism that consumes the still-unmerged `contextual-orchestrator#911`'s
+EWMA-based candidate-ranking observation data once #911 lands — #911
+itself only reorders candidates by an EWMA score and does not add
+exclusion/skip logic, so landing #911 alone would not let a known-failing
+candidate be skipped — or (b) a documented, owner-approved policy
 exception if deliberately racing non-equivalent endpoints is ever
 authorized. Neither is done as of this correction, and (b) is constrained
 by this org's `endpoint_equivalence` racing invariant
