@@ -715,12 +715,20 @@ def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
     """Build one caller-actionable sentence for a classified upstream failure.
 
     The message names which model/agent failed and what to do next; it never
-    echoes raw provider diagnostics beyond the bounded redacted sentence.
+    echoes raw provider diagnostics beyond the bounded redacted sentence. When
+    the failover loop tried more than one candidate before giving up, it also
+    names how many and why the loop stopped, instead of describing only the
+    last-tried candidate.
     """
     guidance = _PROVIDER_FAILURE_GUIDANCE.get(
         exc.error_code, "Review the request or contact the operator."
     )
-    return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+    message = f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+    attempts = getattr(exc, "attempts", None)
+    if attempts:
+        stop_reason = getattr(exc, "stop_reason", "unknown")
+        message += f" ({len(attempts)} candidate(s) tried; stopped: {stop_reason})"
+    return message
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -7959,7 +7967,7 @@ def build_server(
                     _tool_fallback_error_detail(exc),
                 )
             except ProviderRequestTooLargeError as exc:
-                self._send_error(413, "request_too_large", str(exc))
+                self._send_error(413, "request_too_large", str(exc), exc.detail)
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except BatchModelSelectionError:

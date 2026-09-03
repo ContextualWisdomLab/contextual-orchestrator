@@ -854,6 +854,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- `_invoke`'s candidate failover loop now records every tried candidate
+  (agent, model, provider, error code, retryability) instead of discarding
+  all but the most recent failure, and the pool-exhausted
+  `ProviderUpstreamError` carries them as `attempts`/`stop_reason` so
+  `.detail` and the HTTP error body's message name how many routes were
+  tried and why the loop stopped, not just the last one. The 413
+  `request_too_large` HTTP response also now includes the previously
+  silently-dropped `error.detail` (agent/model/status) that
+  `ProviderRequestTooLargeError` already carried.
 
 ### Added
 

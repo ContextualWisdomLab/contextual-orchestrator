@@ -535,6 +535,43 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     assert raised
 
 
+def test_all_agents_failing_reports_every_candidates_attempt_detail() -> None:
+    """A fully exhausted pool names every candidate it tried, not just the last.
+
+    Sibling of ``test_all_agents_failing_raises_after_trying_every_candidate``
+    above: here each agent fails with its own distinct classified upstream
+    error, so the exhausted pool's exception must carry both agents' attempts
+    -- not just the most recently tried one -- once ``_invoke`` gives up.
+    """
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
+    ]
+
+    def _classified_for(agent: ModelAgent) -> ProviderUpstreamError:
+        code = 429 if agent.id == "primary_worker" else 500
+        return classify_provider_failure(_http_error(code), agent_id=agent.id, model=agent.model)
+
+    class DistinctFailures(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            raise _classified_for(agent)
+
+    orchestrator = TaskOrchestrator(agents, client=DistinctFailures())
+    orchestrator._triage_fn = lambda text: False  # single-step route accounting
+    raised = False
+    try:
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+    except ProviderUpstreamError as exc:
+        raised = True
+        assert exc.stop_reason == "all_candidates_exhausted"
+        assert len(exc.attempts) == 2
+        by_agent = {attempt["agent_id"]: attempt for attempt in exc.attempts}
+        assert set(by_agent) == {"primary_worker", "backup_worker"}
+        assert by_agent["primary_worker"]["error_code"] == "rate_limit_exceeded"
+        assert by_agent["backup_worker"]["error_code"] == "api_error"
+    assert raised
+
+
 def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
     primary = orchestrator._agent("primary_worker")

@@ -7768,6 +7768,10 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        # Every candidate this call actually tried, in order, so an exhausted
+        # pool's raised exception can say *which routes were tried and why the
+        # loop stopped* -- not just the one most recent failure.
+        attempts: list[dict[str, Any]] = []
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -7813,6 +7817,9 @@ class TaskOrchestrator:
                         ):
                             excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
+                            attempts.append(
+                                self._failover_attempt_record(agent, exc, None, retry_attempt)
+                            )
                             break
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
@@ -7831,6 +7838,9 @@ class TaskOrchestrator:
                         decision = classify_tool_failure(exc)
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
+                        attempts.append(
+                            self._failover_attempt_record(agent, exc, decision, retry_attempt)
+                        )
                         break
                     else:
                         decision = classify_tool_failure(exc)
@@ -7862,6 +7872,9 @@ class TaskOrchestrator:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
+                    attempts.append(
+                        self._failover_attempt_record(agent, exc, decision, retry_attempt)
+                    )
                     break
                 # Success: one Bernoulli observation plus measured latency, and
                 # provider-reported completion tokens when available feeding the
@@ -7885,12 +7898,57 @@ class TaskOrchestrator:
         ):
             raise last_provider_response_error
         if candidates and every_failure_was_request_too_large:
-            raise ProviderRequestTooLargeError(
+            request_too_large_error = ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+            request_too_large_error.stop_reason = "request_too_large"
+            raise request_too_large_error
         if last_upstream_error is not None:
+            last_upstream_error.attempts = attempts
+            last_upstream_error.stop_reason = "all_candidates_exhausted"
             raise last_upstream_error
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
+        raise RuntimeError(
+            f"all {len(candidates)} candidate agents failed for role={role} (attempts={attempts})"
+        ) from None
+
+    def _failover_attempt_record(
+        self,
+        agent: ModelAgent,
+        exc: Exception,
+        decision: ToolFailureDecision | None,
+        retry_attempt: int,
+    ) -> dict[str, Any]:
+        """Build one caller-safe record of a candidate this call exhausted.
+
+        Only already-classified, already-redacted evidence ever populates a
+        record: a :class:`ProviderUpstreamError`'s own typed attributes for a
+        transport failure, or a tool-fallback decision's stable
+        ``reason_code``/``retry_safe`` for anything else -- never the raw
+        exception text, which can carry secrets, prompts, or upstream
+        diagnostics (CWE-209). This mirrors :meth:`_record_tool_fallback`'s
+        existing secret-free audit-event shape.
+        """
+        if isinstance(exc, ProviderUpstreamError):
+            error_code = exc.error_code
+            provider_status = exc.provider_status
+            retryable = exc.retryable
+        elif decision is not None:
+            error_code = decision.reason_code
+            provider_status = None
+            retryable = decision.retry_safe
+        else:  # pragma: no cover - defensive; every non-ProviderUpstreamError caller classifies first
+            error_code = "unknown"
+            provider_status = None
+            retryable = False
+        return {
+            "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name,
+            "error_code": error_code,
+            "provider_status": provider_status,
+            "retryable": retryable,
+            "retry_attempt": retry_attempt,
+        }
 
     def _record_tool_fallback(
         self,

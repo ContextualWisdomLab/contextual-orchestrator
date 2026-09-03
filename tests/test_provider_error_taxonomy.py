@@ -21,7 +21,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderRequestTooLargeError,
+    is_transient_error,
+)
 from contextual_orchestrator.provider_errors import (  # noqa: E402
     MAX_PROVIDER_ERROR_BODY_BYTES,
     MAX_SAFE_MESSAGE_CHARS,
@@ -328,6 +332,34 @@ def test_detail_and_transport_are_preserved_for_callers() -> None:
     assert "HTTP 429" in str(classified)
 
 
+def test_detail_includes_attempts_and_stop_reason_when_pool_exhausted() -> None:
+    """A caller who set attempts/stop_reason on the exception sees both in .detail.
+
+    Every other construction site never sets these attributes, so the base
+    five-key contract (asserted above) is unaffected; this only exercises the
+    additive path a fully-exhausted failover pool takes.
+    """
+    classified = classify_provider_failure(
+        _http_error(500), agent_id="primary_worker", model="mock-a"
+    )
+    classified.attempts = [
+        {
+            "agent_id": "primary_worker",
+            "model": "mock-a",
+            "provider": "",
+            "error_code": "api_error",
+            "provider_status": 500,
+            "retryable": True,
+            "retry_attempt": 0,
+        }
+    ]
+    classified.stop_reason = "all_candidates_exhausted"
+    detail = classified.detail
+    assert detail["agent_id"] == "primary_worker"
+    assert detail["attempts"] == classified.attempts
+    assert detail["stop_reason"] == "all_candidates_exhausted"
+
+
 # -- client wiring -------------------------------------------------------------
 
 
@@ -493,6 +525,50 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
     assert error["detail"]["provider_status"] == 429
     assert error["detail"]["model"] == "gpt-x"
     assert error["detail"]["retryable"] is True
+
+
+class _AlwaysTooLarge(ModelClient):
+    """Chat client whose provider always rejects the request as oversized."""
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        raise ProviderRequestTooLargeError(
+            "request body exceeds the provider limit", agent_id=agent.id, model=agent.model
+        )
+
+
+def test_chat_completions_413_response_carries_error_detail() -> None:
+    """A pool exhausted entirely by oversized requests still returns structured detail.
+
+    Previously ``server.py``'s ``ProviderRequestTooLargeError`` handler called
+    ``_send_error`` with only 3 arguments, silently dropping the exception's
+    own ``.detail`` -- the response body's ``error.detail`` carried nothing
+    but the generic ``request_id``. It must now also carry the taxonomy
+    fields (and the failover ``stop_reason``) the exception already has.
+    """
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_agent", "gpt-x", tags=("reasoning",))],
+        client=_AlwaysTooLarge(),
+    )
+    orchestrator._triage_fn = lambda text: False
+    token = "taxonomy_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {"model": "gpt-x", "messages": [{"role": "user", "content": "hello"}]},
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 413
+    error = body["error"]
+    assert error["code"] == "request_too_large"
+    detail = error["detail"]
+    assert "request_id" in detail
+    assert "transport" in detail
+    assert detail["stop_reason"] == "request_too_large"
 
 
 def test_guidance_table_covers_every_documented_code() -> None:
