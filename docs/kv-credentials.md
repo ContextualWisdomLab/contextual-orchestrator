@@ -106,6 +106,33 @@ printf '%s' "$CAMOUFOX_MCP_TOKEN" | python -m contextual_orchestrator \
   register-credential --name CAMOUFOX_MCP_TOKEN --value-stdin
 ```
 
+### Web-search boundary
+
+`contextual_orchestrator.web_search.web_search()` (see `docs/adr/0123-web-search-mcp-a2a-gateway-foundation.md`
+for the full design; this is slice 1) queries a SearXNG-compatible metasearch
+instance for grounded results. Register `SEARXNG_URL` with the instance's base
+URL; an `https://` URL is validated with the same SSRF-safe boundary as every
+other remote provider (public, non-private/loopback/link-local/reserved
+destination IP), and an explicit loopback `http://127.0.0.1`-style URL is
+accepted for local development only, exactly like the Wardnet API URL above.
+SearXNG has no native API key, so `SEARXNG_TOKEN` is optional — register it
+only when the instance sits behind a reverse proxy that requires a bearer
+token; when present it is sent as `Authorization: Bearer <token>`.
+
+```bash
+printf '%s' 'https://searxng.internal.example' | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_URL --value-stdin
+printf '%s' "$SEARXNG_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_TOKEN --value-stdin
+```
+
+This module does not deploy SearXNG itself — point it at any SearXNG instance
+you already run (the project's own Docker Compose deployment is documented at
+[docs.searxng.org](https://docs.searxng.org/admin/installation-docker.html)).
+Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
+its `quarantine-sandbox-runtime` session isolation remain a documented
+follow-up; see the ADR.
+
 ### Agent credential naming
 
 `ModelAgent` gained a `credential_key` field (default `"OPENAI_API_KEY"`) that
