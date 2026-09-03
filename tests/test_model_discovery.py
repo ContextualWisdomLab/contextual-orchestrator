@@ -1487,7 +1487,13 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
         discovered = discover_provider_models(source)
 
     assert discovered[0].provider_name == "opencode_go"
-    assert discovered[0].is_free is True
+    # Go's plan is paid, so a zero token rate means "included in the
+    # subscription", not free: it is reported as an unknown price and never
+    # as free, while a genuinely non-zero rate is kept as real evidence.
+    assert source.requires_paid_subscription is True
+    assert discovered[0].is_free is False
+    assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
     assert discovered[1].is_free is False
     assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
     assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
@@ -1734,11 +1740,13 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
         for model in discovered
         if model.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
     ] == [("nvidia_nim", True), ("nvidia_nim_sub", True)]
+    # Go joined the same shared catalog, but its paid plan keeps a zero token
+    # rate out of the free pool (see the subscription contract test).
     assert [
         (model.provider_name, model.is_free)
         for model in discovered
         if model.provider_name == "opencode_go"
-    ] == [("opencode_go", True)]
+    ] == [("opencode_go", False)]
 
 
 def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false() -> None:

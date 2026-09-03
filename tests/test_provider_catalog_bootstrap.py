@@ -696,5 +696,123 @@ def test_three_credential_account_failures_still_hard_fail() -> None:
         set_backend(None)
 
 
+@pytest.mark.parametrize(
+    ("go_models", "go_errors"),
+    [
+        ([], [ProviderDiscoveryError("opencode_go", "http_status_401")]),
+        ([], [ProviderDiscoveryError("opencode_go", "http_status_403")]),
+        ([], []),
+    ],
+    ids=["go_unauthorized", "go_forbidden", "go_empty_catalog"],
+)
+def test_zen_only_account_keeps_zen_models_when_shared_go_source_fails(
+    go_models: list[DiscoveredModel],
+    go_errors: list[ProviderDiscoveryError],
+) -> None:
+    """An absent Go subscription never rolls back the Zen key it shares."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        zen = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")
+        go = _source("opencode_go", "OPENCODE_ZEN_API_KEY")
+        environ = {**_environment(), "OPENCODE_ZEN_API_KEY": "zen-subscription-key"}
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=environ,
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(zen, go),
+            discovery=lambda _sources: (
+                [_model(zen, "zen-live"), *go_models],
+                list(go_errors),
+            ),
+            model_limit=4,
+        )
+
+        assert report.restored_credentials == ()
+        assert get_credential("OPENCODE_ZEN_API_KEY") == "zen-subscription-key"
+        assert "OPENCODE_ZEN_API_KEY" in report.registered_credentials
+        assert report.selected_agent_ids == ("opencode_zen_zen_live",)
+    finally:
+        set_backend(None)
+
+
+def test_shared_credential_rolls_back_only_when_every_sharing_source_fails() -> None:
+    """A shared key survives one source's outage and rolls back when both fail."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        zen = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")
+        go = _source("opencode_go", "OPENCODE_ZEN_API_KEY")
+        environ = {**_environment(), "OPENCODE_ZEN_API_KEY": "zen-subscription-key"}
+
+        zen_down = bootstrap_provider_catalog_runtime(
+            environ=environ,
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, zen, go),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live"), _model(go, "go-live")],
+                [ProviderDiscoveryError("opencode_zen", "http_status_500")],
+            ),
+            model_limit=4,
+        )
+        assert zen_down.restored_credentials == ()
+        assert get_credential("OPENCODE_ZEN_API_KEY") == "zen-subscription-key"
+        assert "opencode_go_go_live" in zen_down.selected_agent_ids
+
+        # A fresh KV so rollback deletes rather than restoring the value the
+        # run above already committed (the durable-KV case covered elsewhere).
+        set_backend(InMemoryCredentialBackend())
+        both_down = bootstrap_provider_catalog_runtime(
+            environ=environ,
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, zen, go),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [
+                    ProviderDiscoveryError("opencode_zen", "http_status_500"),
+                    ProviderDiscoveryError("opencode_go", "http_status_401"),
+                ],
+            ),
+            model_limit=4,
+        )
+        assert both_down.restored_credentials == ("OPENCODE_ZEN_API_KEY",)
+        assert get_credential("OPENCODE_ZEN_API_KEY") is None
+    finally:
+        set_backend(None)
+
+
+def test_inventory_verdict_judges_every_source_sharing_one_credential() -> None:
+    """Rollback evidence is matched against all sources sharing the credential."""
+    zen = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")
+    go = _source("opencode_go", "OPENCODE_ZEN_API_KEY")
+    environ = {"OPENCODE_ZEN_API_KEY": "zen-subscription-key"}
+
+    def verdict_for(failed_provider: str, classification: str):
+        return evaluate_provider_credential_inventory(
+            {
+                "registered_credentials": ["OPENCODE_ZEN_API_KEY"],
+                "restored_credentials": ["OPENCODE_ZEN_API_KEY"],
+                "providers_with_errors": [failed_provider],
+                "provider_error_classifications": {failed_provider: classification},
+            },
+            environ,
+            provider_model_sources=(zen, go),
+            expected_credential_names=("OPENCODE_ZEN_API_KEY",),
+        )
+
+    # Either sharing source's own classified failure explains the rollback --
+    # a one-to-one credential map kept only the last-declared source and
+    # reported the other's failure as unexplained.
+    for provider in ("opencode_zen", "opencode_go"):
+        tolerated = verdict_for(provider, TRANSIENT_FAILURE_CLASSIFICATION)
+        assert tolerated.ok is True
+        assert tolerated.hard_fail_reason is None
+        assert provider in tolerated.warning_message
+
+        rejected = verdict_for(provider, AUTHENTICATION_FAILURE_CLASSIFICATION)
+        assert rejected.ok is False
+        assert "not a tolerated transient outage" in rejected.hard_fail_reason
+        assert AUTHENTICATION_FAILURE_CLASSIFICATION in rejected.hard_fail_reason
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

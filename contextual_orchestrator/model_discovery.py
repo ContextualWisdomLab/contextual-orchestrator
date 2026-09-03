@@ -335,6 +335,13 @@ class ProviderModelSource:
     bootstrap_required: bool = True
     evidence_only: bool = False
     models_dev_provider_id: str | None = None
+    # True when serving this source at all costs money on a recurring plan
+    # (OpenCode Go), independently of the per-token rates its catalog
+    # reports. Such an endpoint reports zero token rates because tokens are
+    # included in the subscription -- not because serving is free -- so
+    # ``_parse_openai_compatible`` publishes those rates as unknown and never
+    # marks the row free. See the ``opencode_go`` source below.
+    requires_paid_subscription: bool = False
 
 
 def configured_gateway_source(
@@ -434,6 +441,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
         bootstrap_required=False,
         models_dev_provider_id="opencode-go",
+        requires_paid_subscription=True,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -1352,6 +1360,22 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if key in UNIT_PRICE_DIMENSIONS
             and _valid_price_component(value)
         )
+        is_free = _row_is_free(row, pricing=pricing, inputs=inputs, outputs=outputs)
+        if source.requires_paid_subscription:
+            # The recurring plan is what serving costs here; a zero token rate
+            # only means tokens are included in it, never that serving is
+            # free. Publishing that zero as a *known* price would admit a
+            # subscription-gated model into every zero-cost route -- the
+            # ``cost:free`` serving tag and, independently of it,
+            # ``refresh_price_book`` feeding ``_is_free_agent``'s price-only
+            # branch (which reads the price book, not ``is_free``, so
+            # clearing the tag alone would not keep it out). Report a zero
+            # component as unknown instead -- the same honesty rule Bytez's
+            # GPU-second pricing follows below. A genuinely non-zero rate is
+            # real evidence and is kept.
+            is_free = False
+            prompt_price = prompt_price or None
+            completion_price = completion_price or None
         discovered.append(
             DiscoveredModel(
                 provider_name=source.provider_name,
@@ -1375,12 +1399,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
-                is_free=_row_is_free(
-                    row,
-                    pricing=pricing,
-                    inputs=inputs,
-                    outputs=outputs,
-                ),
+                is_free=is_free,
                 supports_zero_data_retention=(
                     row["supports_zero_data_retention"]
                     if isinstance(row.get("supports_zero_data_retention"), bool)
