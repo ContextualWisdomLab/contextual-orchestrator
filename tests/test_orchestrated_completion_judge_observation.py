@@ -26,6 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import ProviderUpstreamError  # noqa: E402
 
 _STUB_CONDUCT = {
     "mode": "conduct",
@@ -276,12 +277,17 @@ def test_exhausted_budget_skips_extra_realtime_judge_call_but_keeps_answer(
     call before the caller has anything), this call happens after the
     response is fully decided -- an exhausted budget skips it outright
     instead of raising and losing an already-good answer.
+
+    The budget here is never spent by a previous run: the whole allowance is
+    consumed by *this* request's own not-yet-persisted workflow + synthesis
+    spend, which is exactly the case ``budget_status()`` alone cannot see
+    (Devin review on #1032).
     """
     agent = ModelAgent("worker_agent", "mock", tags=("reasoning",))
     orchestrator = TaskOrchestrator([agent])
     orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
     orchestrator.budget_max_output_tokens = 1
-    monkeypatch.setattr(orchestrator, "budget_status", lambda: {"exceeded": True})
+    assert orchestrator.budget_status()["exceeded"] is False
 
     def _explode(*args: object, **kwargs: object) -> dict[str, Any]:
         raise AssertionError("realtime judge must be skipped once budget is already exceeded")
@@ -295,6 +301,133 @@ def test_exhausted_budget_skips_extra_realtime_judge_call_but_keeps_answer(
     assert result["output_text"] == "[worker_agent] chat-mock"
     assert orchestrator._quality_router.member_observation_count("worker_agent") == 0
     assert orchestrator._psychometric_router.has_observations() is False
+
+
+def test_realtime_judge_excludes_agents_this_request_already_proved_unavailable() -> None:
+    """A failed-over-away agent must not be picked as this request's judge.
+
+    Devin review (PR #1032): ``request_exclusions`` holds every agent this
+    request already proved unavailable. Feeding the judge from
+    ``allowed_agent_ids`` alone leaves such an agent eligible; if it fails
+    the judge call, the resulting failure records a false-negative quality
+    observation against the answer that actually succeeded -- corrupting the
+    exact measurement this wiring exists to produce.
+    """
+
+    class _FirstAgentAlwaysFails:
+        """Fail every call to ``broken_agent``; serve ``healthy_agent`` normally."""
+
+        def proxy_send_once(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            """Raise for the broken agent, otherwise return a fixed answer."""
+            del endpoint, payload
+            if agent.id == "broken_agent":
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="model_not_found",
+                    message="provider rejected the request with HTTP 404",
+                    client_status=404,
+                    provider_status=404,
+                    retryable=False,
+                    transport="passthrough",
+                )
+            return {
+                "id": "resp_test",
+                "object": "response",
+                "model": agent.model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "served answer"}],
+                    }
+                ],
+            }
+
+        proxy_send = proxy_send_once
+
+    broken = ModelAgent("broken_agent", "mock", tags=("reasoning",), priority=100)
+    healthy = ModelAgent("healthy_agent", "mock", tags=("reasoning",), priority=1)
+    orchestrator = TaskOrchestrator([broken, healthy], client=_FirstAgentAlwaysFails())
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+
+    captured: dict[str, object] = {}
+
+    def _spy(
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        captured["excluded_agent_ids"] = excluded_agent_ids
+        captured["judge"] = next(
+            agent.id
+            for agent in orchestrator._ranked_agents(task, "verifier")
+            if allowed_agent_ids is None or agent.id in allowed_agent_ids
+            if excluded_agent_ids is None or agent.id not in excluded_agent_ids
+        )
+        return {
+            "accepted": True,
+            "reason": "stub verdict",
+            "verifier_output": fallback.get("verifier_output", ""),
+            "judge": "model",
+        }
+
+    orchestrator._model_judge_verification = _spy  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(
+        {"input": "hello world"}, endpoint="responses", single_agent=False
+    )
+
+    assert result["output_text"] == "served answer"
+    assert captured["excluded_agent_ids"] == {"broken_agent"}
+    # Without the exclusion the higher-priority broken agent wins verifier
+    # ranking and would have taken the judge call.
+    assert captured["judge"] == "healthy_agent"
+
+
+def test_realtime_judge_spend_reaches_budget_meter_and_spend_analytics() -> None:
+    """The extra judge call's own tokens are metered, not silently free.
+
+    Devin review (PR #1032): ``_realtime_route_judge``'s return value was
+    discarded, so a real, already-incurred provider call was invisible to
+    both the budget meter that gates *subsequent* requests and buyer-facing
+    ``spend_analytics``.
+    """
+    agent = ModelAgent("worker_agent", "mock-model", tags=("reasoning",))
+    client = _ResponsesUsageClient(
+        content="final answer",
+        usage={"input_tokens": 7, "output_tokens": 13, "total_tokens": 20},
+    )
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator.conduct = lambda *args, **kwargs: dict(_STUB_CONDUCT)  # type: ignore[method-assign]
+    orchestrator._model_judge_verification = lambda task, fallback, **_ignored: {  # type: ignore[method-assign]
+        "accepted": True,
+        "reason": "stub verdict",
+        "verifier_output": fallback.get("verifier_output", ""),
+        "judge": "model",
+        "judge_agent_id": "worker_agent",
+        "judge_model": "mock-model",
+        "judge_usage": {"prompt_tokens": 3, "completion_tokens": 29, "total_tokens": 32},
+    }
+
+    orchestrator.proxy_completion(
+        {"input": "hello world"}, endpoint="responses", single_agent=False
+    )
+
+    run = next(iter(orchestrator._workflow_runs.values()))
+    assert run["realtime_verification"]["judge_agent_id"] == "worker_agent"
+    # The synthesis step reported 13 output tokens; the judge call reported
+    # 29 more. Both must land on the meter -- 13 alone is the bug.
+    assert orchestrator.budget_status()["spent_output_tokens"] == 13 + 29
+    assert orchestrator._run_budget_output_by_model(run) == ({"mock-model": 13 + 29}, True)
+
+    rows = {row["model"]: row for row in orchestrator.spend_analytics()["by_model"]}
+    assert rows["mock-model"]["output_tokens"] == 13 + 29
 
 
 if __name__ == "__main__":  # pragma: no cover

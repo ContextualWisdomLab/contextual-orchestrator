@@ -4944,12 +4944,28 @@ class TaskOrchestrator:
         # the verdict is recorded for future routing evidence, never branched
         # on here, since send_synthesis's own retry/failover already ran to
         # completion by this point.
+        #
+        # Research grounding for the mechanism itself is already recorded --
+        # this wiring adds no new technique, it connects an existing
+        # measurement pipeline to a path that was not calling it. See
+        # docs/doctoring/measured-routing-evidence.md ("Real-time judging
+        # before returning answers"; "Multi-layer simple-structure
+        # measurement (fast-mlsirm)") and Baker (2001) in
+        # docs/papers/README.md for the IRT ability fitting.
         usage = (repair_step or synthesis_step).get("usage")
+        trace = [
+            *workflow["trace"],
+            synthesis_step,
+            *([repair_step] if repair_step is not None else []),
+        ]
         # This call must stay pinned to the same eligibility constraint the
         # request's own synthesis already honored (an explicit model pin,
         # the free pool, a ZDR-only virtual request, or a file-replica
-        # subset) -- otherwise an observation-only judge call could reach a
-        # provider the caller's own request was never allowed to use
+        # subset), minus every agent this request already proved unavailable
+        # -- otherwise an observation-only judge call could reach a provider
+        # the caller's own request was never allowed to use, or a
+        # known-failing one whose failure would record a false-negative
+        # quality observation against the answer that actually succeeded
         # (Devin review on #1032).
         #
         # The already-decided, already-served answer above must never be
@@ -4960,17 +4976,26 @@ class TaskOrchestrator:
         # fully decided, matching stream_route's own no-budget-check
         # precedent for already-committed output. An exhausted budget skips
         # the extra judge call outright instead of raising (Devin review on
-        # #1032).
-        judge_budget_exceeded = (
-            self.policy.realtime_judge
-            and (
-                self.budget_max_output_tokens is not None
-                or self.budget_max_cost_usd is not None
-            )
-            and self.budget_status()["exceeded"]
-        )
+        # #1032). The gate reuses _raise_if_spend_budget_exceeded so this
+        # request's own not-yet-persisted spend (workflow trace + synthesis
+        # + repair) counts, exactly as the pre-synthesis checkpoint above
+        # already counts the workflow trace.
+        judge_budget_exceeded = False
+        if self.policy.realtime_judge and (
+            self.budget_max_output_tokens is not None
+            or self.budget_max_cost_usd is not None
+        ):
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(trace)
+            try:
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
+            except BudgetExceededError:
+                judge_budget_exceeded = True
+        realtime_verification: dict[str, Any] | None = None
         if not judge_budget_exceeded:
-            self._realtime_route_judge(
+            realtime_verification = self._realtime_route_judge(
                 text=task,
                 answer=synthesis_output,
                 served_id=final_agent.id,
@@ -4979,6 +5004,7 @@ class TaskOrchestrator:
                 free_only=free_only,
                 prompt_context=prompt_context,
                 allowed_agent_ids=allowed_agent_ids,
+                excluded_agent_ids=request_exclusions or None,
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -4993,11 +5019,6 @@ class TaskOrchestrator:
             elif "messages" in echo:
                 echo["messages"] = copy.deepcopy(messages)
         workflow_run_id = f"run_{uuid.uuid4().hex}"
-        trace = [
-            *workflow["trace"],
-            synthesis_step,
-            *([repair_step] if repair_step is not None else []),
-        ]
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
@@ -5010,6 +5031,12 @@ class TaskOrchestrator:
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": workflow.get("verification"),
+                # The extra observation-only judge above is a second,
+                # independent provider call: conduct()'s own verifier-step
+                # judge already occupies "verification", so its spend needs
+                # its own record slot to reach the budget meter and buyer
+                # analytics (Devin review on #1032).
+                "realtime_verification": realtime_verification,
             }
         )
         self._replace_workflow_run(record)
@@ -8652,40 +8679,58 @@ class TaskOrchestrator:
             if output_tokens is None:
                 return {}, False
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
-        verification = record.get("verification")
-        if isinstance(verification, Mapping):
-            judge_agent_id = verification.get("judge_agent_id")
-            if judge_agent_id is not None:
-                # A completed judge call (judge_agent_id is only ever set
-                # once one has) whose response carried no valid usage must
-                # still count toward the budget meter, or a run of
-                # unmeasured judge calls could exceed a spend cap this
-                # conservative-by-design check exists to enforce. Fall back
-                # to the same estimate-from-real-text _step_output_tokens
-                # already applies to worker steps with no reported usage
-                # (Devin review on #961: an earlier revision of this fix
-                # fabricated a "reported" zero-token dict instead). Estimate
-                # from judge_output_text (the judge's own generated
-                # rationale), not verifier_output (the worker answer it was
-                # judging) -- a second Devin review on this same fallback
-                # caught estimating from the wrong side of the call.
-                judge_model = verification.get("judge_model") or model_by_agent.get(
-                    judge_agent_id, "unknown"
-                )
-                completion_tokens, _judge_reported = _step_output_tokens(
-                    {
-                        "usage": verification.get("judge_usage"),
-                        "output": verification.get("judge_output_text", ""),
-                    },
-                    self.token_counter,
-                    judge_model,
-                )
-                if completion_tokens is None:
-                    return {}, False
-                output_by_model[judge_model] = (
-                    output_by_model.get(judge_model, 0) + completion_tokens
-                )
+        for verification in self._run_judge_accounting_blocks(record):
+            # A completed judge call (judge_agent_id is only ever set
+            # once one has) whose response carried no valid usage must
+            # still count toward the budget meter, or a run of
+            # unmeasured judge calls could exceed a spend cap this
+            # conservative-by-design check exists to enforce. Fall back
+            # to the same estimate-from-real-text _step_output_tokens
+            # already applies to worker steps with no reported usage
+            # (Devin review on #961: an earlier revision of this fix
+            # fabricated a "reported" zero-token dict instead). Estimate
+            # from judge_output_text (the judge's own generated
+            # rationale), not verifier_output (the worker answer it was
+            # judging) -- a second Devin review on this same fallback
+            # caught estimating from the wrong side of the call.
+            judge_model = verification.get("judge_model") or model_by_agent.get(
+                verification["judge_agent_id"], "unknown"
+            )
+            completion_tokens, _judge_reported = _step_output_tokens(
+                {
+                    "usage": verification.get("judge_usage"),
+                    "output": verification.get("judge_output_text", ""),
+                },
+                self.token_counter,
+                judge_model,
+            )
+            if completion_tokens is None:
+                return {}, False
+            output_by_model[judge_model] = (
+                output_by_model.get(judge_model, 0) + completion_tokens
+            )
         return output_by_model, True
+
+    @staticmethod
+    def _run_judge_accounting_blocks(
+        record: Mapping[str, Any],
+    ) -> list[Mapping[str, Any]]:
+        """Every completed judge call recorded on one run, in record order.
+
+        ``verification`` holds the workflow's own verifier-step judge;
+        ``realtime_verification`` holds the separate observation-only
+        realtime judge ``_orchestrated_provider_completion`` fires after
+        synthesis. Both are real, already-incurred provider calls, so both
+        must reach the budget meter and buyer-facing spend analytics
+        (Devin review on #1032). ``judge_agent_id`` is set only once a call
+        actually completed, so it is the presence test for both.
+        """
+        blocks: list[Mapping[str, Any]] = []
+        for key in ("verification", "realtime_verification"):
+            block = record.get(key)
+            if isinstance(block, Mapping) and block.get("judge_agent_id") is not None:
+                blocks.append(block)
+        return blocks
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
         """Store one run and update its constant-time budget meter atomically."""
@@ -8793,13 +8838,8 @@ class TaskOrchestrator:
                     bucket["output_tokens"] += effective
                     total_output_tokens += effective
 
-            verification = run.get("verification")
-            judge_agent_id = (
-                verification.get("judge_agent_id")
-                if isinstance(verification, Mapping)
-                else None
-            )
-            if judge_agent_id is not None:
+            for verification in self._run_judge_accounting_blocks(run):
+                judge_agent_id = verification["judge_agent_id"]
                 # A completed judge call (judge_agent_id is only ever set
                 # once one has) must stay visible here even when its
                 # response carried no valid usage, or a real, incurred

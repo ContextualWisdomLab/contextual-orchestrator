@@ -20,6 +20,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Structured synthesis on the main `orchestrator/free` serving path now feeds
+  the realtime fast-mlsirm judge, so judged quality — not just transport
+  success — becomes routing evidence on the path that carries most traffic.
+  This wires an already-implemented, already-grounded measurement pipeline
+  into a path that was silently not calling it; it introduces no new
+  technique. The grounding is the existing record in
+  [`docs/doctoring/measured-routing-evidence.md`](docs/doctoring/measured-routing-evidence.md)
+  ("Real-time judging before returning answers" and "Multi-layer
+  simple-structure measurement (fast-mlsirm)": Ong et al., 2024; Chen et al.,
+  2023; Zheng et al., 2023; Jeon et al., 2021), plus Baker (2001) in
+  [`docs/papers/README.md`](docs/papers/README.md) for the IRT ability
+  fitting. The call is observation-only: it never branches the served answer,
+  stays inside the request's own agent eligibility (explicit model pin, free
+  pool, ZDR policy, file replicas) minus agents this request already proved
+  unavailable, is skipped once the request's own spend exhausts the operator
+  budget, and records its own token usage on the run so budget and spend
+  analytics see it.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
