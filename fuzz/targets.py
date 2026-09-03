@@ -43,6 +43,10 @@ consume untrusted bytes/JSON:
 12. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
     observation boundary. Arbitrary JSON must fail closed or round-trip to the
     same bounded published-language payload.
+12. ``web_search._parse_results`` -- an untrusted SearXNG (or SearXNG-API-
+    compatible) JSON response body. Must raise only ``TypeError`` on a
+    malformed envelope, silently skip malformed individual rows, and never
+    return more than the caller's ``max_results`` bound.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -86,6 +90,7 @@ from contextual_orchestrator.rater_observation import (
     RaterInvocation,
     RaterObservationError,
 )
+from contextual_orchestrator.web_search import WebSearchResult, _parse_results
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
@@ -497,6 +502,33 @@ def exercise_rater_observation(value: Any) -> None:
     payload = invocation.to_payload()
     assert 1 <= len(payload["observations"]) <= MAX_RATER_OBSERVATIONS
     assert RaterInvocation.from_mapping(payload).to_payload() == payload
+
+
+def exercise_web_search_results(value: Any, max_results: int) -> None:
+    """Drive the SearXNG result parser over an arbitrary decoded JSON envelope.
+
+    ``_parse_results`` consumes an untrusted provider response body. Invariant
+    for arbitrary input: a malformed envelope (not a dict, or a non-list
+    ``results`` field) raises only ``TypeError``; a well-formed envelope never
+    raises, skips malformed individual rows rather than failing the whole
+    parse, and never returns more than ``max_results`` well-typed rows.
+    """
+    try:
+        results = _parse_results(value, max_results)
+    except TypeError:
+        return
+    assert isinstance(results, list)
+    assert len(results) <= max_results
+    for result in results:
+        assert isinstance(result, WebSearchResult)
+        assert isinstance(result.url, str) and result.url
+        assert isinstance(result.title, str)
+        assert isinstance(result.content, str)
+        assert isinstance(result.engine, str)
+        assert result.score is None or (
+            isinstance(result.score, (int, float)) and not isinstance(result.score, bool)
+        )
+        assert result.published_date is None or isinstance(result.published_date, str)
 
 
 def exercise_nim_catalog(raw: bytes) -> None:
