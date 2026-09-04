@@ -21,6 +21,7 @@ MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 TRAIN_CONTEXTS = 24
 BOOTSTRAP_SAMPLES = 2_000
 BOOTSTRAP_SEED = 568
+LATENCY_REPETITIONS = 200
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -73,13 +74,21 @@ def _evaluate(*, two_neighbor: bool) -> tuple[dict[str, float], dict[str, list[f
     context_log_loss: list[float] = []
     regrets: list[float] = []
     samples_ms: list[float] = []
+    context_latency_medians: list[float] = []
     for context_index in range(TRAIN_CONTEXTS):
         angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
-        started_ns = time.perf_counter_ns()
-        ranked = evidence.ranked_evidence(
-            MODEL_IDS, f"held_out_{context_index}", _vector(angle)
-        )
-        samples_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
+        context = f"held_out_{context_index}"
+        vector = _vector(angle)
+        context_samples_ms: list[float] = []
+        ranked: list[tuple[str, float]] = []
+        for _ in range(LATENCY_REPETITIONS):
+            started_ns = time.perf_counter_ns()
+            ranked = evidence.ranked_evidence(MODEL_IDS, context, vector)
+            context_samples_ms.append(
+                (time.perf_counter_ns() - started_ns) / 1_000_000
+            )
+        samples_ms.extend(context_samples_ms)
+        context_latency_medians.append(statistics.median(context_samples_ms))
         predicted = dict(ranked)
         truth = {
             model_id: _probability(model_index, angle)
@@ -108,6 +117,7 @@ def _evaluate(*, two_neighbor: bool) -> tuple[dict[str, float], dict[str, list[f
         "top_choice_regret": statistics.fmean(regrets),
     }, {
         "brier_score": context_brier,
+        "decision_median_ms": context_latency_medians,
         "log_loss": context_log_loss,
         "top_choice_regret": regrets,
     }
@@ -130,6 +140,7 @@ def main() -> None:
             for metric in candidate_samples
         },
         "models": len(MODEL_IDS),
+        "latency_repetitions_per_context": LATENCY_REPETITIONS,
     }
     assert all(
         math.isfinite(value)
