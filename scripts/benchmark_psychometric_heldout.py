@@ -176,15 +176,18 @@ def run_benchmark() -> dict[str, object]:
         )
         for metric in candidate_samples
     }
-    gates = {
-        "accuracy_noninferior": all(
+    gate_status = {
+        "accuracy_noninferior": "passed" if all(
             delta_ci95[metric][1] <= 0.0
             for metric in ("brier_score", "log_loss", "top_choice_regret")
+        ) else "failed",
+        "buyer_heldout": "not_executed",
+        "decision_latency_improved": (
+            "passed" if delta_ci95["decision_median_ms"][1] < 0.0 else "failed"
         ),
-        "buyer_heldout": False,
-        "decision_latency_improved": delta_ci95["decision_median_ms"][1] < 0.0,
-        "measurement_validity": False,
+        "measurement_validity": "not_executed",
     }
+    gates = {name: status == "passed" for name, status in gate_status.items()}
     result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
@@ -196,6 +199,7 @@ def run_benchmark() -> dict[str, object]:
         "models": len(MODEL_IDS),
         "latency_repetitions_per_context": LATENCY_REPETITIONS,
         "production_default_change_allowed": all(gates.values()),
+        "production_gate_status": gate_status,
         "production_gates": gates,
     }
     assert all(

@@ -78,6 +78,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "decision_latency_improved": False,
         "measurement_validity": False,
     }
+    assert report["production_gate_status"] == {
+        "accuracy_noninferior": "passed",
+        "buyer_heldout": "not_executed",
+        "decision_latency_improved": "failed",
+        "measurement_validity": "not_executed",
+    }
     assert report["production_default_change_allowed"] is False
 
 
