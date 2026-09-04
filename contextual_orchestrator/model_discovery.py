@@ -940,6 +940,12 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                     pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
         limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
+        model_provider = model.get("provider")
+        models_dev_npm = (
+            model_provider.get("npm")
+            if isinstance(model_provider, dict)
+            else provider_row.get("npm")
+        )
         original_architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         merged_max_output_tokens = _positive_int_metadata(limits.get("output"))
         if merged_max_output_tokens is None:
@@ -966,6 +972,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                 "max_output_tokens": merged_max_output_tokens,
                 "context_window": merged_context_window,
                 "is_free": _models_dev_cost_is_free(cost),
+                "_models_dev_npm": models_dev_npm,
             }
         )
     return {**payload, "data": enriched}

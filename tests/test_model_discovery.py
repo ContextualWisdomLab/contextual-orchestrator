@@ -734,6 +734,29 @@ def test_models_dev_merge_preserves_limit_metadata() -> None:
     assert merged["data"][0]["max_output_tokens"] == 32768
 
 
+def test_models_dev_merge_preserves_model_protocol_override() -> None:
+    payload = {"data": [{"id": "chat-model"}, {"id": "messages-model"}]}
+    metadata = {
+        "openrouter": {
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "chat-model": {"cost": {"input": 0, "output": 0}},
+                "messages-model": {
+                    "cost": {"input": 0, "output": 0},
+                    "provider": {"npm": "@ai-sdk/anthropic"},
+                },
+            },
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openrouter")
+
+    assert [row["_models_dev_npm"] for row in merged["data"]] == [
+        "@ai-sdk/openai-compatible",
+        "@ai-sdk/anthropic",
+    ]
+
+
 def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence() -> None:
     """Neither source may silently erase the other's field-level evidence.
 
