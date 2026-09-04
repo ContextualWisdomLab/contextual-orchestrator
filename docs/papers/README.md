@@ -15,6 +15,7 @@ the remaining sources are cited and linked without copying their files.
   providers/models, so a gateway should price each request and route to the
   cheapest capable upstream. Distributed under arXiv's non-exclusive license to
   distribute (arXiv perpetual, non-exclusive license 1.0).
+  TMLR record: https://openreview.net/forum?id=cSimKw5p6R
 
 ## Query routing (which upstream / which tier)
 
@@ -134,12 +135,34 @@ is absent here.
 - Li, H., Zhang, Q., Wu, Y., Xiao, X., Li, Z., Xia, S.-T., & Liu, H. (2025).
   *Evaluating scoring bias in LLM-as-a-judge* [Preprint]. arXiv.
   https://arxiv.org/abs/2506.22316
+- Zheng, C., Zhou, H., Meng, F., Zhou, J., & Huang, M. (2024). Large language
+  models are not robust multiple choice selectors. *International Conference
+  on Learning Representations*.
+  https://proceedings.iclr.cc/paper_files/paper/2024/hash/54dd9e0cff6d9214e20d97eb2a3bae49-Abstract-Conference.html
+- Pezeshkpour, P., & Hruschka, E. (2024). Large language models sensitivity to
+  the order of options in multiple-choice questions. In *Findings of the
+  Association for Computational Linguistics: NAACL 2024* (pp. 2006–2017).
+  https://aclanthology.org/2024.findings-naacl.130/
+- Sharma, M., Tong, M., Korbak, T., Duvenaud, D., Askell, A., Bowman, S. R.,
+  Cheng, N., Durmus, E., Hatfield-Dodds, Z., Johnston, S. R., Kravec, S.,
+  Maxwell, T., McCandlish, S., Ndousse, K., Rausch, O., Schiefer, N., Yan, D.,
+  Zhang, M., & Perez, E. (2023). *Towards understanding sycophancy in language
+  models* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2310.13548
+  Research page:
+  https://www.anthropic.com/research/towards-understanding-sycophancy-in-language-models
 - Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark
   for multimodal LLM routing* [Preprint]. arXiv.
   https://doi.org/10.48550/arXiv.2601.17814
 - Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
   parameters for unidimensional multidimensional logistic item response
   models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+- Iannario, M., Monti, A. C., & Scalera, P. (2022). The number of response
+  categories in ordered response models. *The International Journal of
+  Biostatistics, 18*(2), 593–611.
+  https://doi.org/10.1515/ijb-2021-0013
+- Jones, W. P., & Loe, S. A. (2013). Optimal number of questionnaire response
+  categories. *SAGE Open, 3*(2).
+  https://doi.org/10.1177/2158244013489691
 - Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
   Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
   (2023). *Judging LLM-as-a-judge with MT-Bench and Chatbot Arena* [Preprint].

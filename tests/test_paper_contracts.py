@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 def _scholarly_ids(text: str) -> set[str]:
-    """Return normalized arXiv and non-standards DOI identifiers."""
+    """Return normalized identifiers from the scholarly hosts used here."""
     arxiv_ids = {
         match.lower()
         for match in re.findall(
@@ -23,14 +23,30 @@ def _scholarly_ids(text: str) -> set[str]:
     }
     doi_ids: set[str] = set()
     for raw_match in re.findall(
-        r'doi\.org/(10\.[^\s)\]}>"\']+)', text, flags=re.IGNORECASE
+        r'(?:doi\.org/|/doi/(?:pdf/)?)(10\.\d{4,9}/[-._;()/:A-Z0-9]+)',
+        text,
+        flags=re.IGNORECASE,
     ):
-        match = raw_match.rstrip(".,;:").lower()
+        match = raw_match.rstrip(".,;:)").lower()
+        for publisher_suffix in ("/html", "/pdf"):
+            if match.endswith(publisher_suffix):
+                match = match.removesuffix(publisher_suffix)
         if match.startswith(("10.17487/", "10.6028/")):
             continue
         arxiv_doi = re.fullmatch(r"10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})", match)
         doi_ids.add(arxiv_doi.group(1) if arxiv_doi else match)
-    return arxiv_ids | doi_ids
+    hosted_ids = {
+        match.rstrip(".,;:").lower()
+        for match in re.findall(
+            r"https?://(?:aclanthology\.org/[^\s)\]}>]+|"
+            r"proceedings\.iclr\.cc/[^\s)\]}>]+|"
+            r"openreview\.net/forum\?id=[A-Za-z0-9_-]+|"
+            r"www\.anthropic\.com/research/[^\s)\]}>]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    }
+    return arxiv_ids | doi_ids | hosted_ids
 
 
 class RecordingClient:
