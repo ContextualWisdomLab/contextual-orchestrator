@@ -238,6 +238,10 @@ flowchart LR
   each of four candidates probability at least 0.05. Across 24,000 fixed-seed
   trials, inverse-propensity value RMSE is 0.008943 and all known true values
   fall inside their 95% intervals. Buyer execution remains required.
+- Source commit `ca6e9a75` validates Stocking–Lord common-item linking on six
+  synthetic anchors with a known affine scale change. It converges with
+  true-parameter RMSE `3.24e-16`; the production component remains unexecuted
+  until versioned buyer anchors establish invariance across recalibrations.
 
 ## References
 
@@ -246,4 +250,4 @@ Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
 Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
 Finkelman et al., 2009; Barrada et al., 2007; Horvitz & Thompson, 1952;
-Dudík et al., 2011; Swaminathan & Joachims, 2015).
+Dudík et al., 2011; Swaminathan & Joachims, 2015; Stocking & Lord, 1983).

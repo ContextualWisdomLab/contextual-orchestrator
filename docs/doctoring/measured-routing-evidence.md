@@ -146,6 +146,12 @@ candidate receives probability at least 0.05; Horvitz-Thompson estimates reach
 RMSE 0.008943 against known synthetic truth and all four 95% intervals cover
 their targets. This validates executable propensity arithmetic, not buyer
 outcomes, and does not change production selection.
+Source commit `ca6e9a75` validates the released common-item linking contract.
+Six anchors undergo a known `slope=1.3`, `intercept=-0.4` metric change;
+Stocking–Lord linking converges and recovers both coefficients with
+true-parameter RMSE `3.24e-16`. These exact synthetic anchors prove the
+calculation path, not cross-version buyer invariance, so `scale_linking`
+remains `not_executed` for production.
 
 ## APA 7 references
 
@@ -228,6 +234,10 @@ Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
 feedback through counterfactual risk minimization. *Journal of Machine Learning
 Research, 16*(52), 1731–1755.
 https://jmlr.org/papers/v16/swaminathan15a.html
+
+Stocking, M. L., & Lord, F. M. (1983). Developing a common metric in item
+response theory. *Applied Psychological Measurement, 7*(2), 201–210.
+https://doi.org/10.1177/014662168300700208
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.

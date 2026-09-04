@@ -137,6 +137,12 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds propensity-weighted risk with an explicit variance penalty. Source
   commit `2c783b98` adds only the prerequisite fixed-seed logging-policy test;
   production learning and buyer evidence remain out of scope until gated.
+- Stocking, M. L., & Lord, F. M. (1983). Developing a common metric in item
+  response theory. *Applied Psychological Measurement, 7*(2), 201–210.
+  https://doi.org/10.1177/014662168300700208
+  Grounds characteristic-curve linking across separately calibrated forms.
+  Source commit `ca6e9a75` recovers a known six-anchor affine transform with
+  true-parameter RMSE `3.24e-16`; buyer anchors remain unexecuted.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373

@@ -2239,6 +2239,12 @@ the synthetic held-out benchmark without changing live routing. Its fixed
 truth and all four 95% intervals cover their targets. This proves the logging
 and estimator contract only; buyer prompts, operational guardrails, variance
 limits, and protected-main evidence are still absent, so the gate stays closed.
+Source commit `ca6e9a75` exercises the released Stocking–Lord linking path on
+six common-item anchors under a known affine metric change. The fit converges
+and recovers slope 1.3 and intercept -0.4 with true-parameter RMSE `3.24e-16`.
+Because these are synthetic anchors rather than stable items observed across
+buyer recalibrations, `scale_linking` remains `not_executed` and cannot open
+the aggregate validity gate.
 
 ## 7. Delivery gates
 
