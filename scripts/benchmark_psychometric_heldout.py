@@ -1021,6 +1021,25 @@ def run_benchmark() -> dict[str, object]:
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    predictive_fit = {
+        "method": "cross_validated_prediction_tasks",
+        "missing_items": {
+            "status": "synthetic_executed",
+            "candidates": "existing",
+            "items": "held_out",
+            "brier_score": candidate["brier_score"],
+            "log_loss": candidate["log_loss"],
+        },
+        "missing_persons": {
+            "status": "not_executed",
+            "candidates": "held_out",
+            "items": "existing",
+            "known_limit": (
+                "the benchmark contains no unseen candidate deployment with "
+                "outcomes for scoring cold-start prediction"
+            ),
+        },
+    }
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
@@ -1087,6 +1106,7 @@ def run_benchmark() -> dict[str, object]:
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
         "decision_utility": "not_executed",
+        "predictive_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -1219,6 +1239,17 @@ def run_benchmark() -> dict[str, object]:
                 "validated economic model for multi-model routing"
             ),
         },
+        "predictive_fit": {
+            "owner_contract_status": "benchmark_axis_incomplete",
+            "required_evidence": (
+                "versioned buyer outcomes for held-out queries and held-out "
+                "candidate deployments, scored separately"
+            ),
+            "known_limit": (
+                "held-out queries for known candidates do not establish prediction "
+                "for a newly introduced or changed candidate deployment"
+            ),
+        },
         "local_independence": {
             "owner_contract_status": "owner_pr_pending",
             "required_evidence": (
@@ -1303,6 +1334,7 @@ def run_benchmark() -> dict[str, object]:
         "conditional_information_validation": conditional_information,
         "classification_decision_validation": classification_decision,
         "decision_utility_validation": selection_utility,
+        "predictive_fit_validation": predictive_fit,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

@@ -126,6 +126,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
         "decision_utility": "not_executed",
+        "predictive_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -186,6 +187,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "released_selection_analogue"
     )
     assert "not a validated economic model" in requirements["decision_utility"][
+        "known_limit"
+    ]
+    assert requirements["predictive_fit"]["owner_contract_status"] == (
+        "benchmark_axis_incomplete"
+    )
+    assert "newly introduced or changed candidate" in requirements["predictive_fit"][
         "known_limit"
     ]
     assert (
@@ -451,6 +458,19 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert utility["cost_exceeds_value"]["net_utility_gain"] == pytest.approx(
         -2373.362255722077
     )
+    predictive_fit = report["predictive_fit_validation"]
+    assert predictive_fit["method"] == "cross_validated_prediction_tasks"
+    assert predictive_fit["missing_items"] == {
+        "status": "synthetic_executed",
+        "candidates": "existing",
+        "items": "held_out",
+        "brier_score": report["brier_score"],
+        "log_loss": report["log_loss"],
+    }
+    assert predictive_fit["missing_persons"]["status"] == "not_executed"
+    assert "no unseen candidate deployment" in predictive_fit["missing_persons"][
+        "known_limit"
+    ]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
