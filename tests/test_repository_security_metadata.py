@@ -68,9 +68,14 @@ def test_security_workflow_covers_core_repository_security_process():
     for duplicate_scanner in removed_duplicate_scanners:
         assert duplicate_scanner not in workflow_text
 
-    assert "local-quality-${{ github.repository }}-${{ github.event_name }}-${{" in workflow_text
-    assert "github.event.pull_request.number || github.event.schedule || github.ref" in workflow_text
-    assert "cancel-in-progress: true" in workflow_text
+    assert "${{ github.workflow }}-${{ github.repository }}-${{" in workflow_text
+    assert "github.event.pull_request.number || github.event.schedule || github.run_id" in workflow_text
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow_text
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
+        in workflow_text
+    )
+    assert workflow_text.count("github.event.pull_request.draft == false") == 3
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
