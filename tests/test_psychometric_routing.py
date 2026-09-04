@@ -155,10 +155,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert covariate["sample_size"] == heldout_benchmark.ITEM_COVARIATE_SAMPLE_SIZE
     assert covariate["seed"] == heldout_benchmark.ITEM_COVARIATE_SEED
     assert covariate["true_delta"] == -0.8
-    assert covariate["estimated_delta"] == pytest.approx(-0.7923490175075318)
-    assert covariate["absolute_error"] == pytest.approx(0.007650982492468206)
-    assert covariate["convergence_status"] == "max_iter_reached"
-    assert covariate["iterations"] == 80
+    assert covariate["estimated_delta"] == pytest.approx(-0.7896498094289646)
+    assert covariate["absolute_error"] == pytest.approx(0.010350190571035478)
+    assert covariate["convergence_status"] == "converged"
+    assert covariate["iterations"] == 941
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

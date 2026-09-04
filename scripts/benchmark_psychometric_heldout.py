@@ -365,7 +365,7 @@ def _validate_item_covariate_effect() -> dict[str, object]:
         fast_mlsirm.FitConfig(
             model="ULSRM",
             estimator="mmle",
-            max_iter=80,
+            max_iter=1_000,
             latent_dim=1,
             q_theta=15,
             q_xi=7,
