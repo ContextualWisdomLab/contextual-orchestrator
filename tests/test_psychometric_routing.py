@@ -50,11 +50,23 @@ def test_paired_bootstrap_interval_rejects_unpaired_samples() -> None:
 
 
 def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None:
-    monkeypatch.setattr(heldout_benchmark, "LATENCY_REPETITIONS", 2)
+    monkeypatch.setattr(
+        heldout_benchmark,
+        "_measure_paired_latency",
+        lambda _baseline, _candidate: (
+            {"decision_p50_ms": 1.0, "decision_p95_ms": 1.0},
+            {"decision_p50_ms": 2.0, "decision_p95_ms": 2.0},
+            [1.0] * heldout_benchmark.TRAIN_CONTEXTS,
+            [2.0] * heldout_benchmark.TRAIN_CONTEXTS,
+        ),
+    )
 
     report = heldout_benchmark.run_benchmark()
 
-    assert report["latency_repetitions_per_context"] == 2
+    assert (
+        report["latency_repetitions_per_context"]
+        == heldout_benchmark.LATENCY_REPETITIONS
+    )
     assert report["delta"].keys() == report["delta_ci95"].keys()
     for metric, point in report["delta"].items():
         lower, upper = report["delta_ci95"][metric]
