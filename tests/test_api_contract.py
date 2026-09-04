@@ -81,6 +81,9 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}"
     ]["patch"]["requestBody"]["content"]["application/json"]["schema"]
     assert patch_schema["properties"]["stream_usage_supported"]["type"] == "boolean"
+    assert patch_schema["properties"]["batch_endpoint_supported"] == {
+        "anyOf": [{"type": "boolean"}, {"type": "null"}]
+    }
     assert patch_schema["properties"]["max_output_tokens"]["anyOf"] == [
         {
             "type": "integer",

@@ -625,7 +625,7 @@ class ModelAgent:
                 )
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
-        if self.batch_endpoint_supported not in (None, True, False):
+        if self.batch_endpoint_supported is not None and type(self.batch_endpoint_supported) is not bool:
             raise TypeError("batch_endpoint_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
@@ -6035,6 +6035,10 @@ class TaskOrchestrator:
             patched = replace(
                 patched, stream_usage_supported=patch["stream_usage_supported"]
             )
+        if "batch_endpoint_supported" in patch:
+            patched = replace(
+                patched, batch_endpoint_supported=patch["batch_endpoint_supported"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -8417,6 +8421,7 @@ class TaskOrchestrator:
             "max_output_tokens": agent.max_output_tokens,
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
+            "batch_endpoint_supported": agent.batch_endpoint_supported,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }

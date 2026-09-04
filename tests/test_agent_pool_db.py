@@ -39,6 +39,7 @@ NEW_AGENT = {
     "max_output_tokens": 4096,
     "context_window": 128000,
     "stream_usage_supported": True,
+    "batch_endpoint_supported": True,
 }
 
 
@@ -153,6 +154,21 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
 
         restored = TaskOrchestrator([agent], agents_db=db)
         assert restored._agent(agent.id).stream_usage_supported is True
+
+
+def test_batch_endpoint_capability_patch_survives_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent("persisted_agent", "model-x")
+        first = TaskOrchestrator([agent], agents_db=db)
+
+        updated = first.patch_agent(
+            "default", "persisted_agent", {"batch_endpoint_supported": True}
+        )
+        assert updated["batch_endpoint_supported"] is True
+
+        restored = TaskOrchestrator([agent], agents_db=db)
+        assert restored._agent(agent.id).batch_endpoint_supported is True
 
 
 def test_agent_pool_persists_limit_metadata_across_restart() -> None:
@@ -461,18 +477,38 @@ def test_http_create_and_delete_worker_agents() -> None:
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents"
     try:
+        status, invalid_create = _call(
+            base,
+            "POST",
+            token,
+            {**NEW_AGENT, "id": "numeric_batch_agent", "batch_endpoint_supported": 1},
+        )
+        assert status == 400 and invalid_create["error"]["code"] == "invalid_request"
+
         status, created = _call(base, "POST", token, NEW_AGENT)
         assert (
             status == 201
             and created["id"] == "coding_agent"
             and created["status"] == "active"
             and created["stream_usage_supported"] is True
+            and created["batch_endpoint_supported"] is True
         )
 
         status, patched = _call(
             f"{base}/general_agent", "PATCH", token, {"stream_usage_supported": True}
         )
         assert status == 200 and patched["stream_usage_supported"] is True
+
+        status, patched = _call(
+            f"{base}/general_agent", "PATCH", token, {"batch_endpoint_supported": True}
+        )
+        assert status == 200 and patched["batch_endpoint_supported"] is True
+
+        status, invalid_batch_capability = _call(
+            f"{base}/general_agent", "PATCH", token, {"batch_endpoint_supported": 1}
+        )
+        assert status == 400
+        assert invalid_batch_capability["error"]["code"] == "invalid_request"
 
         status, invalid_capability = _call(
             f"{base}/general_agent", "PATCH", token, {"stream_usage_supported": 1}
@@ -481,6 +517,7 @@ def test_http_create_and_delete_worker_agents() -> None:
 
         status, read = _call(f"{base}/general_agent", "GET", token)
         assert status == 200 and read["stream_usage_supported"] is True
+        assert read["batch_endpoint_supported"] is True
 
         status, dup = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
