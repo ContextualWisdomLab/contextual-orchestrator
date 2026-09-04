@@ -8,6 +8,7 @@ from pathlib import Path
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 from scripts.benchmark_psychometric_routing import _require_runtime
+from scripts.benchmark_psychometric_heldout import _expected_brier
 
 
 def test_psychometric_benchmark_requires_python_312() -> None:
@@ -19,6 +20,11 @@ def test_psychometric_benchmark_requires_python_312() -> None:
         raise AssertionError("Python 3.11 must not enter the benchmark dependency path")
 
     _require_runtime((3, 12))
+
+
+def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
+    assert _expected_brier(0.5, 0.5) == 0.25
+    assert _expected_brier(1.0, 0.5) == 0.5
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:
@@ -194,3 +200,49 @@ def test_replacing_judge_row_removes_stale_trailing_items() -> None:
     evidence.observe("prompt", "model", False, None, (0,))
 
     assert evidence.records()[0]["irt_row"] == [0]
+
+
+def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("left", "model_a", True, [1.0, 0.0])
+    evidence.observe("right", "model_a", True, [0.0, 1.0])
+    evidence._scores = {
+        evidence.context_id("left"): {"model_a": 0.9, "model_b": 0.1},
+        evidence.context_id("right"): {"model_a": 0.3, "model_b": 0.7},
+    }
+    evidence._fit_revision = evidence._revision
+
+    ranked = evidence.ranked_evidence(
+        iter(("model_a", "model_b")), "held-out", [1.0, 1.0]
+    )
+
+    assert [(agent_id, round(score, 6)) for agent_id, score in ranked] == [
+        ("model_a", 0.6),
+        ("model_b", 0.4),
+    ]
+
+
+def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
+    evidence._scores = {
+        evidence.context_id("opposite"): {"model_a": 0.9, "model_b": 0.1}
+    }
+    evidence._fit_revision = evidence._revision
+
+    assert evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 0.0]
+    ) == []
+
+
+def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("invalid", "model_a", True, [float("nan"), 1.0])
+    evidence._scores = {
+        evidence.context_id("invalid"): {"model_a": 0.9, "model_b": 0.1}
+    }
+    evidence._fit_revision = evidence._revision
+
+    assert evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 0.0]
+    ) == []

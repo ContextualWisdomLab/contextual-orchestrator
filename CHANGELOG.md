@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Unseen prompt contexts now interpolate the two nearest positive-cosine
+  psychometric score rows instead of copying one neighbor; the seeded held-out
+  benchmark reports Brier score, log loss, top-choice regret, and decision
+  p50/p95 without changing production routing defaults.
 - Psychometric observation replacement now removes only the existing row's
   contiguous trailing items instead of scanning the complete response ledger;
   the checked-in benchmark reports fit/rank and observation p50/p95 separately.
