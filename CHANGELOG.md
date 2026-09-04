@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Refresh the time-bounded NVIDIA hosted NIM access evidence against the
+  official Run NIM Anywhere terms, restoring fail-closed live benchmark
+  execution through 2026-10-04 without treating prototype access as production
+  pricing or licensing evidence.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
