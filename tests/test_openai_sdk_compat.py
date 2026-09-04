@@ -22,11 +22,18 @@ import base64
 import io
 import json
 import threading
+import time
 
 import openai
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.batch_routing import (
+    BatchDownloadError,
+    BatchJob,
+    BatchResultItem,
+)
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.server import SecurityConfig, _read_multipart_form, build_server
 
 _TOKEN = "openai_sdk_compat_token"  # noqa: S105
@@ -68,8 +75,13 @@ class _FakeFileTransport:
         return self._store[provider_id], "application/jsonl"
 
 
-def _start(orchestrator: TaskOrchestrator):
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TOKEN))
+def _start(orchestrator: TaskOrchestrator, *, coordinator=None):
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TOKEN),
+        coordinator=coordinator,
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
@@ -97,6 +109,48 @@ def _batch_input_jsonl(custom_ids: tuple[str, ...], *, model: str) -> bytes:
         for custom_id in custom_ids
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+class _ControllableBatchBackend:
+    """Small backend double for cancellation and retrieval races."""
+
+    name = "controlled"
+
+    def __init__(self, *, status: str = "in_progress", transient_download: bool = False):
+        self.status = status
+        self.transient_download = transient_download
+        self.retrieve_count = 0
+
+    def submit(self, requests, metadata=None):
+        self.requests = requests
+        return BatchJob(
+            job_id="controlled_batch",
+            backend=self.name,
+            status=self.status,
+            request_count=len(requests),
+        )
+
+    def poll(self, job):
+        return {
+            "job_id": job.job_id,
+            "status": self.status,
+            "is_complete": self.status in {"completed", "cancelled"},
+        }
+
+    def retrieve(self, job):
+        self.retrieve_count += 1
+        if self.transient_download:
+            self.transient_download = False
+            raise BatchDownloadError(job.job_id, "temporary")
+        time.sleep(0.02)
+        return [
+            BatchResultItem(custom_id=request.custom_id, answer="done")
+            for request in self.requests
+        ]
+
+    def cancel(self, job):
+        self.status = "cancelling"
+        return {"accepted": True, "status": self.status, "is_complete": False}
 
 
 def test_sdk_batches_create_retrieve_list_cancel_round_trip() -> None:
@@ -169,6 +223,79 @@ def test_sdk_batches_create_retrieve_list_cancel_round_trip() -> None:
         thread.join(timeout=5)
 
 
+def test_sdk_batch_cancel_reports_only_backend_accepted_state() -> None:
+    """Cancellation state comes from the backend, not a local timestamp."""
+    agent = ModelAgent("batch_worker", "mock-batch-model", tags=("files",))
+    orchestrator = TaskOrchestrator([agent])
+    transport = _FakeFileTransport()
+    orchestrator.client.proxy_upload = transport.proxy_upload  # type: ignore[method-assign]
+    orchestrator.client.proxy_get_bytes = transport.proxy_get_bytes  # type: ignore[method-assign]
+    backend = _ControllableBatchBackend()
+    coordinator = CostRoutingCoordinator(orchestrator, batch_backend=backend)
+    server, thread = _start(orchestrator, coordinator=coordinator)
+    try:
+        client = _client(server.server_address[1])
+        uploaded = client.files.create(
+            file=("input.jsonl", io.BytesIO(_batch_input_jsonl(("a",), model="mock-batch-model"))),
+            purpose="batch",
+        )
+        batch = client.batches.create(
+            input_file_id=uploaded.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert batch.status == "in_progress"
+        assert client.batches.cancel(batch.id).status == "cancelling"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_sdk_batch_transient_download_retries_with_single_output_writer() -> None:
+    """A transient download remains retryable and concurrent readers publish once."""
+    agent = ModelAgent("batch_worker", "mock-batch-model", tags=("files",))
+    orchestrator = TaskOrchestrator([agent])
+    transport = _FakeFileTransport()
+    orchestrator.client.proxy_upload = transport.proxy_upload  # type: ignore[method-assign]
+    orchestrator.client.proxy_get_bytes = transport.proxy_get_bytes  # type: ignore[method-assign]
+    backend = _ControllableBatchBackend(status="completed", transient_download=True)
+    coordinator = CostRoutingCoordinator(orchestrator, batch_backend=backend)
+    server, thread = _start(orchestrator, coordinator=coordinator)
+    try:
+        client = _client(server.server_address[1])
+        uploaded = client.files.create(
+            file=("input.jsonl", io.BytesIO(_batch_input_jsonl(("a",), model="mock-batch-model"))),
+            purpose="batch",
+        )
+        batch = client.batches.create(
+            input_file_id=uploaded.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert batch.status == "completed"
+        assert batch.output_file_id is None
+
+        output_ids: list[str | None] = []
+
+        def retrieve() -> None:
+            output_ids.append(
+                _client(server.server_address[1]).batches.retrieve(batch.id).output_file_id
+            )
+
+        readers = [threading.Thread(target=retrieve) for _ in range(2)]
+        for reader in readers:
+            reader.start()
+        for reader in readers:
+            reader.join(timeout=5)
+        assert len(output_ids) == 2
+        assert output_ids[0] == output_ids[1]
+        assert output_ids[0] is not None
+        assert backend.retrieve_count == 2
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_sdk_batches_create_rejects_unsupported_endpoint() -> None:
     """A non-chat batch endpoint fails closed rather than being mishandled."""
     server, thread = _start(TaskOrchestrator([ModelAgent("worker_agent", "mock-model", tags=("files",))]))
@@ -191,6 +318,38 @@ def test_sdk_batches_create_rejects_unsupported_endpoint() -> None:
                 completion_window="24h",
             )
         assert excinfo.value.response.status_code == 400
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("purpose", "completion_window"),
+    [("user_data", "24h"), ("batch", "48h")],
+)
+def test_sdk_batches_enforces_file_purpose_and_completion_window(
+    purpose: str, completion_window: str
+) -> None:
+    """Batch creation rejects promises the backend cannot honor."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("worker_agent", "mock-model", tags=("files",))
+    ])
+    transport = _FakeFileTransport()
+    orchestrator.client.proxy_upload = transport.proxy_upload  # type: ignore[method-assign]
+    orchestrator.client.proxy_get_bytes = transport.proxy_get_bytes  # type: ignore[method-assign]
+    server, thread = _start(orchestrator)
+    try:
+        client = _client(server.server_address[1])
+        uploaded = client.files.create(
+            file=("input.jsonl", io.BytesIO(_batch_input_jsonl(("a",), model="mock-model"))),
+            purpose=purpose,
+        )
+        with pytest.raises(openai.BadRequestError):
+            client.batches.create(
+                input_file_id=uploaded.id,
+                endpoint="/v1/chat/completions",
+                completion_window=completion_window,
+            )
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -244,6 +403,27 @@ def test_sdk_audio_transcriptions_create_multipart_upload() -> None:
         assert base64.b64decode(payload["input_audio"]["data"]) == audio_bytes
         assert payload["language"] == "en"
         assert payload["temperature"] == pytest.approx(0.2)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("response_format", ["text", "srt", "vtt"])
+def test_sdk_audio_transcription_text_formats(response_format: str) -> None:
+    """Stock SDK receives bounded text transports for every text format."""
+    agent = ModelAgent("transcribe_worker", "mock-transcribe", tags=("transcription",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, _payload: {"text": "bounded transcript"}
+    )
+    server, thread = _start(orchestrator)
+    try:
+        transcript = _client(server.server_address[1]).audio.transcriptions.create(
+            file=("clip.wav", io.BytesIO(b"RIFF nonempty"), "audio/wav"),
+            model="mock-transcribe",
+            response_format=response_format,
+        )
+        assert transcript == "bounded transcript"
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -12,6 +12,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import mmap
 import secrets
 import socket
@@ -1565,8 +1566,12 @@ def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
     if temperature is None:
         return None
     value = float(temperature)
-    if value < 0 or value > 2:
-        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    if not math.isfinite(value) or value < 0 or value > 2:
+        raise RequestError(
+            400,
+            "invalid_temperature",
+            "temperature must be a finite number in [0, 2]",
+        )
     body["temperature"] = value
     return value
 
@@ -2415,6 +2420,17 @@ def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
             isinstance(audio.get(field), str) and audio[field] for field in ("data", "format")
         ):
             raise RequestError(400, "invalid_input_audio", "input_audio.data and input_audio.format are required")
+        response_format = body.get("response_format")
+        if response_format is not None and response_format not in {
+            "diarized_json", "json", "text", "srt", "verbose_json", "vtt"
+        }:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format must be diarized_json, json, text, srt, verbose_json, or vtt",
+            )
+        if "temperature" in body:
+            _validate_completions_temperature(body)
     if path == "/v1/rerank":
         documents = body.get("documents")
         if not isinstance(documents, list) or not documents:
@@ -3372,7 +3388,9 @@ def _validate_batch_requests(
     return batch
 
 
-def _parse_batch_input_jsonl(raw: bytes, *, zdr_only: bool) -> list[BatchRequest]:
+def _parse_batch_input_jsonl(
+    raw: bytes, *, endpoint: str, zdr_only: bool
+) -> list[BatchRequest]:
     """Parse an OpenAI Batch API input file (JSONL) into internal batch requests.
 
     Each line must be shaped like a real Batch input line: ``{"custom_id",
@@ -3414,6 +3432,10 @@ def _parse_batch_input_jsonl(raw: bytes, *, zdr_only: bool) -> list[BatchRequest
         seen_custom_ids.add(custom_id)
         if entry.get("method") != "POST":
             raise RequestError(400, "invalid_file", f"line {line_number} method must be POST")
+        if entry.get("url") != endpoint:
+            raise RequestError(
+                400, "invalid_file", f"line {line_number} url must match the batch endpoint"
+            )
         body_obj = entry.get("body")
         if not isinstance(body_obj, dict):
             raise RequestError(400, "invalid_file", f"line {line_number} body must be an object")
@@ -3421,6 +3443,16 @@ def _parse_batch_input_jsonl(raw: bytes, *, zdr_only: bool) -> list[BatchRequest
         model = body_obj.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
         if not isinstance(model, str) or not model.strip():
             raise RequestError(400, "invalid_file", f"line {line_number} model must be a non-empty string")
+        _reject_unknown_keys(body_obj, {"model", "messages"} | OPENAI_PASSTHROUGH_PARAM_KEYS)
+        if body_obj.get("stream") not in (None, False):
+            raise RequestError(400, "invalid_file", f"line {line_number} stream is not supported in batches")
+        _validate_chat_sampling_and_control_fields(body_obj, stream=False)
+        if "response_format" in body_obj:
+            _validate_chat_response_format(body_obj)
+        if "tools" in body_obj:
+            _validate_chat_tools(body_obj)
+        if "tool_choice" in body_obj:
+            _validate_chat_tool_choice(body_obj)
         requests.append(
             BatchRequest(
                 messages=messages,
@@ -3429,6 +3461,11 @@ def _parse_batch_input_jsonl(raw: bytes, *, zdr_only: bool) -> list[BatchRequest
                 attribution={},
                 mode="auto",
                 zdr_only=zdr_only,
+                parameters={
+                    key: value
+                    for key, value in body_obj.items()
+                    if key not in {"model", "messages"}
+                },
             )
         )
     return requests
@@ -3512,8 +3549,8 @@ def _batch_output_jsonl_line(item: dict[str, Any], *, model: str) -> str:
     ``CostRoutingCoordinator.retrieve_batch`` -- this only reshapes them into
     the OpenAI Batch output-file line format, it invents nothing.
     """
-    prompt_tokens = item.get("prompt_tokens") or 0
-    completion_tokens = item.get("completion_tokens") or 0
+    prompt_tokens = item.get("prompt_tokens")
+    completion_tokens = item.get("completion_tokens")
     body = {
         "id": _new_chat_completion_id(),
         "object": "chat.completion",
@@ -3526,11 +3563,15 @@ def _batch_output_jsonl_line(item: dict[str, Any], *, model: str) -> str:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": (
+            {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+            if type(prompt_tokens) is int and type(completion_tokens) is int
+            else None
+        ),
     }
     return json.dumps(
         {
@@ -6062,7 +6103,7 @@ def build_server(
                         items = sorted(
                             (
                                 (job_id, tracked)
-                                for job_id, tracked in openai_batches.items()
+                                for job_id, tracked in list(openai_batches.items())
                                 if tracked.get("owner_id") == principal_id
                             ),
                             key=lambda pair: pair[1].get("created_at", 0),
@@ -6080,7 +6121,10 @@ def build_server(
                         )
                         page = items[:limit]
                         data = [
-                            self._batch_document(job_id, principal_id) for job_id, _tracked in page
+                            _openai_batch_object(
+                                job_id, tracked, tracked.get("status", "validating")
+                            )
+                            for job_id, tracked in page
                         ]
                         self._send(
                             {
@@ -7026,7 +7070,24 @@ def build_server(
                             "capability_unavailable",
                             f"no enabled {capability}-capable model group member is available",
                         ) from exc
-                    if binary:
+                    transcription_format = body.get("response_format")
+                    if capability == "transcription" and transcription_format in {
+                        "text", "srt", "vtt"
+                    }:
+                        text_result = result if isinstance(result, str) else result.get("text")
+                        if not isinstance(text_result, str):
+                            raise RequestError(
+                                502,
+                                "invalid_transcription_response",
+                                "transcription provider did not return text",
+                            )
+                        content_type = {
+                            "text": "text/plain; charset=utf-8",
+                            "srt": "application/x-subrip; charset=utf-8",
+                            "vtt": "text/vtt; charset=utf-8",
+                        }[transcription_format]
+                        self._send_bytes(text_result.encode("utf-8"), content_type)
+                    elif binary:
                         raw, content_type = result
                         self._send_bytes(raw, content_type)
                     else:
@@ -7894,14 +7955,22 @@ def build_server(
                             f"endpoint must be one of {sorted(BATCH_CREATE_ENDPOINTS)}",
                         )
                     completion_window = body.get("completion_window", "24h")
-                    if not isinstance(completion_window, str) or not completion_window.strip():
+                    if completion_window != "24h":
                         raise RequestError(
                             400,
                             "invalid_completion_window",
-                            "completion_window must be a non-empty string",
+                            "completion_window must be 24h",
                         )
                     metadata = _validate_openai_metadata(body)
                     principal_id = security.principal_id(self.headers)
+                    try:
+                        input_owner = files.owner(input_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    if input_owner.document.get("purpose") != "batch":
+                        raise RequestError(
+                            400, "invalid_file", "input_file_id must refer to a batch-purpose file"
+                        )
                     agent, provider_file_id = _resolve_file_download_agent(
                         orchestrator, files, input_file_id, principal_id
                     )
@@ -7921,7 +7990,9 @@ def build_server(
                         raise RequestError(
                             503, "file_provider_unavailable", "the file provider is unavailable"
                         ) from exc
-                    batch_requests = _parse_batch_input_jsonl(raw, zdr_only=zdr_only)
+                    batch_requests = _parse_batch_input_jsonl(
+                        raw, endpoint=endpoint, zdr_only=zdr_only
+                    )
                     models_by_custom_id = {
                         request.custom_id: request.model for request in batch_requests
                     }
@@ -7945,6 +8016,7 @@ def build_server(
                         "request_count": job.request_count,
                         "output_file_id": None,
                         "models_by_custom_id": models_by_custom_id,
+                        "status": job.status,
                     }
                     orchestrator.record_analytics_event(
                         "openai_batch_created",
@@ -7967,19 +8039,24 @@ def build_server(
                     if tracked is None or tracked.get("owner_id") != principal_id:
                         self._send_error(404, "batch_not_found", f"batch {batch_id} not found")
                         return
-                    poll_result = self._run(
-                        lambda: coordinator.poll_batch(batch_id, owner_id=principal_id)
-                    )
-                    if not poll_result.get("is_complete") and tracked.get("cancelling_at") is None:
-                        # ponytail: neither LocalBatchBackend nor PgLlmBatchBackend
-                        # expose a cancel primitive for chat batches (only the
-                        # provider embeddings backend does) -- record the
-                        # cancellation request locally and surface "cancelling"
-                        # rather than fabricate provider-side cancellation.
-                        # Upgrade path: wire BatchBackend.cancel() through
-                        # pg-llm-batch once that primitive exists.
-                        tracked["cancelling_at"] = int(time.time())
-                        openai_batches[batch_id] = tracked
+                    with coordinator.job_registry.lock(
+                        "openai_batch", batch_id, lease_seconds=30
+                    ):
+                        cancellation = self._run(
+                            lambda: coordinator.cancel_batch(
+                                batch_id, owner_id=principal_id
+                            )
+                        )
+                        tracked = openai_batches[batch_id]
+                        if cancellation.get("accepted"):
+                            status = cancellation.get("status")
+                            tracked["status"] = (
+                                status if status in {"cancelling", "cancelled"} else "cancelling"
+                            )
+                            tracked["cancelling_at"] = int(time.time())
+                            if tracked["status"] == "cancelled":
+                                tracked["cancelled_at"] = int(time.time())
+                            openai_batches[batch_id] = tracked
                     self._send(self._batch_document(batch_id, principal_id))
                     return
                 if path == "/v1/responses":
@@ -8666,32 +8743,38 @@ def build_server(
             and download-failure state recorded on ``tracked`` win over a raw
             poll status.
             """
-            tracked = openai_batches[job_id]
-            poll_result = self._run(
-                lambda: coordinator.poll_batch(job_id, owner_id=principal_id)
-            )
-            status = _co_batch_status_to_openai(
-                poll_result.get("status"), poll_result.get("is_complete")
-            )
-            if tracked.get("cancelling_at") is not None:
-                if poll_result.get("is_complete"):
-                    status = "cancelled"
-                    tracked.setdefault("cancelled_at", int(time.time()))
-                else:
-                    status = "cancelling"
-            elif tracked.get("failed_at") is not None:
-                status = "failed"
-            elif status == "completed" and not tracked.get("output_file_id"):
-                try:
-                    output_file_id = self._materialize_batch_output(job_id, tracked, principal_id)
-                except BatchDownloadError:
-                    tracked["failed_at"] = int(time.time())
-                    status = "failed"
-                else:
-                    tracked["output_file_id"] = output_file_id
-                    tracked["completed_at"] = int(time.time())
-            openai_batches[job_id] = tracked
-            return _openai_batch_object(job_id, tracked, status)
+            with coordinator.job_registry.lock(
+                "openai_batch",
+                job_id,
+                lease_seconds=30,
+                renew_until_epoch=time.time() + 1800,
+            ):
+                tracked = openai_batches[job_id]
+                poll_result = self._run(
+                    lambda: coordinator.poll_batch(job_id, owner_id=principal_id)
+                )
+                status = _co_batch_status_to_openai(
+                    poll_result.get("status"), poll_result.get("is_complete")
+                )
+                if tracked.get("cancelling_at") is not None and status not in {
+                    "completed", "failed", "expired"
+                }:
+                    status = "cancelled" if status == "cancelled" else "cancelling"
+                    if status == "cancelled":
+                        tracked.setdefault("cancelled_at", int(time.time()))
+                if status == "completed" and not tracked.get("output_file_id"):
+                    try:
+                        output_file_id = self._materialize_batch_output(
+                            job_id, tracked, principal_id
+                        )
+                    except BatchDownloadError:
+                        pass
+                    else:
+                        tracked["output_file_id"] = output_file_id
+                        tracked["completed_at"] = int(time.time())
+                tracked["status"] = status
+                openai_batches[job_id] = tracked
+                return _openai_batch_object(job_id, tracked, status)
 
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
             value = default if raw is None else int(raw)
@@ -8796,11 +8879,16 @@ def build_server(
             temperature = fields.get("temperature")
             if isinstance(temperature, str) and temperature:
                 try:
-                    request_body["temperature"] = float(temperature)
+                    parsed_temperature = float(temperature)
                 except ValueError:
                     raise RequestError(
                         400, "invalid_temperature", "temperature must be a number"
                     ) from None
+                if not math.isfinite(parsed_temperature):
+                    raise RequestError(
+                        400, "invalid_temperature", "temperature must be a finite number"
+                    )
+                request_body["temperature"] = parsed_temperature
             return request_body
 
         def log_message(self, format: str, *args: object) -> None:

@@ -59,6 +59,16 @@ class FileRegistry:
         # base64 text (JSON-mapping values must be JSON-serializable), keyed
         # by gateway file id. Only populated for locally registered files.
         self._content = job_registry.mapping("local_file_content")
+        self._retention_seconds = job_registry.retention_seconds
+
+    def _purge_expired_local_content(self) -> None:
+        """Remove orphaned or expired gateway-generated file bodies."""
+        cutoff = int(time.time()) - self._retention_seconds
+        for gateway_file_id in list(self._content):
+            owner = self._owners.get(gateway_file_id)
+            created_at = owner.document.get("created_at") if owner is not None else None
+            if owner is None or type(created_at) is not int or created_at < cutoff:
+                self._content.pop(gateway_file_id, None)
 
     def register(
         self,
@@ -126,6 +136,7 @@ class FileRegistry:
         ``_LOCAL_FILE_AGENT_ID`` sentinel and the bytes are served straight
         back out of ``self._content`` (see ``is_local``/``local_content``).
         """
+        self._purge_expired_local_content()
         if not owner_id:
             raise FileContractError("file owner is unavailable")
         gateway_file_id = f"file_{uuid.uuid4().hex}"
@@ -158,6 +169,7 @@ class FileRegistry:
 
     def local_content(self, gateway_file_id: str) -> bytes:
         """Return the raw bytes registered for a locally generated file."""
+        self._purge_expired_local_content()
         return base64.b64decode(self._content[gateway_file_id])
 
     @staticmethod

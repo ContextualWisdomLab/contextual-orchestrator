@@ -137,6 +137,21 @@ def exercise_request_body(raw: bytes) -> None:
     decode + JSON-parse, then run the field validators the POST routes use.
     """
     try:
+        server._parse_batch_input_jsonl(
+            raw, endpoint="/v1/chat/completions", zdr_only=False
+        )
+    except RequestError:
+        pass
+    try:
+        fields = server._read_multipart_form(
+            raw, "multipart/form-data; boundary=fuzz-boundary"
+        )
+    except RequestError:
+        pass
+    else:
+        assert isinstance(fields, dict)
+
+    try:
         body = server._coerce_json(raw)
     except _EXPECTED_BODY_EXC:
         return
