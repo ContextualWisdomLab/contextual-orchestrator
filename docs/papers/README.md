@@ -119,6 +119,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   through seven stable anchors, flags the one injected drift item, and produces
   no stable-item false positive. Its fixed `0.25` tolerance is a preregistered
   effect-size screen, not an inferential cutoff or buyer invariance proof.
+- Guo, R., Zheng, Y., & Chang, H.-H. (2015). A stepwise test characteristic
+  curve method to detect item parameter drift. *Journal of Educational
+  Measurement, 52*(3), 280–300. https://doi.org/10.1111/jedm.12077
+  Grounds judging drift by its aggregate test-function impact rather than item
+  parameter distance alone. Source commit `c7c4a13f` detects the one injected
+  drift item and reduces synthetic TCC-area difference from `0.123355` to zero.
+  The released backward-only heuristic uses a fixed threshold and is not the
+  paper's complete entry-and-removal procedure.
 - Meijer, R. R. (1996). Person-fit research: An introduction. *Applied
   Measurement in Education, 9*(1), 3–8.
   https://doi.org/10.1207/s15324818ame0901_2

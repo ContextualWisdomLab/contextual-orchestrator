@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now distinguishes linked parameter drift
+  from its aggregate test-characteristic-curve impact and detects the one
+  injected function-changing item without claiming a universal cutoff.
 - The held-out psychometric benchmark now reports the bias from treating
   adaptively selected winner observations as an ignorable sample, alongside
   the error reduction from its logged inverse-propensity estimator.

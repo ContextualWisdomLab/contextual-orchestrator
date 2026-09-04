@@ -119,6 +119,13 @@ not a significance test. `parameter_invariance` remains `not_executed` until
 versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
+Source commit `c7c4a13f` adds the distinct functional-impact screen motivated
+by Guo, Zheng, and Chang (2015). One injected item shift creates synthetic TCC
+area difference `0.123355`; the released backward elimination identifies that
+item and reduces the remaining difference to zero. Its caller-supplied `0.05`
+threshold and no-reentry search are narrower than the published method, so the
+result cannot supply a universal drift decision or open the buyer gate.
+
 Source commit `a18e25f7` adds the response-pattern screen described by Meijer
 (1996) and Tendeiro et al. (2016). The released nonparametric ZU3 calculation
 ranks one injected inverted pattern first among 1,000 synthetic candidates and

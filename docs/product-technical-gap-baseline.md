@@ -2286,6 +2286,13 @@ injected drift item, and reports no stable-item false positive. The fixed `0.25`
 tolerance is an effect-size rule rather than a significance test; versioned
 buyer recalibrations and sampling uncertainty are still absent, so
 `parameter_invariance` remains `not_executed`.
+Source commit `c7c4a13f` adds a separate test-function impact check. A known
+shift in item 6 creates TCC-area difference `0.123355`; the released backward
+elimination identifies item 6 and reduces the residual difference to zero in
+one iteration. This complements parameter-distance screening but uses a fixed
+synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
+stepwise method. Buyer recalibrations and preregistered review rules remain
+absent, so the validity gate stays closed.
 Source commit `a18e25f7` exercises the released nonparametric person-fit API on
 1,000 synthetic candidate response patterns. The injected inverted pattern
 ranks first and has ZU3 separation `1.818719` from the next-highest pattern.
