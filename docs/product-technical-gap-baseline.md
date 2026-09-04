@@ -2196,9 +2196,10 @@ The local-independence prerequisite now has an owner-side implementation path:
 `fast-mlsirm` PR [#1748](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1748)
 at exact head `168d8a0a8e7f483a2565178fdc1c60c4d513ab1b` exposes the existing
 Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
-evidence, not released consumer evidence. The owner PR is Draft after further
-input-boundary hardening, its current hosted jobs are queued, and predecessor
-test results do not transfer. It does not open the routing gate without a
+evidence, not released consumer evidence. The owner PR is ready for review after
+current-head Python boundary tests passed 31 cases, Rust `ld_indices` passed five
+cases, and `cargo check` passed. Hosted jobs remain queued and no independent
+approval exists. It does not open the routing gate without a
 preregistered buyer matrix, multiplicity plan, and threshold.
 CO source commit `1309b3ce` also stops conflating this absent evidence with a
 failed measurement: its report marks buyer-heldout and validity gates

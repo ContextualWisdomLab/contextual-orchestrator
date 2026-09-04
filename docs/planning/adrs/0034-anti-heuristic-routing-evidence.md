@@ -213,8 +213,9 @@ flowchart LR
   cannot be published as stable model abilities.
 - `fast-mlsirm` owner PR #1748 at `168d8a0a8e7f483a2565178fdc1c60c4d513ab1b`
   exposes its existing Rust Chen-Thissen signed X2/G2 local-dependence indices
-  to Python. The PR is Draft after later input-boundary hardening and current
-  hosted jobs are queued, so predecessor tests do not transfer. This closes an
+  to Python. The PR is ready for review after current-head Python boundary tests
+  passed 31 cases, Rust `ld_indices` passed five cases, and `cargo check` passed.
+  Hosted jobs remain queued and no independent approval exists. This closes an
   API prerequisite only; buyer execution remains absent.
 - Source commit `1309b3ce` reports gate evidence state explicitly: synthetic
   accuracy is `passed`, decision latency is `failed`, and buyer-heldout plus
