@@ -247,6 +247,10 @@ flowchart LR
   a known shifted item. Purification stabilizes with seven anchors, recall 1.0,
   and zero false positives; the unpurified extra flag is retained as evidence
   of matching-score contamination. Buyer DIF remains unexecuted.
+- Source commit `ac28b6d0` validates a connected many-facet Rasch design across
+  1,000 synthetic respondents, six items, and three judges. The fit converges
+  in five iterations, recovers judge order, and reports severity RMSE 0.018292;
+  buyer judge observations remain unexecuted.
 
 ## References
 
@@ -256,4 +260,5 @@ Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; 
 Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
 Finkelman et al., 2009; Barrada et al., 2007; Horvitz & Thompson, 1952;
 Dudík et al., 2011; Swaminathan & Joachims, 2015; Stocking & Lord, 1983;
-Swaminathan & Rogers, 1990; French & Maller, 2007).
+Swaminathan & Rogers, 1990; French & Maller, 2007; Linacre, 1989; Eckes, 2015;
+Bock & Aitkin, 1981).

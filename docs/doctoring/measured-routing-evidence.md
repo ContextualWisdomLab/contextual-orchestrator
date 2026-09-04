@@ -158,6 +158,12 @@ the matching total is contaminated; iterative logistic purification stabilizes
 with seven anchors, detects the one injected item (recall 1.0), and has zero
 false positives. The result is synthetic contract evidence, so buyer DIF stays
 `not_executed`.
+Source commit `ac28b6d0` validates judge-severity recovery with a connected,
+fully crossed 1,000-respondent × 6-item × 3-judge design. The many-facet Rasch
+fit converges in five iterations, preserves severity order, and reports RMSE
+0.018292 against centered true severities `[-0.7, 0, 0.7]`. Versioned buyer
+judges and observed buyer ratings remain absent, so `judge_effects` stays
+`not_executed`.
 
 ## APA 7 references
 
@@ -249,6 +255,15 @@ French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
 use with logistic regression for differential item functioning detection.
 *Educational and Psychological Measurement, 67*(3), 373–393.
 https://doi.org/10.1177/0013164406294781
+
+Bock, R. D., & Aitkin, M. (1981). Marginal maximum likelihood estimation of
+item parameters: Application of an EM algorithm. *Psychometrika, 46*(4),
+443–459. https://doi.org/10.1007/BF02293801
+
+Eckes, T. (2015). *Introduction to many-facet Rasch measurement* (2nd ed.).
+Peter Lang. https://doi.org/10.3726/978-3-653-04844-5
+
+Linacre, J. M. (1989). *Many-facet Rasch measurement*. MESA Press.
 
 Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
 functioning using logistic regression procedures. *Journal of Educational

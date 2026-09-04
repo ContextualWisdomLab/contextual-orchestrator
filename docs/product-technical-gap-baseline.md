@@ -2253,6 +2253,11 @@ unpurified screen produces one contamination-driven extra flag; purification
 stabilizes with seven anchors and reports recall 1.0 with zero false positives.
 This proves the computation and contamination guard, not candidate-group
 invariance on buyer data, so `candidate_group_dif` remains `not_executed`.
+Source commit `ac28b6d0` exercises the released many-facet Rasch path on a
+connected, fully crossed synthetic design with 1,000 respondents, six items,
+and three judges. It converges in five iterations, recovers judge-severity
+order, and reports centered-severity RMSE 0.018292. No versioned buyer judge
+ratings were executed, so `judge_effects` remains `not_executed`.
 
 ## 7. Delivery gates
 

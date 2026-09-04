@@ -154,6 +154,15 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Together these ground logistic DIF and iterative removal of contaminated
   matching items. Source commit `d0d81e8f` detects the single injected cohort
   shift with recall 1.0 and zero false positives after purification.
+- Linacre, J. M. (1989). *Many-facet Rasch measurement*. MESA Press.
+- Eckes, T. (2015). *Introduction to many-facet Rasch measurement* (2nd ed.).
+  Peter Lang. https://doi.org/10.3726/978-3-653-04844-5
+- Bock, R. D., & Aitkin, M. (1981). Marginal maximum likelihood estimation of
+  item parameters: Application of an EM algorithm. *Psychometrika, 46*(4),
+  443–459. https://doi.org/10.1007/BF02293801
+  These ground the judge facet and its marginal-ML estimation. Source commit
+  `ac28b6d0` recovers centered judge severity with RMSE 0.018292 in a connected
+  synthetic design; buyer judge identities and ratings remain unexecuted.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373
