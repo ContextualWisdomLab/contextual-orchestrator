@@ -12,7 +12,8 @@ push or open a PR.
 ### Security & review gate
 
 - Every PR to `main` runs the required **Security** workflow
-  (`.github/workflows/security.yml`). Its jobs: **CodeQL** (code scanning),
+  (`.github/workflows/security.yml`). Its jobs: tests and package quality,
+  fuzzing, and **CodeQL** (code scanning),
   **Dependency review** (diff-scoped, `fail-on-severity: high`), **Python
   supply chain** (`pip-audit` against `requirements.lock` + CycloneDX SBOM), and
   **Trivy filesystem** (repo-wide, `severity: CRITICAL,HIGH`,

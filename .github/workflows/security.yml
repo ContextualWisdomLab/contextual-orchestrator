@@ -1,9 +1,8 @@
-name: Security
+name: Security and Quality
 
-# Dependency review, Trivy filesystem, OSV, and OpenSSF Scorecard are covered by
-# the org-wide CENTRAL required workflows in ContextualWisdomLab/.github.
-# CodeQL and Python supply-chain evidence stay repo-local because CodeQL default
-# setup is not configured and pip-audit/SBOM evidence is not covered centrally.
+# One local workflow replaces the former Tests, Fuzz, and Security workflows.
+# Central required workflows still own dependency review, Trivy, OSV,
+# Scorecard, SAST, OpenCode, Strix, Noema, and merge scheduling.
 
 on:
   push:
@@ -12,19 +11,130 @@ on:
     branches: [main]
   schedule:
     - cron: "17 3 * * 1"
+    - cron: "41 4 * * 2"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: security-${{ github.ref }}
+  group: local-quality-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.schedule || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  codeql_analysis:
-    name: CodeQL analysis
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  tests:
+    name: Tests and package quality
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      - name: Run full test suite
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+
+      - name: Install hash-locked quality tools
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+
+      - name: Prove complete benchmark coverage and public docstrings
+        run: |
+          set -euo pipefail
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=contextual_orchestrator.nim_benchmark \
+            -m pytest \
+            tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_release_acceptance.py \
+            tests/test_nim_benchmark_workflow_contract.py \
+            -q
+          python -m coverage report \
+            --include=contextual_orchestrator/nim_benchmark.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+
+      - name: Build, install, and import the wheel
+        run: |
+          set -euo pipefail
+          rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
+          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          python -m pip install --no-deps \
+            --target "$RUNNER_TEMP/nim-wheel-site" \
+            dist/contextual_orchestrator-*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
+            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark"
+
+  fuzz:
+    name: Property and coverage-guided fuzzing
+    if: github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install fuzz dependencies
+        run: python -m pip install --require-hashes -r requirements.lock -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt
+
+      - name: Run property-based fuzz tests
+        run: python -m pytest tests/fuzz -q
+
+      - name: Set per-target time budget
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "push" ]; then
+            echo "FUZZ_SECONDS=60" >>"$GITHUB_ENV"
+          else
+            echo "FUZZ_SECONDS=300" >>"$GITHUB_ENV"
+          fi
+
+      - name: Run coverage-guided fuzz targets
+        run: |
+          set -euo pipefail
+          python fuzz/fuzz_request_body.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/request_body
+          python fuzz/fuzz_agent_config.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/agent_config
+          python fuzz/fuzz_redaction.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/redaction
+          python fuzz/fuzz_orchestration.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/orchestration
+          python fuzz/fuzz_model_judge.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/judge
+          python fuzz/fuzz_pii_key.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/pii_key
+          python fuzz/fuzz_reasoning_effort_profile.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/reasoning_effort_profile
+          python fuzz/fuzz_nim_catalog.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/nim_catalog
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: fuzz-crashes
+          path: crash-*
+          if-no-files-found: ignore
+
+  security:
+    name: CodeQL, supply chain, and SBOM
+    if: >-
+      (github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1') &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -42,41 +152,30 @@ jobs:
           languages: python
           build-mode: none
 
-      - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/analyze@v4.37.8
-        with:
-          category: "/language:python"
-
-  python_supply_chain:
-    name: Python supply chain
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install audit and SBOM tools
-        run: python -m pip install --require-hashes -r requirements-security-ci.txt
-
-      - name: Install pinned Python dependencies
+      - name: Install audit and project dependencies
         run: |
+          python -m pip install --require-hashes -r requirements-security-ci.txt
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --no-deps -e .
 
-      - name: Audit pinned dependencies
-        run: python -m pip_audit -r requirements.lock
-
-      - name: Generate CycloneDX SBOM
-        run: cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
+      - name: Audit pinned dependencies and generate SBOM
+        run: |
+          set -euo pipefail
+          python -m pip_audit -r requirements.lock
+          cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
         with:
           name: cyclonedx-sbom
           path: cyclonedx-sbom.json
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/analyze@v4.37.8
+        with:
+          category: "/language:python"
