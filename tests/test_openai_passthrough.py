@@ -581,6 +581,60 @@ def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() ->
     assert "use the tool" not in json.dumps(body)
 
 
+def test_http_free_tool_passthrough_raw_timeout_fails_over_and_reports_attempts() -> None:
+    """HTTP passthrough preserves attempt evidence for raw transport failures."""
+
+    class TimeoutFreePool(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            del endpoint, payload
+            if agent.id == "free_primary":
+                raise TimeoutError("provider timed out")
+            return {"id": "chatcmpl-free", "object": "chat.completion", "model": agent.model, "choices": []}
+
+        proxy_send = proxy_send_once
+
+    token = "passthrough_token"
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary",
+                "free-primary-model",
+                tags=("cost:free",),
+                provider_name="free-primary",
+                priority=2,
+            ),
+            ModelAgent(
+                "free_backup",
+                "free-backup-model",
+                tags=("cost:free",),
+                provider_name="free-backup",
+                priority=1,
+            ),
+        ],
+        client=TimeoutFreePool(),  # type: ignore[arg-type]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 200
+    assert body["model"] == "free-backup-model"
+
+
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"

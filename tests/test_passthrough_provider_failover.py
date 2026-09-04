@@ -260,6 +260,34 @@ def test_virtual_passthrough_all_oversized_tool_errors_preserve_size_contract() 
     assert orchestrator._circuit == {}
 
 
+def test_free_passthrough_transport_errors_fail_over_from_raw_timeout() -> None:
+    """Retryable raw transport failures stay on the free-model failover path."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": TimeoutError("provider timed out"),
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
     """A generic provider invalid_tools response must not hide a bad request."""
     failure = _invalid_tools_error()
@@ -1302,10 +1330,24 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
         }
     )
 
-    with pytest.raises(RuntimeError, match="terminal wrapper") as caught:
+    with pytest.raises(ProviderUpstreamError) as caught:
         _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
-    assert caught.value is failure
+    assert caught.value.error_code == "api_error"
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
+    assert caught.value.detail["attempts"] == [
+        {
+            "agent_id": "primary_agent",
+            "model": "primary-model",
+            "error_code": "api_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": False,
+            "transport": "passthrough",
+            "phase": "provider_response",
+            "failover_decision": "sticky_candidate_failure",
+        }
+    ]
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
@@ -1418,10 +1460,23 @@ def test_only_temporary_dns_failures_advance(
             {"messages": [{"role": "user", "content": "x"}]}
         )["model"] == "fallback-model"
     else:
-        with pytest.raises(RuntimeError, match="provider resolution failed"):
-            _build(client).proxy_completion(
-                {"messages": [{"role": "user", "content": "x"}]}
-            )
+        with pytest.raises(ProviderUpstreamError) as caught:
+            _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+        assert caught.value.error_code == "provider_connection_error"
+        assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
+        assert caught.value.detail["attempts"] == [
+            {
+                "agent_id": "primary_agent",
+                "model": "primary-model",
+                "error_code": "provider_connection_error",
+                "client_status": 502,
+                "provider_status": None,
+                "retryable": False,
+                "transport": "passthrough",
+                "phase": "connecting",
+                "failover_decision": "sticky_candidate_failure",
+            }
+        ]
 
 
 def test_ambiguous_timeout_is_not_replayed() -> None:
@@ -1434,9 +1489,25 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
         }
     )
 
-    with pytest.raises(TimeoutError, match="outcome unknown"):
+    with pytest.raises(ProviderUpstreamError) as caught:
         _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert caught.value.error_code == "provider_connection_error"
+    assert caught.value.retryable is True
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
+    assert caught.value.detail["attempts"] == [
+        {
+            "agent_id": "primary_agent",
+            "model": "primary-model",
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "connecting",
+            "failover_decision": "sticky_candidate_failure",
+        }
+    ]
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 

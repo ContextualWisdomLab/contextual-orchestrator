@@ -27,29 +27,31 @@ virtual-model passthrough failover inside `TaskOrchestrator.proxy_completion`.
 
 Current-head RCA:
 
-- raw HTTP 5xx passthrough failures already advanced across distinct virtual
-  candidates, but a pre-classified `ProviderUpstreamError` with
-  `transport="passthrough"`, `retryable=True`, `client_status=502`, and no
-  upstream status did not;
-- when every eligible free candidate failed, the final gateway error collapsed
-  to one typed exception without any request-scoped candidate ledger, leaving
-  consumers with `served_model=unknown` and no bounded receipt of which
-  candidates were selected or attempted.
+- raw HTTP passthrough failures were already classified and could participate
+  in bounded failover, but raw provider transport exceptions such as
+  `TimeoutError`, `urllib.error.URLError`, `ConnectionError`, and wrapped DNS
+  failures were not classified inside the multi-candidate passthrough loop;
+- `classify_provider_failure()` already mapped those raw exceptions to bounded
+  typed 502 surfaces, but `proxy_completion()` only invoked the classifier for
+  `HTTPError` and already-classified `ProviderUpstreamError` instances;
+- for `orchestrator/free`, retryable raw transport failures therefore stopped
+  at the first selected candidate instead of advancing to the next eligible
+  free provider, and sticky raw failures had no request-scoped attempt receipt
+  explaining why the gateway did not retry.
 
 ### Local fix completed
 
 The worktree change makes one surgical contract extension:
 
-- `proxy_completion` now preserves a bounded per-request passthrough attempt
-  ledger for classified failures: selected candidate ids, per-attempt
-  candidate/model identity, typed failure class, retryability, lifecycle phase,
-  failover decision, and terminal reason;
+- `proxy_completion()` now classifies every caught passthrough provider
+  exception before deciding whether failover is permitted;
 - `orchestrator/free` virtual passthrough now advances to the next distinct
-  eligible candidate when a candidate returns a classified retryable transport
-  `502` with no upstream provider status, while explicit concrete-model
-  requests remain sticky;
-- wrapped transient errors that were already eligible for failover through
-  `__cause__` inspection retain that prior behavior unchanged.
+  eligible candidate when a provider raises a raw retryable transport failure
+  that classifies to a passthrough 502 with no upstream provider status;
+- sticky failures now record the distinct failover decision
+  `sticky_candidate_failure` instead of incorrectly reusing
+  `eligible_candidates_exhausted`, while explicit concrete-model requests
+  remain single-provider sticky.
 
 The public error detail remains bounded and secret-safe: no credentials, raw
 provider bodies, or prompt text are emitted. The new lifecycle phase is
@@ -58,27 +60,20 @@ from provider-response failures without inventing provider acceptance.
 
 ### Exact local verification
 
-- Added RED tests for free-pool classified transport `502` failover,
-  exhausted free-pool attempt receipts, sticky explicit concrete-model
-  transport failure, and the HTTP error-detail surface for tool-bearing
-  `/v1/chat/completions`.
-- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -k 'classified_ambiguous_connection_error or classified_retryable_transport_502 or bounded_attempt_evidence or explicit_model_classified_transport_502 or all_candidates_chain_the_last_failure or non_transient_error_is_not_replayed or http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502 or virtual_passthrough_advances_once or http_virtual_structured_synthesis_failure_returns_provider_error' -q`
-  -> `13 passed, 82 deselected in 1.63s`
-- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py tests/test_provider_error_taxonomy.py tests/test_chat_orchestration_mode_http_honesty.py -q`
-  -> `124 passed in 21.73s`
+- Added focused regressions for raw timeout failover in the in-process
+  free-model passthrough loop, raw timeout failover through the real
+  `/v1/chat/completions` HTTP path, and bounded sticky attempt evidence for
+  non-failover raw wrapper, permanent DNS, and ambiguous timeout cases.
+- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `97 passed in 12.75s`
+- `uv run pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `118 passed in 14.68s`
 
-### Exact-head refresh on September 4, 2026
+### Branch-local quality note
 
-PR [#1049](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1049)
-was later refreshed onto then-current `origin/main`
-`60c562defc81fb1897fa97ebdb5bf8f69eae0c55`, producing exact head
-`e678fb41a6b554ad8ff7a17310a107e3984b9b7c`. The refresh only merged current
-`main`; it did not change the issue `#1045` contract or duplicate PR
-[#1046](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1046),
-whose EgressWeave SSRF fix remains a separate open line.
-
-- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py tests/test_provider_error_taxonomy.py tests/test_chat_orchestration_mode_http_honesty.py tests/test_opencode_go.py -q`
-  -> `126 passed in 16.43s`
+- `uv run ruff check contextual_orchestrator/orchestrator.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py`
+  could not run in this worktree because the pinned environment does not
+  currently expose a `ruff` executable (`No such file or directory`).
 
 Hosted exact-head checks, protected merge, and the unchanged LifeOS/Noema
 consumer canary remain future steps because this invocation stopped at one

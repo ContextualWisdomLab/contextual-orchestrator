@@ -4419,47 +4419,43 @@ class TaskOrchestrator:
                     send_once = self.client.proxy_send
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                classified = (
-                    classify_provider_failure(
-                        exc,
-                        agent_id=candidate.id,
-                        model=candidate.model,
-                        transport="passthrough",
-                    )
-                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError))
-                    else None
+                classified = classify_provider_failure(
+                    exc,
+                    agent_id=candidate.id,
+                    model=candidate.model,
+                    transport="passthrough",
                 )
                 failover_eligible = _is_passthrough_failover_error(exc) or (
                     requested_model == self.FREE_MODEL
-                    and isinstance(classified, ProviderUpstreamError)
                     and classified.transport == "passthrough"
                     and classified.retryable
                     and classified.client_status == 502
                     and classified.provider_status is None
                 )
                 has_remaining_candidates = index + 1 < len(candidates)
-                if isinstance(classified, ProviderUpstreamError):
-                    attempt_receipts.append(
-                        _passthrough_attempt_record(
-                            classified,
-                            failover_decision=(
-                                "advance_to_next_candidate"
-                                if failover_eligible and has_remaining_candidates
-                                else "eligible_candidates_exhausted"
-                            ),
-                        )
+                attempt_receipts.append(
+                    _passthrough_attempt_record(
+                        classified,
+                        failover_decision=(
+                            "advance_to_next_candidate"
+                            if failover_eligible and has_remaining_candidates
+                            else (
+                                "eligible_candidates_exhausted"
+                                if failover_eligible
+                                else "sticky_candidate_failure"
+                            )
+                        ),
                     )
+                )
                 if not failover_eligible:
-                    if classified is not None:
-                        raise _set_passthrough_attempt_evidence(
-                            classified,
-                            selected_candidate_ids=selected_candidate_ids,
-                            attempts=attempt_receipts,
-                            terminal_reason="terminal_provider_failure",
-                        ) from None
-                    raise
+                    raise _set_passthrough_attempt_evidence(
+                        classified,
+                        selected_candidate_ids=selected_candidate_ids,
+                        attempts=attempt_receipts,
+                        terminal_reason="terminal_provider_failure",
+                    ) from None
                 last_failure = (
-                    classified if isinstance(classified, ProviderUpstreamError) else exc,
+                    classified,
                     candidate,
                 )
                 request_too_large = _is_request_too_large_error(exc)
