@@ -53,6 +53,12 @@ latency or answer accuracy. The next accuracy experiment must use a held-out
 model-query matrix and report log loss or Brier score alongside routing regret;
 true-parameter simulations must continue to report RMSE.
 
+The successor observation-path experiment uses the same 512-context ledger.
+Replacing one model/context row fell from p50 0.133833 ms and p95 0.152166 ms
+on `b2f90116` to p50 0.000875 ms and p95 0.001000 ms. The benchmark now emits
+both fields. This is local gateway bookkeeping evidence; the fit, held-out
+quality, and provider latency remain separate KPIs.
+
 ## APA 7 references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large

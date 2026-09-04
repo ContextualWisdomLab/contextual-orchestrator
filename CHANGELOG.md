@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Psychometric observation replacement now removes only the existing row's
+  contiguous trailing items instead of scanning the complete response ledger;
+  the checked-in benchmark reports fit/rank and observation p50/p95 separately.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
