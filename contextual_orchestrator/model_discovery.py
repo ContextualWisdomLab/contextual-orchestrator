@@ -802,14 +802,12 @@ def _deduplicate_discovered_models(
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
 
-    Every claim that can differ between the two rows is withheld the same
-    way, ``supports_tool_calls`` included: two rows for one serving identity
-    that disagree are ambiguous evidence, and the ``None`` default is the
-    fail-closed reading everywhere it is consumed
-    (:func:`general_free_serving_candidates`'s exemption and the
-    ``tool_call:supported`` agent tag both require ``is True``). Retaining
-    the winning row's ``True`` here would let provider row order decide
-    whether a conflicted identity carries verified tool-call evidence.
+    Conflicting price, limit, and privacy claims are always withheld. Tool-call
+    support stays tri-state per its own evidence: duplicates that disagree stay
+    unknown, while duplicates that both explicitly say ``True`` or both
+    explicitly say ``False`` preserve that consensus. Otherwise provider row
+    order would erase verified tool support that the free-pool admission
+    contract legitimately depends on.
     """
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
@@ -832,7 +830,11 @@ def _deduplicate_discovered_models(
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
-            supports_tool_calls=None,
+            supports_tool_calls=(
+                previous.supports_tool_calls
+                if previous.supports_tool_calls == model.supports_tool_calls
+                else None
+            ),
             zdr_capable=False,
         )
     return list(unique.values())
@@ -1006,6 +1008,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("context_window", None)
         row.pop("context_length", None)
         row.pop("max_completion_tokens", None)
+        row.pop("supported_parameters", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
@@ -1021,6 +1024,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
         completion_limits: list[int | None] = []
         context_windows: list[int | None] = []
+        tool_support_values: list[bool | None] = []
         privacy_values = {
             key: []
             for key in (
@@ -1074,6 +1078,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             if info.get("supports_vision") is True and "image" not in inputs:
                 inputs = (*inputs, "image")
             deployment_inputs.append(inputs)
+            tool_support_values.append(
+                _tool_call_support_evidence(
+                    info.get("supported_parameters", params.get("supported_parameters"))
+                )
+            )
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
@@ -1137,6 +1146,14 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 row["context_window"] = unique_context_windows.pop()
             else:
                 row["_context_window_conflicted"] = True
+        if tool_support_values and all(value is not None for value in tool_support_values):
+            unique_tool_support = set(tool_support_values)
+            if len(unique_tool_support) == 1:
+                row["supported_parameters"] = (
+                    ["tools", "tool_choice"]
+                    if unique_tool_support.pop() is True
+                    else ["response_format"]
+                )
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:

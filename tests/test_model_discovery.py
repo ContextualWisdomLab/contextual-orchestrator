@@ -373,6 +373,35 @@ def test_duplicate_discovery_withholds_conflicting_tool_call_support() -> None:
     assert discovered[0].supports_tool_calls is None
 
 
+def test_duplicate_discovery_preserves_agreed_tool_call_support() -> None:
+    """Unrelated duplicate conflicts must not erase agreed tool-call evidence."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway-a.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                supports_tool_calls=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway-b.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=2.0,
+                supports_tool_calls=True,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is True
+
+
 def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
     """Conflicting duplicate rows must not preserve one limit by row order."""
     discovered = _deduplicate_discovered_models(
@@ -679,6 +708,59 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
     assert by_id["mismatch-model"].context_window_conflicted is True
     assert by_id["missing-model"].max_output_tokens_conflicted is False
     assert by_id["missing-model"].context_window_conflicted is False
+
+
+def test_configured_gateway_preserves_only_consensus_tool_call_support() -> None:
+    """Logical-model tool-call evidence requires explicit deployment consensus."""
+    payload = {
+        "data": [
+            {"id": "agreed-tools", "supported_parameters": ["tools"]},
+            {"id": "conflicted-tools", "supported_parameters": ["tools"]},
+            {"id": "missing-tools", "supported_parameters": ["tools"]},
+        ]
+    }
+    metadata = {
+        "data": [
+            {
+                "model_name": "agreed-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "agreed-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "conflicted-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "conflicted-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
+            {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
+            {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+    discovered = _parse_openai_compatible(
+        merged,
+        ProviderModelSource(
+            provider_name="configured_gateway",
+            credential_name="LLM_GATEWAY_API_KEY",
+            list_url="https://gateway.example/v1/models",
+            chat_base_url="https://gateway.example/v1",
+            capabilities=("chat",),
+        ),
+    )
+    by_id = {model.model_id: model for model in discovered}
+
+    assert by_id["agreed-tools"].supports_tool_calls is True
+    assert by_id["conflicted-tools"].supports_tool_calls is None
+    assert by_id["missing-tools"].supports_tool_calls is None
 
 
 def test_models_dev_merge_preserves_limit_metadata() -> None:
