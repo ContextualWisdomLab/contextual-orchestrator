@@ -2827,6 +2827,7 @@ class ModelClient:
 
     @staticmethod
     def _egress_address_to_destination(address: str, port: int) -> ProviderDestination:
+        """Build a (family, sockaddr) pair from one already-validated EgressWeave address."""
         ip_address = ipaddress.ip_address(address)
         if isinstance(ip_address, ipaddress.IPv6Address):
             return (socket.AF_INET6, (address, port, 0, 0))
