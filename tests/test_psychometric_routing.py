@@ -550,6 +550,22 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert stopping["accuracy_delta_ci95"] == [0.0, 0.0]
     assert stopping["confidence_resolved_rate"] == 0.425
     assert stopping["resolved_accuracy"] == 1.0
+    risk_coverage = stopping["risk_coverage_screen"]
+    assert risk_coverage["method"] == (
+        "development_selected_heldout_evaluated_reject_option"
+    )
+    assert risk_coverage["selected_confidence_z"] == 1.645
+    assert risk_coverage["maximum_selective_risk_wilson_upper95"] == 0.025
+    assert risk_coverage["heldout"] == pytest.approx(
+        {
+            "confidence_z": 1.645,
+            "coverage": 0.56,
+            "selective_risk": 0.0,
+            "selective_risk_wilson_upper95": 0.01686083665142801,
+            "resolved_mean_queries": 5.5625,
+            "near_cut_coverage": 0.11,
+        }
+    )
     assert stopping["distance_from_cut_strata"] == {
         "near_lt_0_5": {
             "candidates": 100,

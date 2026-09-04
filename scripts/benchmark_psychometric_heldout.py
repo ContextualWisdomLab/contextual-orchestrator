@@ -59,6 +59,8 @@ ADAPTIVE_CALIBRATION_CANDIDATES = 400
 ADAPTIVE_CALIBRATION_ITEMS = 31
 ADAPTIVE_CALIBRATION_MAX_ITEMS = 12
 ADAPTIVE_CALIBRATION_TARGET_SE = 0.5
+SELECTIVE_CLASSIFICATION_Z = (1.0, 1.28, 1.645, 1.96, 2.326, 2.576)
+SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER = 0.025
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -1347,6 +1349,76 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             "mid_0_5_to_1": summarize_stratum(0.5, 1.0),
             "far_ge_1": summarize_stratum(1.0, None),
         },
+    }
+
+    def selective_point(seed: int, confidence: float) -> dict[str, float]:
+        resolved: list[tuple[int, float, float]] = []
+        for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+            generator = random.Random(seed + candidate_index)
+            theta = -2.0 + 4.0 * (
+                candidate_index + 0.5
+            ) / ADAPTIVE_CALIBRATION_CANDIDATES
+            responses: dict[str, int] = {}
+            state = cat_next_item(bundle, responses, device="cpu")
+            for step in range(ADAPTIVE_CALIBRATION_MAX_ITEMS):
+                item_index = state["ranked_items"][0]
+                code = f"calibration_{item_index}"
+                responses[code] = int(
+                    generator.random() < probability(theta, difficulties[item_index])
+                )
+                state = cat_next_item(bundle, responses, device="cpu")
+                if abs(state["theta_eap"][0]) > confidence * state["theta_sd"][0]:
+                    resolved.append(
+                        (
+                            step + 1,
+                            float((state["theta_eap"][0] >= 0.0) != (theta >= 0.0)),
+                            abs(theta),
+                        )
+                    )
+                    break
+        errors = sum(row[1] for row in resolved)
+        count = len(resolved)
+        risk = errors / count
+        z95 = 1.96
+        denominator = 1.0 + z95**2 / count
+        error_upper = (
+            risk
+            + z95**2 / (2.0 * count)
+            + z95 * math.sqrt(risk * (1.0 - risk) / count + z95**2 / (4.0 * count**2))
+        ) / denominator
+        return {
+            "confidence_z": confidence,
+            "coverage": count / ADAPTIVE_CALIBRATION_CANDIDATES,
+            "selective_risk": risk,
+            "selective_risk_wilson_upper95": error_upper,
+            "resolved_mean_queries": statistics.fmean(row[0] for row in resolved),
+            "near_cut_coverage": sum(row[2] < 0.5 for row in resolved) / 100.0,
+        }
+
+    development_points = [
+        selective_point(30_000, confidence)
+        for confidence in SELECTIVE_CLASSIFICATION_Z
+    ]
+    selected = max(
+        (
+            point
+            for point in development_points
+            if point["selective_risk_wilson_upper95"]
+            <= SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER
+        ),
+        key=lambda point: point["coverage"],
+    )
+    heldout = selective_point(40_000, selected["confidence_z"])
+    classification_stopping["risk_coverage_screen"] = {
+        "method": "development_selected_heldout_evaluated_reject_option",
+        "development_seed": 30_000,
+        "heldout_seed": 40_000,
+        "maximum_selective_risk_wilson_upper95": (
+            SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER
+        ),
+        "development_points": development_points,
+        "selected_confidence_z": selected["confidence_z"],
+        "heldout": heldout,
     }
     return {
         "method": "maximum_fisher_information_eap_screen",
