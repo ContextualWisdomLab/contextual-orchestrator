@@ -147,9 +147,10 @@ class PsychometricRoutingEvidence:
 
             agent_ids = sorted({agent_id for agent_id, _context_id, _item in self._responses})
             context_ids = list(self._contexts)
+            context_positions = {context_id: index for index, context_id in enumerate(context_ids)}
             item_keys = sorted(
                 {(context_id, item_index) for _agent, context_id, item_index in self._responses},
-                key=lambda item: (context_ids.index(item[0]), item[1]),
+                key=lambda item: (context_positions[item[0]], item[1]),
             )
             matrix = np.full((len(agent_ids), len(item_keys)), np.nan, dtype=float)
             for row, agent_id in enumerate(agent_ids):
