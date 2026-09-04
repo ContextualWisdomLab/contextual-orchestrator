@@ -136,6 +136,15 @@ correlations are particularly weak for binary data. `construct_dimensionality`
 therefore remains `not_executed` until buyer responses, a preregistered construct
 structure, and confirmatory holdout fit exist.
 
+Source commit `7f13dc7d` adds the distinct limited-information M2 global-fit
+screen derived from Maydeu-Olivares and Joe (2005). A fitted one-factor design
+produces M2 `45.744317` with `p=0.105619`; fitting that same one-factor model to
+known two-factor data produces M2 `287.163678` with `p≈2.27e-41`. Xu et al.
+(2017) show that sensitivity depends on the form of multidimensionality, so
+this synthetic separation cannot establish a construct or universal cutoff.
+`global_model_fit` remains `not_executed` until a converged buyer calibration,
+complete responses, a preregistered model, and held-out review exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

@@ -145,6 +145,21 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds the limitation: Pearson-correlation parallel analysis can perform
   poorly on binary items. CO therefore treats the result as a synthetic screen,
   not construct identification or buyer-validity evidence.
+- Maydeu-Olivares, A., & Joe, H. (2005). Limited- and full-information
+  estimation and goodness-of-fit testing in 2ⁿ contingency tables: A unified
+  framework. *Journal of the American Statistical Association, 100*(471),
+  1009–1020. https://doi.org/10.1198/016214504000002069
+  Grounds limited-information global model-fit testing for binary response
+  tables. Source commit `7f13dc7d` yields M2 `45.744317` (`p=0.105619`) for a
+  fitted one-factor design and M2 `287.163678` (`p≈2.27e-41`) when the same
+  one-factor model is fitted to known two-factor data.
+- Xu, J., Paek, I., & Xia, Y. (2017). Investigating the behaviors of M2 and
+  RMSEA2 in fitting a unidimensional model to multidimensional data. *Applied
+  Psychological Measurement, 41*(8), 632–644.
+  https://doi.org/10.1177/0146621617710464
+  Grounds the limitation that M2 sensitivity varies with the multidimensional
+  structure. A detected synthetic misspecification therefore does not establish
+  buyer construct validity or universal model-fit thresholds.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

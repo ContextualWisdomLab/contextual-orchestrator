@@ -2293,6 +2293,14 @@ departure from a single latent dimension. Pearson-PCA parallel analysis on
 binary responses cannot identify the construct or replace confirmatory
 holdout fit, so `construct_dimensionality` remains `not_executed` pending a
 preregistered buyer construct structure and complete buyer responses.
+Source commit `7f13dc7d` exercises the released limited-information M2 global-fit
+diagnostics on two seeded 1,200-response, 10-item cases. The correctly specified
+one-factor case gives M2 `45.744317`, `p=0.105619`, and RMSEA `0.016001`; the
+known two-factor case fitted as one factor gives M2 `287.163678`, `p≈2.27e-41`,
+and RMSEA `0.077517`. This verifies detection for one known misspecification,
+not universal sensitivity or buyer construct validity. `global_model_fit`
+remains `not_executed` pending converged buyer calibration, complete responses,
+a preregistered model, and held-out review.
 
 ## 7. Delivery gates
 

@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now distinguishes a fitted one-factor
+  design from known two-factor misspecification with the released M2 global-fit
+  diagnostics, while keeping buyer model fit and construct validity closed.
 - The held-out psychometric benchmark now recovers two known latent dimensions
   with the released Horn parallel-analysis screen. It keeps buyer construct
   validity closed because Pearson-PCA screening on binary responses is not a
