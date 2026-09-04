@@ -152,7 +152,10 @@ Source commit `2c783b98` preregisters a benchmark-only ε-greedy logging policy
 with 20% exploration across four candidates and 24,000 fixed-seed trials. Every
 candidate receives probability at least 0.05; Horvitz-Thompson estimates reach
 RMSE 0.008943 against known synthetic truth and all four 95% intervals cover
-their targets. This validates executable propensity arithmetic, not buyer
+their targets. Source `36dbf3bb` adds the missing naive comparison: treating
+adaptively selected observations as ignorable yields RMSE `0.321979`, so logged
+inverse-propensity estimation reduces error by `0.313036`. This validates
+executable propensity arithmetic, not buyer
 outcomes, and does not change production selection.
 Source commit `ca6e9a75` validates the released common-item linking contract.
 Six anchors undergo a known `slope=1.3`, `intercept=-0.4` metric change;

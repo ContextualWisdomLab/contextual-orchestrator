@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now reports the bias from treating
+  adaptively selected winner observations as an ignorable sample, alongside
+  the error reduction from its logged inverse-propensity estimator.
 - The held-out psychometric benchmark now measures expected classification
   accuracy and consistency at a declared decision cut. Lower score error improves
   both measures, while buyer cuts, decision costs, and validity remain gated.

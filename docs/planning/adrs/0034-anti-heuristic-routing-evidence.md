@@ -321,6 +321,10 @@ flowchart LR
   each of four candidates probability at least 0.05. Across 24,000 fixed-seed
   trials, inverse-propensity value RMSE is 0.008943 and all known true values
   fall inside their 95% intervals. Buyer execution remains required.
+- Source commit `36dbf3bb` makes the adaptive-selection counterfactual explicit.
+  Naive means from the selected observations have RMSE `0.321979`; reusing the
+  logged assignment probabilities reduces RMSE to `0.008943`, an improvement
+  of `0.313036`. Production routing remains deterministic and unidentified.
 - Source commit `ca6e9a75` validates Stocking–Lord common-item linking on six
   synthetic anchors with a known affine scale change. It converges with
   true-parameter RMSE `3.24e-16`; the production component remains unexecuted
