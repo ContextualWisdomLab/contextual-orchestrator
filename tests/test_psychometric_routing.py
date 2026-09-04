@@ -467,10 +467,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "brier_score": report["brier_score"],
         "log_loss": report["log_loss"],
     }
-    assert predictive_fit["missing_persons"]["status"] == "not_executed"
-    assert "no unseen candidate deployment" in predictive_fit["missing_persons"][
-        "known_limit"
-    ]
+    assert predictive_fit["missing_persons"]["status"] == "failed_no_prediction"
+    assert predictive_fit["missing_persons"]["contexts"] == 24
+    assert predictive_fit["missing_persons"]["prediction_coverage"] == 0.0
+    assert "no psychometric estimate" in predictive_fit["missing_persons"]["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]

@@ -22,6 +22,7 @@ from contextual_orchestrator.psychometric_routing import (  # noqa: E402
 
 
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
+UNSEEN_MODEL_ID = "model_unseen"
 TRAIN_CONTEXTS = 24
 BOOTSTRAP_SAMPLES = 2_000
 BOOTSTRAP_SEED = 568
@@ -1021,6 +1022,16 @@ def run_benchmark() -> dict[str, object]:
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    unseen_predictions = sum(
+        bool(
+            candidate_evidence.ranked_evidence(
+                (UNSEEN_MODEL_ID,),
+                f"held_out_{context_index}",
+                _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS),
+            )
+        )
+        for context_index in range(TRAIN_CONTEXTS)
+    )
     predictive_fit = {
         "method": "cross_validated_prediction_tasks",
         "missing_items": {
@@ -1031,12 +1042,14 @@ def run_benchmark() -> dict[str, object]:
             "log_loss": candidate["log_loss"],
         },
         "missing_persons": {
-            "status": "not_executed",
+            "status": "failed_no_prediction",
             "candidates": "held_out",
             "items": "existing",
+            "contexts": TRAIN_CONTEXTS,
+            "prediction_coverage": unseen_predictions / TRAIN_CONTEXTS,
             "known_limit": (
-                "the benchmark contains no unseen candidate deployment with "
-                "outcomes for scoring cold-start prediction"
+                "the router emits no psychometric estimate for an unseen "
+                "candidate deployment"
             ),
         },
     }
