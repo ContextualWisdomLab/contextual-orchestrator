@@ -190,6 +190,11 @@ flowchart LR
   and the paired latency-delta CI upper bound fell from median `0.0022899` to
   `0.0006677` ms (70.84%). Brier, log loss, and regret were unchanged. The
   upper bound remains positive, so the latency production gate stays closed.
+- Source commit `260fa1dd` reuses the validated query-vector norm across all
+  retained contexts. In five before/after local runs, median candidate p50 fell
+  from `0.023167` to `0.015042` ms (35.07%); median paired latency-delta CI upper
+  bound fell from `0.0008368` to `0.0006112` ms. Accuracy metrics were
+  bit-identical, but the positive upper bound keeps the gate closed.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted

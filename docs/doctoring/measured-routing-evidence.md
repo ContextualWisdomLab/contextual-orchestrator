@@ -101,6 +101,12 @@ the paired context-median latency-delta CI upper bound fell from `0.0022899` to
 `0.0006677` ms (70.84%). Brier `0.1418346845`, log loss `0.4475784303`, and
 regret `0` were identical in every pair. Because the CI upper bound remains
 positive, this improvement does not open the latency or production gate.
+Source commit `260fa1dd` then computes the validated query-vector norm once per
+decision rather than once for every retained context. Across five before/after
+local runs, median candidate p50 fell from `0.023167` to `0.015042` ms (35.07%)
+and the median paired latency-delta CI upper bound fell from `0.0008368` to
+`0.0006112` ms. Brier, log loss, and regret remained bit-identical. The latency
+and production gates remain closed because the interval upper bound is positive.
 
 ## APA 7 references
 
