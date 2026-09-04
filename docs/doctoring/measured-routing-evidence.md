@@ -38,6 +38,21 @@ fails closed to conducted orchestration when its reply violates the exact
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
 
+## Accuracy and decision-latency KPI
+
+Run `uv run python scripts/benchmark_psychometric_routing.py`. The benchmark
+fixes the native fit and probability output, then measures only gateway matrix
+preparation and ranking for 512 contexts, four models, and two dichotomous
+items per context. Lower median milliseconds is better; the psychometric and
+reasoning-effort tests must remain green.
+
+Protected `main@2e414d15` measured 2.448167 ms. Candidate performance commit
+`0561c9b81f68bd9be9bd413f4a23892717e54701`, carried by PR #1058, measured 1.100583 ms, a
+55.04% reduction. This local same-host result does not prove production
+latency or answer accuracy. The next accuracy experiment must use a held-out
+model-query matrix and report log loss or Brier score alongside routing regret;
+true-parameter simulations must continue to report RMSE.
+
 ## APA 7 references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
@@ -55,6 +70,10 @@ Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
 parameters for unidimensional multidimensional logistic item response
 models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
 
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
 Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
 & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
 answering. In *Proceedings of the 2020 Conference on Empirical Methods in
@@ -68,6 +87,11 @@ Laplace, P.-S. (1774). Mémoire sur la probabilité des causes par les
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs
 with preference data*. arXiv. https://arxiv.org/abs/2406.18665
+
+Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
+(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2506.01048
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
