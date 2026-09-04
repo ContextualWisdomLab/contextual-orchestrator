@@ -50,6 +50,7 @@ RELIABILITY_SEED = 260_913
 EQUATING_BOOTSTRAPS = 300
 EQUATING_SEED = 260_914
 ROSTER_INVARIANCE_SEED = 260_915
+GENERALIZABILITY_SEED = 260_916
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -688,6 +689,42 @@ def _validate_score_reliability() -> dict[str, object]:
     }
 
 
+def _validate_generalizability_design() -> dict[str, object]:
+    """Separate candidate, query, occasion, and interaction variance."""
+    generator = np.random.default_rng(GENERALIZABILITY_SEED)
+    candidates, items, occasions = 80, 12, 4
+    scores = (
+        generator.normal(0.0, 1.0, (candidates, 1, 1))
+        + generator.normal(0.0, 0.5, (1, items, 1))
+        + generator.normal(0.0, 0.3, (1, 1, occasions))
+        + generator.normal(0.0, 0.45, (candidates, items, 1))
+        + generator.normal(0.0, 0.25, (candidates, 1, occasions))
+        + generator.normal(0.0, 0.2, (1, items, occasions))
+        + generator.normal(0.0, 0.55, (candidates, items, occasions))
+    )
+    result = fast_mlsirm.gtheory_pio(
+        scores, n_prime=((1, 1), (6, 2), (12, 4))
+    )
+    return {
+        "method": "two_facet_crossed_g_study_and_d_study",
+        "seed": GENERALIZABILITY_SEED,
+        "candidates": candidates,
+        "items": items,
+        "occasions": occasions,
+        "variance_component_order": ["p", "i", "o", "pi", "po", "io", "pio"],
+        "variance_components_raw": result.var_raw,
+        "designs": [
+            {
+                "items": row.n_i_prime,
+                "occasions": row.n_o_prime,
+                "generalizability": row.generalizability,
+                "dependability": row.dependability,
+            }
+            for row in result.d_study
+        ],
+    }
+
+
 def _validate_conditional_information() -> dict[str, object]:
     """Show that spreading item difficulty improves tail precision."""
     item_count = 12
@@ -956,6 +993,7 @@ def run_benchmark() -> dict[str, object]:
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
     score_reliability = _validate_score_reliability()
+    generalizability_design = _validate_generalizability_design()
     conditional_information = _validate_conditional_information()
     classification_decision = _validate_classification_decision()
     candidate_group_dif = _validate_candidate_group_dif()
@@ -1006,6 +1044,7 @@ def run_benchmark() -> dict[str, object]:
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
+        "generalizability_design": "not_executed",
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
         "local_independence": "not_executed",
@@ -1094,6 +1133,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "reliability summarizes score precision under the fitted model; "
                 "it cannot establish model fit, invariance, or construct validity"
+            ),
+        },
+        "generalizability_design": {
+            "owner_contract_status": "released_balanced_design",
+            "required_evidence": (
+                "a complete balanced buyer candidate-by-query-by-occasion design, "
+                "random-facet justification, and preregistered dependability target"
+            ),
+            "known_limit": (
+                "clamped ANOVA variance components and a synthetic balanced design "
+                "do not establish generalizability for incomplete live routing data"
             ),
         },
         "conditional_information": {
@@ -1198,6 +1248,7 @@ def run_benchmark() -> dict[str, object]:
         "construct_dimensionality_validation": construct_dimensionality,
         "global_model_fit_validation": global_model_fit,
         "score_reliability_validation": score_reliability,
+        "generalizability_design_validation": generalizability_design,
         "conditional_information_validation": conditional_information,
         "classification_decision_validation": classification_decision,
         "candidate_group_dif_validation": candidate_group_dif,

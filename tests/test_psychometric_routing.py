@@ -109,6 +109,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
+        "generalizability_design": "not_executed",
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
         "local_independence": "not_executed",
@@ -149,6 +150,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "cannot establish model fit" in requirements["score_reliability"][
         "known_limit"
     ]
+    assert requirements["generalizability_design"]["owner_contract_status"] == (
+        "released_balanced_design"
+    )
+    assert "incomplete live routing data" in requirements[
+        "generalizability_design"
+    ]["known_limit"]
     assert requirements["conditional_information"]["owner_contract_status"] == (
         "released"
     )
@@ -339,6 +346,33 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert reliability["reliability_separation"] == pytest.approx(
         0.43399916807515376
+    )
+    generalizability = report["generalizability_design_validation"]
+    assert generalizability["method"] == "two_facet_crossed_g_study_and_d_study"
+    assert generalizability["seed"] == heldout_benchmark.GENERALIZABILITY_SEED
+    assert generalizability["candidates"] == 80
+    assert generalizability["items"] == 12
+    assert generalizability["occasions"] == 4
+    assert generalizability["variance_component_order"] == [
+        "p", "i", "o", "pi", "po", "io", "pio"
+    ]
+    assert generalizability["variance_components_raw"] == pytest.approx(
+        [
+            0.8920854351890845,
+            0.38675818561154557,
+            0.33929872672516587,
+            0.20329167309583476,
+            0.06794210129890639,
+            0.03957100513262765,
+            0.2925758611991488,
+        ]
+    )
+    assert generalizability["designs"] == pytest.approx(
+        [
+            {"items": 1, "occasions": 1, "generalizability": 0.6127401988587848, "dependability": 0.40156480032236525},
+            {"items": 6, "occasions": 2, "generalizability": 0.9062963862712675, "dependability": 0.7301843004795637},
+            {"items": 12, "occasions": 4, "generalizability": 0.9570630655050173, "dependability": 0.8496163507384494},
+        ]
     )
     information = report["conditional_information_validation"]
     assert information["method"] == "fisher_test_information"
