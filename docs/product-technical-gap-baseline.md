@@ -2409,9 +2409,13 @@ scores: released maximum-information EAP selection for candidate onboarding.
 Across 400 known synthetic candidates, it reaches target SE 0.5 after 7.1775
 calibration queries on average versus 10.47 for a random order, reduces theta
 RMSE from 0.607152 to 0.575996, and reduces unobserved-probability MSE from
-0.014671 to 0.007531. These are calibration-query and prediction-error KPIs,
-not live decision latency or buyer evidence; zero-observation candidate
-coverage and the production gate therefore remain unchanged.
+0.014746 to 0.007504. Paired 95% intervals are `[-3.4125, -3.18]` queries,
+`[-0.080874, 0.006129]` theta squared error, and
+`[-0.008804, -0.005716]` unobserved-probability squared error. The theta
+interval includes zero, so no general theta-accuracy improvement is claimed.
+These are calibration-query and prediction-error KPIs, not live decision
+latency or buyer evidence; zero-observation candidate coverage and the
+production gate therefore remain unchanged.
 
 ## 7. Delivery gates
 

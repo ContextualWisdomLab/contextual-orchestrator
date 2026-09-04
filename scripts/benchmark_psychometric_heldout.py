@@ -1179,11 +1179,13 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     def probability(theta: float, difficulty: float) -> float:
         return 1.0 / (1.0 + math.exp(-discrimination * (theta + difficulty)))
 
-    def evaluate(*, adaptive: bool) -> dict[str, float]:
+    def evaluate(
+        *, adaptive: bool
+    ) -> tuple[dict[str, float], dict[str, list[float]]]:
         squared_errors: list[float] = []
-        prediction_errors: list[float] = []
+        candidate_prediction_errors: list[float] = []
         administered_counts: list[int] = []
-        target_reached = 0
+        target_reached: list[float] = []
         for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
             generator = random.Random(10_000 + candidate_index)
             theta = -2.0 + 4.0 * (
@@ -1203,12 +1205,11 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
                 )
                 state = cat_next_item(bundle, responses, device="cpu")
                 if state["theta_sd"][0] <= ADAPTIVE_CALIBRATION_TARGET_SE:
-                    target_reached += 1
                     break
             estimate = state["theta_eap"][0]
             squared_errors.append((estimate - theta) ** 2)
             administered_counts.append(len(responses))
-            prediction_errors.extend(
+            prediction_errors = [
                 (
                     probability(estimate, difficulty)
                     - probability(theta, difficulty)
@@ -1216,17 +1217,38 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
                 ** 2
                 for item_index, difficulty in enumerate(difficulties)
                 if f"calibration_{item_index}" not in responses
+            ]
+            candidate_prediction_errors.append(statistics.fmean(prediction_errors))
+            target_reached.append(
+                float(state["theta_sd"][0] <= ADAPTIVE_CALIBRATION_TARGET_SE)
             )
         return {
             "theta_rmse": math.sqrt(statistics.fmean(squared_errors)),
-            "unobserved_probability_mse": statistics.fmean(prediction_errors),
+            "unobserved_probability_mse": statistics.fmean(
+                candidate_prediction_errors
+            ),
             "mean_calibration_queries": statistics.fmean(administered_counts),
-            "target_se_reached_rate": target_reached
-            / ADAPTIVE_CALIBRATION_CANDIDATES,
+            "target_se_reached_rate": statistics.fmean(target_reached),
+        }, {
+            "theta_squared_error": squared_errors,
+            "unobserved_probability_squared_error": candidate_prediction_errors,
+            "calibration_queries": [float(value) for value in administered_counts],
+            "target_se_reached": target_reached,
         }
 
-    adaptive = evaluate(adaptive=True)
-    random_baseline = evaluate(adaptive=False)
+    adaptive, adaptive_samples = evaluate(adaptive=True)
+    random_baseline, random_samples = evaluate(adaptive=False)
+    paired_delta = {
+        metric: statistics.fmean(adaptive_samples[metric])
+        - statistics.fmean(random_samples[metric])
+        for metric in adaptive_samples
+    }
+    paired_delta_ci95 = {
+        metric: _paired_bootstrap_mean_ci(
+            adaptive_samples[metric], random_samples[metric]
+        )
+        for metric in adaptive_samples
+    }
     return {
         "method": "maximum_fisher_information_eap_screen",
         "candidates": ADAPTIVE_CALIBRATION_CANDIDATES,
@@ -1235,6 +1257,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         "target_standard_error": ADAPTIVE_CALIBRATION_TARGET_SE,
         "adaptive": adaptive,
         "random_baseline": random_baseline,
+        "paired_delta": paired_delta,
+        "paired_delta_ci95": paired_delta_ci95,
         "mean_query_reduction": random_baseline["mean_calibration_queries"]
         - adaptive["mean_calibration_queries"],
         "theta_rmse_reduction": random_baseline["theta_rmse"]

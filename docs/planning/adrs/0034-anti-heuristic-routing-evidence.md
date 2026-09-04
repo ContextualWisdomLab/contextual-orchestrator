@@ -111,10 +111,14 @@ screen rather than fabricating a cold-start score. Across 400 known synthetic
 candidates and a 31-query bank, the released Rust-backed maximum-information
 EAP path reaches target SE 0.5 after 7.1775 queries on average, compared with
 10.47 for a seeded random order. It reduces theta RMSE from 0.607152 to
-0.575996 and unobserved-probability MSE from 0.014671 to 0.007531. The maximum
-of 12 calibration queries is an onboarding burden, not live routing latency;
-the one-dimensional synthetic bank does not establish construct validity,
-invariance, or buyer performance. Production admission remains unchanged.
+0.575996 and unobserved-probability MSE from 0.014746 to 0.007504. Paired 95%
+intervals are `[-3.4125, -3.18]` queries, `[-0.080874, 0.006129]` theta
+squared error, and `[-0.008804, -0.005716]` unobserved-probability squared
+error. Because the theta interval includes zero, no general theta-accuracy gain
+is claimed. The maximum of 12 calibration queries is an onboarding burden, not
+live routing latency; the one-dimensional synthetic bank does not establish
+construct validity, invariance, or buyer performance. Production admission
+remains unchanged.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

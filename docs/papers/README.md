@@ -297,9 +297,13 @@ Buyer next action: call `run_equal_budget_ablation` and read
   path reused by source `f4513527`. Across 400 known synthetic candidate
   deployments, adaptive selection reaches target SE 0.5 in 7.1775 queries on
   average versus 10.47 for a seeded random order, while reducing theta RMSE
-  from 0.607152 to 0.575996 and unobserved-probability MSE from 0.014671 to
-  0.007531. This one-dimensional onboarding screen neither establishes an
-  invariant model ability nor measures live per-request decision latency.
+  from 0.607152 to 0.575996 and unobserved-probability MSE from 0.014746 to
+  0.007504. Paired 95% intervals are `[-3.4125, -3.18]` queries,
+  `[-0.080874, 0.006129]` theta squared error, and
+  `[-0.008804, -0.005716]` unobserved-probability squared error. The theta
+  interval includes zero, so that accuracy improvement is not established.
+  This one-dimensional onboarding screen neither identifies an invariant model
+  ability nor measures live per-request decision latency.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

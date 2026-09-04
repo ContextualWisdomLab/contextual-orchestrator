@@ -518,7 +518,23 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert adaptive["mean_query_reduction"] == pytest.approx(3.2925)
     assert adaptive["theta_rmse_reduction"] == pytest.approx(0.0311560376825727)
     assert adaptive["unobserved_probability_mse_reduction"] == pytest.approx(
-        0.007139810493868
+        0.007242434141391531
+    )
+    assert adaptive["paired_delta"]["calibration_queries"] == pytest.approx(-3.2925)
+    assert adaptive["paired_delta_ci95"]["calibration_queries"] == pytest.approx(
+        [-3.4125, -3.18]
+    )
+    assert adaptive["paired_delta"]["theta_squared_error"] == pytest.approx(
+        -0.036862187126945056
+    )
+    assert adaptive["paired_delta_ci95"]["theta_squared_error"] == pytest.approx(
+        [-0.0808741028637953, 0.006129009732609613]
+    )
+    assert adaptive["paired_delta_ci95"][
+        "unobserved_probability_squared_error"
+    ] == pytest.approx([-0.00880415088135534, -0.005715993179414072])
+    assert adaptive["paired_delta_ci95"]["target_se_reached"] == pytest.approx(
+        [0.1, 0.1625]
     )
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
