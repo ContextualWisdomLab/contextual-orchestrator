@@ -46,13 +46,6 @@ from .credentials import NotConfigured, get_credential
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
-from .opencode_go import (
-    NATIVE_ENDPOINTS as OPENCODE_GO_NATIVE_ENDPOINTS,
-    chat_to_messages,
-    chat_to_responses,
-    messages_to_chat,
-    responses_to_chat,
-)
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .reasoning_effort_profile import EffortProfileError
@@ -2115,13 +2108,9 @@ class ModelClient:
         if api_key:
             headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
-        endpoint = OPENCODE_GO_NATIVE_ENDPOINTS.get(agent.model) if agent.provider_name == "opencode_go" else None
-        if agent.provider_name == "opencode_go" and endpoint is None:
-            raise ValueError("OpenCode Go model endpoint is not documented")
-        native_payload = chat_to_responses(payload) if endpoint == "responses" else chat_to_messages(payload) if endpoint == "messages" else payload
         request = urllib.request.Request(
-            self._provider_url(agent, f"/{endpoint or 'chat/completions'}"),
-            data=json.dumps(native_payload).encode("utf-8"),
+            self._provider_url(agent, "/chat/completions"),
+            data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
         )
@@ -2133,7 +2122,6 @@ class ModelClient:
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
-        data = responses_to_chat(data) if endpoint == "responses" else messages_to_chat(data) if endpoint == "messages" else data
         _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
@@ -2480,20 +2468,10 @@ class ModelClient:
         if operation_kind != "request":
             trace_name = f"{operation_kind}.{trace_name}"
             trace_attributes["contextual_orchestrator.operation_kind"] = operation_kind
-        native_endpoint = OPENCODE_GO_NATIVE_ENDPOINTS.get(agent.model) if agent.provider_name == "opencode_go" else None
-        if agent.provider_name == "opencode_go" and native_endpoint is None:
-            raise ValueError("OpenCode Go model endpoint is not documented")
         with traced(
             trace_name,
             trace_attributes,
         ):
-            if native_endpoint and normalized_endpoint in {"chat/completions", "responses"}:
-                chat_request = _responses_to_chat_payload(payload) if normalized_endpoint == "responses" else payload
-                native_payload = chat_to_responses(chat_request) if native_endpoint == "responses" else chat_to_messages(chat_request) if native_endpoint == "messages" else chat_request
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                    result = self._send_raw_with_retry(agent, native_endpoint, native_payload, destination, allow_transient_retries=allow_transient_retries)
-                chat_result = responses_to_chat(result) if native_endpoint == "responses" else messages_to_chat(result) if native_endpoint == "messages" else result
-                return _chat_to_responses_payload(chat_result, payload) if normalized_endpoint == "responses" else chat_result
             if (
                 normalized_endpoint == "chat/completions"
                 and _is_local_provider_url(agent.base_url)
@@ -2505,7 +2483,10 @@ class ModelClient:
                     "max_tokens",
                     self.request_settings_snapshot()["max_output_tokens"],
                 )
-            if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
+            if normalized_endpoint == "responses" and (
+                _is_local_provider_url(agent.base_url)
+                or agent.provider_name == "opencode_go"
+            ):
                 chat_payload = _responses_to_chat_payload(payload)
                 if "response_format" in chat_payload and not (
                     "response_format" in agent.tags

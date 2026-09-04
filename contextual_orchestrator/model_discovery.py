@@ -34,7 +34,6 @@ from .chat_capability import (
     requires_non_text_input,
 )
 from .credentials import get_credential
-from .opencode_go import NATIVE_ENDPOINTS as OPENCODE_GO_NATIVE_ENDPOINTS
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -64,6 +63,15 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+# The live Go catalog exposes only id/object/created/owned_by. Keep the one
+# serving allowlist to the official Chat Completions table; every other row is
+# retained as evidence-only until the API reports a protocol or an adapter exists.
+_OPENCODE_GO_CHAT_MODELS = frozenset({
+    "glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "kimi-k3",
+    "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "deepseek-v4-pro",
+    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "mimo-v2.5",
+    "mimo-v2.5-pro", "hy4-preview", "hy3",
+})
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
@@ -1263,8 +1271,6 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
             continue
-        if source.provider_name == "opencode_go" and model_id not in OPENCODE_GO_NATIVE_ENDPOINTS:
-            continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         supported_parameters = (
@@ -1389,6 +1395,10 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     else None
                 ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
+                evidence_only=(
+                    source.provider_name == "opencode_go"
+                    and model_id not in _OPENCODE_GO_CHAT_MODELS
+                ),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1653,7 +1663,10 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [
+        replace(model, evidence_only=source.evidence_only or model.evidence_only)
+        for model in discovered
+    ]
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
             "discovery_result account=%s model_count=%d elapsed_ms=%.1f",
