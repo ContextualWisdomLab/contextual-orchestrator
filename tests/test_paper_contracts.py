@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -161,11 +162,19 @@ def test_paper_inventory_covers_tracked_research_identifiers() -> None:
     inventory_path = ROOT_DIR / "docs/papers/README.md"
     inventory_ids = _scholarly_ids(inventory_path.read_text(encoding="utf-8"))
     referenced_ids: set[str] = set()
-    for suffix in ("*.py", "*.md"):
-        for path in ROOT_DIR.rglob(suffix):
-            if path == inventory_path or any(part.startswith(".") for part in path.parts):
-                continue
-            referenced_ids.update(_scholarly_ids(path.read_text(encoding="utf-8")))
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py", "*.md"],
+        cwd=ROOT_DIR,
+        check=True,
+        capture_output=True,
+    ).stdout.decode().split("\0")
+    for relative in tracked:
+        path = ROOT_DIR / relative
+        if not relative or path == inventory_path or any(
+            part.startswith(".") for part in Path(relative).parts
+        ):
+            continue
+        referenced_ids.update(_scholarly_ids(path.read_text(encoding="utf-8")))
 
     assert referenced_ids <= inventory_ids, sorted(referenced_ids - inventory_ids)
 

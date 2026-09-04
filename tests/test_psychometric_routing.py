@@ -6,6 +6,7 @@ import math
 import numpy as np
 from dataclasses import replace
 from pathlib import Path
+import threading
 import pytest
 
 from contextual_orchestrator import (
@@ -268,6 +269,68 @@ def test_runtime_deployment_change_discards_contextual_judge_observation() -> No
 
     assert orchestrator._psychometric_router.records() == []
     orchestrator.close()
+
+
+def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state_db = str(tmp_path / "state.sqlite3")
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("model_a", "model-a")], state_db=state_db
+    )
+    saved = threading.Event()
+    release = threading.Event()
+    errors: list[BaseException] = []
+    original_save = orchestrator._store.save
+
+    def blocking_save(kind, key, value, **kwargs):
+        if kind == "psychometric_observation":
+            saved.set()
+            assert release.wait(timeout=2)
+        original_save(kind, key, value, **kwargs)
+
+    monkeypatch.setattr(orchestrator._store, "save", blocking_save)
+
+    def run(callable_):
+        try:
+            callable_()
+        except BaseException as error:  # pragma: no cover - surfaced below
+            errors.append(error)
+
+    observe = threading.Thread(
+        target=run,
+        args=(
+            lambda: orchestrator._observe_contextual_quality(
+                "system/user",
+                "model_a",
+                accepted=True,
+                latency_seconds=0.1,
+                output_tokens=10,
+            ),
+        ),
+    )
+    observe.start()
+    assert saved.wait(timeout=2)
+    patch = threading.Thread(
+        target=run,
+        args=(lambda: orchestrator.patch_agent("default", "model_a", {"priority": 2}),),
+    )
+    patch.start()
+    release.set()
+    observe.join(timeout=2)
+    patch.join(timeout=2)
+
+    assert not observe.is_alive()
+    assert not patch.is_alive()
+    assert errors == []
+    assert orchestrator._psychometric_router.records() == []
+    orchestrator.close()
+
+    restarted = TaskOrchestrator(
+        [ModelAgent("model_a", "model-a", priority=2)], state_db=state_db
+    )
+    assert restarted._psychometric_router.records() == []
+    restarted.close()
 
 
 def test_replacing_judge_row_removes_stale_trailing_items() -> None:
