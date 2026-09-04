@@ -134,6 +134,10 @@ Candidates within 0.5 of the synthetic cut stop early only 3% of the time,
 average 11.86 queries, and reach 0.70 accuracy. Candidates at least 1.0 away
 stop early 68%, average 8.305 queries, and reach 1.0 accuracy. These strata are
 descriptive checks on known truth, not calibrated buyer subgroup guarantees.
+Source `e2cb547f` also reports the abstention boundary directly. The interval
+resolves 42.5% of all candidates with 1.0 conditional synthetic accuracy, but
+only 3% within 0.5 of the cut. Unresolved candidates remain unresolved evidence;
+the benchmark must not silently turn them into production routing decisions.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

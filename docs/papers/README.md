@@ -320,6 +320,8 @@ Buyer next action: call `run_equal_budget_ablation` and read
   within 0.5 of the cut stop early 3% of the time, average 11.86 queries, and
   reach 0.70 accuracy; candidates at least 1.0 away stop early 68%, average
   8.305 queries, and reach 1.0 accuracy. These descriptive synthetic strata
+  are complemented by source `e2cb547f`: 42.5% are confidence-resolved with
+  1.0 conditional synthetic accuracy, but near-cut resolution is only 3%.
   are not calibrated subgroup guarantees.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral

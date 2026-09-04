@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- The classification screen now reports confidence-resolved coverage and
+  conditional accuracy, preserving unresolved candidates instead of hiding
+  forced decisions inside aggregate accuracy.
 - The adaptive onboarding screen now compares a bounded 95% confidence-interval
   classification stop with fixed 12-query calibration, reporting paired query
   and decision-accuracy intervals plus near/mid/far-cut strata instead of

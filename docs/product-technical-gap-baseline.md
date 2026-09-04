@@ -2430,6 +2430,11 @@ cut. The within-0.5 stratum stops early 3%, averages 11.86 queries, and reaches
 queries, and reaches 1.0 accuracy. The gap confirms that aggregate query
 savings cannot stand in for near-cut buyer risk or calibrated subgroup
 performance.
+Source commit `e2cb547f` makes abstention observable rather than folding it
+into forced classification. The interval resolves 42.5% of candidates with
+1.0 conditional synthetic accuracy, but resolves only 3% within 0.5 of the
+cut. Unresolved candidates therefore remain a buyer-policy and fallback gap;
+this selective result does not change the production gate.
 
 ## 7. Delivery gates
 
