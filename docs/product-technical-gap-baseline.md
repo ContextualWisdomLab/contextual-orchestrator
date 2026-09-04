@@ -36,6 +36,11 @@ from seed-only unit coverage to the real Actions-facing startup path:
 - the test serves real HTTP, verifies authenticated `GET /v1/models` exposes
   `orchestrator/free`, and verifies authenticated `POST /v1/chat/completions`
   with `model="orchestrator/free"` succeeds through owner-side routing;
+- the routed free-model request now intercepts the real HTTPS provider
+  transport instead of short-circuiting through `mock://`, so the gateway must
+  resolve `OPENROUTER_API_KEY` from the KV and send
+  `Authorization: Bearer router-secret` on the provider request before the
+  success path can pass;
 - the same two endpoints now also prove both missing and invalid Bearer tokens
   fail with the documented `401 unauthorized` contract before any owner-route
   success is accepted;
@@ -55,7 +60,7 @@ gateway's authenticated free pool.
 ### Exact local verification
 
 - `uv run pytest tests/test_ci_gateway_bootstrap.py -q`
-  -> `3 passed in 1.86s`
+  -> `3 passed in 1.60s`
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 

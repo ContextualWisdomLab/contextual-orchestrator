@@ -87,11 +87,12 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
 ) -> None:
     """The Actions bootstrap path serves authenticated owner-owned free routing."""
     module = _bootstrap_module()
+    provider_requests: list[dict[str, object]] = []
     discovered = DiscoveredModel(
         provider_name="openrouter",
         model_id="free-mock-model",
         credential_name="OPENROUTER_API_KEY",
-        chat_base_url="mock://free-owner-gateway",
+        chat_base_url="https://provider.example/v1",
         auth_scheme="Bearer",
         capabilities=("chat",),
         prompt_price_per_1k=0.0,
@@ -120,6 +121,57 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
         "contextual_orchestrator.__main__.discover_provider_models",
         lambda *_args, **_kwargs: ([discovered], []),
         raising=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
+        lambda self, agent: (0, ("127.0.0.1", 443)),
+    )
+
+    class _FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._body = json.dumps(payload).encode("utf-8")
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    def fake_open_provider(self, request, destination=None, *, timeout=None):
+        del self, destination, timeout
+        provider_requests.append(
+            {
+                "url": request.full_url,
+                "authorization": request.get_header("Authorization"),
+                "body": json.loads(request.data.decode("utf-8")),
+            }
+        )
+        return _FakeResponse(
+            {
+                "id": "chatcmpl-provider",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "free-mock-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "verify the owner boundary",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+            }
+        )
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._open_provider",
+        fake_open_provider,
     )
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv(module.SERVER_AUTH_ENV_NAME, "loopback-owner-token")
@@ -186,11 +238,29 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
         assert chat_body["model"] == "orchestrator/free"
         content = chat_body["choices"][0]["message"]["content"]
         assert "verify the owner boundary" in content
+        matching_requests = [
+            record
+            for record in provider_requests
+            if record["url"] == "https://provider.example/v1/chat/completions"
+            and record["authorization"] == "Bearer router-secret"
+            and isinstance(record["body"], dict)
+            and record["body"].get("model") == "free-mock-model"
+            and record["body"].get("messages") == [
+                {"role": "user", "content": "verify the owner boundary"}
+            ]
+        ]
+        assert matching_requests, provider_requests
+        request_body = matching_requests[0]["body"]
+        assert request_body["messages"] == [
+            {"role": "user", "content": "verify the owner boundary"}
+        ]
         chat_blob = json.dumps(chat_body)
         assert "router-secret" not in chat_blob
         assert "OPENROUTER_API_KEY" not in chat_blob
         assert discovered.chat_base_url not in chat_blob
-        assert "mock://" not in chat_blob
+        provider_blob = json.dumps(provider_requests)
+        assert "router-secret" in provider_blob
+        assert "OPENROUTER_API_KEY" not in provider_blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
