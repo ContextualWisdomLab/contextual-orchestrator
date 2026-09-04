@@ -119,6 +119,11 @@ Source commit `fdb8e57a` also separates released owner contracts from the
 pending local-independence contract and the unimplemented item-side and
 adaptive-exposure contracts. It records the buyer evidence each check still
 needs without treating API availability as completed validation.
+Source commit `7edccae0` caches the validated unit vector for each retained
+context at observation time. Across five before/after local runs, median
+candidate p50 fell from `0.016083` to `0.009791` ms (39.12%) while Brier, log
+loss, and regret remained identical. The candidate-minus-baseline latency CI
+upper bound remained positive, so the production latency gate stays closed.
 
 ## APA 7 references
 

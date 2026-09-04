@@ -216,6 +216,10 @@ flowchart LR
   contract is released, pending review, or not implemented, plus the buyer
   evidence still required. Availability never changes an unexecuted component
   into a pass.
+- Source commit `7edccae0` normalizes each retained context embedding once at
+  observation time. Five paired local runs reduced median candidate decision
+  p50 from `0.016083` to `0.009791` ms with unchanged quality, but the positive
+  paired latency-delta CI upper bound keeps the production gate closed.
 
 ## References
 

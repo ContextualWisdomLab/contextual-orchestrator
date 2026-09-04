@@ -2210,6 +2210,11 @@ Source commit `fdb8e57a` now separates released owner contracts, the pending
 local-independence contract, and unimplemented item-side language/domain and
 adaptive-exposure contracts from execution status. None can pass without the
 buyer evidence named in the benchmark report.
+Source commit `7edccae0` caches validated unit context embeddings at observation
+time. Five before/after local runs reduced median candidate decision p50 from
+`0.016083` to `0.009791` ms with unchanged Brier, log loss, and regret. The
+candidate-minus-baseline latency interval still crosses only positive values,
+so the latency and production gates remain closed.
 
 ## 7. Delivery gates
 

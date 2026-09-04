@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Psychometric routing now normalizes retained context embeddings once when
+  they are observed. Five before/after local runs reduced median candidate
+  decision p50 from `0.016083` to `0.009791` ms without changing quality metrics.
 - Psychometric benchmark evidence now distinguishes released owner contracts,
   a pending owner contract, and unimplemented validity checks while keeping all
   unexecuted checks fail-closed.
