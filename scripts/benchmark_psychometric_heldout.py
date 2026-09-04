@@ -36,6 +36,7 @@ ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
 UNCERTAINTY_SAMPLE_SIZE = 1_200
 UNCERTAINTY_SEED = 260_909
+INVARIANCE_DRIFT_TOLERANCE = 0.25
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -276,6 +277,50 @@ def _validate_scale_linking() -> dict[str, object]:
     }
 
 
+def _validate_parameter_invariance() -> dict[str, object]:
+    """Detect known post-linking drift without treating it as significance."""
+    old_discrimination = np.asarray([0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 1.0, 1.6])
+    old_intercept = np.asarray([-1.2, -0.5, 0.1, 0.7, 1.3, 1.8, -0.8, 0.4])
+    true_slope = 1.3
+    true_intercept = -0.4
+    expected_drift_items = [7]
+    new_discrimination = old_discrimination * true_slope
+    new_intercept = old_intercept + old_discrimination * true_intercept
+    new_intercept[expected_drift_items] += 0.8
+    anchor_items = np.arange(7)
+    linking = fast_mlsirm.irt_link(
+        old_discrimination[anchor_items],
+        old_intercept[anchor_items],
+        new_discrimination[anchor_items],
+        new_intercept[anchor_items],
+        method="stocking_lord",
+    )
+    discrimination_drift = new_discrimination - old_discrimination * linking.slope
+    intercept_drift = new_intercept - (
+        old_intercept + old_discrimination * linking.intercept
+    )
+    item_drift = np.sqrt(
+        (discrimination_drift**2 + intercept_drift**2) / 2.0
+    )
+    flagged_items = np.flatnonzero(item_drift > INVARIANCE_DRIFT_TOLERANCE).tolist()
+    return {
+        "method": "linked_parameter_drift_effect_size",
+        "items": len(old_discrimination),
+        "anchor_items": anchor_items.tolist(),
+        "drift_tolerance": INVARIANCE_DRIFT_TOLERANCE,
+        "expected_drift_items": expected_drift_items,
+        "flagged_items": flagged_items,
+        "known_drift_recall": len(set(flagged_items) & set(expected_drift_items))
+        / len(expected_drift_items),
+        "stable_item_false_positive_count": len(
+            set(flagged_items) - set(expected_drift_items)
+        ),
+        "maximum_stable_item_drift": float(np.max(item_drift[anchor_items])),
+        "injected_item_drift": float(item_drift[expected_drift_items[0]]),
+        "linking_converged": linking.converged,
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -454,6 +499,7 @@ def run_benchmark() -> dict[str, object]:
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
+    parameter_invariance = _validate_parameter_invariance()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -490,6 +536,7 @@ def run_benchmark() -> dict[str, object]:
     gates = {name: status == "passed" for name, status in gate_status.items()}
     validity_components = {
         "scale_linking": "not_executed",
+        "parameter_invariance": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -502,6 +549,17 @@ def run_benchmark() -> dict[str, object]:
             "owner_contract_status": "released",
             "required_evidence": (
                 "versioned common-item anchors and a preregistered linking policy"
+            ),
+        },
+        "parameter_invariance": {
+            "owner_contract_status": "released_effect_size_screen",
+            "required_evidence": (
+                "versioned recalibrations, stable anchors, identified linking, and "
+                "preregistered drift review rules"
+            ),
+            "known_limit": (
+                "the benchmark drift tolerance is an effect-size screen, not a "
+                "sampling-uncertainty or significance test"
             ),
         },
         "local_independence": {
@@ -576,6 +634,7 @@ def run_benchmark() -> dict[str, object]:
         "measurement_validity_requirements": validity_requirements,
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
+        "parameter_invariance_validation": parameter_invariance,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

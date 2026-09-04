@@ -86,6 +86,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     }
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
+        "parameter_invariance": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -96,6 +97,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     requirements = report["measurement_validity_requirements"]
     assert set(requirements) == set(report["measurement_validity_components"])
     assert requirements["scale_linking"]["owner_contract_status"] == "released"
+    assert requirements["parameter_invariance"]["owner_contract_status"] == (
+        "released_effect_size_screen"
+    )
+    assert "not a sampling-uncertainty" in requirements["parameter_invariance"][
+        "known_limit"
+    ]
     assert (
         requirements["local_independence"]["owner_contract_status"]
         == "owner_pr_pending"
@@ -143,6 +150,19 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         linking["true_intercept"]
     )
     assert linking["true_parameter_rmse"] < 1e-12
+    invariance = report["parameter_invariance_validation"]
+    assert invariance["method"] == "linked_parameter_drift_effect_size"
+    assert invariance["anchor_items"] == list(range(7))
+    assert invariance["drift_tolerance"] == (
+        heldout_benchmark.INVARIANCE_DRIFT_TOLERANCE
+    )
+    assert invariance["expected_drift_items"] == [7]
+    assert invariance["flagged_items"] == [7]
+    assert invariance["known_drift_recall"] == 1.0
+    assert invariance["stable_item_false_positive_count"] == 0
+    assert invariance["maximum_stable_item_drift"] == 0.0
+    assert invariance["injected_item_drift"] == pytest.approx(0.5656854249492381)
+    assert invariance["linking_converged"] is True
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
