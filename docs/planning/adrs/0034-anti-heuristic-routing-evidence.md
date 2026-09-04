@@ -120,11 +120,12 @@ versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
 Source commit `7c3e6e98` adds false-alarm rate and detection-delay p50/p95 as
-separate temporal KPIs, motivated by Chen, Lee, and Li (2022). Across 500
-seeded one-stream Bernoulli runs, raising the CUSUM threshold from `log(100)`
-to `7.0` lowers pre-change false alarms from `21.2%` to `1.4%`; delay p50 rises
-from 6 to 10 observations and p95 from 17 to 22. This bounded calculation is
-not the paper's multistream Bayesian compound-risk procedure.
+separate temporal KPIs, motivated by Chen, Lee, and Li (2022). Source commit
+`c096659b` searches thresholds 6.0 through 7.0 in 0.1 steps and selects the
+minimum p95 delay among candidates meeting the synthetic 5% false-alarm and
+25-observation p95 limits. Threshold `6.1` records `4.8%` false alarms, p50
+delay 8, and p95 delay 20, improving the prior 10/22 delays. This bounded
+calculation is not the paper's multistream Bayesian compound-risk procedure.
 `sequential_drift` remains `not_executed` until buyer time-series observations,
 declared change risks, and preregistered false-alarm and delay targets exist.
 

@@ -2307,10 +2307,11 @@ synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
 stepwise method. Buyer recalibrations and preregistered review rules remain
 absent, so the validity gate stays closed.
 Source commit `7c3e6e98` adds temporal drift KPIs motivated by Chen, Lee, and
-Li (2022). Across 500 seeded one-stream Bernoulli runs, raising the CUSUM
-threshold from `log(100)` to `7.0` reduces pre-change false alarms from `21.2%`
-to `1.4%`; detection-delay p50 rises from 6 to 10 observations and p95 from 17
-to 22. The tradeoff is a synthetic calculation contract, not the paper's
+Li (2022). Source commit `c096659b` searches 11 thresholds over 500 seeded
+runs, selecting `6.1` as the minimum p95 delay among candidates meeting the
+synthetic 5% false-alarm and 25-observation p95 limits. It records `4.8%` false
+alarms, p50 delay 8, and p95 delay 20, improving the prior candidate's 10/22
+delays. The tradeoff is a synthetic calculation contract, not the paper's
 multistream Bayesian compound-risk procedure or a buyer-approved threshold.
 `sequential_drift`
 remains `not_executed` pending versioned buyer time series, declared risk, and
