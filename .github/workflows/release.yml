@@ -113,9 +113,11 @@ jobs:
           if ! tag_ref_output="$(gh api "${tag_ref_endpoint}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
             if printf '%s' "${tag_ref_output}" | grep -q "HTTP 404"; then
               echo "::notice::Tag v${RELEASE_VERSION} does not exist yet (confirmed 404); this is a fresh publish."
-              echo "tag_resume=false" >> "${GITHUB_OUTPUT}"
-              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
-              echo "target_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+              {
+                echo "tag_resume=false"
+                echo "release_resume=false"
+                echo "target_sha=${GITHUB_SHA}"
+              } >> "${GITHUB_OUTPUT}"
               echo "TARGET_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
               exit 0
             fi
@@ -176,8 +178,10 @@ jobs:
           fi
           target_sha="${tag_commit}"
 
-          echo "tag_resume=true" >> "${GITHUB_OUTPUT}"
-          echo "target_sha=${target_sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tag_resume=true"
+            echo "target_sha=${target_sha}"
+          } >> "${GITHUB_OUTPUT}"
           echo "TARGET_SHA=${target_sha}" >> "${GITHUB_ENV}"
 
           # A published Release already existing does not mean nothing is

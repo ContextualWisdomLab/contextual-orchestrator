@@ -6,7 +6,7 @@ cause -- the tag (and, now, the Release object itself) is created before the
 fallible SBOM-asset step, so any failure after that must be safely
 retryable without ever moving the tag or double-publishing:
 
-- The tag resume-vs-reject branching: an already-existing tag that points
+- The exact refs/tags resume-vs-reject branching: an already-existing tag that points
   at this exact commit is a safe resume; a tag pointing at any other commit
   is rejected rather than silently accepted or overwritten.
 - The Release resume-vs-create branching (`release_resume`, a Devin
@@ -15,7 +15,7 @@ retryable without ever moving the tag or double-publishing:
   release create` can publish the Release object and then fail partway
   through uploading its assets, so "the Release already exists" must not be
   treated as "nothing left to do." `publish` always attempts the
-  best-effort SBOM asset attach afterward, whether the Release was just
+  mandatory SBOM asset attach afterward, whether the Release was just
   created or already existed.
 - Confirmed-absence vs transient-failure classification for both lookups
   (Devin's later finding, "API failures block release recovery"): a failed
@@ -25,8 +25,8 @@ retryable without ever moving the tag or double-publishing:
   fails the step closed instead of risking a wrong fresh-create attempt
   against unconfirmed state. See the real bash+stub-`gh` simulation near
   the end of this file for end-to-end coverage beyond text assertions.
-- `actions: read` is granted at the `verify` job's scope (needed for the
-  best-effort SBOM lookup) and nowhere else.
+- `actions: read` is granted at the `verify` job's scope for the mandatory
+  exact-commit SBOM lookup and nowhere else.
 - The two-job least-privilege split: `verify` (read-only, no persisted git
   credential) executes all repository-controlled code -- the fresh test
   suite and note rendering -- before `publish` (the only job holding
@@ -53,7 +53,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release.yml"
@@ -114,9 +113,9 @@ def test_tag_state_step_exists_with_a_stable_output() -> None:
     workflow = _workflow_text()
     verify_block = _job_block(workflow, "verify")
     assert 'id: tag_state' in verify_block
-    assert 'echo "tag_resume=false" >> "${GITHUB_OUTPUT}"' in verify_block
-    assert 'echo "tag_resume=true" >> "${GITHUB_OUTPUT}"' in verify_block
-    assert 'echo "release_resume=false" >> "${GITHUB_OUTPUT}"' in verify_block
+    assert 'echo "tag_resume=false"' in verify_block
+    assert 'echo "tag_resume=true"' in verify_block
+    assert 'echo "release_resume=false"' in verify_block
     assert 'echo "release_resume=true" >> "${GITHUB_OUTPUT}"' in verify_block
     assert "outputs:" in verify_block
     assert "tag_resume: ${{ steps.tag_state.outputs.tag_resume }}" in verify_block
@@ -141,13 +140,13 @@ def test_tag_lookup_confirmed_404_is_a_fresh_publish_without_error() -> None:
     branch must resume as a clean fresh publish, no error, no exit 1,
     distinct from the non-404 fail-closed branch tested right below."""
     step = _tag_state_step(_workflow_text())
-    lookup_index = step.index('if ! tag_lookup_output=')
+    lookup_index = step.index('if ! tag_ref_output=')
     confirmed_404_index = step.index('grep -q "HTTP 404"', lookup_index)
     inner_fi_index = step.index('\n            fi\n', confirmed_404_index)
     confirmed_404_branch = step[confirmed_404_index:inner_fi_index]
     assert "::error::" not in confirmed_404_branch
-    assert 'echo "tag_resume=false" >> "${GITHUB_OUTPUT}"' in confirmed_404_branch
-    assert 'echo "release_resume=false" >> "${GITHUB_OUTPUT}"' in confirmed_404_branch
+    assert 'echo "tag_resume=false"' in confirmed_404_branch
+    assert 'echo "release_resume=false"' in confirmed_404_branch
     assert "exit 0" in confirmed_404_branch
 
 
@@ -159,7 +158,7 @@ def test_tag_lookup_non_404_error_fails_closed_not_treated_as_absent() -> None:
     had its chance to `exit 0` first) so a later retry can resolve cleanly
     instead of compounding a wrong assumption."""
     step = _tag_state_step(_workflow_text())
-    lookup_index = step.index('if ! tag_lookup_output=')
+    lookup_index = step.index('if ! tag_ref_output=')
     confirmed_404_fi_index = step.index('\n            fi\n', lookup_index)
     outer_fi_index = step.index('\n          fi\n', confirmed_404_fi_index)
     fail_closed_branch = step[confirmed_404_fi_index:outer_fi_index]
@@ -319,17 +318,15 @@ def test_publish_job_only_creates_the_release_when_it_does_not_already_exist() -
     assert "if: env.RELEASE_RESUME != 'true'" in if_line
 
 
-def test_release_asset_attach_always_runs_and_is_best_effort() -> None:
+def test_required_release_asset_attach_always_runs_and_fails_closed() -> None:
     """Whether the Release was just created fresh or already existed on a
-    resumed run, attaching the SBOM asset must still be attempted -- and a
-    failed attach must never fail the whole run, matching this workflow's
-    established SBOM best-effort convention (Devin's follow-up finding: an
-    asset upload failing after `gh release create` already succeeded must
-    be retryable, not stranded)."""
+    resumed run, attaching the SBOM asset must still be attempted. A failed
+    attach fails this run closed and a later dispatch resumes without moving
+    the tag."""
     workflow = _workflow_text()
     publish_block = _job_block(workflow, "publish")
     create_step_index = publish_block.index("Create the GitHub Release")
-    attach_step_index = publish_block.index("Attach any still-missing release assets")
+    attach_step_index = publish_block.index("Attach required release SBOM")
     assert create_step_index < attach_step_index
 
     attach_step = publish_block[attach_step_index:]
@@ -337,12 +334,10 @@ def test_release_asset_attach_always_runs_and_is_best_effort() -> None:
     # The attach step itself carries no `if:` gate -- it must run whether
     # `Create the GitHub Release` ran or was skipped as already-resumed.
     assert "if:" not in step_header
-    assert "set -euo pipefail" not in attach_step, (
-        "the attach step must not abort-on-error via -e; a failed upload "
-        "needs its own explicit, non-fatal handling instead"
-    )
+    assert "set -euo pipefail" in attach_step
     assert "if ! gh release upload" in attach_step
-    assert "::warning::" in attach_step
+    assert "::error::" in attach_step
+    assert "exit 1" in attach_step
     assert "--clobber" in attach_step
 
 
@@ -410,10 +405,10 @@ tag_sha="${GH_STUB_TAG_SHA:-${SIM_GITHUB_SHA}}"
 if [ "$1" = "api" ]; then
   request="$2"
   case "${request}" in
-    *"/commits/v${RELEASE_VERSION}"*)
+    *"/git/ref/tags/v${RELEASE_VERSION}"*)
       case "${tag_mode}" in
         tag_confirmed_404)
-          echo "gh: No commit found for SHA: v${RELEASE_VERSION} (HTTP 404)" >&2
+          echo "gh: Not Found (HTTP 404)" >&2
           exit 1
           ;;
         tag_rate_limited)
@@ -425,7 +420,7 @@ if [ "$1" = "api" ]; then
           exit 1
           ;;
         tag_exists)
-          echo "${tag_sha}"
+          printf 'commit\t%s\n' "${tag_sha}"
           exit 0
           ;;
         *) echo "unhandled stub gh api tag mode: ${tag_mode}" >&2; exit 97 ;;

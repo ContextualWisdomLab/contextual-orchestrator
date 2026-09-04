@@ -25,12 +25,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
 import pytest
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release.yml"
@@ -227,16 +225,13 @@ def test_gate_verifies_requested_version_matches_pyproject_toml() -> None:
     assert "pyproject.toml" in workflow
 
 
-def test_gate_determines_tag_resume_state_via_the_commits_api() -> None:
-    """A tag's existence is resolved through the commit-dereferencing API.
-
-    Superseded by the idempotent resume/reject design (Devin finding 3): see
-    `tests/test_release_workflow_idempotency_contract.py` for the full
-    resume-vs-reject branching contract.
-    """
+def test_gate_determines_tag_resume_state_via_the_exact_tag_namespace() -> None:
+    """Only the refs/tags namespace may establish release-tag identity."""
     workflow = _workflow_text()
     verify_block = _job_block(workflow, "verify")
-    assert 'repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}' in verify_block
+    assert 'repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}' in verify_block
+    assert 'repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}' in verify_block
+    assert 'repos/${GITHUB_REPOSITORY}/commits/v${RELEASE_VERSION}' not in verify_block
     assert "tag_resume" in verify_block
 
 
@@ -273,30 +268,19 @@ def test_release_notes_file_backs_the_published_release_body() -> None:
     assert "--notes-file release-notes.md" in workflow
 
 
-def test_sbom_asset_attachment_is_best_effort_and_never_blocks_the_release() -> None:
-    """A missing SBOM artifact, or a failed lookup, must warn, never abort.
-
-    Bounded tightly to just the SBOM step's own body (the next step's
-    heading is the boundary), and asserts the *mechanism* of non-fatality --
-    each fallible `gh` call is guarded by an explicit `if !`, and the step
-    does not opt into `set -e` (which would abort the whole step on the
-    first failing command, including the permission-sensitive `gh run
-    list`) -- rather than only checking that a warning string appears
-    somewhere loosely nearby (Devin finding 4).
-    """
+def test_sbom_is_mandatory_before_release_publication() -> None:
+    """Missing exact-commit SBOM evidence must fail publication closed."""
     workflow = _workflow_text()
     verify_block = _job_block(workflow, "verify")
-    sbom_step_index = verify_block.index("Fetch the CycloneDX SBOM")
+    sbom_step_index = verify_block.index("Fetch the required CycloneDX SBOM for this commit")
     next_step_index = verify_block.index("Upload rendered notes and SBOM")
     sbom_block = verify_block[sbom_step_index:next_step_index]
 
-    assert "set -euo pipefail" not in sbom_block, (
-        "the SBOM step must not abort-on-error via -e; every fallible "
-        "command needs its own explicit failure handling instead"
-    )
-    assert "if ! run_id=" in sbom_block
+    assert "set -euo pipefail" in sbom_block
+    assert 'if [ -z "${run_id}" ]' in sbom_block
     assert "if ! gh run download" in sbom_block
-    assert sbom_block.count("::warning::") >= 2
+    assert sbom_block.count("::error::") >= 3
+    assert sbom_block.count("exit 1") >= 3
 
 
 def test_concurrency_group_serializes_release_runs() -> None:
@@ -415,26 +399,21 @@ def test_checks_gate_script_content() -> None:
     assert "GITHUB_RUN_ID" in script
 
 
-def test_expected_push_checks_matches_this_repositorys_actual_push_triggered_jobs() -> None:
-    """`RELEASE_EXPECTED_PUSH_CHECKS` (Devin finding: "Missing checks pass
-    release gate") must track the real job `name:` values `ci.yml`,
-    `fuzz.yml`, and `security.yml` declare for their push-triggered jobs --
-    not a hand-copied list that can silently drift once one of those jobs
-    is renamed, added, or removed."""
+def test_expected_push_checks_are_unique_after_central_workflow_migration() -> None:
+    """The release inventory remains explicit when CI callers are centralized."""
     workflow = _workflow_text()
     expected = json.loads(_expected_push_checks_json(workflow))
     assert len(expected) == len(set(expected)), "expected-checks list has a duplicate"
 
-    def _job_names(path: Path) -> list[str]:
-        return re.findall(r"^ {4}name: (.+)$", path.read_text(encoding="utf-8"), re.MULTILINE)
-
-    push_triggered_job_names = (
-        _job_names(REPOSITORY_ROOT / ".github/workflows/ci.yml")
-        + _job_names(REPOSITORY_ROOT / ".github/workflows/fuzz.yml")
-        + _job_names(REPOSITORY_ROOT / ".github/workflows/security.yml")
-    )
-    assert set(expected) == set(push_triggered_job_names)
-    assert len(expected) == len(push_triggered_job_names), "a push-triggered job name is duplicated"
+    assert expected
+    assert set(expected) == {
+        "Full unit and contract suite",
+        "NIM benchmark coverage, docstrings, and package smoke",
+        "Hypothesis property tests",
+        "Atheris coverage-guided",
+        "CodeQL analysis",
+        "Python supply chain",
+    }
 
 
 def test_checks_gate_requires_expected_checks_before_checking_they_are_green() -> None:
