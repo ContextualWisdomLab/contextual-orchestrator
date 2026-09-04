@@ -22,6 +22,9 @@ TRAIN_CONTEXTS = 24
 BOOTSTRAP_SAMPLES = 2_000
 BOOTSTRAP_SEED = 568
 LATENCY_REPETITIONS = 200
+ASSIGNMENT_TRIALS = 24_000
+ASSIGNMENT_SEED = 260_905
+EXPLORATION_RATE = 0.2
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -152,12 +155,90 @@ def _measure_paired_latency(
     )
 
 
+def _validate_assignment_design(
+    evidence: PsychometricRoutingEvidence,
+) -> dict[str, object]:
+    """Validate a preregistered positive-propensity logging design on known truth."""
+    generator = random.Random(ASSIGNMENT_SEED)
+    weighted_rewards = {model_id: [] for model_id in MODEL_IDS}
+    observations = {model_id: 0 for model_id in MODEL_IDS}
+    minimum_probability = EXPLORATION_RATE / len(MODEL_IDS)
+    for trial_index in range(ASSIGNMENT_TRIALS):
+        context_index = trial_index % TRAIN_CONTEXTS
+        angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
+        context = f"held_out_{context_index}"
+        ranked = evidence.ranked_evidence(MODEL_IDS, context, _vector(angle))
+        selected_probability = minimum_probability
+        probabilities = {model_id: minimum_probability for model_id in MODEL_IDS}
+        probabilities[ranked[0][0]] += 1.0 - EXPLORATION_RATE
+        draw = generator.random()
+        cumulative = 0.0
+        selected = MODEL_IDS[-1]
+        for model_id in MODEL_IDS:
+            cumulative += probabilities[model_id]
+            if draw < cumulative:
+                selected = model_id
+                selected_probability = probabilities[model_id]
+                break
+        selected_index = MODEL_IDS.index(selected)
+        reward = float(generator.random() < _probability(selected_index, angle))
+        observations[selected] += 1
+        for model_id in MODEL_IDS:
+            weighted_rewards[model_id].append(
+                reward / selected_probability if model_id == selected else 0.0
+            )
+
+    true_values = {
+        model_id: statistics.fmean(
+            _probability(
+                model_index,
+                2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS,
+            )
+            for context_index in range(TRAIN_CONTEXTS)
+        )
+        for model_index, model_id in enumerate(MODEL_IDS)
+    }
+    estimates = {
+        model_id: statistics.fmean(values)
+        for model_id, values in weighted_rewards.items()
+    }
+    confidence_intervals: dict[str, list[float]] = {}
+    covered = 0
+    for model_id, values in weighted_rewards.items():
+        standard_error = statistics.stdev(values) / math.sqrt(ASSIGNMENT_TRIALS)
+        interval = [
+            estimates[model_id] - 1.96 * standard_error,
+            estimates[model_id] + 1.96 * standard_error,
+        ]
+        confidence_intervals[model_id] = interval
+        covered += interval[0] <= true_values[model_id] <= interval[1]
+    return {
+        "assignment_mechanism": "epsilon_greedy",
+        "exploration_rate": EXPLORATION_RATE,
+        "minimum_assignment_probability": minimum_probability,
+        "trials": ASSIGNMENT_TRIALS,
+        "seed": ASSIGNMENT_SEED,
+        "observations_by_candidate": observations,
+        "inverse_propensity_value": estimates,
+        "true_value": true_values,
+        "inverse_propensity_rmse": math.sqrt(
+            statistics.fmean(
+                (estimates[model_id] - true_values[model_id]) ** 2
+                for model_id in MODEL_IDS
+            )
+        ),
+        "confidence_interval_95": confidence_intervals,
+        "true_value_coverage_rate": covered / len(MODEL_IDS),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    assignment_design = _validate_assignment_design(candidate_evidence)
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -262,6 +343,7 @@ def run_benchmark() -> dict[str, object]:
         "production_gates": gates,
         "measurement_validity_components": validity_components,
         "measurement_validity_requirements": validity_requirements,
+        "assignment_design_validation": assignment_design,
     }
     assert all(
         math.isfinite(value)

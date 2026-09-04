@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now validates a preregistered ε-greedy
+  logging design with positive assignment probability for every candidate,
+  inverse-propensity value RMSE, and true-value confidence-interval coverage.
+  It remains synthetic evidence and does not open the buyer-validity gate.
 - Route, conducted-workflow, and streaming trace rows now retain a secret-free
   deterministic selection-design receipt: the versioned candidate set, actual
   attempted deployments, selected deployment, and policy hash. Propensity stays

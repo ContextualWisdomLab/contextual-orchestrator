@@ -114,6 +114,18 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "adaptive_exposure"
     ]["known_limit"]
     assert report["production_default_change_allowed"] is False
+    assignment = report["assignment_design_validation"]
+    assert assignment["assignment_mechanism"] == "epsilon_greedy"
+    assert assignment["minimum_assignment_probability"] == pytest.approx(0.05)
+    assert assignment["trials"] == heldout_benchmark.ASSIGNMENT_TRIALS
+    assert assignment["seed"] == heldout_benchmark.ASSIGNMENT_SEED
+    assert all(
+        count > 0 for count in assignment["observations_by_candidate"].values()
+    )
+    assert assignment["inverse_propensity_rmse"] == pytest.approx(
+        0.008942720293704905
+    )
+    assert assignment["true_value_coverage_rate"] == 1.0
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:
