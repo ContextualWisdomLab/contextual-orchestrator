@@ -28,12 +28,20 @@ def _require_runtime(version_info: tuple[int, ...] = sys.version_info) -> None:
         )
 
 
+def _last_context_request(context_count: int) -> tuple[str, list[float]]:
+    """Return the exact-match context id and score vector for the final context."""
+    if context_count < 1:
+        raise ValueError("context_count must be positive")
+    return f"context_{context_count - 1}", [1.0, float(context_count)]
+
+
 def main() -> None:
     """Print repeatable fit-preparation and ranking latency in milliseconds."""
     _require_runtime()
     import numpy as np
 
     model_ids = [f"model_{model_index}" for model_index in range(4)]
+    last_context, last_vector = _last_context_request(CONTEXT_COUNT)
     evidence = PsychometricRoutingEvidence(max_contexts=CONTEXT_COUNT)
     for context_index in range(CONTEXT_COUNT):
         for model_index, model_id in enumerate(model_ids):
@@ -62,9 +70,7 @@ def main() -> None:
         for _ in range(9):
             evidence._fit_revision = -1
             started_ns = time.perf_counter_ns()
-            ranked = evidence.ranked_evidence(
-                model_ids, "context_511", [1.0, 512.0]
-            )
+            ranked = evidence.ranked_evidence(model_ids, last_context, last_vector)
             samples_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
 
     assert len(ranked) == len(model_ids)
@@ -72,7 +78,7 @@ def main() -> None:
     for sample_index in range(101):
         started_ns = time.perf_counter_ns()
         evidence.observe(
-            "context_511",
+            last_context,
             "model_3",
             bool(sample_index % 2),
             None,

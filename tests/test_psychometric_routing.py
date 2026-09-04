@@ -16,7 +16,10 @@ from contextual_orchestrator import (
     default_role_effort_catalog,
 )
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
-from scripts.benchmark_psychometric_routing import _require_runtime
+from scripts.benchmark_psychometric_routing import (
+    _last_context_request,
+    _require_runtime,
+)
 from scripts.benchmark_psychometric_heldout import (
     _expected_brier,
     _paired_bootstrap_mean_ci,
@@ -32,6 +35,16 @@ def test_psychometric_benchmark_requires_python_312() -> None:
         raise AssertionError("Python 3.11 must not enter the benchmark dependency path")
 
     _require_runtime((3, 12))
+
+
+def test_psychometric_benchmark_last_context_request_tracks_context_count() -> None:
+    assert _last_context_request(512) == ("context_511", [1.0, 512.0])
+    assert _last_context_request(3) == ("context_2", [1.0, 3.0])
+
+
+def test_psychometric_benchmark_last_context_request_rejects_nonpositive_counts() -> None:
+    with pytest.raises(ValueError, match="context_count must be positive"):
+        _last_context_request(0)
 
 
 def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
