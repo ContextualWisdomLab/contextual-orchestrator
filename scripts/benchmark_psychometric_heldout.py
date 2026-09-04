@@ -1351,8 +1351,12 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         },
     }
 
-    def selective_point(seed: int, confidence: float) -> dict[str, float]:
-        resolved: list[tuple[int, float, float]] = []
+    def selective_point(
+        seed: int, confidence: float
+    ) -> tuple[dict[str, float], dict[str, list[float]]]:
+        resolved: list[tuple[int, float, float, bool]] = []
+        resolution_flags: list[float] = []
+        all_candidate_queries: list[float] = []
         for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
             generator = random.Random(seed + candidate_index)
             theta = -2.0 + 4.0 * (
@@ -1360,6 +1364,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             ) / ADAPTIVE_CALIBRATION_CANDIDATES
             responses: dict[str, int] = {}
             state = cat_next_item(bundle, responses, device="cpu")
+            resolution_flags.append(0.0)
+            all_candidate_queries.append(float(ADAPTIVE_CALIBRATION_MAX_ITEMS))
             for step in range(ADAPTIVE_CALIBRATION_MAX_ITEMS):
                 item_index = state["ranked_items"][0]
                 code = f"calibration_{item_index}"
@@ -1373,8 +1379,11 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
                             step + 1,
                             float((state["theta_eap"][0] >= 0.0) != (theta >= 0.0)),
                             abs(theta),
+                            theta >= 0.0,
                         )
                     )
+                    resolution_flags[-1] = 1.0
+                    all_candidate_queries[-1] = float(step + 1)
                     break
         errors = sum(row[1] for row in resolved)
         count = len(resolved)
@@ -1386,17 +1395,31 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             + z95**2 / (2.0 * count)
             + z95 * math.sqrt(risk * (1.0 - risk) / count + z95**2 / (4.0 * count**2))
         ) / denominator
+        negative = [row for row in resolved if not row[3]]
+        positive = [row for row in resolved if row[3]]
         return {
             "confidence_z": confidence,
             "coverage": count / ADAPTIVE_CALIBRATION_CANDIDATES,
             "selective_risk": risk,
             "selective_risk_wilson_upper95": error_upper,
             "resolved_mean_queries": statistics.fmean(row[0] for row in resolved),
+            "all_candidate_mean_queries": statistics.fmean(all_candidate_queries),
             "near_cut_coverage": sum(row[2] < 0.5 for row in resolved) / 100.0,
+            "negative_coverage": len(negative) / 200.0,
+            "positive_coverage": len(positive) / 200.0,
+            "absolute_directional_coverage_gap": abs(
+                len(negative) - len(positive)
+            )
+            / 200.0,
+            "negative_selective_risk": statistics.fmean(row[1] for row in negative),
+            "positive_selective_risk": statistics.fmean(row[1] for row in positive),
+        }, {
+            "resolved": resolution_flags,
+            "queries": all_candidate_queries,
         }
 
     development_points = [
-        selective_point(30_000, confidence)
+        selective_point(30_000, confidence)[0]
         for confidence in SELECTIVE_CLASSIFICATION_Z
     ]
     selected = max(
@@ -1408,7 +1431,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         ),
         key=lambda point: point["coverage"],
     )
-    heldout = selective_point(40_000, selected["confidence_z"])
+    heldout, heldout_samples = selective_point(40_000, selected["confidence_z"])
+    heldout_baseline, heldout_baseline_samples = selective_point(40_000, 1.96)
     classification_stopping["risk_coverage_screen"] = {
         "method": "development_selected_heldout_evaluated_reject_option",
         "development_seed": 30_000,
@@ -1419,6 +1443,21 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         "development_points": development_points,
         "selected_confidence_z": selected["confidence_z"],
         "heldout": heldout,
+        "heldout_baseline": heldout_baseline,
+        "heldout_paired_delta": {
+            "coverage": statistics.fmean(heldout_samples["resolved"])
+            - statistics.fmean(heldout_baseline_samples["resolved"]),
+            "all_candidate_queries": statistics.fmean(heldout_samples["queries"])
+            - statistics.fmean(heldout_baseline_samples["queries"]),
+        },
+        "heldout_paired_delta_ci95": {
+            "coverage": _paired_bootstrap_mean_ci(
+                heldout_samples["resolved"], heldout_baseline_samples["resolved"]
+            ),
+            "all_candidate_queries": _paired_bootstrap_mean_ci(
+                heldout_samples["queries"], heldout_baseline_samples["queries"]
+            ),
+        },
     }
     return {
         "method": "maximum_fisher_information_eap_screen",

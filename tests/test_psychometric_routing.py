@@ -563,8 +563,27 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
             "selective_risk": 0.0,
             "selective_risk_wilson_upper95": 0.01686083665142801,
             "resolved_mean_queries": 5.5625,
+            "all_candidate_mean_queries": 8.395,
             "near_cut_coverage": 0.11,
+            "negative_coverage": 0.575,
+            "positive_coverage": 0.545,
+            "absolute_directional_coverage_gap": 0.03,
+            "negative_selective_risk": 0.0,
+            "positive_selective_risk": 0.0,
         }
+    )
+    assert risk_coverage["heldout_baseline"]["coverage"] == 0.4425
+    assert risk_coverage["heldout_baseline"]["all_candidate_mean_queries"] == 9.88
+    assert risk_coverage["heldout_paired_delta"] == pytest.approx(
+        {"coverage": 0.1175, "all_candidate_queries": -1.485}
+    )
+    assert risk_coverage["heldout_paired_delta_ci95"]["coverage"] == pytest.approx(
+        [0.0875, 0.1475]
+    )
+    assert risk_coverage["heldout_paired_delta_ci95"][
+        "all_candidate_queries"
+    ] == pytest.approx(
+        [-1.715, -1.2625]
     )
     assert stopping["distance_from_cut_strata"] == {
         "near_lt_0_5": {
