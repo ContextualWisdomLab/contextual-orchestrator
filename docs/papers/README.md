@@ -71,8 +71,16 @@ Buyer next action: call `run_equal_budget_ablation` and read
   R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
   item response theory* [Preprint]. arXiv.
   https://doi.org/10.48550/arXiv.2506.01048
-  Grounds held-out response prediction by model ability and query properties;
+  Motivates held-out response prediction from candidate-query interactions;
   exact-query and semantic warm-start evidence must be evaluated separately.
+  The gateway does not adopt the paper's stronger interpretation of fitted
+  coordinates as stable LLM abilities or query properties. The paper and its
+  public implementation report predictive metrics, but do not establish scale
+  linking, parameter invariance, local independence, DIF, parameter uncertainty,
+  rater effects, or adaptive-routing selection-bias control. Until those checks
+  exist, fitted values remain deployment- and sample-conditional routing
+  evidence rather than psychometric measurements that can be compared across
+  model versions, provider policies, domains, or time.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373
@@ -87,7 +95,12 @@ Buyer next action: call `run_equal_budget_ablation` and read
 The current gateway does not claim these papers' full estimators. Candidate changes
 must report held-out prediction quality or true-parameter RMSE together with
 route-decision latency; faster Python preparation alone is a latency result,
-not an accuracy improvement.
+not an accuracy improvement. Production evidence must identify the measured
+unit as a versioned endpoint + model + system/decode/tool policy, preserve
+anchor interactions across recalibration, report uncertainty and subgroup/domain
+DIF, and log randomized exposure or propensities when routing controls which
+responses are observed. Without those conditions, the safe result is "no
+psychometric evidence", never a portable ability rank.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 

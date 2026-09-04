@@ -12,11 +12,13 @@ from typing import Iterable
 class PsychometricRoutingEvidence:
     """Fit judged model-by-prompt responses and score the nearest prompt item.
 
-    The response matrix is model (person) by system/user interaction (item).
-    A fast-mlsirm MLSRM fit estimates model ability and latent interaction
-    distance together. New prompts interpolate at most two positive-cosine
-    observed interactions. Candidates without a fitted estimate remain
-    unranked so the caller can preserve its existing measured-routing order.
+    The response matrix is versioned deployment candidate by system/user
+    interaction. A fast-mlsirm MLSRM fit estimates conditional response
+    probabilities and latent interaction distance together. These local values
+    are routing evidence, not a transportable or invariant model-ability scale.
+    New prompts interpolate at most two positive-cosine observed interactions.
+    Candidates without a fitted estimate remain unranked so the caller can
+    preserve its existing measured-routing order.
     """
 
     def __init__(self, max_contexts: int = 512) -> None:

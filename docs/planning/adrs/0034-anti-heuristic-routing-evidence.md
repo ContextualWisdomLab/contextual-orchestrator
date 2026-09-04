@@ -56,6 +56,17 @@ The seeded smooth-response benchmark is regression evidence only. It cannot
 authorize a production-policy change until a preregistered buyer-held-out
 matrix shows non-inferior accuracy and acceptable end-to-end latency.
 
+The fitted value is a conditional success estimate for one versioned deployment
+candidate: endpoint, model revision, system prompt, decoding policy, and enabled
+tools. It is not a context-free "LLM ability" measurement. Scores must not be
+linked across candidate-catalog, policy, domain, or time changes unless anchor
+interactions establish scale continuity. Production calibration must also test
+local dependence and subgroup/domain DIF, report estimate uncertainty, model
+judge/rater effects, and record randomized exposure or routing propensity so
+adaptively missing outcomes do not turn the incumbent policy into ground truth.
+Failure of any required check yields no psychometric evidence and preserves the
+existing measured order.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is
@@ -83,6 +94,10 @@ without a judge-capable member.
 - Learned routers trained offline (RouteLLM-style): require labeled
   preference data this gateway does not have per deployment; measured
   ledgers give per-deployment truth without training data.
+- Treating neural IRT coordinates as portable model ability: predictive fit
+  alone does not establish construct validity, invariance, scale linking, DIF,
+  or uncertainty. The same numerical score can change when the candidate pool,
+  judge, prompt policy, or exposure policy changes.
 - Pure latency routing: ignores whether answers were actually acceptable;
   the quality ledger exists precisely because fast wrong answers are worse
   than slower verified ones.
@@ -129,6 +144,11 @@ flowchart LR
   tests cover exact and interpolated scoring, iterable candidates, persistence,
   and routing integration. Buyer-held-out and protected-main evidence remain
   open.
+- Measurement-validity gate remains open: versioned measurement units, anchors,
+  local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
+  correction have no buyer-held-out evidence yet. Consequently these fitted
+  values may order candidates only inside the current deployment sample and
+  cannot be published as stable model abilities.
 
 ## References
 
