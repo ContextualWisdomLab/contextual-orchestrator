@@ -221,9 +221,10 @@ replacement from a finite universe. *Journal of the American Statistical
 Association, 47*(260), 663–685.
 https://doi.org/10.1080/01621459.1952.10483446
 
-Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
-parameters for unidimensional multidimensional logistic item response
-models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping
+unobserved item–respondent interactions: A latent space item response model
+with interaction map. *Psychometrika, 86*(2), 378–403.
+https://doi.org/10.1007/s11336-021-09762-5
 
 Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
 Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020

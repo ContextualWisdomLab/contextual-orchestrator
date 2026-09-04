@@ -385,9 +385,10 @@ is absent here.
 - Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark
   for multimodal LLM routing* [Preprint]. arXiv.
   https://doi.org/10.48550/arXiv.2601.17814
-- Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
-  parameters for unidimensional multidimensional logistic item response
-  models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+- Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping
+  unobserved item–respondent interactions: A latent space item response model
+  with interaction map. *Psychometrika, 86*(2), 378–403.
+  https://doi.org/10.1007/s11336-021-09762-5
 - Iannario, M., Monti, A. C., & Scalera, P. (2022). The number of response
   categories in ordered response models. *The International Journal of
   Biostatistics, 18*(2), 593–611.
