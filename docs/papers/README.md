@@ -172,6 +172,18 @@ Buyer next action: call `run_equal_budget_ablation` and read
   https://doi.org/10.1177/0013164416638900
   Grounds treating reliability and model fit as distinct evidence. High score
   precision cannot repair a misspecified model or establish validity.
+- Lord, F. M. (1950). *Properties of test scores expressed as functions of the
+  item parameters* (Research Bulletin RB-50-56). Educational Testing Service.
+  https://doi.org/10.1002/j.2333-8504.1950.tb00919.x
+  Grounds reporting measurement error and discriminating power at specified
+  ability levels rather than only as one sample average.
+- Magis, D. (2013). A note on the item information function of the
+  four-parameter logistic model. *Applied Psychological Measurement, 37*(4),
+  304–315. https://doi.org/10.1177/0146621613475471
+  Grounds the released item/test information calculation. Source commit
+  `b4efa489` spreads 12 item difficulties across `[-2, 2]`, improving the
+  worst information over trait points `[-2, 0, 2]` by `15.789%` and reducing
+  worst conditional standard error from `0.890897` to `0.827931`.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

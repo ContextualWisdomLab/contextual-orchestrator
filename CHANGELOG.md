@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now reports conditional test information
+  and standard error at the center and tails. A range-matched item bank improves
+  worst-case information without treating average reliability as uniform precision.
 - The held-out psychometric benchmark now verifies that posterior empirical
   reliability rises when known item information increases. Reliability remains
   separate from model fit and cannot open the buyer-validity gate by itself.

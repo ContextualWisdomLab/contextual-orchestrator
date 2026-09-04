@@ -154,6 +154,15 @@ invariance or construct validity. `score_reliability` therefore remains
 `not_executed` until buyer calibration, posterior errors, a purpose-specific
 target, and separate model-fit evidence exist.
 
+Source commit `b4efa489` adds the conditional precision screen required by
+Lord's test-information tradition and the released Magis (2013) calculation.
+Across trait points `[-2, 0, 2]`, spreading 12 item difficulties across
+`[-2, 2]` improves worst information by `15.789%` and reduces worst conditional
+standard error from `0.890897` to `0.827931`; center information falls because
+precision is redistributed rather than created. `conditional_information`
+remains `not_executed` until buyer-relevant trait regions, calibrated items,
+and purpose-specific precision targets exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

@@ -2308,6 +2308,13 @@ calculation on two seeded 1,200-response, 12-item cases. Reliability rises from
 information, not buyer score precision or validity. Reliability and model fit
 remain separate evidence, so `score_reliability` stays `not_executed` pending
 buyer calibration, posterior errors, a purpose-specific target, and fit review.
+Source commit `b4efa489` exercises the released test-information calculation at
+trait points `[-2, 0, 2]`. Spreading 12 item difficulties across `[-2, 2]`
+raises worst information from `1.259923` to `1.458854` (`15.789%`) and lowers
+worst conditional standard error from `0.890897` to `0.827931`; center
+information falls from `3.0` to `2.194529`, exposing the actual precision
+tradeoff. `conditional_information` remains `not_executed` until buyer-relevant
+regions, calibrated items, and preregistered precision targets exist.
 
 ## 7. Delivery gates
 
