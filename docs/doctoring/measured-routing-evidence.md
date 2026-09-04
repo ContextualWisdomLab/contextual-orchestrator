@@ -40,7 +40,11 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Accuracy and decision-latency KPI
 
-Run `uv run python scripts/benchmark_psychometric_routing.py`. The benchmark
+Run
+`uv run --python 3.12 python scripts/benchmark_psychometric_routing.py`.
+Python 3.12 is explicit because the locked NumPy/fast-mlsirm benchmark
+dependencies are intentionally unavailable on the product's supported Python
+3.10 and 3.11 runtimes. The benchmark
 fixes the native fit and probability output, then measures only gateway matrix
 preparation and ranking for 512 contexts, four models, and two dichotomous
 items per context. Lower median milliseconds is better; the psychometric and

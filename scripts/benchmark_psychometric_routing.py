@@ -10,8 +10,6 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.psychometric_routing import (  # noqa: E402
@@ -19,8 +17,19 @@ from contextual_orchestrator.psychometric_routing import (  # noqa: E402
 )
 
 
+def _require_runtime(version_info: tuple[int, ...] = sys.version_info) -> None:
+    if tuple(version_info[:2]) < (3, 12):
+        raise SystemExit(
+            "psychometric routing benchmark requires Python 3.12 or newer; "
+            "run: uv run --python 3.12 python scripts/benchmark_psychometric_routing.py"
+        )
+
+
 def main() -> None:
     """Print repeatable fit-preparation and ranking latency in milliseconds."""
+    _require_runtime()
+    import numpy as np
+
     model_ids = [f"model_{model_index}" for model_index in range(4)]
     evidence = PsychometricRoutingEvidence(max_contexts=512)
     for context_index in range(512):
