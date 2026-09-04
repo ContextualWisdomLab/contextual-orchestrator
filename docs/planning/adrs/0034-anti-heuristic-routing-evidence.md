@@ -80,6 +80,10 @@ IRT-Router defines LLM deployments as test takers and queries as items. Under
 that orientation, query language or domain is an item/context property, not a
 person-group label. The gateway therefore will not manufacture a conventional
 person-group DIF result by passing buyer language or domain as the group vector.
+The paper supplies a useful constrained response predictor, but monotonicity and
+selected face-valid examples do not identify its latent scale or establish
+psychometric construct validity. CO therefore does not call its learned
+coordinates stable ability or difficulty measurements.
 When enough versioned candidate deployments support a preregistered comparison,
 provider family or decode-policy cohort may be tested as a candidate-group DIF
 screen through the released `fast-mlsirm` API. Language and domain require an
@@ -91,6 +95,13 @@ discrimination, and language-specific ability residuals. The latter terms
 remain canonical-owner gaps. Buyer-language and cross-domain validity gates
 therefore remain false rather than re-labeling a routing predictor as an
 invariant measurement model.
+
+Source commit `6162af9e` runs the released single-coefficient item-covariate
+path on 1,200 synthetic candidate observations and 12 items. The estimate
+recovers true `delta=-0.8` as `-0.792349` (absolute error `0.007651`), but the
+fit ends at `max_iter_reached` after 80 iterations. The report preserves both
+facts and leaves the buyer language/domain component `not_executed`; a close
+point estimate cannot override a failed convergence verdict.
 
 ### Workflow triage without keywords
 

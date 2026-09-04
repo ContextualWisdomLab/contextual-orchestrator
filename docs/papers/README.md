@@ -74,6 +74,10 @@ Buyer next action: call `run_equal_budget_ablation` and read
   https://doi.org/10.48550/arXiv.2506.01048
   Motivates held-out response prediction from candidate-query interactions;
   exact-query and semantic warm-start evidence must be evaluated separately.
+  CO classifies this as an IRT-shaped predictive model, not a validated
+  psychometric measurement model: monotonicity alone does not identify a scale
+  or establish construct validity, and the paper's selected model-pair and
+  two-query examples do not supply uncertainty or invariant measurement proof.
   The gateway does not adopt the paper's stronger interpretation of fitted
   coordinates as stable LLM abilities or query properties. The paper and its
   public implementation report predictive metrics, but do not establish scale
@@ -82,6 +86,10 @@ Buyer next action: call `run_equal_budget_ablation` and read
   exist, fitted values remain deployment- and sample-conditional routing
   evidence rather than psychometric measurements that can be compared across
   model versions, provider policies, domains, or time.
+  Source commit `6162af9e` exercises the released item-side covariate contract
+  against a known coefficient. It estimates `-0.792349` for true `-0.8`
+  (absolute error `0.007651`) but reaches the 80-iteration limit rather than a
+  convergence verdict, so this evidence explicitly does not pass validity.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

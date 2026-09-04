@@ -2258,6 +2258,13 @@ connected, fully crossed synthetic design with 1,000 respondents, six items,
 and three judges. It converges in five iterations, recovers judge-severity
 order, and reports centered-severity RMSE 0.018292. No versioned buyer judge
 ratings were executed, so `judge_effects` remains `not_executed`.
+Source commit `6162af9e` exercises the released multigroup item-covariate path
+on a known `delta=-0.8`. It estimates `-0.792349` (absolute error `0.007651`)
+but ends at `max_iter_reached` after 80 iterations. The baseline therefore
+records recovery and failed convergence separately and leaves
+`item_language_domain_effects` `not_executed`. IRT-Router remains an
+IRT-shaped prediction reference, not evidence that its learned coordinates are
+identified, invariant psychometric ability or difficulty measurements.
 
 ## 7. Delivery gates
 
