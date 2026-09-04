@@ -1818,8 +1818,14 @@ class ModelClient:
             else:
                 destination = self._validate_provider(agent)
                 if _is_local_provider_url(agent.base_url):
+                    registry_headers: dict[str, str] = {}
+                    apply_header(
+                        registry_headers,
+                        api_version_for(agent.provider_name),
+                    )
                     registry_request = urllib.request.Request(
                         self._provider_url(agent, "/models"),
+                        headers=registry_headers,
                         method="GET",
                     )
                     with self._open_provider(

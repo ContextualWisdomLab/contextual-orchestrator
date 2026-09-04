@@ -466,6 +466,37 @@ def test_declared_header_version_is_injected_on_every_request() -> None:
     assert seen[0].get_header("Anthropic-version") == "2023-06-01"
 
 
+def test_declared_header_version_is_injected_on_local_model_registry_probe() -> None:
+    """Readiness must authenticate the versioned registry request like inference."""
+    agent = ModelAgent(
+        "versioned_probe_agent",
+        "model-x",
+        base_url="mlx://127.0.0.1:8080/v1",
+        provider_name="test_header_provider",
+    )
+    client = ModelClient(max_retries=0)
+    seen = []
+
+    def open_provider(request, _destination=None, timeout=None):
+        """Capture registry and inference requests with valid fixture responses."""
+        seen.append(request)
+        if request.full_url.endswith("/models"):
+            return _Response({"data": [{"id": "model-x"}]})
+        return _Response({"choices": [{"message": {"content": "OK"}}]})
+
+    version = ProviderApiVersion(header_name="anthropic-version", value="2023-06-01")
+    with patch(
+        "contextual_orchestrator.orchestrator.api_version_for",
+        side_effect=lambda name: version if name == "test_header_provider" else None,
+    ), patch.object(client, "_open_provider", side_effect=open_provider):
+        result = client.probe(agent)
+
+    assert result["status"] == "ready"
+    assert len(seen) == 2
+    assert seen[0].get_header("Anthropic-version") == "2023-06-01"
+    assert seen[1].get_header("Anthropic-version") == "2023-06-01"
+
+
 def test_declared_query_param_version_is_appended_to_the_url() -> None:
     agent = ModelAgent(
         "versioned_query_agent",
