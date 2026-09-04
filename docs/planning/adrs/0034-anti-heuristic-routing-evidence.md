@@ -119,6 +119,14 @@ not a significance test. `parameter_invariance` remains `not_executed` until
 versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
+Source commit `a18e25f7` adds the response-pattern screen described by Meijer
+(1996) and Tendeiro et al. (2016). The released nonparametric ZU3 calculation
+ranks one injected inverted pattern first among 1,000 synthetic candidates and
+separates it from the next-highest pattern by `1.818719`. This is a review
+signal, not a diagnosis: no universal cutoff or causal label is attached, and
+`response_pattern_fit` remains `not_executed` without complete buyer responses
+and a preregistered human-review policy.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

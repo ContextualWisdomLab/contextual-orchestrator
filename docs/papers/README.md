@@ -119,6 +119,19 @@ Buyer next action: call `run_equal_budget_ablation` and read
   through seven stable anchors, flags the one injected drift item, and produces
   no stable-item false positive. Its fixed `0.25` tolerance is a preregistered
   effect-size screen, not an inferential cutoff or buyer invariance proof.
+- Meijer, R. R. (1996). Person-fit research: An introduction. *Applied
+  Measurement in Education, 9*(1), 3–8.
+  https://doi.org/10.1207/s15324818ame0901_2
+  Grounds examining response patterns that deviate from the fitted model or
+  comparison group instead of trusting every fitted candidate coordinate.
+- Tendeiro, J. N., Meijer, R. R., & Niessen, A. S. M. (2016). PerFit: An R
+  package for person-fit analysis in IRT. *Journal of Statistical Software,
+  74*(5), 1–27. https://doi.org/10.18637/jss.v074.i05
+  Grounds the released nonparametric person-fit statistics. Source commit
+  `a18e25f7` ranks one injected inverted response pattern first among 1,000
+  candidates with ZU3 separation `1.818719` from the next-highest pattern. The
+  diagnostic does not explain the anomaly or supply a universal action cutoff,
+  so buyer response-pattern fit remains unexecuted.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

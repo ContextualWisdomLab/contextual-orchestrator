@@ -2279,6 +2279,12 @@ injected drift item, and reports no stable-item false positive. The fixed `0.25`
 tolerance is an effect-size rule rather than a significance test; versioned
 buyer recalibrations and sampling uncertainty are still absent, so
 `parameter_invariance` remains `not_executed`.
+Source commit `a18e25f7` exercises the released nonparametric person-fit API on
+1,000 synthetic candidate response patterns. The injected inverted pattern
+ranks first and has ZU3 separation `1.818719` from the next-highest pattern.
+Because unusual response patterns neither identify a cause nor prove invalidity,
+the report applies no universal cutoff and leaves `response_pattern_fit`
+`not_executed` pending complete buyer responses and a human-review policy.
 
 ## 7. Delivery gates
 

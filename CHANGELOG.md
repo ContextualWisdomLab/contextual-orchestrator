@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now exercises released nonparametric
+  person-fit diagnostics and ranks one injected inverted candidate response
+  pattern first. It reports separation without inventing a universal cutoff or
+  treating an unusual pattern as proof that a candidate is invalid.
 - The held-out psychometric benchmark now links two synthetic recalibrations
   through seven stable anchors and detects the one injected item-parameter drift
   with no stable-item false positive. The tolerance is explicitly an effect-size
