@@ -87,7 +87,7 @@ class PsychometricRoutingEvidence:
                 return []
             exact_id = self.context_id(prompt_interaction)
             if exact_id in self._scores:
-                context_id = exact_id
+                context_scores = self._scores[exact_id]
             elif vector is not None:
                 comparable = [
                     (self._cosine(vector, stored_vector), stored_id)
@@ -97,13 +97,30 @@ class PsychometricRoutingEvidence:
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
                     return []
-                context_id = max(comparable, key=lambda item: (item[0], item[1]))[1]
+                neighbors = sorted(comparable, reverse=True)[:2]
+                if len(neighbors) == 1 or neighbors[1][0] <= 0:
+                    context_scores = self._scores[neighbors[0][1]]
+                else:
+                    context_scores = {
+                        agent_id: sum(
+                            similarity * self._scores[context_id][agent_id]
+                            for similarity, context_id in neighbors
+                            if agent_id in self._scores[context_id]
+                        )
+                        / sum(
+                            similarity
+                            for similarity, context_id in neighbors
+                            if agent_id in self._scores[context_id]
+                        )
+                        for agent_id in agent_ids
+                        if any(agent_id in self._scores[context_id] for _, context_id in neighbors)
+                    }
             else:
                 return []
             scored = [
-                (agent_id, self._scores[context_id][agent_id])
+                (agent_id, context_scores[agent_id])
                 for agent_id in agent_ids
-                if agent_id in self._scores[context_id]
+                if agent_id in context_scores
             ]
             return sorted(scored, key=lambda item: (-item[1], item[0]))
 

@@ -182,3 +182,23 @@ def test_replacing_judge_row_removes_stale_trailing_items() -> None:
     evidence.observe("prompt", "model", False, None, (0,))
 
     assert evidence.records()[0]["irt_row"] == [0]
+
+
+def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("left", "model_a", True, [1.0, 0.0])
+    evidence.observe("right", "model_a", True, [0.0, 1.0])
+    evidence._scores = {
+        evidence.context_id("left"): {"model_a": 0.9, "model_b": 0.1},
+        evidence.context_id("right"): {"model_a": 0.3, "model_b": 0.7},
+    }
+    evidence._fit_revision = evidence._revision
+
+    ranked = evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 1.0]
+    )
+
+    assert [(agent_id, round(score, 6)) for agent_id, score in ranked] == [
+        ("model_a", 0.6),
+        ("model_b", 0.4),
+    ]
