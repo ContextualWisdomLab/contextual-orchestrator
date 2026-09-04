@@ -316,6 +316,11 @@ Buyer next action: call `run_equal_budget_ablation` and read
   paired query-delta interval is `[-2.425, -1.835]` and the accuracy-delta
   interval is `[0, 0]`. Near-cut behavior, normal-interval calibration, buyer
   decision costs, and live query latency remain unvalidated.
+  Source `298e1fc8` makes the known near-cut limitation observable: candidates
+  within 0.5 of the cut stop early 3% of the time, average 11.86 queries, and
+  reach 0.70 accuracy; candidates at least 1.0 away stop early 68%, average
+  8.305 queries, and reach 1.0 accuracy. These descriptive synthetic strata
+  are not calibrated subgroup guarantees.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

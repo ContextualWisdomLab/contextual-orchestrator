@@ -2424,6 +2424,12 @@ the cut, with a 12-query maximum, averages 9.875 queries and stops early for
 accuracy. Buyer cuts and costs, near-cut risk, interval calibration, and live
 provider latency remain absent, so this result does not change the production
 gate.
+Source commit `298e1fc8` stratifies this stopping result by distance from the
+cut. The within-0.5 stratum stops early 3%, averages 11.86 queries, and reaches
+0.70 accuracy; the at-least-1.0-away stratum stops early 68%, averages 8.305
+queries, and reaches 1.0 accuracy. The gap confirms that aggregate query
+savings cannot stand in for near-cut buyer risk or calibrated subgroup
+performance.
 
 ## 7. Delivery gates
 

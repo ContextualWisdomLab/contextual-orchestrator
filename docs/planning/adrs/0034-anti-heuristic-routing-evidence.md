@@ -129,6 +129,11 @@ query-delta interval is `[-2.425, -1.835]` and the accuracy-delta interval is
 `[0, 0]`. This does not establish calibrated interval coverage, acceptable
 near-cut risk, buyer decision costs, or provider-call latency. It remains a
 benchmark design candidate, not a production stopping rule.
+Source `298e1fc8` prevents the aggregate savings from hiding near-cut risk.
+Candidates within 0.5 of the synthetic cut stop early only 3% of the time,
+average 11.86 queries, and reach 0.70 accuracy. Candidates at least 1.0 away
+stop early 68%, average 8.305 queries, and reach 1.0 accuracy. These strata are
+descriptive checks on known truth, not calibrated buyer subgroup guarantees.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

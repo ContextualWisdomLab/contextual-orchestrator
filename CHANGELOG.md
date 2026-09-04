@@ -12,8 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - The adaptive onboarding screen now compares a bounded 95% confidence-interval
   classification stop with fixed 12-query calibration, reporting paired query
-  and decision-accuracy intervals instead of treating generic score precision
-  as the routing decision objective.
+  and decision-accuracy intervals plus near/mid/far-cut strata instead of
+  treating generic score precision or an aggregate mean as the routing
+  decision objective.
 - The held-out psychometric benchmark now compares released maximum-information
   EAP calibration with random query ordering for unseen-candidate onboarding,
   reporting calibration-query burden, score error, and unobserved-probability
