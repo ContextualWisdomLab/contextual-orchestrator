@@ -2307,12 +2307,12 @@ synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
 stepwise method. Buyer recalibrations and preregistered review rules remain
 absent, so the validity gate stays closed.
 Source commit `7c3e6e98` adds temporal drift KPIs motivated by Chen, Lee, and
-Li (2022). Source commit `c096659b` searches 11 thresholds over 500 seeded
-runs, selecting `6.1` as the minimum p95 delay among candidates meeting the
-synthetic 5% false-alarm and 25-observation p95 limits. It records `4.8%` false
-alarms, p50 delay 8, and p95 delay 20, improving the prior candidate's 10/22
-delays. The tradeoff is a synthetic calculation contract, not the paper's
-multistream Bayesian compound-risk procedure or a buyer-approved threshold.
+Li (2022). Source commit `1b3b7244` selects a threshold on 500 calibration runs
+using a 95% Wilson false-alarm upper bound, then evaluates it on an independent
+500-run seed. Selected threshold `6.6` records held-out false alarms `2.4%`
+with upper bound `4.15%`, delay p50 10, and p95 20. The tradeoff is a synthetic
+calculation contract, not the paper's multistream Bayesian compound-risk
+procedure or a buyer-approved threshold.
 `sequential_drift`
 remains `not_executed` pending versioned buyer time series, declared risk, and
 preregistered false-alarm and detection-delay targets.

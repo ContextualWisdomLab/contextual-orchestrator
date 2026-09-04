@@ -22,8 +22,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - The held-out psychometric benchmark now measures sequential probability-drift
   detection delay and pre-change false alarms over 500 repetitions. A bounded
-  threshold search minimizes p95 delay among candidates meeting both synthetic
-  targets, without claiming the cited compound-risk procedure.
+  calibration search uses a 95% Wilson false-alarm bound, then evaluates the
+  selected threshold on an independent 500-repetition seed.
 - The held-out psychometric benchmark now distinguishes prediction for unseen
   queries from prediction for unseen candidate deployments. The latter remains
   separate and reports zero psychometric prediction coverage instead of

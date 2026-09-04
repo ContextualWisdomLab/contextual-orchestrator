@@ -121,11 +121,11 @@ preregistered review rules exist.
 
 Source commit `7c3e6e98` adds false-alarm rate and detection-delay p50/p95 as
 separate temporal KPIs, motivated by Chen, Lee, and Li (2022). Source commit
-`c096659b` searches thresholds 6.0 through 7.0 in 0.1 steps and selects the
-minimum p95 delay among candidates meeting the synthetic 5% false-alarm and
-25-observation p95 limits. Threshold `6.1` records `4.8%` false alarms, p50
-delay 8, and p95 delay 20, improving the prior 10/22 delays. This bounded
-calculation is not the paper's multistream Bayesian compound-risk procedure.
+`1b3b7244` searches thresholds 6.0 through 7.0 on 500 calibration runs, requiring
+the 95% Wilson false-alarm upper bound and p95 delay to meet the synthetic
+limits. It evaluates the selected `6.6` threshold on a separate 500-run seed:
+held-out false alarms are `2.4%` with upper bound `4.15%`, delay p50 is 10, and
+p95 is 20. This is not the paper's multistream Bayesian compound-risk procedure.
 `sequential_drift` remains `not_executed` until buyer time-series observations,
 declared change risks, and preregistered false-alarm and delay targets exist.
 

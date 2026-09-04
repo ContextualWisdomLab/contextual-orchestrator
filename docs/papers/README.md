@@ -220,11 +220,11 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds monitoring psychometric drift as a sequential decision with explicit
   false-detection and missed-detection risks. Source commit `7c3e6e98` runs a
   narrower one-stream Bernoulli CUSUM calculation over 500 seeded repetitions.
-  Source commit `c096659b` searches 11 thresholds and selects `6.1`, the minimum
-  p95 delay among candidates meeting the synthetic 5% false-alarm and 25-step
-  p95 limits. It yields `4.8%` false alarms, p50 delay 8, and p95 delay 20,
-  improving the prior candidate's 10/22 delays. It is not the paper's
-  multistream Bayesian compound-risk procedure and supplies no buyer threshold.
+  Source commit `1b3b7244` searches 11 thresholds on 500 calibration runs using
+  a 95% Wilson false-alarm upper bound, then evaluates the selected `6.6`
+  threshold on an independent 500-run seed. Held-out false alarms are `2.4%`
+  with upper bound `4.15%`; delay p50 is 10 and p95 is 20 observations. It is
+  not the paper's multistream Bayesian procedure and supplies no buyer threshold.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.
   https://doi.org/10.1007/BF02289447
