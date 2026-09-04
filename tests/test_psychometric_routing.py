@@ -15,7 +15,10 @@ from contextual_orchestrator import (
 )
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 from scripts.benchmark_psychometric_routing import _require_runtime
-from scripts.benchmark_psychometric_heldout import _expected_brier
+from scripts.benchmark_psychometric_heldout import (
+    _expected_brier,
+    _paired_bootstrap_mean_ci,
+)
 
 
 def test_psychometric_benchmark_requires_python_312() -> None:
@@ -32,6 +35,17 @@ def test_psychometric_benchmark_requires_python_312() -> None:
 def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
     assert _expected_brier(0.5, 0.5) == 0.25
     assert _expected_brier(1.0, 0.5) == 0.5
+
+
+def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
+    assert _paired_bootstrap_mean_ci(
+        [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]
+    ) == pytest.approx([-0.1, -0.1])
+
+
+def test_paired_bootstrap_interval_rejects_unpaired_samples() -> None:
+    with pytest.raises(ValueError, match="non-empty and equal length"):
+        _paired_bootstrap_mean_ci([0.1], [])
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:
