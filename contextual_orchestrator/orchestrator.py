@@ -4091,6 +4091,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
             # A batch_route row persisted before judging (see batch_route's

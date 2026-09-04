@@ -219,6 +219,14 @@ def test_contextual_judge_observation_does_not_survive_deployment_change(
 
     assert records == []
 
+    reverted = TaskOrchestrator(
+        [ModelAgent("model_a", "model-a")], state_db=state_db
+    )
+    reverted_records = reverted._psychometric_router.records()
+    reverted.close()
+
+    assert reverted_records == []
+
 
 def test_runtime_deployment_change_discards_contextual_judge_observation() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("model_a", "model-a")])
