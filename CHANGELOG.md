@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now distinguishes prediction for unseen
+  queries from prediction for unseen candidate deployments. The latter remains
+  unexecuted instead of inheriting accuracy evidence from known candidates.
 - The held-out psychometric benchmark now reports selection success and net
   utility together, showing that higher predictive validity does not justify a
   route when its measurement cost exceeds buyer-valued outcome gains.

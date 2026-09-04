@@ -204,6 +204,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   `0.500273` to `0.723515`, but an `8,000`-unit cost increase turns net utility
   from `5,626.64` to `-2,373.36`. Personnel selection is only an analogue;
   buyer-valued routing outcomes and costs remain unvalidated.
+- Stenhaug, B. A., & Domingue, B. W. (2022). Predictive fit metrics for item
+  response models. *Applied Psychological Measurement, 46*(2), 128–143.
+  https://doi.org/10.1177/01466216211066603
+  Separates prediction of missing responses for observed persons from prediction
+  of complete responses for new persons. Source commit `68831dff` maps those
+  tasks to unseen queries for known deployments and unseen candidate deployments.
+  The synthetic benchmark executes only the first task, so it cannot claim
+  cold-start predictive fit for a newly introduced or changed deployment.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.
   https://doi.org/10.1007/BF02289447

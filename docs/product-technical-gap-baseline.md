@@ -2375,6 +2375,13 @@ negative at `-2,373.36`. The personnel-selection normal model is an analogue,
 not validated routing economics, so `decision_utility` remains `not_executed`
 pending buyer-valued outcomes, actual routing costs and volume, selection ratio,
 and a preregistered target.
+Source commit `68831dff` applies the predictive-fit distinction from Stenhaug
+and Domingue (2022). Existing Brier and log-loss results cover held-out queries
+for known candidate deployments only. The report now exposes cold-start
+prediction for an unseen candidate deployment as a separate `not_executed`
+task, so query holdout evidence cannot be reused as candidate-generalization
+evidence. `predictive_fit` remains closed until versioned buyer outcomes support
+separate held-out-query and held-out-candidate scoring.
 
 ## 7. Delivery gates
 
