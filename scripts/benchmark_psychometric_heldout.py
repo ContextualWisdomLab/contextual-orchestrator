@@ -20,6 +20,10 @@ MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 TRAIN_CONTEXTS = 24
 
 
+def _expected_brier(predicted: float, target: float) -> float:
+    return target * (1.0 - target) + (predicted - target) ** 2
+
+
 def _probability(model_index: int, angle: float) -> float:
     phase = 2.0 * math.pi * model_index / len(MODEL_IDS)
     return 1.0 / (1.0 + math.exp(-2.5 * math.cos(angle - phase)))
@@ -46,7 +50,7 @@ def main() -> None:
     }
     evidence._fit_revision = evidence._revision
 
-    squared_errors: list[float] = []
+    brier_scores: list[float] = []
     log_losses: list[float] = []
     regrets: list[float] = []
     samples_ms: list[float] = []
@@ -65,7 +69,7 @@ def main() -> None:
         for model_id in MODEL_IDS:
             probability = min(max(predicted[model_id], 1e-12), 1.0 - 1e-12)
             target = truth[model_id]
-            squared_errors.append((probability - target) ** 2)
+            brier_scores.append(_expected_brier(probability, target))
             log_losses.append(
                 -(target * math.log(probability) + (1.0 - target) * math.log(1.0 - probability))
             )
@@ -74,7 +78,7 @@ def main() -> None:
 
     ordered_ms = sorted(samples_ms)
     result = {
-        "brier_score": statistics.fmean(squared_errors),
+        "brier_score": statistics.fmean(brier_scores),
         "contexts_held_out": TRAIN_CONTEXTS,
         "contexts_train": TRAIN_CONTEXTS,
         "decision_p50_ms": statistics.median(samples_ms),

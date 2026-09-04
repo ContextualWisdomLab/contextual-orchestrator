@@ -66,9 +66,9 @@ quality, and provider latency remain separate KPIs.
 Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate
 semantic warm-start experiment. On its fixed 24-training/24-held-out smooth
 latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
-Brier 0.0020161821, log loss 0.4525311878, mean top-choice regret 0.0024259478,
+Brier 0.1438369123, log loss 0.4525311878, mean top-choice regret 0.0024259478,
 and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
-`50d91c9e`, carried by PR #1061, reports Brier 0.0000139543, log loss
+`50d91c9e`, carried by PR #1061, reports Brier 0.1418346845, log loss
 0.4475784303, zero top-choice regret, and p50 about 0.0204 ms. This seeded
 simulation isolates unseen-context interpolation; it is not a substitute for
 preregistered buyer prompts, observed judge outcomes, or end-to-end latency.
