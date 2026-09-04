@@ -56,6 +56,13 @@ CHAT_COMPLETIONS_ONLY_TAG = "api:chat_completions_only"
 RESPONSES_ONLY_TAG = "api:responses_only"
 
 
+def _shape_tags(tags: Iterable[str]) -> set[str]:
+    declared = set(tags)
+    if {CHAT_COMPLETIONS_ONLY_TAG, RESPONSES_ONLY_TAG} <= declared:
+        raise ValueError("conflicting API shape tags")
+    return declared
+
+
 def agent_supports_responses(tags: Iterable[str]) -> bool:
     """Return whether an agent may receive a Responses-shaped request as-is.
 
@@ -68,7 +75,7 @@ def agent_supports_responses(tags: Iterable[str]) -> bool:
     not tag-based and stays checked separately by the caller
     (``ModelClient._proxy_send``'s own ``_is_local_provider_url`` check).
     """
-    return CHAT_COMPLETIONS_ONLY_TAG not in set(tags)
+    return CHAT_COMPLETIONS_ONLY_TAG not in _shape_tags(tags)
 
 
 def agent_supports_chat_completions(tags: Iterable[str]) -> bool:
@@ -78,7 +85,7 @@ def agent_supports_chat_completions(tags: Iterable[str]) -> bool:
     (proven restricted to the Responses API) -- the mirror of
     :func:`agent_supports_responses`.
     """
-    return RESPONSES_ONLY_TAG not in set(tags)
+    return RESPONSES_ONLY_TAG not in _shape_tags(tags)
 
 
 def _responses_text(value: Any) -> str:
@@ -163,6 +170,8 @@ def responses_request_to_chat_request(request: dict[str, Any]) -> dict[str, Any]
                     ):
                         parts.append({"type": "text", "text": part["text"]})
                     elif part_type in {"input_image", "image_url"}:
+                        if part.get("file_id") is not None:
+                            raise ValueError("Responses input_image file_id has no Chat equivalent")
                         image_url = part.get("image_url")
                         if isinstance(image_url, str):
                             image_url = {
@@ -228,10 +237,13 @@ def responses_request_to_chat_request(request: dict[str, Any]) -> dict[str, Any]
     for tool in request.get("tools") or []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
+        source = (
+            tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        )
         function = {
-            key: tool[key]
+            key: source[key]
             for key in ("name", "description", "parameters", "strict")
-            if key in tool
+            if key in source
         }
         tools.append({"type": "function", "function": function})
     if tools:
@@ -239,10 +251,13 @@ def responses_request_to_chat_request(request: dict[str, Any]) -> dict[str, Any]
 
     tool_choice = payload.get("tool_choice")
     if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-        payload["tool_choice"] = {
-            "type": "function",
-            "function": {"name": tool_choice.get("name", "")},
-        }
+        function = tool_choice.get("function")
+        name = (
+            function.get("name", "")
+            if isinstance(function, dict)
+            else tool_choice.get("name", "")
+        )
+        payload["tool_choice"] = {"type": "function", "function": {"name": name}}
     return payload
 
 
@@ -331,18 +346,6 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
                 "output": _responses_text(message.get("content")),
             })
             continue
-        tool_calls = message.get("tool_calls")
-        if role == "assistant" and isinstance(tool_calls, list):
-            for tool_call in tool_calls:
-                if not isinstance(tool_call, dict):
-                    continue
-                function = tool_call.get("function") or {}
-                input_items.append({
-                    "type": "function_call",
-                    "call_id": str(tool_call.get("id", "")),
-                    "name": str(function.get("name", "")),
-                    "arguments": str(function.get("arguments", "{}")),
-                })
         content = message.get("content")
         text_type = "output_text" if role == "assistant" else "input_text"
         if isinstance(content, str):
@@ -382,6 +385,18 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
                         parts.append(image_part)
             if parts:
                 input_items.append({"type": "message", "role": role, "content": parts})
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function") or {}
+                input_items.append({
+                    "type": "function_call",
+                    "call_id": str(tool_call.get("id", "")),
+                    "name": str(function.get("name", "")),
+                    "arguments": str(function.get("arguments", "{}")),
+                })
 
     payload_out: dict[str, Any] = {
         "model": payload.get("model", "local-model"),
@@ -389,9 +404,8 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
         "stream": False,
     }
     for key in (
-        "temperature", "top_p", "stop", "seed", "presence_penalty",
-        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "user",
-        "parallel_tool_calls", "tool_choice", "metadata",
+        "temperature", "top_p", "top_logprobs", "user", "parallel_tool_calls",
+        "tool_choice", "metadata", "store", "service_tier", "reasoning",
     ):
         if key in payload:
             payload_out[key] = payload[key]
@@ -425,9 +439,9 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
     for tool in payload.get("tools") or []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
-        function = tool.get("function")
-        if not isinstance(function, dict):
-            continue
+        function = (
+            tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        )
         tools.append({
             "type": "function",
             **{
@@ -442,8 +456,16 @@ def chat_request_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]
     tool_choice = payload_out.get("tool_choice")
     if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
         function = tool_choice.get("function")
-        if isinstance(function, dict):
-            payload_out["tool_choice"] = {"type": "function", "name": function.get("name", "")}
+        name = (
+            function.get("name", "")
+            if isinstance(function, dict)
+            else tool_choice.get("name", "")
+        )
+        payload_out["tool_choice"] = {"type": "function", "name": name}
+
+    for control in ("modalities", "prediction"):
+        if control in payload:
+            raise ValueError(f"Chat control {control} has no Responses equivalent")
 
     return payload_out
 
@@ -491,7 +513,9 @@ def responses_response_to_chat_response(
     if tool_calls:
         finish_reason = "tool_calls"
     elif data.get("status") == "incomplete":
-        finish_reason = "length"
+        details = data.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, dict) else None
+        finish_reason = "content_filter" if reason == "content_filter" else "length"
     else:
         finish_reason = "stop"
 

@@ -196,6 +196,19 @@ versioned provider is one dict entry, never a new `if provider_name ==
   *response* side -- a caller-facing reply must return 200 with whatever
   chat-expressible content the provider produced, not fail the whole
   request over an unmappable reasoning trace.
+- The shared request translators preserve assistant text before its following
+  function calls, accept either function-tool shape already admitted by the
+  HTTP validators, and reject contradictory `api:*_only` declarations. A
+  Responses `input_image` containing only `file_id` fails closed because Chat
+  Completions has no equivalent reference field; deleting the image would
+  silently change the request.
+- Chat controls are copied to Responses only when the current OpenAI Responses
+  contract accepts the same field. This includes `store`, `service_tier`, and
+  `reasoning`, while Chat-only `stop`, `seed`, penalties, `logit_bias`, and
+  `logprobs` are not forwarded. Accepted Chat controls with no Responses
+  equivalent (`modalities` and `prediction`) fail closed instead of being
+  dropped. `incomplete_details.reason=content_filter` maps to the matching Chat
+  finish reason rather than token exhaustion.
 - Multiple `tool_calls` on one Chat Completions assistant turn become that
   many separate Responses `function_call` items when translated up, which
   loses the fact they originally shared one turn if there was more than
@@ -203,6 +216,10 @@ versioned provider is one dict entry, never a new `if provider_name ==
   content and every tool call's name/arguments/linkage, but not necessarily
   the exact original message *count* -- verified explicitly in
   `tests/test_chat_responses_shape.py`.
+- Readiness is shape-aware: `ModelClient.probe()` sends one bounded
+  `/responses` request for an `api:responses_only` agent and evaluates its
+  translated text result. Worker chat, streaming, and batch paths remain
+  separate from readiness and retain the fail-closed boundary below.
 - **Deferred: `ModelClient.chat()`/`stream_chat()` fail closed for a
   `responses_only` agent rather than translating.** `route_once`, triage,
   planner calls, `conduct`'s intermediate worker steps, and real
@@ -247,11 +264,23 @@ versioned provider is one dict entry, never a new `if provider_name ==
 
 ## References
 
+### Evidence classification
+
+This is wire-contract adaptation, not an empirical model-quality claim. Its
+normative basis is the current OpenAI API specification and generated official
+SDK types, not an academic paper. No paper PDF is attached or presented as
+proof of field-level compatibility. Active upstream capability discovery,
+built-in-tool translation, streaming translation, and production provider
+registry entries remain deferred; the references below do not prove them.
+
 OpenAI. (n.d.). *Chat Completions API reference*. OpenAI Platform.
 https://platform.openai.com/docs/api-reference/chat
 
 OpenAI. (n.d.). *Responses API reference*. OpenAI Platform.
 https://platform.openai.com/docs/api-reference/responses
+
+OpenAI. (n.d.). *Response create parameters*. OpenAI Python SDK.
+https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py
 
 Anthropic. (n.d.). *Versions*. Anthropic API Reference.
 https://docs.claude.com/en/api/versioning

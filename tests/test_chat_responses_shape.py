@@ -120,6 +120,58 @@ def test_chat_request_to_responses_request_maps_multiturn_and_tool_calls() -> No
     }]
 
 
+def test_chat_request_to_responses_preserves_assistant_text_before_tool_calls() -> None:
+    translated = chat_request_to_responses_request({
+        "messages": [{
+            "role": "assistant",
+            "content": "I will look that up.",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        }],
+    })
+
+    assert [item["type"] for item in translated["input"]] == ["message", "function_call"]
+
+
+def test_chat_request_to_responses_preserves_supported_controls_only() -> None:
+    translated = chat_request_to_responses_request({
+        "messages": [{"role": "user", "content": "hi"}],
+        "store": True,
+        "service_tier": "flex",
+        "reasoning": {"effort": "high"},
+        "stop": ["END"],
+        "seed": 7,
+        "presence_penalty": 0.2,
+        "frequency_penalty": 0.3,
+        "logit_bias": {"1": 1},
+        "logprobs": True,
+    })
+
+    assert translated["store"] is True
+    assert translated["service_tier"] == "flex"
+    assert translated["reasoning"] == {"effort": "high"}
+    for unsupported in (
+        "stop", "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
+    ):
+        assert unsupported not in translated
+
+
+@pytest.mark.parametrize("control", ["modalities", "prediction"])
+def test_chat_request_to_responses_rejects_unrepresentable_controls(control: str) -> None:
+    with pytest.raises(ValueError, match=control):
+        chat_request_to_responses_request({
+            "messages": [{"role": "user", "content": "hi"}],
+            control: (
+                ["text"]
+                if control == "modalities"
+                else {"type": "content", "content": "x"}
+            ),
+        })
+
+
 def test_chat_request_responses_request_round_trips_message_text() -> None:
     """Text content and tool-call/tool-result linkage survive the round trip.
 
@@ -197,6 +249,28 @@ def test_responses_request_to_chat_request_rejects_unsupported_item_type() -> No
     """Built-in Responses tool-use primitives have no chat equivalent (honest failure)."""
     with pytest.raises(ValueError, match="unsupported Responses input item"):
         responses_request_to_chat_request({"input": [{"type": "web_search_call"}]})
+
+
+def test_responses_request_to_chat_request_rejects_file_id_image() -> None:
+    with pytest.raises(ValueError, match="file_id"):
+        responses_request_to_chat_request({
+            "input": [{"type": "message", "role": "user", "content": [
+                {"type": "input_image", "file_id": "file_123"},
+            ]}],
+        })
+
+
+def test_tool_and_tool_choice_alternate_shapes_are_preserved() -> None:
+    flat = {"type": "function", "name": "lookup", "parameters": {"type": "object"}}
+    nested = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+    assert chat_request_to_responses_request({
+        "tools": [flat], "tool_choice": {"type": "function", "name": "lookup"},
+    })["tools"] == [flat]
+    assert responses_request_to_chat_request({
+        "tools": [nested],
+        "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+    })["tools"] == [nested]
 
 
 def test_chat_request_to_responses_request_maps_image_content() -> None:
@@ -309,6 +383,15 @@ def test_responses_response_to_chat_response_maps_incomplete_status_to_length() 
     assert back["id"] == "chatcmpl_x"
 
 
+def test_responses_response_maps_content_filter_finish_reason() -> None:
+    back = responses_response_to_chat_response({
+        "status": "incomplete",
+        "incomplete_details": {"reason": "content_filter"},
+        "output": [],
+    }, {"model": "m"})
+    assert back["choices"][0]["finish_reason"] == "content_filter"
+
+
 # ---------------------------------------------------------------------------
 # Shape-capability tag helper defaults
 # ---------------------------------------------------------------------------
@@ -329,6 +412,14 @@ def test_shape_capability_declares_responses_only() -> None:
     tags = ("api:responses_only",)
     assert agent_supports_responses(tags) is True
     assert agent_supports_chat_completions(tags) is False
+
+
+def test_shape_capability_rejects_conflicting_exclusivity_tags() -> None:
+    tags = ("api:chat_completions_only", "api:responses_only")
+    with pytest.raises(ValueError, match="conflicting API shape tags"):
+        agent_supports_responses(tags)
+    with pytest.raises(ValueError, match="conflicting API shape tags"):
+        agent_supports_chat_completions(tags)
 
 
 # ---------------------------------------------------------------------------
@@ -617,12 +708,7 @@ def test_stream_chat_raises_for_responses_only_agent_instead_of_silent_wrong_sha
         list(client.stream_chat(agent, [{"role": "user", "content": "hi"}]))
 
 
-def test_probe_reports_not_ready_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
-    """ModelClient.probe() (readiness checks) shares chat()/stream_chat()'s gap:
-    it always builds and sends Chat Completions shape with no translation
-    branch of its own. A responses_only agent must be reported not-ready with
-    a typed reason rather than let the raw provider rejection surface as an
-    opaque transport failure."""
+def test_probe_uses_responses_endpoint_for_responses_only_agent() -> None:
     agent = ModelAgent(
         "responses_only_worker",
         "responses-model",
@@ -630,10 +716,16 @@ def test_probe_reports_not_ready_for_responses_only_agent_instead_of_silent_wron
         tags=("api:responses_only",),
     )
     client = ModelClient(max_retries=0)
-    result = client.probe(agent)
-    assert result["status"] == "not_ready"
-    assert result["failure_code"] == "responses_only_agent_cannot_serve_chat_probe"
-    assert result["error_type"] == "ValueError"
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_send_raw", return_value={
+            "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}],
+        },
+    ) as send:
+        result = client.probe(agent)
+    assert result["status"] == "ready"
+    assert send.call_args.args[1] == "responses"
+    assert send.call_args.args[2]["input"] == "Reply with exactly OK."
 
 
 def test_batch_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:

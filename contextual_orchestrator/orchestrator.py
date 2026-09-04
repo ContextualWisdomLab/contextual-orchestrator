@@ -1793,22 +1793,7 @@ class ModelClient:
                 "error_type": "ValueError",
                 "failure_code": "non_chat_model",
             }
-        if not agent_supports_chat_completions(agent.tags):
-            # This probe always builds and sends Chat Completions shape (see
-            # the payload built below) with no translation branch of its
-            # own, mirroring ModelClient.chat()/stream_chat() (ADR 0128). An
-            # agent proven api:responses_only cannot accept that shape, so
-            # report it as not-ready with a clear, typed reason instead of
-            # letting the raw provider rejection surface as an opaque
-            # transport failure.
-            return {
-                "agent_id": agent.id,
-                "model": agent.model,
-                "status": "not_ready",
-                "latency_ms": round((time.monotonic() - started) * 1000, 2),
-                "error_type": "ValueError",
-                "failure_code": "responses_only_agent_cannot_serve_chat_probe",
-            }
+        supports_chat = agent_supports_chat_completions(agent.tags)
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -1851,11 +1836,30 @@ class ModelClient:
                     "stream": False,
                     "max_tokens": 1,
                 }
-                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                if not supports_chat:
+                    responses_payload = {
+                        "model": agent.model,
+                        "input": "Reply with exactly OK.",
+                        "stream": False,
+                        "max_output_tokens": 1,
+                    }
+                    with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
+                        response = self._send_raw(
+                            agent,
+                            "responses",
+                            responses_payload,
+                            destination,
+                            timeout=probe_timeout,
+                        )
+                    translated = responses_response_to_chat_response(response, payload)
+                    content = translated["choices"][0]["message"]["content"]
+                    usage = self.take_usage()
+                elif _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(agent, payload, destination, timeout=probe_timeout)
-                usage = self.take_usage()
+                if supports_chat:
+                    with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
+                        content = self._send(agent, payload, destination, timeout=probe_timeout)
+                    usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
                 raise RuntimeError(f"provider {agent.id} returned empty probe content")
@@ -2573,6 +2577,8 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         payload = self._clamp_agent_token_budget(agent, payload)
@@ -2589,7 +2595,12 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        with self._open_provider(request, destination) as response:
+        opener = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opener as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         return data
