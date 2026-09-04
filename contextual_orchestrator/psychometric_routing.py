@@ -121,20 +121,23 @@ class PsychometricRoutingEvidence:
                 ):
                     context_scores = self._scores[neighbors[0][1]]
                 else:
-                    context_scores = {
-                        agent_id: sum(
-                            similarity * self._scores[context_id][agent_id]
-                            for similarity, context_id in neighbors
-                            if agent_id in self._scores[context_id]
-                        )
-                        / sum(
-                            similarity
-                            for similarity, context_id in neighbors
-                            if agent_id in self._scores[context_id]
-                        )
-                        for agent_id in agent_ids
-                        if any(agent_id in self._scores[context_id] for _, context_id in neighbors)
-                    }
+                    (first_similarity, first_id), (second_similarity, second_id) = neighbors
+                    first_scores = self._scores[first_id]
+                    second_scores = self._scores[second_id]
+                    context_scores = {}
+                    for agent_id in agent_ids:
+                        first_score = first_scores.get(agent_id)
+                        second_score = second_scores.get(agent_id)
+                        if first_score is None:
+                            if second_score is not None:
+                                context_scores[agent_id] = second_score
+                        elif second_score is None:
+                            context_scores[agent_id] = first_score
+                        else:
+                            context_scores[agent_id] = (
+                                first_similarity * first_score
+                                + second_similarity * second_score
+                            ) / (first_similarity + second_similarity)
             else:
                 return []
             scored = [
