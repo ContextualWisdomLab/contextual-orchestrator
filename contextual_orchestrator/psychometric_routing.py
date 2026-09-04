@@ -33,6 +33,7 @@ class PsychometricRoutingEvidence:
         self.semantic_warm_start_enabled = semantic_warm_start_enabled
         self._lock = threading.Lock()
         self._contexts: OrderedDict[str, list[float] | None] = OrderedDict()
+        self._context_unit_vectors: dict[str, tuple[float, ...] | None] = {}
         self._responses: dict[tuple[str, str, int], int] = {}
         self._revision = 0
         self._fit_revision = -1
@@ -66,7 +67,11 @@ class PsychometricRoutingEvidence:
     ) -> None:
         """Restore or record one observation using a non-reversible context id."""
         with self._lock:
-            self._contexts[context_id] = vector
+            stored_vector = list(vector) if vector is not None else None
+            self._contexts[context_id] = stored_vector
+            self._context_unit_vectors[context_id] = (
+                self._unit_vector(stored_vector) if stored_vector is not None else None
+            )
             self._contexts.move_to_end(context_id)
             values = (int(accepted), *(int(value) for value in irt_row))
             if any(value not in (0, 1) for value in values):
@@ -79,6 +84,7 @@ class PsychometricRoutingEvidence:
                 self._responses[(agent_id, context_id, item_index)] = value
             while len(self._contexts) > self.max_contexts:
                 removed, _ = self._contexts.popitem(last=False)
+                self._context_unit_vectors.pop(removed, None)
                 self._responses = {
                     key: value for key, value in self._responses.items() if key[1] != removed
                 }
@@ -100,18 +106,16 @@ class PsychometricRoutingEvidence:
             if exact_id in self._scores:
                 context_scores = self._scores[exact_id]
             elif vector is not None:
-                vector_norm = self._finite_norm(vector)
-                if vector_norm is None:
+                unit_vector = self._unit_vector(vector)
+                if unit_vector is None:
                     return []
                 comparable = [
                     (
-                        self._cosine_with_left_norm(
-                            vector, vector_norm, stored_vector
-                        ),
+                        self._cosine_unit_vectors(unit_vector, stored_unit_vector),
                         stored_id,
                     )
-                    for stored_id, stored_vector in self._contexts.items()
-                    if stored_id in self._scores and stored_vector is not None
+                    for stored_id, stored_unit_vector in self._context_unit_vectors.items()
+                    if stored_id in self._scores and stored_unit_vector is not None
                 ]
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
@@ -176,6 +180,11 @@ class PsychometricRoutingEvidence:
                 for context_id, vector in self._contexts.items()
                 if context_id in retained_contexts
             )
+            self._context_unit_vectors = {
+                context_id: vector
+                for context_id, vector in self._context_unit_vectors.items()
+                if context_id in retained_contexts
+            }
             self._revision += 1
 
     def records(self) -> list[dict[str, object]]:
@@ -252,11 +261,12 @@ class PsychometricRoutingEvidence:
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float | None:
         """Cosine similarity for two finite, equal-length embedding vectors."""
-        left_norm = PsychometricRoutingEvidence._finite_norm(left)
-        if left_norm is None:
+        left_unit = PsychometricRoutingEvidence._unit_vector(left)
+        right_unit = PsychometricRoutingEvidence._unit_vector(right)
+        if left_unit is None or right_unit is None:
             return None
-        return PsychometricRoutingEvidence._cosine_with_left_norm(
-            left, left_norm, right
+        return PsychometricRoutingEvidence._cosine_unit_vectors(
+            left_unit, right_unit
         )
 
     @staticmethod
@@ -268,18 +278,20 @@ class PsychometricRoutingEvidence:
         return norm if norm else None
 
     @staticmethod
-    def _cosine_with_left_norm(
-        left: list[float], left_norm: float, right: list[float]
+    def _unit_vector(vector: list[float]) -> tuple[float, ...] | None:
+        """Return one finite unit vector, or None when cosine is undefined."""
+        norm = PsychometricRoutingEvidence._finite_norm(vector)
+        return tuple(value / norm for value in vector) if norm is not None else None
+
+    @staticmethod
+    def _cosine_unit_vectors(
+        left: tuple[float, ...], right: tuple[float, ...]
     ) -> float | None:
-        """Cosine similarity when the validated left norm is already known."""
+        """Cosine similarity for two validated unit vectors."""
         if len(left) != len(right):
             return None
-        right_norm = PsychometricRoutingEvidence._finite_norm(right)
-        if right_norm is None:
-            return None
         similarity = math.fsum(
-            (left_value / left_norm) * (right_value / right_norm)
-            for left_value, right_value in zip(left, right)
+            left_value * right_value for left_value, right_value in zip(left, right)
         )
         if not math.isfinite(similarity):
             return None

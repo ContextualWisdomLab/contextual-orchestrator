@@ -448,6 +448,31 @@ def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
     ]
 
 
+def test_semantic_warm_start_reuses_observed_unit_vectors(monkeypatch) -> None:
+    evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
+    evidence.observe("left", "model_a", True, [1.0, 0.0])
+    evidence.observe("right", "model_a", True, [0.0, 1.0])
+    evidence._scores = {
+        evidence.context_id("left"): {"model_a": 0.9},
+        evidence.context_id("right"): {"model_a": 0.3},
+    }
+    evidence._fit_revision = evidence._revision
+    original = evidence._finite_norm
+    calls = 0
+
+    def counted(vector):
+        nonlocal calls
+        calls += 1
+        return original(vector)
+
+    monkeypatch.setattr(
+        PsychometricRoutingEvidence, "_finite_norm", staticmethod(counted)
+    )
+
+    assert evidence.ranked_evidence(("model_a",), "held-out", [1.0, 1.0])
+    assert calls == 1
+
+
 def test_semantic_warm_start_defaults_to_validated_single_neighbor() -> None:
     evidence = PsychometricRoutingEvidence()
     evidence.observe("left", "model_a", True, [1.0, 0.0])
