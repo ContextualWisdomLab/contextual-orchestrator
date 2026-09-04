@@ -47,6 +47,8 @@ MODEL_FIT_SAMPLE_SIZE = 1_200
 MODEL_FIT_SEED = 260_912
 RELIABILITY_SAMPLE_SIZE = 1_200
 RELIABILITY_SEED = 260_913
+EQUATING_BOOTSTRAPS = 300
+EQUATING_SEED = 260_914
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -378,6 +380,50 @@ def _validate_functional_drift() -> dict[str, object]:
         "area_trace": result["area_trace"],
         "iterations": result["iterations"],
         "termination_reason": result["termination_reason"],
+    }
+
+
+def _validate_score_equating() -> dict[str, object]:
+    """Recover a known score-form transformation with bootstrap uncertainty."""
+    old_scores = np.tile(np.arange(11, dtype=np.int64), 100)
+    expected_equivalents = 2.0 * np.arange(11, dtype=float) + 1.0
+    new_scores = (2 * old_scores) + 1
+    result = fast_mlsirm.equate_observed_scores(
+        old_scores, new_scores, method="linear", k_x=10, k_y=21
+    )
+    uncertainty = fast_mlsirm.equating_standard_errors(
+        old_scores,
+        new_scores,
+        method="linear",
+        k_x=10,
+        k_y=21,
+        n_boot=EQUATING_BOOTSTRAPS,
+        seed=EQUATING_SEED,
+    )
+    linked_rmse = float(
+        np.sqrt(np.mean((result.y_equivalents - expected_equivalents) ** 2))
+    )
+    unlinked_rmse = float(
+        np.sqrt(np.mean((result.x_scores - expected_equivalents) ** 2))
+    )
+    return {
+        "method": result.method,
+        "observations_per_form": len(old_scores),
+        "expected_slope": 2.0,
+        "expected_intercept": 1.0,
+        "estimated_slope": result.slope,
+        "estimated_intercept": result.intercept,
+        "unlinked_score_rmse": unlinked_rmse,
+        "equated_score_rmse": linked_rmse,
+        "bootstrap_repetitions": EQUATING_BOOTSTRAPS,
+        "bootstrap_seed": EQUATING_SEED,
+        "interval_95_coverage": float(
+            np.mean(
+                (uncertainty["ci_lo"] <= expected_equivalents)
+                & (expected_equivalents <= uncertainty["ci_hi"])
+            )
+        ),
+        "maximum_standard_error": float(np.max(uncertainty["se"])),
     }
 
 
@@ -825,6 +871,7 @@ def run_benchmark() -> dict[str, object]:
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
     functional_drift = _validate_functional_drift()
+    score_equating = _validate_score_equating()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
@@ -868,6 +915,7 @@ def run_benchmark() -> dict[str, object]:
     validity_components = {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "score_equating": "not_executed",
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
@@ -897,6 +945,13 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "the benchmark drift tolerance is an effect-size screen, not a "
                 "sampling-uncertainty or significance test"
+            ),
+        },
+        "score_equating": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "versioned buyer forms, comparable populations or anchors, and "
+                "preregistered equating-error targets"
             ),
         },
         "response_pattern_fit": {
@@ -1040,6 +1095,7 @@ def run_benchmark() -> dict[str, object]:
         "scale_linking_validation": scale_linking,
         "parameter_invariance_validation": parameter_invariance,
         "functional_drift_validation": functional_drift,
+        "score_equating_validation": score_equating,
         "response_pattern_fit_validation": response_pattern_fit,
         "construct_dimensionality_validation": construct_dimensionality,
         "global_model_fit_validation": global_model_fit,

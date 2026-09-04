@@ -86,8 +86,9 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     }
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
-        "parameter_invariance": "not_executed",
-        "response_pattern_fit": "not_executed",
+            "parameter_invariance": "not_executed",
+            "score_equating": "not_executed",
+            "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
@@ -209,6 +210,17 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert invariance["maximum_stable_item_drift"] == 0.0
     assert invariance["injected_item_drift"] == pytest.approx(0.5656854249492381)
     assert invariance["linking_converged"] is True
+    equating = report["score_equating_validation"]
+    assert equating["method"] == "linear"
+    assert equating["observations_per_form"] == 1_100
+    assert equating["estimated_slope"] == pytest.approx(2.0)
+    assert equating["estimated_intercept"] == pytest.approx(1.0)
+    assert equating["unlinked_score_rmse"] == pytest.approx(6.782329983125268)
+    assert equating["equated_score_rmse"] == 0.0
+    assert equating["bootstrap_repetitions"] == heldout_benchmark.EQUATING_BOOTSTRAPS
+    assert equating["bootstrap_seed"] == heldout_benchmark.EQUATING_SEED
+    assert equating["interval_95_coverage"] == 1.0
+    assert equating["maximum_standard_error"] == pytest.approx(0.351886177855059)
     functional_drift = report["functional_drift_validation"]
     assert functional_drift["method"] == "backward_tcc_area_elimination"
     assert functional_drift["expected_drift_items"] == [6]
