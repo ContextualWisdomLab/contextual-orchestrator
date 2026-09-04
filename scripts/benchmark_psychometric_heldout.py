@@ -39,6 +39,9 @@ UNCERTAINTY_SEED = 260_909
 INVARIANCE_DRIFT_TOLERANCE = 0.25
 PERSON_FIT_SAMPLE_SIZE = 1_000
 PERSON_FIT_SEED = 260_910
+DIMENSIONALITY_SAMPLE_SIZE = 1_000
+DIMENSIONALITY_SEED = 260_911
+DIMENSIONALITY_ITERATIONS = 360
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -352,6 +355,39 @@ def _validate_response_pattern_fit() -> dict[str, object]:
     }
 
 
+def _validate_construct_dimensionality() -> dict[str, object]:
+    """Recover two known dimensions with Horn parallel analysis."""
+    generator = np.random.default_rng(DIMENSIONALITY_SEED)
+    item_count = 12
+    expected_dimensions = 2
+    ability = generator.normal(
+        size=(DIMENSIONALITY_SAMPLE_SIZE, expected_dimensions)
+    )
+    item_dimension = np.repeat(np.arange(expected_dimensions), item_count // 2)
+    item_difficulty = np.tile(np.linspace(-1.2, 1.2, item_count // 2), 2)
+    logits = ability[:, item_dimension] - item_difficulty
+    probabilities = 1.0 / (1.0 + np.exp(-logits))
+    responses = (generator.random(probabilities.shape) < probabilities).astype(float)
+    result = fast_mlsirm.parallel_analysis(
+        responses,
+        n_iterations=DIMENSIONALITY_ITERATIONS,
+        centile=95,
+        seed=DIMENSIONALITY_SEED,
+    )
+    return {
+        "method": "horn_parallel_analysis_pearson_pca",
+        "sample_size": DIMENSIONALITY_SAMPLE_SIZE,
+        "seed": DIMENSIONALITY_SEED,
+        "iterations": DIMENSIONALITY_ITERATIONS,
+        "items": item_count,
+        "expected_dimensions": expected_dimensions,
+        "retained_dimensions": result.retained,
+        "known_dimensions_recovered": result.retained == expected_dimensions,
+        "leading_eigenvalues": result.eigenvalues[:3].tolist(),
+        "leading_adjusted_eigenvalues": result.adjusted_eigenvalues[:3].tolist(),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -532,6 +568,7 @@ def run_benchmark() -> dict[str, object]:
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
     response_pattern_fit = _validate_response_pattern_fit()
+    construct_dimensionality = _validate_construct_dimensionality()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -570,6 +607,7 @@ def run_benchmark() -> dict[str, object]:
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
         "response_pattern_fit": "not_executed",
+        "construct_dimensionality": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -604,6 +642,18 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "nonparametric person fit ranks unusual response patterns but does "
                 "not identify their cause or prove a candidate invalid"
+            ),
+        },
+        "construct_dimensionality": {
+            "owner_contract_status": "released_limited_screen",
+            "required_evidence": (
+                "buyer candidate-by-criterion responses, a preregistered construct "
+                "structure, and confirmatory holdout fit"
+            ),
+            "known_limit": (
+                "Pearson-correlation PCA parallel analysis on dichotomous responses "
+                "is a dimensionality screen, not construct identification or "
+                "confirmatory factor validation"
             ),
         },
         "local_independence": {
@@ -680,6 +730,7 @@ def run_benchmark() -> dict[str, object]:
         "scale_linking_validation": scale_linking,
         "parameter_invariance_validation": parameter_invariance,
         "response_pattern_fit_validation": response_pattern_fit,
+        "construct_dimensionality_validation": construct_dimensionality,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

@@ -88,6 +88,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
         "response_pattern_fit": "not_executed",
+        "construct_dimensionality": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -110,6 +111,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "does not identify their cause" in requirements["response_pattern_fit"][
         "known_limit"
     ]
+    assert requirements["construct_dimensionality"]["owner_contract_status"] == (
+        "released_limited_screen"
+    )
+    assert "not construct identification" in requirements[
+        "construct_dimensionality"
+    ]["known_limit"]
     assert (
         requirements["local_independence"]["owner_contract_status"]
         == "owner_pr_pending"
@@ -181,6 +188,27 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert person_fit["injected_zu3"] == pytest.approx(5.22635820493048)
     assert person_fit["next_highest_zu3"] == pytest.approx(3.4076390572266213)
     assert person_fit["zu3_rank_separation"] == pytest.approx(1.8187191477038587)
+    dimensionality = report["construct_dimensionality_validation"]
+    assert dimensionality["method"] == "horn_parallel_analysis_pearson_pca"
+    assert (
+        dimensionality["sample_size"]
+        == heldout_benchmark.DIMENSIONALITY_SAMPLE_SIZE
+    )
+    assert dimensionality["seed"] == heldout_benchmark.DIMENSIONALITY_SEED
+    assert (
+        dimensionality["iterations"]
+        == heldout_benchmark.DIMENSIONALITY_ITERATIONS
+    )
+    assert dimensionality["items"] == 12
+    assert dimensionality["expected_dimensions"] == 2
+    assert dimensionality["retained_dimensions"] == 2
+    assert dimensionality["known_dimensions_recovered"] is True
+    assert dimensionality["leading_eigenvalues"] == pytest.approx(
+        [1.91125714, 1.80816602, 0.97219015]
+    )
+    assert dimensionality["leading_adjusted_eigenvalues"] == pytest.approx(
+        [1.68362962, 1.64330776, 0.84748594]
+    )
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
