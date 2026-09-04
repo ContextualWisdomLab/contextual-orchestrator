@@ -193,6 +193,17 @@ Buyer next action: call `run_equal_budget_ablation` and read
   raises expected accuracy from `0.814182` to `0.996895` and consistency from
   `0.710275` to `0.993829` when synthetic standard error falls from `0.8` to
   `0.2`. The cut and costs are synthetic, so buyer decisions remain unexecuted.
+- Taylor, H. C., & Russell, J. T. (1939). The relationship of validity
+  coefficients to the practical effectiveness of tests in selection:
+  Discussion and tables. *Journal of Applied Psychology, 23*(5), 565–578.
+  https://doi.org/10.1037/h0057079
+  Grounds the joint reporting of predictive validity, selection ratio, base
+  rate, and expected selected success. Source commit `452a3649` pairs that
+  result with the released Brogden-Cronbach-Gleser utility analogue: raising
+  validity from `0.2` to `0.6` raises synthetic selected success from
+  `0.500273` to `0.723515`, but an `8,000`-unit cost increase turns net utility
+  from `5,626.64` to `-2,373.36`. Personnel selection is only an analogue;
+  buyer-valued routing outcomes and costs remain unvalidated.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.
   https://doi.org/10.1007/BF02289447

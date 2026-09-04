@@ -2366,6 +2366,15 @@ This converts measurement uncertainty into an observable decision-error KPI,
 but cannot define a buyer decision or its asymmetric costs.
 `classification_decision` remains `not_executed` pending buyer-linked measures,
 valid standard errors, a declared cut and cost model, and preregistered targets.
+Source commit `452a3649` adds a separate decision-utility screen. Raising
+synthetic predictive validity from `0.2` to `0.6` raises the Taylor-Russell
+selected-success ratio from `0.500273` to `0.723515` and net utility from
+`2,042.21` to `5,626.64`. Keeping validity fixed while increasing total cost
+from `2,000` to `10,000` leaves selected success unchanged but makes net utility
+negative at `-2,373.36`. The personnel-selection normal model is an analogue,
+not validated routing economics, so `decision_utility` remains `not_executed`
+pending buyer-valued outcomes, actual routing costs and volume, selection ratio,
+and a preregistered target.
 
 ## 7. Delivery gates
 

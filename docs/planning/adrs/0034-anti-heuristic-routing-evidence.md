@@ -207,6 +207,16 @@ does not choose a buyer cut or encode asymmetric decision costs.
 valid standard errors, an explicit cut and cost model, and preregistered targets
 exist.
 
+Source commit `452a3649` adds the economic boundary omitted by classification
+accuracy alone. The released Taylor-Russell calculation raises synthetic
+selected success from `0.500273` at validity `0.2` to `0.723515` at validity
+`0.6`. The paired Brogden-Cronbach-Gleser analogue reports net utility
+`5,626.64` at total measurement cost `2,000`, then `-2,373.36` at cost `10,000`
+without changing validity or selected success. This is a personnel-selection
+analogue, not a validated multi-model routing economy. `decision_utility`
+remains `not_executed` until buyer-valued outcome units, request volume, routing
+cost, selection ratio, and a preregistered utility target exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is
