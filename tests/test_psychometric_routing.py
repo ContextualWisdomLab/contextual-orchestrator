@@ -102,9 +102,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
-            "parameter_invariance": "not_executed",
-            "score_equating": "not_executed",
-            "response_pattern_fit": "not_executed",
+        "parameter_invariance": "not_executed",
+        "candidate_roster_invariance": "not_executed",
+        "score_equating": "not_executed",
+        "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
@@ -226,6 +227,25 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert invariance["maximum_stable_item_drift"] == 0.0
     assert invariance["injected_item_drift"] == pytest.approx(0.5656854249492381)
     assert invariance["linking_converged"] is True
+    roster = report["candidate_roster_invariance_validation"]
+    assert roster["method"] == "separate_calibration_common_item_linking"
+    assert roster["seed"] == heldout_benchmark.ROSTER_INVARIANCE_SEED
+    assert roster["full_candidate_count"] == 20
+    assert roster["retained_candidate_count"] == 16
+    assert roster["common_items"] == 200
+    assert roster["full_convergence_status"] == "converged"
+    assert roster["reduced_convergence_status"] == "converged"
+    assert roster["linking_converged"] is True
+    assert roster["linking_termination_reason"] == "tolerance_met"
+    assert roster["linked_common_score_rmse"] == pytest.approx(
+        0.010865713831645366
+    )
+    assert roster["linked_common_score_correlation"] == pytest.approx(
+        0.9999990868860807
+    )
+    assert roster["maximum_linked_common_score_shift"] == pytest.approx(
+        0.016498037451536662
+    )
     equating = report["score_equating_validation"]
     assert equating["method"] == "linear"
     assert equating["observations_per_form"] == 1_100

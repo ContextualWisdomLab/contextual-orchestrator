@@ -49,6 +49,7 @@ RELIABILITY_SAMPLE_SIZE = 1_200
 RELIABILITY_SEED = 260_913
 EQUATING_BOOTSTRAPS = 300
 EQUATING_SEED = 260_914
+ROSTER_INVARIANCE_SEED = 260_915
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -366,6 +367,63 @@ def _validate_parameter_invariance() -> dict[str, object]:
         "maximum_stable_item_drift": float(np.max(item_drift[anchor_items])),
         "injected_item_drift": float(item_drift[expected_drift_items[0]]),
         "linking_converged": linking.converged,
+    }
+
+
+def _validate_candidate_roster_invariance() -> dict[str, object]:
+    """Compare common candidate measures after a candidate-roster change."""
+    generator = np.random.default_rng(ROSTER_INVARIANCE_SEED)
+    candidate_count = 20
+    retained_candidates = 16
+    item_count = 200
+    ability = np.linspace(-2.0, 2.0, candidate_count)
+    item_intercept = np.linspace(-1.5, 1.5, item_count)
+    probabilities = 1.0 / (
+        1.0 + np.exp(-(ability[:, None] + item_intercept[None, :]))
+    )
+    responses = (generator.random(probabilities.shape) < probabilities).astype(float)
+    factor_id = np.zeros(item_count, dtype=np.int64)
+    config = fast_mlsirm.FitConfig(
+        model="MIRT",
+        estimator="mmle",
+        max_iter=1_000,
+        latent_dim=1,
+        q_theta=21,
+        q_xi=7,
+        rust_device="cpu",
+        seed=ROSTER_INVARIANCE_SEED,
+    )
+    full = fast_mlsirm.fit(responses, factor_id, config)
+    reduced = fast_mlsirm.fit(responses[:retained_candidates], factor_id, config)
+    linking = fast_mlsirm.irt_link(
+        np.exp(full.params.alpha),
+        np.asarray(full.params.b),
+        np.exp(reduced.params.alpha),
+        np.asarray(reduced.params.b),
+        method="stocking_lord",
+    )
+    full_theta = np.asarray(full.params.theta)[:retained_candidates, 0]
+    reduced_theta = np.asarray(reduced.params.theta)[:, 0]
+    linked_theta = linking.slope * reduced_theta + linking.intercept
+    return {
+        "method": "separate_calibration_common_item_linking",
+        "seed": ROSTER_INVARIANCE_SEED,
+        "full_candidate_count": candidate_count,
+        "retained_candidate_count": retained_candidates,
+        "common_items": item_count,
+        "full_convergence_status": full.convergence_status,
+        "reduced_convergence_status": reduced.convergence_status,
+        "linking_converged": linking.converged,
+        "linking_termination_reason": linking.termination_reason,
+        "linked_common_score_rmse": float(
+            np.sqrt(np.mean((linked_theta - full_theta) ** 2))
+        ),
+        "linked_common_score_correlation": float(
+            np.corrcoef(linked_theta, full_theta)[0, 1]
+        ),
+        "maximum_linked_common_score_shift": float(
+            np.max(np.abs(linked_theta - full_theta))
+        ),
     }
 
 
@@ -891,6 +949,7 @@ def run_benchmark() -> dict[str, object]:
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
+    candidate_roster_invariance = _validate_candidate_roster_invariance()
     functional_drift = _validate_functional_drift()
     score_equating = _validate_score_equating()
     response_pattern_fit = _validate_response_pattern_fit()
@@ -941,6 +1000,7 @@ def run_benchmark() -> dict[str, object]:
     validity_components = {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "candidate_roster_invariance": "not_executed",
         "score_equating": "not_executed",
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
@@ -971,6 +1031,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "the benchmark drift tolerance is an effect-size screen, not a "
                 "sampling-uncertainty or significance test"
+            ),
+        },
+        "candidate_roster_invariance": {
+            "owner_contract_status": "released_limited_screen",
+            "required_evidence": (
+                "versioned candidate rosters, common buyer items, identified "
+                "linking, and preregistered score-shift targets"
+            ),
+            "known_limit": (
+                "synthetic separate-calibration stability does not establish "
+                "invariance for a buyer's models, queries, or deployment versions"
             ),
         },
         "score_equating": {
@@ -1120,6 +1191,7 @@ def run_benchmark() -> dict[str, object]:
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
         "parameter_invariance_validation": parameter_invariance,
+        "candidate_roster_invariance_validation": candidate_roster_invariance,
         "functional_drift_validation": functional_drift,
         "score_equating_validation": score_equating,
         "response_pattern_fit_validation": response_pattern_fit,
