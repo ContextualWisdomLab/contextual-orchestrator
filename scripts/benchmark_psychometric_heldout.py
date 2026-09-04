@@ -44,6 +44,8 @@ DIMENSIONALITY_SEED = 260_911
 DIMENSIONALITY_ITERATIONS = 360
 MODEL_FIT_SAMPLE_SIZE = 1_200
 MODEL_FIT_SEED = 260_912
+RELIABILITY_SAMPLE_SIZE = 1_200
+RELIABILITY_SEED = 260_913
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -456,6 +458,59 @@ def _validate_global_model_fit() -> dict[str, object]:
     }
 
 
+def _validate_score_reliability() -> dict[str, object]:
+    """Verify posterior reliability rises with known item information."""
+    generator = np.random.default_rng(RELIABILITY_SEED)
+    item_count = 12
+    ability = generator.normal(size=RELIABILITY_SAMPLE_SIZE)
+    item_difficulty = np.linspace(-1.5, 1.5, item_count)
+    random_draws = generator.random((RELIABILITY_SAMPLE_SIZE, item_count))
+    factor_id = np.zeros(item_count, dtype=np.int64)
+    config = fast_mlsirm.FitConfig(
+        model="MIRT",
+        estimator="mmle",
+        max_iter=1_000,
+        latent_dim=1,
+        q_theta=21,
+        q_xi=7,
+        rust_device="cpu",
+        seed=RELIABILITY_SEED,
+    )
+
+    def fit_case(discrimination: float) -> dict[str, float | int | str]:
+        probabilities = 1.0 / (
+            1.0
+            + np.exp(
+                -discrimination
+                * (ability[:, None] - item_difficulty[None, :])
+            )
+        )
+        responses = (random_draws < probabilities).astype(float)
+        result = fast_mlsirm.fit(responses, factor_id, config)
+        reliability = fast_mlsirm.empirical_reliability(result, device="cpu")
+        return {
+            "true_item_discrimination": discrimination,
+            "convergence_status": result.convergence_status,
+            "iterations": result.n_iter,
+            "empirical_reliability": float(reliability[0]),
+        }
+
+    weak_information = fit_case(0.45)
+    strong_information = fit_case(1.5)
+    return {
+        "method": "posterior_variance_empirical_reliability",
+        "sample_size_per_case": RELIABILITY_SAMPLE_SIZE,
+        "seed": RELIABILITY_SEED,
+        "items": item_count,
+        "weak_information": weak_information,
+        "strong_information": strong_information,
+        "reliability_separation": (
+            strong_information["empirical_reliability"]
+            - weak_information["empirical_reliability"]
+        ),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -638,6 +693,7 @@ def run_benchmark() -> dict[str, object]:
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
+    score_reliability = _validate_score_reliability()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -678,6 +734,7 @@ def run_benchmark() -> dict[str, object]:
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
+        "score_reliability": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -735,6 +792,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "M2 sensitivity depends on the misspecification and sample design; "
                 "one global statistic cannot establish construct validity"
+            ),
+        },
+        "score_reliability": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "converged buyer calibration, posterior standard errors, "
+                "preregistered reliability targets, and model-fit evidence"
+            ),
+            "known_limit": (
+                "reliability summarizes score precision under the fitted model; "
+                "it cannot establish model fit, invariance, or construct validity"
             ),
         },
         "local_independence": {
@@ -813,6 +881,7 @@ def run_benchmark() -> dict[str, object]:
         "response_pattern_fit_validation": response_pattern_fit,
         "construct_dimensionality_validation": construct_dimensionality,
         "global_model_fit_validation": global_model_fit,
+        "score_reliability_validation": score_reliability,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

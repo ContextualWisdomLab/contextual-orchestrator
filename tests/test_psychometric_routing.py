@@ -90,6 +90,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
+        "score_reliability": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -122,6 +123,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "released_limited_information"
     )
     assert "cannot establish construct validity" in requirements["global_model_fit"][
+        "known_limit"
+    ]
+    assert requirements["score_reliability"]["owner_contract_status"] == "released"
+    assert "cannot establish model fit" in requirements["score_reliability"][
         "known_limit"
     ]
     assert (
@@ -237,6 +242,27 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert misspecified_case["m2"] == pytest.approx(287.1636779430094)
     assert misspecified_case["p_value"] == pytest.approx(2.2660557889816854e-41)
     assert misspecified_case["rmsea"] == pytest.approx(0.07751712400695583)
+    reliability = report["score_reliability_validation"]
+    assert reliability["method"] == "posterior_variance_empirical_reliability"
+    assert (
+        reliability["sample_size_per_case"]
+        == heldout_benchmark.RELIABILITY_SAMPLE_SIZE
+    )
+    assert reliability["seed"] == heldout_benchmark.RELIABILITY_SEED
+    assert reliability["items"] == 12
+    weak_information = reliability["weak_information"]
+    strong_information = reliability["strong_information"]
+    assert weak_information["convergence_status"] == "converged"
+    assert strong_information["convergence_status"] == "converged"
+    assert weak_information["empirical_reliability"] == pytest.approx(
+        0.36643726355460837
+    )
+    assert strong_information["empirical_reliability"] == pytest.approx(
+        0.8004364316297621
+    )
+    assert reliability["reliability_separation"] == pytest.approx(
+        0.43399916807515376
+    )
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
