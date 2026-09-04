@@ -236,10 +236,14 @@ def run_benchmark() -> dict[str, object]:
             ),
         },
         "adaptive_exposure": {
-            "owner_contract_status": "not_implemented",
+            "owner_contract_status": "released_exposure_control_only",
             "required_evidence": (
                 "randomized assignment or logged routing propensities for every "
                 "candidate outcome"
+            ),
+            "known_limit": (
+                "CAT exposure control does not record gateway propensities or "
+                "identify unobserved candidate outcomes"
             ),
         },
     }

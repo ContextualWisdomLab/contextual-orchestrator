@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Adaptive-exposure evidence now distinguishes released CAT exposure control
+  from the missing gateway propensity and counterfactual-observation contract.
+  The unexecuted production gate remains closed.
 - Item-side language/domain validity evidence now reports the released but
   limited multigroup item-covariate contract instead of claiming no owner
   implementation exists. Unexecuted buyer evidence remains fail-closed.

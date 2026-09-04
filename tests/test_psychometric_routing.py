@@ -108,8 +108,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     ]
     assert (
         requirements["adaptive_exposure"]["owner_contract_status"]
-        == "not_implemented"
+        == "released_exposure_control_only"
     )
+    assert "does not record gateway propensities" in requirements[
+        "adaptive_exposure"
+    ]["known_limit"]
     assert report["production_default_change_allowed"] is False
 
 
