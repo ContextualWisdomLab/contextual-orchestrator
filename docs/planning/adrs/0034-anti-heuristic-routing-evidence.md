@@ -229,6 +229,10 @@ flowchart LR
   contract from CO's missing randomized-assignment or propensity ledger. The
   former limits repeated item administration; it cannot identify responses for
   candidate deployments that the gateway did not invoke.
+- Source commit `46e15555` records the ordered versioned candidate set, actual
+  attempts, selected deployment, and policy hash on every route, conducted
+  workflow, and streaming trace row. The receipt marks deterministic propensity
+  as `not_identified`; it is audit evidence, not a correction for missing outcomes.
 
 ## References
 

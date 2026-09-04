@@ -2226,6 +2226,12 @@ Source commit `a095b41f` also corrects the adaptive-exposure owner status:
 CO routing propensities nor identifies unobserved candidate outcomes. The
 gateway still needs randomized assignment or a propensity ledger before this
 validity component can execute.
+Source commit `46e15555` closes the winner-only audit gap without overstating
+identification: route, conducted-workflow, and streaming traces retain the
+ordered versioned candidate set, actual attempts, selected deployment, and
+policy hash, while deterministic propensity remains `not_identified`. Buyer
+outcomes under a preregistered randomized design or another defensible
+identification strategy are still required before the validity component passes.
 
 ## 7. Delivery gates
 

@@ -133,6 +133,12 @@ Source commit `a095b41f` similarly separates released CAT exposure control
 from the missing gateway observation-design contract. `fast-mlsirm` 0.9.1 can
 calibrate an exposure filter, but it cannot reconstruct routing propensities or
 unobserved candidate outcomes that CO never recorded.
+Source commit `46e15555` adds a secret-free selection-design receipt to route,
+conducted-workflow, and streaming trace rows. It binds the ordered candidate
+deployments, actual attempts, selected deployment, and policy snapshot while
+labeling the current deterministic assignment propensity `not_identified`.
+This supplies an auditable observation denominator; it does not identify
+counterfactual outcomes or open the adaptive-exposure gate.
 
 ## APA 7 references
 

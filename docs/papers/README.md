@@ -111,7 +111,9 @@ Buyer next action: call `run_equal_budget_ablation` and read
   https://doi.org/10.1111/j.1745-3984.2009.01070.x
   Grounds explicit randomized exposure control. CO must record the actual
   selection design/probability before any propensity correction; deterministic
-  winner-only history is not sufficient evidence.
+  winner-only history is not sufficient evidence. Source commit `46e15555`
+  now records the candidate set, attempts, selection, and policy identity while
+  honestly leaving deterministic propensity unidentified.
 - Barrada, J. R., Olea, J., & Ponsoda, V. (2007). Methods for restricting
   maximum exposure rate in computerized adaptive testing. *Methodology, 3*(1),
   14–23. https://doi.org/10.1027/1614-2241.3.1.14
