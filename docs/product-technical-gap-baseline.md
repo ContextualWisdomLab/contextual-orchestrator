@@ -67,6 +67,19 @@ from provider-response failures without inventing provider acceptance.
 - `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py tests/test_provider_error_taxonomy.py tests/test_chat_orchestration_mode_http_honesty.py -q`
   -> `124 passed in 21.73s`
 
+### Exact-head refresh on September 4, 2026
+
+PR [#1049](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1049)
+was later refreshed onto then-current `origin/main`
+`60c562defc81fb1897fa97ebdb5bf8f69eae0c55`, producing exact head
+`e678fb41a6b554ad8ff7a17310a107e3984b9b7c`. The refresh only merged current
+`main`; it did not change the issue `#1045` contract or duplicate PR
+[#1046](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1046),
+whose EgressWeave SSRF fix remains a separate open line.
+
+- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py tests/test_provider_error_taxonomy.py tests/test_chat_orchestration_mode_http_honesty.py tests/test_opencode_go.py -q`
+  -> `126 passed in 16.43s`
+
 Hosted exact-head checks, protected merge, and the unchanged LifeOS/Noema
 consumer canary remain future steps because this invocation stopped at one
 completed local root-cause work unit, per the hourly-loop boundary.
