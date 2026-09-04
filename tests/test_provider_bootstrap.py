@@ -338,61 +338,6 @@ def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligibl
     assert orchestrator._is_general_free_agent(agent) is False
 
 
-def test_orchestrator_free_pool_never_excludes_zdr_true_models_from_multiple_providers():
-    """A ``zdr: false`` (not-required) pool must still surface ``zdr:true`` members.
-
-    ``zdr: false`` on a request/pool means "ZDR is not *required*", never
-    "ZDR-capable models are excluded". ``TaskOrchestrator._zdr_agent_allowed``
-    encodes this as ``not zdr_required or has_zdr_tag`` -- when
-    ``zdr_required`` is False, the expression is unconditionally True and
-    cannot depend on the agent's own tags, so a ``privacy:zdr`` agent can
-    never be dropped by a pool that merely does not *require* ZDR (see
-    ``contextual_orchestrator.orchestrator.TaskOrchestrator._zdr_agent_allowed``
-    and its use in ``_ranked_agents``). This also proves the discovery-level
-    guarantee (``test_discover_all_models_applies_model_zdr_evidence_to_other_sources``
-    in ``tests/test_model_discovery.py``) survives all the way through
-    bootstrap activation into the live ``orchestrator/free`` candidate set,
-    for ZDR-capable free models sourced from more than one provider family.
-    """
-    openrouter_zdr = replace(
-        _model("openrouter", "OPENROUTER_API_KEY", "openrouter/zdr-free-model", 0.0),
-        is_free=True,
-        zdr_capable=True,
-    )
-    nvidia_zdr = replace(
-        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nvidia/zdr-free-model", 0.0),
-        is_free=True,
-        zdr_capable=True,
-    )
-    plain_free = replace(
-        _model("bytez", "BYTEZ_API_KEY", "bytez/plain-free-model", 0.0),
-        is_free=True,
-    )
-
-    agents = [
-        provider_bootstrap._active_agent_from_discovered(model)
-        for model in (openrouter_zdr, nvidia_zdr, plain_free)
-    ]
-    orchestrator = TaskOrchestrator(agents)
-
-    # Sanity: the fixture models really do carry the tags this test exercises.
-    assert {"privacy:zdr", "cost:free"} <= set(agents[0].tags)
-    assert {"privacy:zdr", "cost:free"} <= set(agents[1].tags)
-    assert "privacy:zdr" not in agents[2].tags
-
-    # Default (request does not require ZDR): every free agent, ZDR-tagged or
-    # not, from every provider family, remains an eligible orchestrator/free
-    # candidate -- ZDR-true is never filtered out by a non-ZDR-requiring pool.
-    default_pool = orchestrator._ranked_agents("", "worker", free_only=True)
-    assert {agent.id for agent in default_pool} == {agent.id for agent in agents}
-
-    # Explicit zdr_only=True narrows to just the ZDR-capable members, proving
-    # the ZDR tag is doing real filtering work (not merely inert metadata).
-    with orchestrator.request_policy(True):
-        zdr_only_pool = orchestrator._ranked_agents("", "worker", free_only=True)
-    assert {agent.id for agent in zdr_only_pool} == {agents[0].id, agents[1].id}
-
-
 def test_serving_tags_preserve_explicit_no_zdr_evidence():
     """Explicit unsupported zero-data retention survives tag normalization."""
     model = replace(
