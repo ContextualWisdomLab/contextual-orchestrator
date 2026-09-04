@@ -35,7 +35,7 @@ Observation time: 2026-09-04 Asia/Seoul.
 - `uv run pytest tests/test_model_discovery.py -k 'duplicate_discovery_preserves_agreed_tool_call_support or configured_gateway_preserves_only_consensus_tool_call_support'`
   -> `2 passed`
 - `uv run pytest tests/test_model_discovery.py tests/test_provider_bootstrap.py tests/test_provider_catalog_store.py tests/test_general_free_pool_text_input_contract.py`
-  -> `192 passed in 3.33s`
+  -> `193 passed in 3.35s`
 
 ### Residual external gate
 

@@ -1170,7 +1170,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 row["supported_parameters"] = (
                     ["tools", "tool_choice"]
                     if unique_tool_support.pop() is True
-                    else ["response_format"]
+                    else []
                 )
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()

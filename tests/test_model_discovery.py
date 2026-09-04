@@ -784,6 +784,7 @@ def test_configured_gateway_preserves_only_consensus_tool_call_support() -> None
             {"id": "agreed-tools", "supported_parameters": ["tools"]},
             {"id": "conflicted-tools", "supported_parameters": ["tools"]},
             {"id": "missing-tools", "supported_parameters": ["tools"]},
+            {"id": "agreed-no-tools", "supported_parameters": ["tools"]},
         ]
     }
     metadata = {
@@ -809,6 +810,20 @@ def test_configured_gateway_preserves_only_consensus_tool_call_support() -> None
             },
             {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
             {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
+            {
+                "model_name": "agreed-no-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
+            {
+                "model_name": "agreed-no-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
         ]
     }
 
@@ -828,6 +843,8 @@ def test_configured_gateway_preserves_only_consensus_tool_call_support() -> None
     assert by_id["agreed-tools"].supports_tool_calls is True
     assert by_id["conflicted-tools"].supports_tool_calls is None
     assert by_id["missing-tools"].supports_tool_calls is None
+    assert by_id["agreed-no-tools"].supports_tool_calls is False
+    assert "response_format" not in by_id["agreed-no-tools"].capabilities
 
 
 def test_models_dev_merge_preserves_limit_metadata() -> None:
