@@ -136,6 +136,14 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         linking["true_intercept"]
     )
     assert linking["true_parameter_rmse"] < 1e-12
+    dif = report["candidate_group_dif_validation"]
+    assert dif["method"] == "logistic_dif_purified"
+    assert dif["expected_dif_items"] == [0]
+    assert dif["flagged_items"] == [0]
+    assert dif["known_dif_recall"] == 1.0
+    assert dif["false_positive_count"] == 0
+    assert dif["purification_converged"] is True
+    assert dif["anchor_items"] == 7
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

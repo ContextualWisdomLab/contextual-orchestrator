@@ -28,6 +28,8 @@ LATENCY_REPETITIONS = 200
 ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
+DIF_SAMPLE_SIZE = 4_000
+DIF_SEED = 260_906
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -268,6 +270,39 @@ def _validate_scale_linking() -> dict[str, object]:
     }
 
 
+def _validate_candidate_group_dif() -> dict[str, object]:
+    """Recover one known candidate-cohort item shift after criterion purification."""
+    generator = np.random.default_rng(DIF_SEED)
+    item_count = 8
+    group = np.repeat((0, 1), DIF_SAMPLE_SIZE // 2)
+    ability = generator.normal(size=DIF_SAMPLE_SIZE)
+    intercept = np.linspace(-1.4, 1.4, item_count)
+    logits = ability[:, None] - intercept[None, :]
+    logits[:, 0] += 1.4 * group
+    probabilities = 1.0 / (1.0 + np.exp(-logits))
+    responses = (generator.random((DIF_SAMPLE_SIZE, item_count)) < probabilities).astype(
+        np.int8
+    )
+    result = fast_mlsirm.logistic_dif_purified(responses, group)
+    flagged_items = np.flatnonzero(result["flagged_bh"]).tolist()
+    expected_items = [0]
+    return {
+        "method": "logistic_dif_purified",
+        "sample_size": DIF_SAMPLE_SIZE,
+        "seed": DIF_SEED,
+        "expected_dif_items": expected_items,
+        "flagged_items": flagged_items,
+        "known_dif_recall": len(set(flagged_items) & set(expected_items))
+        / len(expected_items),
+        "false_positive_count": len(set(flagged_items) - set(expected_items)),
+        "purification_converged": bool(result["purify_converged"]),
+        "purification_termination_reason": str(
+            result["purify_termination_reason"]
+        ),
+        "anchor_items": int(result["n_anchor"]),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
@@ -276,6 +311,7 @@ def run_benchmark() -> dict[str, object]:
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
+    candidate_group_dif = _validate_candidate_group_dif()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -382,6 +418,7 @@ def run_benchmark() -> dict[str, object]:
         "measurement_validity_requirements": validity_requirements,
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
+        "candidate_group_dif_validation": candidate_group_dif,
     }
     assert all(
         math.isfinite(value)

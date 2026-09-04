@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now verifies purified logistic DIF on a
+  known candidate-cohort item shift, reporting detection recall, false-positive
+  count, anchor count, and purification convergence. Buyer DIF remains unexecuted.
 - The held-out psychometric benchmark now verifies Stocking–Lord scale linking
   against a known affine transformation of six common-item anchors and reports
   convergence plus true-parameter RMSE. Buyer anchors remain unexecuted.
