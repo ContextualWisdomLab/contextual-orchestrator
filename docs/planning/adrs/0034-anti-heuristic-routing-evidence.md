@@ -64,6 +64,9 @@ catalog are hashed into the evidence identity; a changed model, endpoint,
 capability, or decode policy cannot inherit earlier rows. Source commit
 `0554b3ac` preserves the production similarity rule and adds policy-change and
 restart invalidation tests.
+Persistence source commit `ffb1383b` serializes observation writes with
+candidate retention and pruning; a barrier-driven regression proves a
+concurrent pool update cannot silently delete or later revive a valid row.
 It is not a context-free "LLM ability" measurement. Scores must not be
 linked across candidate-catalog, policy, domain, or time changes unless anchor
 interactions establish scale continuity. Production calibration must also test

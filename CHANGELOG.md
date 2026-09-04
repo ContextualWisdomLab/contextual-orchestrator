@@ -30,6 +30,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   normalization rejects non-finite evidence; the production single-neighbor
   path retains its pre-experiment behavior while the positive-cosine cutoff
   remains confined to the opt-in interpolation experiment.
+- Psychometric router mutation and durable persistence now share one lock, so a
+  concurrent agent-pool change cannot prune a freshly saved valid observation.
+  The paper inventory contract now scans only Git-tracked Python and Markdown
+  sources, excluding ignored build artifacts from research coverage decisions.
 - Psychometric observation replacement now removes only the existing row's
   contiguous trailing items instead of scanning the complete response ledger;
   the checked-in benchmark reports fit/rank and observation p50/p95 separately.
