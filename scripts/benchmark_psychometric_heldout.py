@@ -1254,6 +1254,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     sequential_correct: list[float] = []
     fixed_correct: list[float] = []
     sequential_queries: list[float] = []
+    classification_rows: list[tuple[float, float, float, float]] = []
     for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
         generator = random.Random(30_000 + candidate_index)
         theta = -2.0 + 4.0 * (
@@ -1280,6 +1281,30 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         sequential_queries.append(float(early_decision[0]))
         sequential_correct.append(float(early_decision[1] == true_decision))
         fixed_correct.append(float(fixed_decision == true_decision))
+        classification_rows.append(
+            (
+                abs(theta),
+                float(early_decision[0]),
+                sequential_correct[-1],
+                fixed_correct[-1],
+            )
+        )
+
+    def summarize_stratum(lower: float, upper: float | None) -> dict[str, float]:
+        rows = [
+            row
+            for row in classification_rows
+            if row[0] >= lower and (upper is None or row[0] < upper)
+        ]
+        return {
+            "candidates": len(rows),
+            "sequential_mean_queries": statistics.fmean(row[1] for row in rows),
+            "early_stop_rate": statistics.fmean(
+                float(row[1] < ADAPTIVE_CALIBRATION_MAX_ITEMS) for row in rows
+            ),
+            "sequential_accuracy": statistics.fmean(row[2] for row in rows),
+            "fixed_accuracy": statistics.fmean(row[3] for row in rows),
+        }
 
     classification_stopping = {
         "method": "confidence_interval_classification_stopping",
@@ -1305,6 +1330,11 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
             sequential_correct, fixed_correct
         ),
+        "distance_from_cut_strata": {
+            "near_lt_0_5": summarize_stratum(0.0, 0.5),
+            "mid_0_5_to_1": summarize_stratum(0.5, 1.0),
+            "far_ge_1": summarize_stratum(1.0, None),
+        },
     }
     return {
         "method": "maximum_fisher_information_eap_screen",

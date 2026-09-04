@@ -548,6 +548,29 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert stopping["decision_agreement_rate"] == 1.0
     assert stopping["query_delta_ci95"] == pytest.approx([-2.425, -1.835])
     assert stopping["accuracy_delta_ci95"] == [0.0, 0.0]
+    assert stopping["distance_from_cut_strata"] == {
+        "near_lt_0_5": {
+            "candidates": 100,
+            "sequential_mean_queries": 11.86,
+            "early_stop_rate": 0.03,
+            "sequential_accuracy": 0.7,
+            "fixed_accuracy": 0.7,
+        },
+        "mid_0_5_to_1": {
+            "candidates": 100,
+            "sequential_mean_queries": 11.03,
+            "early_stop_rate": 0.25,
+            "sequential_accuracy": 0.95,
+            "fixed_accuracy": 0.95,
+        },
+        "far_ge_1": {
+            "candidates": 200,
+            "sequential_mean_queries": 8.305,
+            "early_stop_rate": 0.68,
+            "sequential_accuracy": 1.0,
+            "fixed_accuracy": 1.0,
+        },
+    }
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
