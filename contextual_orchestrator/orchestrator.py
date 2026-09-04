@@ -2122,16 +2122,7 @@ class ModelClient:
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
-        if not agent_supports_chat_completions(agent.tags):
-            # See the matching guard in ModelClient.chat(): stream_chat's real
-            # token-streaming transport (_stream_send) always posts Chat
-            # Completions shape and has no translation branch, so an agent
-            # proven api:responses_only must fail closed here rather than
-            # silently receive a shape it cannot accept.
-            raise ValueError(
-                f"agent {agent.id!r} is declared api:responses_only and cannot "
-                "serve a Chat Completions request via ModelClient.stream_chat()"
-            )
+        supports_chat = agent_supports_chat_completions(agent.tags)
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
@@ -2154,7 +2145,18 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         if include_usage:
             payload["stream_options"] = {"include_usage": True}
-        payload = self.apply_effort_profile(agent, payload, effort_profile)
+        if supports_chat:
+            payload = self.apply_effort_profile(agent, payload, effort_profile)
+            endpoint = "chat/completions"
+            response_shape = "chat"
+        else:
+            payload = chat_request_to_responses_request(payload)
+            payload["stream"] = True
+            payload = self.apply_effort_profile(
+                agent, payload, effort_profile, api_surface="responses"
+            )
+            endpoint = "responses"
+            response_shape = "responses"
         parsed_provider = urlparse(agent.base_url)
         with traced(
             f"chat {agent.model}",
@@ -2167,12 +2169,29 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+            if response_shape == "chat":
+                yield from self._stream_send(agent, payload, destination)
+            else:
+                yield from self._stream_send(
+                    agent,
+                    payload,
+                    destination,
+                    endpoint=endpoint,
+                    response_shape=response_shape,
+                )
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        endpoint: str = "chat/completions",
+        response_shape: str = "chat",
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
+        if response_shape not in {"chat", "responses"}:
+            raise ValueError("response_shape must be chat or responses")
         self._local.usage = None
         payload = self._clamp_agent_token_budget(agent, payload)
         api_key = _provider_credential(agent)
@@ -2182,7 +2201,7 @@ class ModelClient:
         apply_header(headers, api_version_for(agent.provider_name))
         inject_trace_context(headers)
         request = urllib.request.Request(
-            self._provider_url(agent, "/chat/completions"),
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
@@ -2206,6 +2225,29 @@ class ModelClient:
                     except json.JSONDecodeError:
                         continue
                     if not isinstance(chunk, dict):
+                        continue
+                    if response_shape == "responses":
+                        event_type = chunk.get("type")
+                        if event_type == "response.output_text.delta":
+                            delta = chunk.get("delta")
+                            if isinstance(delta, str) and delta:
+                                yield delta
+                            continue
+                        if event_type in {"response.completed", "response.incomplete"}:
+                            completed = chunk.get("response")
+                            if not isinstance(completed, dict):
+                                continue
+                            translated = responses_response_to_chat_response(completed, payload)
+                            stream_usage = translated["usage"]
+                            self._local.usage = stream_usage
+                            if isinstance(completed.get("model"), str):
+                                stream_model = completed["model"]
+                            stream_choices.extend({
+                                "finish_reason": choice["finish_reason"]
+                            } for choice in translated["choices"])
+                            continue
+                        if event_type in {"error", "response.failed"}:
+                            raise RuntimeError("provider Responses stream failed")
                         continue
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):

@@ -770,13 +770,8 @@ def test_apply_header_and_query_param_are_no_ops_for_none_version() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ModelClient.chat()/stream_chat() must not silently mis-shape a request to
-# an agent proven api:responses_only -- these two methods (used by
-# route_once/triage/planner/conduct's worker calls, not just the public
-# passthrough endpoints _proxy_send guards) always build and send Chat
-# Completions shape with no translation branch of their own, so a
-# responses_only-declared agent must fail closed rather than silently
-# receive a shape it cannot accept.
+# Internal worker request shape: synchronous chat remains fail-closed while
+# stream_chat translates live Responses SSE through the shared transport.
 # ---------------------------------------------------------------------------
 
 def test_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
@@ -791,7 +786,7 @@ def test_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() ->
         client.chat(agent, [{"role": "user", "content": "hi"}])
 
 
-def test_stream_chat_raises_for_responses_only_agent_instead_of_silent_wrong_shape() -> None:
+def test_stream_chat_translates_for_responses_only_agent() -> None:
     agent = ModelAgent(
         "responses_only_worker",
         "responses-model",
@@ -799,8 +794,18 @@ def test_stream_chat_raises_for_responses_only_agent_instead_of_silent_wrong_sha
         tags=("api:responses_only",),
     )
     client = ModelClient(max_retries=0)
-    with pytest.raises(ValueError, match="api:responses_only"):
-        list(client.stream_chat(agent, [{"role": "user", "content": "hi"}]))
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_stream_send", return_value=iter(("one", " two")),
+    ) as send:
+        assert list(client.stream_chat(agent, [{"role": "user", "content": "hi"}])) == [
+            "one", " two",
+        ]
+
+    forwarded = send.call_args.args[1]
+    assert send.call_args.kwargs == {"endpoint": "responses", "response_shape": "responses"}
+    assert "messages" not in forwarded
+    assert forwarded["input"][0]["content"] == [{"type": "input_text", "text": "hi"}]
+    assert forwarded["stream"] is True
 
 
 def test_probe_uses_responses_endpoint_for_responses_only_agent() -> None:

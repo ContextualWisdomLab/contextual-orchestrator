@@ -124,6 +124,38 @@ def test_stream_send_parses_real_provider_sse() -> None:
     assert "".join(deltas) == "Hello streamed world"
 
 
+def test_stream_send_parses_responses_provider_sse_without_buffering() -> None:
+    usage = {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
+    frames = [
+        'event: response.output_text.delta\n',
+        'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
+        'event: response.output_text.delta\n',
+        'data: {"type":"response.output_text.delta","delta":" responses"}\n\n',
+        'event: response.completed\n',
+        'data: ' + json.dumps({
+            "type": "response.completed",
+            "response": {"model": "gpt-x", "status": "completed", "usage": usage},
+        }) + '\n\n',
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "responses_worker", "gpt-x", base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        deltas = list(client._stream_send(
+            agent,
+            {"model": "gpt-x", "input": "hi", "stream": True},
+            endpoint="responses",
+            response_shape="responses",
+        ))
+
+    assert deltas == ["Hello", " responses"]
+    assert client.take_usage() == {
+        "prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5,
+    }
+
+
 def test_stream_send_ignores_empty_and_missing_choices() -> None:
     """Usage-only or malformed frames must not abort a valid stream (IndexError)."""
     frames = [
