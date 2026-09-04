@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import numpy as np
 from pathlib import Path
+import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
@@ -84,7 +86,9 @@ def test_contextual_fast_mlsirm_evidence_precedes_static_coldstart_order(monkeyp
     monkeypatch.setattr(
         orchestrator._psychometric_router,
         "ranked_evidence",
-        lambda agent_ids, prompt, vector: [("quality_first", 0.91)],
+        lambda agent_ids, prompt, vector: [
+            (next(agent_id for agent_id in agent_ids if agent_id.startswith("quality_first:")), 0.91)
+        ],
     )
     monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
 
@@ -139,7 +143,9 @@ def test_contextual_fast_mlsirm_evidence_orders_every_post_413_candidate(monkeyp
     monkeypatch.setattr(
         orchestrator._psychometric_router,
         "ranked_evidence",
-        lambda agent_ids, prompt, vector: [("quality_backup", 0.88)],
+        lambda agent_ids, prompt, vector: [
+            (next(agent_id for agent_id in agent_ids if agent_id.startswith("quality_backup:")), 0.88)
+        ],
     )
     monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
 
@@ -178,12 +184,13 @@ def test_contextual_judge_observation_survives_restart_without_raw_prompt(
     records = second._psychometric_router.records()
     second.close()
 
+    candidate_id = TaskOrchestrator._psychometric_candidate_id(agents[0])
     assert records == [
         {
             "context_id": PsychometricRoutingEvidence.context_id(
                 "system secret/user request"
             ),
-            "agent_id": "model_a",
+            "agent_id": candidate_id,
             "accepted": True,
             "irt_row": [1, 0],
             "vector": None,
@@ -203,7 +210,7 @@ def test_replacing_judge_row_removes_stale_trailing_items() -> None:
 
 
 def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
-    evidence = PsychometricRoutingEvidence()
+    evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
     evidence.observe("left", "model_a", True, [1.0, 0.0])
     evidence.observe("right", "model_a", True, [0.0, 1.0])
     evidence._scores = {
@@ -220,6 +227,23 @@ def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
         ("model_a", 0.6),
         ("model_b", 0.4),
     ]
+
+
+def test_semantic_warm_start_defaults_to_validated_single_neighbor() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("left", "model_a", True, [1.0, 0.0])
+    evidence.observe("right", "model_a", True, [0.0, 1.0])
+    evidence._scores = {
+        evidence.context_id("left"): {"model_a": 0.9, "model_b": 0.1},
+        evidence.context_id("right"): {"model_a": 0.3, "model_b": 0.7},
+    }
+    evidence._fit_revision = evidence._revision
+
+    ranked = evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [0.9, 0.8]
+    )
+
+    assert ranked == [("model_a", 0.9), ("model_b", 0.1)]
 
 
 def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
@@ -246,3 +270,54 @@ def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
     assert evidence.ranked_evidence(
         ("model_a", "model_b"), "held-out", [1.0, 0.0]
     ) == []
+
+
+def test_cosine_is_finite_for_large_finite_embeddings() -> None:
+    similarity = PsychometricRoutingEvidence._cosine(
+        [1e308, 1e308], [1e308, 1e308]
+    )
+
+    assert similarity is not None
+    assert math.isfinite(similarity)
+    assert similarity == pytest.approx(1.0)
+
+
+def test_deployment_configuration_changes_psychometric_identity() -> None:
+    before = ModelAgent("model_a", "model-a", base_url="https://one.example/v1")
+    after = ModelAgent("model_a", "model-b", base_url="https://two.example/v1")
+
+    assert TaskOrchestrator._psychometric_candidate_id(
+        before
+    ) != TaskOrchestrator._psychometric_candidate_id(after)
+
+
+def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
+    old_agent = ModelAgent("reused_agent", "model-old", base_url="https://old.example/v1")
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("static_first", "model-static", priority=100),
+            ModelAgent(
+                "reused_agent",
+                "model-new",
+                base_url="https://new.example/v1",
+                priority=1,
+            ),
+        ]
+    )
+    old_candidate_id = TaskOrchestrator._psychometric_candidate_id(old_agent)
+    context = "versioned system/user interaction"
+    orchestrator._psychometric_router.observe(
+        context, old_candidate_id, True, None
+    )
+    orchestrator._psychometric_router._scores = {
+        PsychometricRoutingEvidence.context_id(context): {old_candidate_id: 1.0}
+    }
+    orchestrator._psychometric_router._fit_revision = (
+        orchestrator._psychometric_router._revision
+    )
+
+    ranked = orchestrator._ranked_agents(
+        "request", "worker", prompt_context=context
+    )
+
+    assert [agent.id for agent in ranked] == ["static_first", "reused_agent"]

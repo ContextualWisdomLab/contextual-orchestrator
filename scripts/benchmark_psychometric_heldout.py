@@ -35,7 +35,9 @@ def _vector(angle: float) -> list[float]:
 
 def main() -> None:
     """Print seeded held-out probability error, regret, and routing latency."""
-    evidence = PsychometricRoutingEvidence(max_contexts=TRAIN_CONTEXTS)
+    evidence = PsychometricRoutingEvidence(
+        max_contexts=TRAIN_CONTEXTS, semantic_warm_start_enabled=True
+    )
     for context_index in range(TRAIN_CONTEXTS):
         angle = 2.0 * math.pi * context_index / TRAIN_CONTEXTS
         context = f"train_{context_index}"

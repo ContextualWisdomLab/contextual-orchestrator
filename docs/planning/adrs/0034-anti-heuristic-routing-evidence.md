@@ -43,12 +43,12 @@ The replacement ordering ladder is evidence-only:
 
 ### Psychometric warm start for unseen contexts
 
-An exact previously judged context keeps its fitted model probabilities. For
-an unseen context, the gateway takes at most the two most similar contexts with
-positive cosine similarity and averages each available model probability using
-those similarities as weights. One usable neighbor retains the prior
-single-neighbor behavior; no usable vector returns no psychometric evidence and
-falls back to the existing measured order.
+An exact previously judged context keeps its fitted model probabilities. The
+production default for an unseen context remains the previously validated
+single nearest positive-cosine context. The experimental held-out harness may
+enable two-neighbor interpolation and average each available candidate
+probability using those similarities as weights. No usable vector returns no
+psychometric evidence and falls back to the existing measured order.
 
 This bounded Nadaraya-style local interpolation replaces a discontinuous
 nearest-context copy without adding a trained router or bandwidth parameter.
@@ -58,7 +58,9 @@ matrix shows non-inferior accuracy and acceptable end-to-end latency.
 
 The fitted value is a conditional success estimate for one versioned deployment
 candidate: endpoint, model revision, system prompt, decoding policy, and enabled
-tools. It is not a context-free "LLM ability" measurement. Scores must not be
+tools. Declared candidate configuration is hashed into the evidence identity;
+a changed model, endpoint, capability, or policy cannot inherit earlier rows.
+It is not a context-free "LLM ability" measurement. Scores must not be
 linked across candidate-catalog, policy, domain, or time changes unless anchor
 interactions establish scale continuity. Production calibration must also test
 local dependence and subgroup/domain DIF, report estimate uncertainty, model
@@ -143,7 +145,7 @@ flowchart LR
   zero while decision p50 remains near 0.02 ms. Eleven focused psychometric
   tests cover exact and interpolated scoring, iterable candidates, persistence,
   and routing integration. Buyer-held-out and protected-main evidence remain
-  open.
+  open, so two-neighbor interpolation remains disabled in production.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted

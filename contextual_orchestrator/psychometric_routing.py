@@ -21,8 +21,16 @@ class PsychometricRoutingEvidence:
     preserve its existing measured-routing order.
     """
 
-    def __init__(self, max_contexts: int = 512) -> None:
+    def __init__(
+        self,
+        max_contexts: int = 512,
+        *,
+        semantic_warm_start_enabled: bool = False,
+    ) -> None:
+        if type(semantic_warm_start_enabled) is not bool:
+            raise TypeError("semantic_warm_start_enabled must be a boolean")
         self.max_contexts = max_contexts
+        self.semantic_warm_start_enabled = semantic_warm_start_enabled
         self._lock = threading.Lock()
         self._contexts: OrderedDict[str, list[float] | None] = OrderedDict()
         self._responses: dict[tuple[str, str, int], int] = {}
@@ -100,7 +108,8 @@ class PsychometricRoutingEvidence:
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
                     return []
-                neighbors = sorted(comparable, reverse=True)[:2]
+                neighbor_limit = 2 if self.semantic_warm_start_enabled else 1
+                neighbors = sorted(comparable, reverse=True)[:neighbor_limit]
                 if neighbors[0][0] <= 0:
                     return []
                 if len(neighbors) == 1 or neighbors[1][0] <= 0:
@@ -215,9 +224,14 @@ class PsychometricRoutingEvidence:
             or not all(math.isfinite(value) for value in right)
         ):
             return None
-        dot = sum(a * b for a, b in zip(left, right))
-        left_norm = sum(value * value for value in left) ** 0.5
-        right_norm = sum(value * value for value in right) ** 0.5
+        left_norm = math.hypot(*left)
+        right_norm = math.hypot(*right)
         if left_norm == 0.0 or right_norm == 0.0:
             return None
-        return dot / (left_norm * right_norm)
+        similarity = math.fsum(
+            (left_value / left_norm) * (right_value / right_norm)
+            for left_value, right_value in zip(left, right)
+        )
+        if not math.isfinite(similarity):
+            return None
+        return max(-1.0, min(1.0, similarity))

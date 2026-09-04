@@ -6995,18 +6995,30 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = {
+            self._psychometric_candidate_id(candidate): candidate for candidate in candidates
+        }
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
+
+    @staticmethod
+    def _psychometric_candidate_id(agent: ModelAgent) -> str:
+        """Bind routing evidence to the complete declared deployment configuration."""
+        configuration = json.dumps(
+            agent.to_config(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+        return f"{agent.id}:{revision}"
 
     def _observe_contextual_quality(
         self,
@@ -7020,9 +7032,10 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
+        candidate_id = self._psychometric_candidate_id(self._agent(served_id))
         self._psychometric_router.observe(
             prompt_context,
-            served_id,
+            candidate_id,
             accepted,
             self._embed_cached(prompt_context),
             irt_row,
@@ -7032,9 +7045,9 @@ class TaskOrchestrator:
             record = next(
                 item
                 for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+                if item["context_id"] == context_id and item["agent_id"] == candidate_id
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
+            key = hashlib.sha256(f"{context_id}\0{candidate_id}".encode()).hexdigest()
             self._store.save("psychometric_observation", key, record)
             retained = {
                 hashlib.sha256(

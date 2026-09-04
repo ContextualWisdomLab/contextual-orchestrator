@@ -63,8 +63,9 @@ on `b2f90116` to p50 0.000875 ms and p95 0.001000 ms. The benchmark now emits
 both fields. This is local gateway bookkeeping evidence; the fit, held-out
 quality, and provider latency remain separate KPIs.
 
-Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate
-semantic warm-start experiment. On its fixed 24-training/24-held-out smooth
+Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate,
+explicitly enabled semantic warm-start experiment. Production retains the
+validated single-neighbor behavior. On its fixed 24-training/24-held-out smooth
 latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
 Brier 0.1438369123, log loss 0.4525311878, mean top-choice regret 0.0024259478,
 and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
@@ -72,6 +73,7 @@ and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
 0.4475784303, zero top-choice regret, and p50 about 0.0204 ms. This seeded
 simulation isolates unseen-context interpolation; it is not a substitute for
 preregistered buyer prompts, observed judge outcomes, or end-to-end latency.
+The experimental result cannot alter live routing until those gates pass.
 
 ## APA 7 references
 
