@@ -162,7 +162,7 @@ schema/provider/mode identity, removes it at or after its deadline, and never
 resolves a credential, discovers a model, or calls a provider. This repository
 deliberately adds no scheduler.
 
-Seed the credential into the KV once at bootstrap:
+Seed the OpenRouter credential into the KV once at bootstrap:
 
 ```bash
 echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator register-credential --name OPENROUTER_API_KEY --value-stdin

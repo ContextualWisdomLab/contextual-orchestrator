@@ -2385,7 +2385,7 @@ Buyer-visible gaps now prioritized:
    keyboard/native-form REST editor; DB membership is normalized and legacy JSON
    membership migrates without data loss. Authenticated deployed-browser runtime
    evidence remains a release/UAT gate rather than an implementation gap.
-3. **Implemented in the current product-gap branch:** the OpenRouter free-model
+3. **Implemented on protected `main`:** the OpenRouter free-model
    canary is dry-run-only by default and selects a current chat row only when
    prompt and completion prices are explicitly zero and comparable. Live mode
    is unscheduled and requires positive request, output-token, timeout, evidence
