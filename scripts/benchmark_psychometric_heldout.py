@@ -1254,7 +1254,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     sequential_correct: list[float] = []
     fixed_correct: list[float] = []
     sequential_queries: list[float] = []
-    classification_rows: list[tuple[float, float, float, float]] = []
+    classification_rows: list[tuple[float, float, float, float, float]] = []
     for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
         generator = random.Random(30_000 + candidate_index)
         theta = -2.0 + 4.0 * (
@@ -1275,6 +1275,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             ):
                 early_decision = (step + 1, state["theta_eap"][0] >= 0.0)
         fixed_decision = state["theta_eap"][0] >= 0.0
+        confidence_resolved = early_decision is not None
         if early_decision is None:
             early_decision = (ADAPTIVE_CALIBRATION_MAX_ITEMS, fixed_decision)
         true_decision = theta >= 0.0
@@ -1287,6 +1288,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
                 float(early_decision[0]),
                 sequential_correct[-1],
                 fixed_correct[-1],
+                float(confidence_resolved),
             )
         )
 
@@ -1304,6 +1306,10 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             ),
             "sequential_accuracy": statistics.fmean(row[2] for row in rows),
             "fixed_accuracy": statistics.fmean(row[3] for row in rows),
+            "confidence_resolved_rate": statistics.fmean(row[4] for row in rows),
+            "resolved_accuracy": statistics.fmean(
+                row[2] for row in rows if row[4]
+            ),
         }
 
     classification_stopping = {
@@ -1329,6 +1335,12 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         ),
         "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
             sequential_correct, fixed_correct
+        ),
+        "confidence_resolved_rate": statistics.fmean(
+            row[4] for row in classification_rows
+        ),
+        "resolved_accuracy": statistics.fmean(
+            row[2] for row in classification_rows if row[4]
         ),
         "distance_from_cut_strata": {
             "near_lt_0_5": summarize_stratum(0.0, 0.5),

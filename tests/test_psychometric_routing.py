@@ -548,6 +548,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert stopping["decision_agreement_rate"] == 1.0
     assert stopping["query_delta_ci95"] == pytest.approx([-2.425, -1.835])
     assert stopping["accuracy_delta_ci95"] == [0.0, 0.0]
+    assert stopping["confidence_resolved_rate"] == 0.425
+    assert stopping["resolved_accuracy"] == 1.0
     assert stopping["distance_from_cut_strata"] == {
         "near_lt_0_5": {
             "candidates": 100,
@@ -555,6 +557,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
             "early_stop_rate": 0.03,
             "sequential_accuracy": 0.7,
             "fixed_accuracy": 0.7,
+            "confidence_resolved_rate": 0.03,
+            "resolved_accuracy": 1.0,
         },
         "mid_0_5_to_1": {
             "candidates": 100,
@@ -562,6 +566,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
             "early_stop_rate": 0.25,
             "sequential_accuracy": 0.95,
             "fixed_accuracy": 0.95,
+            "confidence_resolved_rate": 0.26,
+            "resolved_accuracy": 1.0,
         },
         "far_ge_1": {
             "candidates": 200,
@@ -569,6 +575,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
             "early_stop_rate": 0.68,
             "sequential_accuracy": 1.0,
             "fixed_accuracy": 1.0,
+            "confidence_resolved_rate": 0.705,
+            "resolved_accuracy": 1.0,
         },
     }
     assert "not live decision latency" in adaptive["known_limit"]
