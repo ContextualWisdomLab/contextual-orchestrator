@@ -179,6 +179,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert assignment["inverse_propensity_rmse"] == pytest.approx(
         0.008942720293704905
     )
+    assert assignment["naive_observed_rmse"] == pytest.approx(
+        0.32197876384702356
+    )
+    assert assignment["inverse_propensity_rmse_reduction"] == pytest.approx(
+        0.31303604355331865
+    )
     assert assignment["true_value_coverage_rate"] == 1.0
     linking = report["scale_linking_validation"]
     assert linking["method"] == "stocking_lord"

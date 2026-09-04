@@ -182,6 +182,7 @@ def _validate_assignment_design(
     """Validate a preregistered positive-propensity logging design on known truth."""
     generator = random.Random(ASSIGNMENT_SEED)
     weighted_rewards = {model_id: [] for model_id in MODEL_IDS}
+    observed_rewards = {model_id: [] for model_id in MODEL_IDS}
     observations = {model_id: 0 for model_id in MODEL_IDS}
     minimum_probability = EXPLORATION_RATE / len(MODEL_IDS)
     for trial_index in range(ASSIGNMENT_TRIALS):
@@ -203,6 +204,7 @@ def _validate_assignment_design(
         selected_index = MODEL_IDS.index(selected)
         reward = float(generator.random() < _probability(selected_index, angle))
         observations[selected] += 1
+        observed_rewards[selected].append(reward)
         for model_id in MODEL_IDS:
             weighted_rewards[model_id].append(
                 reward / selected_probability if model_id == selected else 0.0
@@ -222,6 +224,22 @@ def _validate_assignment_design(
         model_id: statistics.fmean(values)
         for model_id, values in weighted_rewards.items()
     }
+    naive_estimates = {
+        model_id: statistics.fmean(values)
+        for model_id, values in observed_rewards.items()
+    }
+    naive_rmse = math.sqrt(
+        statistics.fmean(
+            (naive_estimates[model_id] - true_values[model_id]) ** 2
+            for model_id in MODEL_IDS
+        )
+    )
+    inverse_propensity_rmse = math.sqrt(
+        statistics.fmean(
+            (estimates[model_id] - true_values[model_id]) ** 2
+            for model_id in MODEL_IDS
+        )
+    )
     confidence_intervals: dict[str, list[float]] = {}
     covered = 0
     for model_id, values in weighted_rewards.items():
@@ -240,13 +258,11 @@ def _validate_assignment_design(
         "seed": ASSIGNMENT_SEED,
         "observations_by_candidate": observations,
         "inverse_propensity_value": estimates,
+        "naive_observed_value": naive_estimates,
         "true_value": true_values,
-        "inverse_propensity_rmse": math.sqrt(
-            statistics.fmean(
-                (estimates[model_id] - true_values[model_id]) ** 2
-                for model_id in MODEL_IDS
-            )
-        ),
+        "naive_observed_rmse": naive_rmse,
+        "inverse_propensity_rmse": inverse_propensity_rmse,
+        "inverse_propensity_rmse_reduction": naive_rmse - inverse_propensity_rmse,
         "confidence_interval_95": confidence_intervals,
         "true_value_coverage_rate": covered / len(MODEL_IDS),
     }
