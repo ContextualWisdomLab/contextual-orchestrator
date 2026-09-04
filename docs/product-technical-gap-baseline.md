@@ -2207,9 +2207,9 @@ components. All remain `not_executed`; in particular, winner-only adaptive
 history carries no recorded randomized exposure probability and therefore
 cannot support an invented propensity correction.
 Source commit `fdb8e57a` now separates released owner contracts, the pending
-local-independence contract, and unimplemented item-side language/domain and
-adaptive-exposure contracts from execution status. None can pass without the
-buyer evidence named in the benchmark report.
+local-independence contract, and owner gaps from execution status. Later source
+commits refine two owner classifications; none can pass without the buyer
+evidence named in the benchmark report.
 Source commit `7edccae0` caches validated unit context embeddings at observation
 time. Five before/after local runs reduced median candidate decision p50 from
 `0.016083` to `0.009791` ms with unchanged Brier, log loss, and regret. The
@@ -2221,6 +2221,11 @@ so a preregistered difficulty contrast is `released_limited`, not wholly
 unimplemented. Language-specific discrimination and residual effects still
 require owner work, and no buyer observations or anchors have executed the
 available slice.
+Source commit `a095b41f` also corrects the adaptive-exposure owner status:
+`fast-mlsirm` 0.9.1 exposes CAT exposure control, but that surface neither logs
+CO routing propensities nor identifies unobserved candidate outcomes. The
+gateway still needs randomized assignment or a propensity ledger before this
+validity component can execute.
 
 ## 7. Delivery gates
 

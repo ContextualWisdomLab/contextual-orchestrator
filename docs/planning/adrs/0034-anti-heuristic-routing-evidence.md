@@ -225,6 +225,10 @@ flowchart LR
   item-covariate owner contract. It supports one preregistered item-side
   difficulty contrast, not language-specific discrimination or residuals, and
   does not pass without linked buyer observations and anchors.
+- Source commit `a095b41f` distinguishes the released CAT exposure-control
+  contract from CO's missing randomized-assignment or propensity ledger. The
+  former limits repeated item administration; it cannot identify responses for
+  candidate deployments that the gateway did not invoke.
 
 ## References
 
@@ -232,4 +236,4 @@ See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
 Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
-Finkelman et al., 2009).
+Finkelman et al., 2009; Barrada et al., 2007).

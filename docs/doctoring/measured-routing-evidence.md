@@ -116,9 +116,10 @@ scale linking, local independence, correctly oriented candidate-group DIF,
 item-side language/domain effects, judge effects, and adaptive exposure must
 each carry evidence. All six currently report `not_executed`.
 Source commit `fdb8e57a` also separates released owner contracts from the
-pending local-independence contract and the unimplemented item-side and
-adaptive-exposure contracts. It records the buyer evidence each check still
-needs without treating API availability as completed validation.
+pending local-independence contract and contracts then classified as
+unimplemented. It records the buyer evidence each check still needs without
+treating API availability as completed validation; later evidence corrects the
+two overly broad classifications below.
 Source commit `7edccae0` caches the validated unit vector for each retained
 context at observation time. Across five before/after local runs, median
 candidate p50 fell from `0.016083` to `0.009791` ms (39.12%) while Brier, log
@@ -128,8 +129,16 @@ Source commit `00b2eef3` corrects the item-side owner status from
 `not_implemented` to `released_limited`. The installed `fast-mlsirm` 0.9.1
 contract can estimate one multigroup item covariate coefficient; it cannot
 claim the richer language-specific discrimination or residual model.
+Source commit `a095b41f` similarly separates released CAT exposure control
+from the missing gateway observation-design contract. `fast-mlsirm` 0.9.1 can
+calibrate an exposure filter, but it cannot reconstruct routing propensities or
+unobserved candidate outcomes that CO never recorded.
 
 ## APA 7 references
+
+Barrada, J. R., Olea, J., & Ponsoda, V. (2007). Methods for restricting maximum
+exposure rate in computerized adaptive testing. *Methodology, 3*(1), 14–23.
+https://doi.org/10.1027/1614-2241.3.1.14
 
 Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
 using item response theory. *Journal of Educational and Behavioral Statistics,

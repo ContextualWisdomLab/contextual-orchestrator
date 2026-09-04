@@ -112,6 +112,13 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds explicit randomized exposure control. CO must record the actual
   selection design/probability before any propensity correction; deterministic
   winner-only history is not sufficient evidence.
+- Barrada, J. R., Olea, J., & Ponsoda, V. (2007). Methods for restricting
+  maximum exposure rate in computerized adaptive testing. *Methodology, 3*(1),
+  14–23. https://doi.org/10.1027/1614-2241.3.1.14
+  Grounds the released `fast-mlsirm` CAT exposure-control surface. Selection
+  and administration probabilities used to limit item exposure are not logged
+  gateway routing propensities and do not identify outcomes for candidates the
+  gateway did not call.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373
