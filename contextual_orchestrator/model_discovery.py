@@ -906,12 +906,9 @@ def _models_dev_cost_is_free(cost: object) -> bool:
 def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> Any:
     """Join an availability catalog with Models.dev cost and modality evidence.
 
-    Cost is always taken solely from Models.dev (see ``_models_dev_cost_is_free``'s
-    docstring and ADR 0041's cost-safety argument): none of these four joined
-    providers reports its own per-model price today, so there is nothing on the
-    provider side for a compromised or lying upstream to assert instead, and
-    ``pricing``/``is_free`` must stay third-party-verified rather than
-    self-reported. Modality and capacity evidence carries no such safety
+    Free-model classification is always taken from Models.dev (see
+    ``_models_dev_cost_is_free`` and ADR 0041's cost-safety argument), so a
+    provider cannot certify itself as free. Modality and capacity evidence carries no such safety
     argument -- it is not used to certify a model as free -- so those fields
     are a field-level union instead: Models.dev's value wins only when
     Models.dev actually reports one, and the provider's own catalog value

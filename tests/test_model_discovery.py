@@ -737,9 +737,9 @@ def test_models_dev_merge_preserves_limit_metadata() -> None:
 def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence() -> None:
     """Neither source may silently erase the other's field-level evidence.
 
-    Cost stays solely Models.dev-authoritative (ADR 0041's cost-safety
-    argument: a compromised provider must never be able to self-report
-    "free"). Modality and capacity metadata carry no such safety argument, so
+    Free-model classification stays Models.dev-authoritative (ADR 0041's
+    cost-safety argument: a compromised provider must never be able to
+    self-report "free"). Modality and capacity metadata carry no such safety argument, so
     they are a field-level union: two partial records, each missing what the
     other supplies, must combine rather than have the later source blank out
     the earlier one's evidence.
