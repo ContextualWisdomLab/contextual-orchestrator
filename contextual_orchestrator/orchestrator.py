@@ -4440,7 +4440,10 @@ class TaskOrchestrator:
                 attempt_receipts.append(
                     _passthrough_attempt_record(
                         classified,
-                        provider_name=candidate.provider_name,
+                        provider_name=(
+                            candidate.provider_name
+                            or self._infer_provider_name(candidate.base_url)
+                        ),
                         attempt_number=index + 1,
                         failover_decision=(
                             "advance_to_next_candidate"

@@ -1241,7 +1241,13 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
     )
     orchestrator = _build(client)
     orchestrator.agents = [
-        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+        replace(
+            agent,
+            base_url=f"mock://{agent.id}",
+            provider_name="",
+            tags=(*agent.tags, "cost:free"),
+        )
+        for agent in orchestrator.agents
     ]
 
     with pytest.raises(ProviderUpstreamError) as caught:
@@ -1263,7 +1269,7 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         {
             "agent_id": "primary_agent",
             "model": "primary-model",
-            "provider_name": "primary",
+            "provider_name": "mock-primary_agent",
             "attempt_number": 1,
             "error_code": "provider_connection_error",
             "client_status": 502,
@@ -1276,7 +1282,7 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         {
             "agent_id": "fallback_agent",
             "model": "fallback-model",
-            "provider_name": "fallback",
+            "provider_name": "mock-fallback_agent",
             "attempt_number": 2,
             "error_code": "provider_connection_error",
             "client_status": 502,
