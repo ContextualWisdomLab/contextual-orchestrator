@@ -322,7 +322,21 @@ Buyer next action: call `run_equal_budget_ablation` and read
   8.305 queries, and reach 1.0 accuracy. These descriptive synthetic strata
   are complemented by source `e2cb547f`: 42.5% are confidence-resolved with
   1.0 conditional synthetic accuracy, but near-cut resolution is only 3%.
-  are not calibrated subgroup guarantees.
+  These are not calibrated subgroup guarantees.
+- Chow, C. K. (1970). On optimum recognition error and reject tradeoff. *IEEE
+  Transactions on Information Theory, 16*(1), 41–46.
+  https://doi.org/10.1109/TIT.1970.1054406
+  Establishes the error–reject tradeoff rather than treating forced coverage as
+  free. Redistribution permission was not established, so this repository
+  records the citation and decision impact instead of copying the PDF.
+- El-Yaniv, R., & Wiener, Y. (2010). On the foundations of noise-free selective
+  classification. *Journal of Machine Learning Research, 11*, 1605–1641.
+  https://www.jmlr.org/papers/v11/el-yaniv10a.html
+  Grounds risk–coverage evaluation for classification with a reject option.
+  Source `a718b290` selects `z=1.645` on a development seed under a 2.5% Wilson
+  error-upper-bound rule. On an independent seed it resolves 56% of candidates
+  with zero observed error, a 1.686% Wilson upper bound, and 5.5625 mean queries
+  among resolved candidates; buyer costs and live coverage remain unexecuted.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.
