@@ -51,7 +51,7 @@ gateway's authenticated free pool.
 ### Exact local verification
 
 - `uv run pytest tests/test_ci_gateway_bootstrap.py -q`
-  -> `3 passed in 1.21s`
+  -> `3 passed in 1.95s`
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 

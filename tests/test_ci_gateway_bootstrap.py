@@ -46,6 +46,18 @@ def _request_json(
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _assert_unauthorized(
+    method: str,
+    url: str,
+    *,
+    token: str | None,
+    body: dict[str, object] | None = None,
+) -> None:
+    status, payload = _request_json(method, url, token=token, body=body)
+    assert status == 401, payload
+    assert payload["error"]["code"] == "unauthorized"
+
+
 def test_seed_credentials_copies_present_provider_keys_into_kv(monkeypatch) -> None:
     module = _bootstrap_module()
     assert module.PROVIDER_KEY_ENV_NAMES == tuple(
@@ -133,15 +145,24 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
 
     server = captured["server"]
     thread = captured["thread"]
-    assert get_credential("OPENROUTER_API_KEY") == "router-secret"
-    assert get_credential(module.SERVER_AUTH_ENV_NAME) == "loopback-owner-token"
-    assert "OPENROUTER_API_KEY" not in module.os.environ
-    assert module.SERVER_AUTH_ENV_NAME not in module.os.environ
     try:
+        assert get_credential("OPENROUTER_API_KEY") == "router-secret"
+        assert get_credential(module.SERVER_AUTH_ENV_NAME) == "loopback-owner-token"
+        assert "OPENROUTER_API_KEY" not in module.os.environ
+        assert module.SERVER_AUTH_ENV_NAME not in module.os.environ
         port = server.server_address[1]
+        models_url = f"http://127.0.0.1:{port}/v1/models"
+        chat_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+        chat_request = {
+            "model": "orchestrator/free",
+            "messages": [{"role": "user", "content": "verify the owner boundary"}],
+        }
+        for token in (None, "wrong-owner-token"):
+            _assert_unauthorized("GET", models_url, token=token)
+            _assert_unauthorized("POST", chat_url, token=token, body=chat_request)
         models_status, models_body = _request_json(
             "GET",
-            f"http://127.0.0.1:{port}/v1/models",
+            models_url,
             token="loopback-owner-token",
         )
         assert models_status == 200, models_body
@@ -156,20 +177,19 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
 
         chat_status, chat_body = _request_json(
             "POST",
-            f"http://127.0.0.1:{port}/v1/chat/completions",
+            chat_url,
             token="loopback-owner-token",
-            body={
-                "model": "orchestrator/free",
-                "messages": [{"role": "user", "content": "verify the owner boundary"}],
-            },
+            body=chat_request,
         )
         assert chat_status == 200, chat_body
         assert chat_body["object"] == "chat.completion"
         assert chat_body["model"] == "orchestrator/free"
         content = chat_body["choices"][0]["message"]["content"]
         assert "verify the owner boundary" in content
-        assert "router-secret" not in json.dumps(chat_body)
-        assert "OPENROUTER_API_KEY" not in json.dumps(chat_body)
+        chat_blob = json.dumps(chat_body)
+        assert "router-secret" not in chat_blob
+        assert "OPENROUTER_API_KEY" not in chat_blob
+        assert "mock://" not in chat_blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
