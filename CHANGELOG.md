@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Psychometric benchmark evidence now distinguishes released owner contracts,
+  a pending owner contract, and unimplemented validity checks while keeping all
+  unexecuted checks fail-closed.
 - The psychometric benchmark now enumerates scale linking, local independence,
   candidate-group DIF, item language/domain effects, judge effects, and adaptive
   exposure as separate measurement-validity evidence components instead of one

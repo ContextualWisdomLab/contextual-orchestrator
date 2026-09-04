@@ -92,6 +92,21 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "judge_effects": "not_executed",
         "adaptive_exposure": "not_executed",
     }
+    requirements = report["measurement_validity_requirements"]
+    assert set(requirements) == set(report["measurement_validity_components"])
+    assert requirements["scale_linking"]["owner_contract_status"] == "released"
+    assert (
+        requirements["local_independence"]["owner_contract_status"]
+        == "owner_pr_pending"
+    )
+    assert (
+        requirements["item_language_domain_effects"]["owner_contract_status"]
+        == "not_implemented"
+    )
+    assert (
+        requirements["adaptive_exposure"]["owner_contract_status"]
+        == "not_implemented"
+    )
     assert report["production_default_change_allowed"] is False
 
 

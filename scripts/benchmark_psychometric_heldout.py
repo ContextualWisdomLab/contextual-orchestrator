@@ -196,6 +196,48 @@ def run_benchmark() -> dict[str, object]:
         "judge_effects": "not_executed",
         "adaptive_exposure": "not_executed",
     }
+    validity_requirements = {
+        "scale_linking": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "versioned common-item anchors and a preregistered linking policy"
+            ),
+        },
+        "local_independence": {
+            "owner_contract_status": "owner_pr_pending",
+            "required_evidence": (
+                "buyer response matrix, model probabilities, and preregistered "
+                "multiplicity and review rules"
+            ),
+        },
+        "candidate_group_dif": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "candidate cohort labels, matched scores, purification, and "
+                "preregistered review rules"
+            ),
+        },
+        "item_language_domain_effects": {
+            "owner_contract_status": "not_implemented",
+            "required_evidence": (
+                "item-side language and domain parameters on linked buyer observations"
+            ),
+        },
+        "judge_effects": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "connected respondent-task-rater observations with versioned judge "
+                "identities"
+            ),
+        },
+        "adaptive_exposure": {
+            "owner_contract_status": "not_implemented",
+            "required_evidence": (
+                "randomized assignment or logged routing propensities for every "
+                "candidate outcome"
+            ),
+        },
+    }
     result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
@@ -210,6 +252,7 @@ def run_benchmark() -> dict[str, object]:
         "production_gate_status": gate_status,
         "production_gates": gates,
         "measurement_validity_components": validity_components,
+        "measurement_validity_requirements": validity_requirements,
     }
     assert all(
         math.isfinite(value)
