@@ -98,6 +98,22 @@ def test_dependabot_tracks_actions_and_python_dependencies():
         assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
 
 
+def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
+    """The combined fuzz job needs one consistent, continuation-safe lock set."""
+    project_lock = read_text("requirements.lock")
+    atheris_lock = read_text("fuzz/requirements-atheris.txt")
+    pinned = re.compile(r"(?m)^([A-Za-z0-9_.-]+)==([^ ;\\]+)")
+    project_versions = dict(pinned.findall(project_lock))
+    atheris_versions = dict(pinned.findall(atheris_lock))
+
+    for package_name in project_versions.keys() & atheris_versions.keys():
+        assert atheris_versions[package_name] == project_versions[package_name]
+    lines = atheris_lock.splitlines()
+    for line_number, line in enumerate(lines):
+        if line.lstrip().startswith("--hash="):
+            assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
+
+
 def test_review_adr_requires_enforced_exact_head_merge_controls():
     adr_text = read_text("docs/planning/adrs/0004-pr-review-merge-loop.md")
     normalized_adr_text = " ".join(adr_text.split())
