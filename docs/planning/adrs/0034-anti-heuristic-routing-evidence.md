@@ -125,7 +125,7 @@ flowchart LR
 - PR #1061 candidate evidence: the fixed 24-training/24-held-out synthetic
   surface reduces Brier score from 0.0020161821 to 0.0000139543, log loss from
   0.4525311878 to 0.4475784303, and mean top-choice regret from 0.0024259478 to
-  zero while decision p50 remains near 0.02 ms. Seven focused psychometric
+  zero while decision p50 remains near 0.02 ms. Nine focused psychometric
   tests cover exact and interpolated scoring, iterable candidates, persistence,
   and routing integration. Buyer-held-out and protected-main evidence remain
   open.
