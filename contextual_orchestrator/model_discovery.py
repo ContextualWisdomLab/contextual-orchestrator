@@ -33,7 +33,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
-from .credentials import get_credential
+from .credentials import NotConfigured, get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -186,6 +186,12 @@ def probe_discovered_model_tool_call_capability(
     This is real runtime evidence, not a model-name heuristic. It is deliberately
     separate from :func:`discover_all_models` so callers decide when the extra
     latency and token cost are justified.
+
+    The response body (success or 400 error) is capped at
+    :data:`MAX_DISCOVERY_RESPONSE_BYTES`, the same bounded-read-then-check
+    pattern used elsewhere in this module, so an oversized or misbehaving
+    provider response cannot exhaust memory; an oversized body is treated as
+    ambiguous evidence (``None``) rather than raising.
     """
     api_key = get_credential(discovered.credential_name)
     if not api_key:
@@ -251,11 +257,17 @@ def probe_discovered_model_tool_call_capability(
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with client._open_provider(request, destination, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+            return None
+        body = raw.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
             return None
-        body = exc.read().decode("utf-8", errors="replace")
+        raw = exc.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+            return None
+        body = raw.decode("utf-8", errors="replace")
         try:
             error_payload = json.loads(body)
         except json.JSONDecodeError:
@@ -498,6 +510,7 @@ class DiscoveredModel:
     zdr_capable: bool = False
     evidence_only: bool = False
     spend_admitted: bool = True
+    supports_parallel_tool_calls: bool | None = None
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -794,6 +807,12 @@ def _deduplicate_discovered_models(
             supports_no_training=None,
             supports_no_prompt_retention=None,
             zdr_capable=False,
+            supports_parallel_tool_calls=(
+                chosen.supports_parallel_tool_calls
+                if previous.supports_parallel_tool_calls
+                == model.supports_parallel_tool_calls
+                else None
+            ),
         )
     return list(unique.values())
 
@@ -973,9 +992,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             "privacy_policy_urls",
         ):
             row.pop(key, None)
+        row.pop("supported_parameters", None)
         model_details = by_name.get(row["id"], [])
         deployment_outputs: list[tuple[str, ...]] = []
         deployment_inputs: list[tuple[str, ...]] = []
+        deployment_supported_parameters: list[tuple[str, ...]] = []
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
@@ -1034,6 +1055,23 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             if info.get("supports_vision") is True and "image" not in inputs:
                 inputs = (*inputs, "image")
             deployment_inputs.append(inputs)
+            supported_parameters = info.get(
+                "supported_openai_params",
+                info.get("supported_parameters", detail.get("supported_parameters")),
+            )
+            if isinstance(params.get("supported_openai_params"), list):
+                supported_parameters = params["supported_openai_params"]
+            elif isinstance(params.get("supported_parameters"), list):
+                supported_parameters = params["supported_parameters"]
+            deployment_supported_parameters.append(
+                tuple(sorted({
+                    value.strip().casefold()
+                    for value in supported_parameters
+                    if isinstance(value, str) and value.strip()
+                }))
+                if isinstance(supported_parameters, list)
+                else ()
+            )
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
@@ -1085,6 +1123,10 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "input_modalities": list(deployment_inputs[0]),
                 "output_modalities": list(deployment_outputs[0]),
             }
+        if deployment_supported_parameters and all(
+            deployment_supported_parameters
+        ) and len(set(deployment_supported_parameters)) == 1:
+            row["supported_parameters"] = list(deployment_supported_parameters[0])
         if completion_limits and all(value is not None for value in completion_limits):
             unique_completion_limits = {value for value in completion_limits if value is not None}
             if len(unique_completion_limits) == 1:
@@ -1261,6 +1303,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if isinstance(row.get("supported_parameters"), list)
             else []
         )
+        parallel_tool_calls = _parallel_tool_call_evidence(supported_parameters)
         top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
@@ -1378,6 +1421,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     else None
                 ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
+                supports_parallel_tool_calls=parallel_tool_calls,
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1804,6 +1848,7 @@ def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
         discovered.model_id,
         capabilities=discovered.capabilities,
         output_modalities=discovered.output_modalities,
+        supports_parallel_tool_calls=discovered.supports_parallel_tool_calls,
     )
 
 
@@ -1828,8 +1873,8 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities
-    ) and not (
-        is_general_chat_agent_model_id(discovered.model_id)
+    ) and not is_discovered_chat_candidate(
+        replace(discovered, supports_parallel_tool_calls=None)
     ):
         raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
@@ -1848,6 +1893,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
+            *discovery_tool_call_tags(discovered),
         ),
         priority=priority,
         disabled=True,
@@ -1890,6 +1936,16 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     other.
     """
     return requires_non_text_input(discovered.input_modalities)
+
+
+def _requires_single_tool_call(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog/probe evidence shows this model only supports one tool call at a time.
+
+    The general blind serving pool may send multi-tool-call requests, so a model
+    whose evidence says it cannot handle ``parallel_tool_calls`` is disqualified
+    from that pool. ``None`` (no evidence) never triggers exclusion.
+    """
+    return discovered.supports_parallel_tool_calls is False
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
@@ -1972,10 +2028,15 @@ def general_free_serving_candidates(
     an extra input modality (e.g. an image) could ever use meaningfully;
     :func:`_requires_non_text_input` excludes exactly those rows here, using
     catalog evidence discovery already records, not a per-model name rule.
+    Similarly, a model whose evidence says it only accepts a single tool call
+    at a time is not fit for arbitrary tool-calling requests;
+    :func:`_requires_single_tool_call` excludes those rows, while ``None``
+    (no evidence) keeps the pool open.
     Such a model remains fully discovered, fully counted in
     :func:`free_discovered_models`'s price-based inventory, and eligible for
-    a pool that is not modality-blind (e.g. one built for vision/multimodal
-    tasks) -- it is only withheld from *this* general-purpose free selector.
+    a pool that is not modality-blind or tool-call-blind (e.g. one built for
+    vision/multimodal or single-tool tasks) -- it is only withheld from *this*
+    general-purpose free selector.
 
     Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
     failure (run 33325907333, job 99295892400): NVIDIA NIM's free
@@ -2010,7 +2071,9 @@ def general_free_serving_candidates(
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if is_routable_discovered_model(model)
+        and not _requires_non_text_input(model)
+        and not _requires_single_tool_call(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates

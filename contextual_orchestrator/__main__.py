@@ -23,6 +23,8 @@ from .openrouter_canary import (
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    DISCOVERY_TOOL_CALL_MULTI_TAG,
+    DISCOVERY_TOOL_CALL_SINGLE_TAG,
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
     ProviderModelSource,
@@ -30,6 +32,7 @@ from .model_discovery import (
     agent_id_for,
     configured_gateway_source,
     discover_all_models,
+    discovery_tool_call_tags,
     free_discovered_models,
     general_free_serving_candidates,
     is_discovered_chat_candidate,
@@ -40,6 +43,7 @@ from .model_discovery import (
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -689,6 +693,56 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+_DISCOVERY_CAPABILITY_BLOCKED_TAG = "discovery:blocked:capability"
+_DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG = (
+    "discovery:blocked:capability:preserve-disabled"
+)
+
+
+def _refresh_discovered_tool_call_tags(
+    tags: tuple[str, ...],
+    model: DiscoveredModel,
+) -> tuple[str, ...]:
+    """Replace stale tool-call evidence with the current discovery result.
+
+    Only the specific visible tag paired with a discovery marker currently
+    present is discovery-owned. A prior discovery pass always writes its
+    visible tag and hidden marker together (see
+    :func:`~contextual_orchestrator.model_discovery.discovery_tool_call_tags`),
+    so a marker for one polarity (e.g. ``discovery:tool_call:multi``) never
+    implies ownership of the *other* visible tag. This preserves an
+    operator-authored ``tool_call:single``/``tool_call:multi`` override that
+    predates any discovery evidence: it is never removed just because
+    discovery later supplies -- and then withdraws -- unrelated evidence.
+
+    A same-polarity collision (an operator's plain tag already reads the
+    same value discovery now independently reports) is handled the same
+    way: discovery never claims ownership -- by adding its hidden marker --
+    of a visible tag that is already present without one. The two tags are
+    string-identical, so there would otherwise be no way to tell them apart
+    on a later refresh; leaving the marker off means the pre-existing tag
+    is never mistaken for discovery's own and never gets removed just
+    because discovery's evidence later goes stale.
+    """
+    discovery_owned_visible_tag = {
+        DISCOVERY_TOOL_CALL_SINGLE_TAG: "tool_call:single",
+        DISCOVERY_TOOL_CALL_MULTI_TAG: "tool_call:multi",
+    }
+    hidden_tags = set(discovery_owned_visible_tag)
+    owned_visible_tags = {
+        discovery_owned_visible_tag[tag] for tag in tags if tag in hidden_tags
+    }
+    refreshed = [
+        tag
+        for tag in tags
+        if tag not in hidden_tags and tag not in owned_visible_tags
+    ]
+    new_evidence_tags = discovery_tool_call_tags(model)
+    if new_evidence_tags and new_evidence_tags[0] in refreshed:
+        return tuple(dict.fromkeys(refreshed))
+    return tuple(dict.fromkeys(refreshed)) + new_evidence_tags
+
+
 def _probe_configured_gateway_structured_chat(
     orchestrator: TaskOrchestrator,
     model: DiscoveredModel,
@@ -730,7 +784,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     chat_models = [
         model
         for model in discovered
-        if not model.evidence_only and is_discovered_chat_candidate(model)
+        if not model.evidence_only
+        and is_discovered_chat_candidate(
+            replace(model, supports_parallel_tool_calls=None)
+        )
     ]
     configured_gateway_probe_required = any(
         model.provider_name == "configured_gateway"
@@ -767,12 +824,28 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     agents = []
     for model in runtime_models:
         existing = existing_by_id.get(agent_id_for(model))
+        capability_blocked = model.supports_parallel_tool_calls is False
         embedding_routable = "embedding" in model.capabilities and model.spend_admitted
-        spend_routable = is_routable_discovered_model(model) or embedding_routable
+        spend_routable = (
+            is_routable_discovered_model(replace(model, supports_parallel_tool_calls=None))
+            or embedding_routable
+        )
         structured_routable = agent_id_for(model) not in failed_configured_gateway_probe_ids
-        routable = embedding_routable or (spend_routable and structured_routable)
+        routable = embedding_routable or (
+            spend_routable and structured_routable and not capability_blocked
+        )
         if existing is None:
-            agents.append(replace(agent_from_discovered(model), disabled=not routable))
+            agent = replace(
+                agent_from_discovered(
+                    replace(model, supports_parallel_tool_calls=None)
+                ),
+                disabled=not routable,
+            )
+            tags = _refresh_discovered_tool_call_tags(agent.tags, model)
+            if capability_blocked:
+                tags = (*tags, _DISCOVERY_CAPABILITY_BLOCKED_TAG)
+            agent = replace(agent, tags=tuple(dict.fromkeys(tags)))
+            agents.append(agent)
         elif "discovered" not in existing.tags:
             continue
         else:
@@ -786,14 +859,17 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 if model.context_window_conflicted
                 else model.context_window or existing.context_window
             )
+            refreshed_tags = _refresh_discovered_tool_call_tags(existing.tags, model)
             limits_changed = (
                 existing.max_output_tokens != max_output_tokens
                 or existing.context_window != context_window
+                or refreshed_tags != existing.tags
             )
             existing = replace(
                 existing,
                 max_output_tokens=max_output_tokens,
                 context_window=context_window,
+                tags=refreshed_tags,
             )
         if existing is not None and (not routable or not structured_routable):
             block_markers = {
@@ -801,6 +877,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 "spend:blocked:preserve-disabled",
                 "structured:blocked",
                 "structured:blocked:preserve-disabled",
+                _DISCOVERY_CAPABILITY_BLOCKED_TAG,
+                _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
             }
             preserve_disabled = existing.disabled and (
                 not block_markers.intersection(existing.tags)
@@ -811,6 +889,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 blocked_tags.append("spend:blocked")
             if not structured_routable:
                 blocked_tags.append("structured:blocked")
+            if capability_blocked:
+                blocked_tags.append(_DISCOVERY_CAPABILITY_BLOCKED_TAG)
             tags = (
                 *(tag for tag in existing.tags if tag not in block_markers),
                 *blocked_tags,
@@ -824,7 +904,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )
-        elif existing is not None and any(tag in existing.tags for tag in ("spend:blocked", "structured:blocked")):
+        elif existing is not None and any(
+            tag in existing.tags
+            for tag in (
+                "spend:blocked",
+                "structured:blocked",
+                _DISCOVERY_CAPABILITY_BLOCKED_TAG,
+            )
+        ):
             agents.append(
                 replace(
                     existing,
@@ -833,6 +920,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                         for tag in (
                             "spend:blocked:preserve-disabled",
                             "structured:blocked:preserve-disabled",
+                            _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
                         )
                     ),
                     tags=tuple(
@@ -844,6 +932,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                             "spend:blocked:preserve-disabled",
                             "structured:blocked",
                             "structured:blocked:preserve-disabled",
+                            _DISCOVERY_CAPABILITY_BLOCKED_TAG,
+                            _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
                         }
                     ),
                 )

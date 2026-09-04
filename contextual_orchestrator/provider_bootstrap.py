@@ -33,6 +33,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    discovery_tool_call_tags,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
     refresh_price_book,
@@ -193,6 +194,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
+                *discovery_tool_call_tags(model),
             )
         )
     )

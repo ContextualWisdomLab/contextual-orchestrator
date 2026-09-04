@@ -127,13 +127,21 @@ def is_general_chat_candidate(
     *,
     capabilities: Iterable[str] = (),
     output_modalities: Iterable[str] = (),
+    supports_parallel_tool_calls: bool | None = None,
 ) -> bool:
     """Apply explicit catalog evidence before falling back to the model name.
 
     A generic model identifier cannot identify a media-only endpoint. When a
     provider supplies capability or output-modality metadata, that metadata is
     therefore authoritative; absent metadata keeps the legacy name heuristic.
+
+    General chat agents may receive multi-tool-call requests, so a model whose
+    catalog or probe evidence shows it only supports one tool call at a time is
+    not a general chat candidate. ``None`` means no evidence either way and
+    keeps the existing eligibility decision.
     """
+    if supports_parallel_tool_calls is False:
+        return False
     outputs = {
         value.strip().casefold()
         for value in output_modalities

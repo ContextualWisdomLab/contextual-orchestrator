@@ -9,6 +9,7 @@ import sys
 import urllib.error
 import urllib.parse
 from contextlib import contextmanager
+from io import BytesIO
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, get_type_hints
@@ -30,6 +31,7 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
+    MAX_DISCOVERY_RESPONSE_BYTES,
     ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
@@ -43,12 +45,16 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
+    _parallel_tool_call_evidence,
     _price_per_1k,
+    _response_contains_parallel_probe_tool_calls,
     _parse_openai_compatible,
     _positive_int_metadata,
+    _tool_call_parallelism_from_error,
     agent_from_discovered,
     agent_id_for,
     apply_openrouter_spend_admission,
+    probe_discovered_model_tool_call_capability,
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
@@ -284,6 +290,58 @@ def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
     ]
 
 
+def test_configured_gateway_preserves_consensus_supported_parameters() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    detail = {
+        "model_name": "tool-model",
+        "model_info": {
+            "mode": "chat",
+            "supported_parameters": ["parallel_tool_calls", "tools"],
+        },
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, {"data": [detail, detail]})
+
+    assert merged["data"][0]["supported_parameters"] == [
+        "parallel_tool_calls",
+        "tools",
+    ]
+
+
+def test_configured_gateway_parameter_consensus_ignores_order_and_case() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    merged = _merge_configured_gateway_metadata(
+        payload,
+        {"data": [
+            {"model_name": "tool-model", "model_info": {"supported_parameters": ["tools", "PARALLEL_TOOL_CALLS"]}},
+            {"model_name": "tool-model", "model_info": {"supported_parameters": ["parallel_tool_calls", "tools"]}},
+        ]},
+    )
+
+    assert merged["data"][0]["supported_parameters"] == ["parallel_tool_calls", "tools"]
+
+
+def test_configured_gateway_withholds_conflicting_supported_parameters() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    merged = _merge_configured_gateway_metadata(
+        payload,
+        {
+            "data": [
+                {
+                    "model_name": "tool-model",
+                    "model_info": {"supported_parameters": ["parallel_tool_calls"]},
+                },
+                {
+                    "model_name": "tool-model",
+                    "model_info": {"supported_parameters": ["tools"]},
+                },
+            ]
+        },
+    )
+
+    assert "supported_parameters" not in merged["data"][0]
+
+
 def test_configured_gateway_keeps_ambiguous_privacy_strings_unknown() -> None:
     """Only explicit boolean strings can become provider privacy evidence."""
     payload = {"data": [{"id": "chat-model"}]}
@@ -404,6 +462,39 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
 
     assert len(discovered) == 1
     assert discovered[0].zdr_capable is False
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (True, False, None),
+        (True, None, None),
+        (False, None, None),
+        (True, True, True),
+        (False, False, False),
+        (None, None, None),
+    ],
+)
+def test_duplicate_discovery_parallel_tool_call_evidence_is_order_invariant(
+    left: bool | None,
+    right: bool | None,
+    expected: bool | None,
+) -> None:
+    first = DiscoveredModel(
+        provider_name="gateway",
+        model_id="shared-model",
+        credential_name="KEY_A",
+        chat_base_url="https://gateway.example/v1",
+        auth_scheme="Bearer",
+        supports_parallel_tool_calls=left,
+    )
+    second = replace(first, supports_parallel_tool_calls=right)
+
+    forward = _deduplicate_discovered_models([first, second])[0]
+    reverse = _deduplicate_discovered_models([second, first])[0]
+
+    assert forward.supports_parallel_tool_calls is expected
+    assert reverse.supports_parallel_tool_calls is expected
 
 
 def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
@@ -2554,6 +2645,20 @@ def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
         "privacy:no_training",
         "privacy:retention_only",
     } <= set(agent_from_discovered(discovered).tags)
+
+
+def test_agent_from_discovered_allows_single_tool_chat_rows_as_disabled_agents() -> None:
+    """Single-tool chat evidence blocks general routing, not durable representation."""
+    discovered = _single_tool_discovered_model()
+
+    agent = agent_from_discovered(discovered)
+
+    assert agent.disabled is True
+    assert agent.model == discovered.model_id
+    assert "chat" in agent.tags
+    assert "tool_call:single" in agent.tags
+
+
 def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
     discovered = DiscoveredModel(
         provider_name="openai",
@@ -2775,6 +2880,185 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
     assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
 
 
+def _single_tool_discovered_model() -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="generic/single-tool-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+        supports_parallel_tool_calls=False,
+    )
+
+
+def test_parallel_tool_call_evidence_from_supported_parameters() -> None:
+    """Direct ``parallel_tool_calls`` parameter is positive evidence; absence is not."""
+    assert _parallel_tool_call_evidence(["parallel_tool_calls", "temperature"]) is True
+    assert _parallel_tool_call_evidence(["tools", "temperature"]) is None
+    assert _parallel_tool_call_evidence([]) is None
+    assert _parallel_tool_call_evidence(None) is None
+    assert _parallel_tool_call_evidence(["  PARALLEL_TOOL_CALLS  "]) is True
+
+
+def test_tool_call_parallelism_from_error_recognizes_single_tool_rejection() -> None:
+    """Only explicit single-tool-call messages are treated as negative evidence."""
+    assert (
+        _tool_call_parallelism_from_error(
+            {"error": {"message": "This model only supports single tool-calls at once!"}}
+        )
+        is False
+    )
+    assert (
+        _tool_call_parallelism_from_error(
+            {"message": "parallel_tool_calls is not supported for this model."}
+        )
+        is False
+    )
+    assert (
+        _tool_call_parallelism_from_error({"error": {"message": "Invalid API key"}})
+        is None
+    )
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "parallel_tool_calls must be a boolean"}}
+    ) is None
+    assert _tool_call_parallelism_from_error("only supports one tool call at a time.") is False
+    assert _tool_call_parallelism_from_error({"error": {}}) is None
+
+
+def test_tool_call_parallelism_from_error_ignores_generic_one_tool_validation() -> None:
+    """Generic one-tool validation errors are not evidence of single-tool-only support."""
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "At least one tool is required for this request."}}
+    ) is None
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "One tool has an invalid schema."}}
+    ) is None
+
+
+def test_probe_discovered_model_tool_call_capability_success_returns_true() -> None:
+    """A 200 probe counts only when the response actually contains both tool calls."""
+    discovered = _single_tool_discovered_model()
+    response = urllib.request.addinfourl(
+        BytesIO(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {"name": "probe_a", "arguments": "{}"},
+                                    },
+                                    {
+                                        "type": "function",
+                                        "function": {"name": "probe_b", "arguments": "{}"},
+                                    },
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        ),
+        {"content-type": "application/json"},
+        "",
+    )
+    response.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=response
+    ) as mocked:
+        result = probe_discovered_model_tool_call_capability(discovered, timeout=5.0)
+    assert result is True
+    request = mocked.call_args[0][0]
+    assert request.get_full_url() == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert request.method == "POST"
+    payload = json.loads(request.data)
+    assert payload["parallel_tool_calls"] is True
+    assert payload["max_tokens"] == 32
+    assert len(payload["tools"]) == 2
+
+
+def test_probe_discovered_model_tool_call_capability_rejects_oversized_response() -> None:
+    """A provider cannot exhaust memory by streaming an unbounded probe body."""
+    discovered = _single_tool_discovered_model()
+    oversized = urllib.request.addinfourl(
+        BytesIO(b"x" * (MAX_DISCOVERY_RESPONSE_BYTES + 1)),
+        {"content-type": "application/json"},
+        "",
+    )
+    oversized.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=oversized
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_discovered_model_tool_call_capability_rejects_oversized_400_body() -> None:
+    """An oversized 400 error body is also treated as ambiguous, not evidence."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url,
+        400,
+        "Bad Request",
+        {},
+        BytesIO(b"only supports single tool-calls " + b"x" * (MAX_DISCOVERY_RESPONSE_BYTES + 1)),
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"choices": [{"message": {"content": "no tool calls"}}]},
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "probe_a", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {},
+    ],
+)
+def test_probe_discovered_model_tool_call_capability_success_without_two_calls_returns_none(
+    body: dict[str, object]
+) -> None:
+    discovered = _single_tool_discovered_model()
+    response = urllib.request.addinfourl(
+        BytesIO(json.dumps(body).encode()),
+        {"content-type": "application/json"},
+        "",
+    )
+    response.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=response
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
 _MODEL_DISCOVERY_LOGGER_NAME = "contextual_orchestrator.model_discovery"
 
 
@@ -2865,6 +3149,146 @@ def test_parallel_probe_does_not_treat_echoed_tool_definitions_as_calls() -> Non
             "choices": [{"message": {"content": "no tool calls"}}],
         }
     )
+
+
+def test_probe_discovered_model_tool_call_capability_single_tool_400_returns_false() -> None:
+    """NIM's explicit single-tool 400 is captured as negative evidence."""
+    discovered = _single_tool_discovered_model()
+    body = json.dumps(
+        {"error": {"message": "This model only supports single tool-calls at once!"}}
+    ).encode()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(body)
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
+
+
+def test_probe_returns_none_without_credential() -> None:
+    """No credential means no probe; absence of evidence stays open."""
+    discovered = _single_tool_discovered_model()
+    assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_returns_none_on_network_error() -> None:
+    """Network failures are not evidence one way or the other."""
+    discovered = _single_tool_discovered_model()
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+        side_effect=urllib.error.URLError("timeout"),
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_tool_call_parallelism_from_error_handles_non_dict_error_value() -> None:
+    """A string ``error`` value still lets us read ``message`` from the payload."""
+    assert (
+        _tool_call_parallelism_from_error(
+            {"error": "string-value", "message": "This model only supports single tool-calls"}
+        )
+        is False
+    )
+
+
+def test_tool_call_parallelism_from_error_rejects_unrecognised_types() -> None:
+    """Non-dict, non-string payloads carry no usable signal."""
+    assert _tool_call_parallelism_from_error(123) is None
+    assert _tool_call_parallelism_from_error(None) is None
+
+
+def test_probe_returns_none_for_non_https_url() -> None:
+    """A non-HTTPS base URL is not probed for safety."""
+    discovered = replace(_single_tool_discovered_model(), chat_base_url="http://insecure.example/v1")
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_returns_none_for_non_400_http_error() -> None:
+    """Only 400 responses are interpreted as capability evidence."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 500, "Internal Error", {}, BytesIO(b"oops")
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_reads_non_json_400_body_as_plain_message() -> None:
+    """A plain-text 400 body is still searched for a single-tool signal."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(b"only supports single tool-calls")
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
+
+
+def test_is_routable_discovered_model_false_when_single_tool_only() -> None:
+    """Single-tool-call evidence makes a discovered row not a general chat candidate."""
+    discovered = _single_tool_discovered_model()
+    assert is_routable_discovered_model(discovered) is False
+
+
+def test_general_free_serving_candidates_excludes_single_tool_call_model() -> None:
+    """The general free pool excludes a model known to only accept one tool call."""
+    single = _single_tool_discovered_model()
+    multi = replace(single, model_id="generic/multi-tool-model", supports_parallel_tool_calls=True)
+    unknown = replace(single, model_id="generic/unknown-tool-model", supports_parallel_tool_calls=None)
+    candidates = general_free_serving_candidates([single, multi, unknown])
+    assert [model.model_id for model in candidates] == [
+        "generic/multi-tool-model",
+        "generic/unknown-tool-model",
+    ]
+
+
+def test_discovery_and_orchestrator_tool_call_eligibility_cannot_drift() -> None:
+    """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree on tool calls."""
+    single = _single_tool_discovered_model()
+    multi = replace(single, model_id="generic/multi-tool-model", supports_parallel_tool_calls=True)
+    unknown = replace(single, model_id="generic/unknown-tool-model", supports_parallel_tool_calls=None)
+    discovered = [single, multi, unknown]
+    serving_model_ids = {
+        model.model_id for model in general_free_serving_candidates(discovered)
+    }
+    agent_id_translation = str.maketrans("/.-", "___")
+    agents = {
+        model.model_id: ModelAgent(
+            model.model_id.casefold().translate(agent_id_translation),
+            model.model_id,
+            tags=(
+                "cost:free",
+                *(f"input:{value}" for value in model.input_modalities),
+                *(
+                    ("tool_call:multi",)
+                    if model.supports_parallel_tool_calls is True
+                    else ("tool_call:single",)
+                    if model.supports_parallel_tool_calls is False
+                    else ()
+                ),
+            ),
+        )
+        for model in discovered
+    }
+    orchestrator = TaskOrchestrator(list(agents.values()))
+    for model in discovered:
+        agent = agents[model.model_id]
+        assert orchestrator._is_general_free_agent(agent) == (
+            model.model_id in serving_model_ids
+        ), model.model_id
 
 
 def test_discover_provider_models_debug_logs_are_silent_without_debug() -> None:
