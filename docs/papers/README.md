@@ -78,6 +78,11 @@ Buyer next action: call `run_equal_budget_ablation` and read
   697–738. https://doi.org/10.1111/jedm.12373
   Grounds a joint accuracy-time KPI: maximize information per unit time rather
   than treating latency as a tie-breaker after accuracy.
+- Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+  Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
+  Grounds local similarity-weighted probability interpolation. The gateway
+  uses the smallest bounded form: two positive-cosine neighbors, with no
+  learned bandwidth or claim of reproducing the paper's estimator.
 
 The current gateway does not claim either paper's estimator. Candidate changes
 must report held-out prediction quality or true-parameter RMSE together with

@@ -59,6 +59,16 @@ on `b2f90116` to p50 0.000875 ms and p95 0.001000 ms. The benchmark now emits
 both fields. This is local gateway bookkeeping evidence; the fit, held-out
 quality, and provider latency remain separate KPIs.
 
+Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate
+semantic warm-start experiment. On its fixed 24-training/24-held-out smooth
+latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
+Brier 0.0020161821, log loss 0.4525311878, mean top-choice regret 0.0024259478,
+and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
+`50d91c9e`, carried by PR #1061, reports Brier 0.0000139543, log loss
+0.4475784303, zero top-choice regret, and p50 about 0.0204 ms. This seeded
+simulation isolates unseen-context interpolation; it is not a substitute for
+preregistered buyer prompts, observed judge outcomes, or end-to-end latency.
+
 ## APA 7 references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
@@ -75,6 +85,9 @@ https://doi.org/10.1145/52325.52356
 Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
 parameters for unidimensional multidimensional logistic item response
 models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+
+Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
 
 He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
 adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
