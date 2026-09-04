@@ -115,6 +115,10 @@ Source commit `c690ebe7` makes the measurement-validity denominator explicit:
 scale linking, local independence, correctly oriented candidate-group DIF,
 item-side language/domain effects, judge effects, and adaptive exposure must
 each carry evidence. All six currently report `not_executed`.
+Source commit `fdb8e57a` also separates released owner contracts from the
+pending local-independence contract and the unimplemented item-side and
+adaptive-exposure contracts. It records the buyer evidence each check still
+needs without treating API availability as completed validation.
 
 ## APA 7 references
 

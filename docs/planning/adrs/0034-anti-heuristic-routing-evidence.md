@@ -212,6 +212,10 @@ flowchart LR
   local independence, candidate-group DIF, item language/domain effects, judge
   effects, and adaptive exposure. Every component is presently `not_executed`;
   an aggregate label can no longer hide which evidence is absent.
+- Source commit `fdb8e57a` records whether each component's canonical owner
+  contract is released, pending review, or not implemented, plus the buyer
+  evidence still required. Availability never changes an unexecuted component
+  into a pass.
 
 ## References
 

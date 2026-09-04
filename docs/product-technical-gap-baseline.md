@@ -2206,6 +2206,10 @@ Source commit `c690ebe7` expands the validity denominator into six named
 components. All remain `not_executed`; in particular, winner-only adaptive
 history carries no recorded randomized exposure probability and therefore
 cannot support an invented propensity correction.
+Source commit `fdb8e57a` now separates released owner contracts, the pending
+local-independence contract, and unimplemented item-side language/domain and
+adaptive-exposure contracts from execution status. None can pass without the
+buyer evidence named in the benchmark report.
 
 ## 7. Delivery gates
 
