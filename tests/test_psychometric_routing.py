@@ -215,3 +215,16 @@ def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
     assert evidence.ranked_evidence(
         ("model_a", "model_b"), "held-out", [1.0, 0.0]
     ) == []
+
+
+def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("invalid", "model_a", True, [float("nan"), 1.0])
+    evidence._scores = {
+        evidence.context_id("invalid"): {"model_a": 0.9, "model_b": 0.1}
+    }
+    evidence._fit_revision = evidence._revision
+
+    assert evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 0.0]
+    ) == []

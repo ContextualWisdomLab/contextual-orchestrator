@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import hashlib
+import math
 import threading
 from typing import Iterable
 
@@ -13,10 +14,9 @@ class PsychometricRoutingEvidence:
 
     The response matrix is model (person) by system/user interaction (item).
     A fast-mlsirm MLSRM fit estimates model ability and latent interaction
-    distance together. New prompts use the single nearest observed interaction
-    by embedding cosine; there is no hand-tuned similarity threshold or score
-    weight. Candidates without a fitted estimate remain unranked so the caller
-    can preserve its existing measured-routing order.
+    distance together. New prompts interpolate at most two positive-cosine
+    observed interactions. Candidates without a fitted estimate remain
+    unranked so the caller can preserve its existing measured-routing order.
     """
 
     def __init__(self, max_contexts: int = 512) -> None:
@@ -206,7 +206,12 @@ class PsychometricRoutingEvidence:
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float | None:
         """Cosine similarity for two finite, equal-length embedding vectors."""
-        if not left or len(left) != len(right):
+        if (
+            not left
+            or len(left) != len(right)
+            or not all(math.isfinite(value) for value in left)
+            or not all(math.isfinite(value) for value in right)
+        ):
             return None
         dot = sum(a * b for a, b in zip(left, right))
         left_norm = sum(value * value for value in left) ** 0.5
