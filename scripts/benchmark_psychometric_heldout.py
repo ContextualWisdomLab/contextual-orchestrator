@@ -52,7 +52,7 @@ def _paired_bootstrap_mean_ci(
     return [means[math.floor(0.025 * BOOTSTRAP_SAMPLES)], means[math.ceil(0.975 * BOOTSTRAP_SAMPLES) - 1]]
 
 
-def _evaluate(*, two_neighbor: bool) -> tuple[dict[str, float], dict[str, list[float]]]:
+def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
     evidence = PsychometricRoutingEvidence(
         max_contexts=TRAIN_CONTEXTS, semantic_warm_start_enabled=two_neighbor
     )
@@ -69,26 +69,20 @@ def _evaluate(*, two_neighbor: bool) -> tuple[dict[str, float], dict[str, list[f
         for context_index in range(TRAIN_CONTEXTS)
     }
     evidence._fit_revision = evidence._revision
+    return evidence
 
+
+def _evaluate_quality(
+    evidence: PsychometricRoutingEvidence,
+) -> tuple[dict[str, float], dict[str, list[float]]]:
     context_brier: list[float] = []
     context_log_loss: list[float] = []
     regrets: list[float] = []
-    samples_ms: list[float] = []
-    context_latency_medians: list[float] = []
     for context_index in range(TRAIN_CONTEXTS):
         angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
         context = f"held_out_{context_index}"
         vector = _vector(angle)
-        context_samples_ms: list[float] = []
-        ranked: list[tuple[str, float]] = []
-        for _ in range(LATENCY_REPETITIONS):
-            started_ns = time.perf_counter_ns()
-            ranked = evidence.ranked_evidence(MODEL_IDS, context, vector)
-            context_samples_ms.append(
-                (time.perf_counter_ns() - started_ns) / 1_000_000
-            )
-        samples_ms.extend(context_samples_ms)
-        context_latency_medians.append(statistics.median(context_samples_ms))
+        ranked = evidence.ranked_evidence(MODEL_IDS, context, vector)
         predicted = dict(ranked)
         truth = {
             model_id: _probability(model_index, angle)
@@ -108,25 +102,69 @@ def _evaluate(*, two_neighbor: bool) -> tuple[dict[str, float], dict[str, list[f
         selected = ranked[0][0]
         regrets.append(max(truth.values()) - truth[selected])
 
-    ordered_ms = sorted(samples_ms)
     return {
         "brier_score": statistics.fmean(context_brier),
-        "decision_p50_ms": statistics.median(samples_ms),
-        "decision_p95_ms": ordered_ms[math.ceil(0.95 * len(ordered_ms)) - 1],
         "log_loss": statistics.fmean(context_log_loss),
         "top_choice_regret": statistics.fmean(regrets),
     }, {
         "brier_score": context_brier,
-        "decision_median_ms": context_latency_medians,
         "log_loss": context_log_loss,
         "top_choice_regret": regrets,
     }
 
 
+def _measure_paired_latency(
+    baseline: PsychometricRoutingEvidence,
+    candidate: PsychometricRoutingEvidence,
+) -> tuple[dict[str, float], dict[str, float], list[float], list[float]]:
+    all_samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
+    context_medians: dict[str, list[float]] = {"baseline": [], "candidate": []}
+    for context_index in range(TRAIN_CONTEXTS):
+        context = f"held_out_{context_index}"
+        vector = _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS)
+        samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
+        for repetition in range(LATENCY_REPETITIONS):
+            ordered = (
+                (("baseline", baseline), ("candidate", candidate))
+                if (context_index + repetition) % 2 == 0
+                else (("candidate", candidate), ("baseline", baseline))
+            )
+            for name, evidence in ordered:
+                started_ns = time.perf_counter_ns()
+                evidence.ranked_evidence(MODEL_IDS, context, vector)
+                samples[name].append((time.perf_counter_ns() - started_ns) / 1_000_000)
+        for name in samples:
+            all_samples[name].extend(samples[name])
+            context_medians[name].append(statistics.median(samples[name]))
+
+    def summary(values: list[float]) -> dict[str, float]:
+        ordered = sorted(values)
+        return {
+            "decision_p50_ms": statistics.median(values),
+            "decision_p95_ms": ordered[math.ceil(0.95 * len(ordered)) - 1],
+        }
+
+    return (
+        summary(all_samples["baseline"]),
+        summary(all_samples["candidate"]),
+        context_medians["baseline"],
+        context_medians["candidate"],
+    )
+
+
 def main() -> None:
     """Print paired held-out accuracy uncertainty and decision latency."""
-    baseline, baseline_samples = _evaluate(two_neighbor=False)
-    candidate, candidate_samples = _evaluate(two_neighbor=True)
+    baseline_evidence = _build_evidence(two_neighbor=False)
+    candidate_evidence = _build_evidence(two_neighbor=True)
+    baseline, baseline_samples = _evaluate_quality(baseline_evidence)
+    candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
+        _measure_paired_latency(baseline_evidence, candidate_evidence)
+    )
+    baseline.update(baseline_latency)
+    candidate.update(candidate_latency)
+    baseline_samples["decision_median_ms"] = baseline_medians
+    candidate_samples["decision_median_ms"] = candidate_medians
     result = {
         **candidate,
         "baseline": baseline,
