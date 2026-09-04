@@ -362,12 +362,13 @@ flowchart LR
   correction have no buyer-held-out evidence yet. Consequently these fitted
   values may order candidates only inside the current deployment sample and
   cannot be published as stable model abilities.
-- `fast-mlsirm` owner PR #1748 at `168d8a0a8e7f483a2565178fdc1c60c4d513ab1b`
+- `fast-mlsirm` owner PR #1748 at `8461914a5bf04f9732add77761dd121bbec00103`
   exposes its existing Rust Chen-Thissen signed X2/G2 local-dependence indices
-  to Python. The PR is ready for review after current-head Python boundary tests
-  passed 31 cases, Rust `ld_indices` passed five cases, and `cargo check` passed.
-  Hosted jobs remain queued and no independent approval exists. This closes an
-  API prerequisite only; buyer execution remains absent.
+  to Python. An independent detached-worktree audit passed 44 focused fitstats,
+  control-safety, and result-contract tests in 4.71 seconds, and the owner diff
+  passes `git diff --check`. The PR remains Draft, `REVIEW_REQUIRED`, and
+  blocked; its hosted rollup is not green and no independent approval exists.
+  This closes an API prerequisite only; buyer execution remains absent.
 - Source commit `1309b3ce` reports gate evidence state explicitly: synthetic
   accuracy is `passed`, decision latency is `failed`, and buyer-heldout plus
   measurement-validity work is `not_executed`. Compatibility Booleans remain

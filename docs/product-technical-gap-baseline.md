@@ -2194,12 +2194,15 @@ live work item.
 
 The local-independence prerequisite now has an owner-side implementation path:
 `fast-mlsirm` PR [#1748](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1748)
-at exact head `ce39acba53e20a9311ca2c339b90457f6a2403d6` exposes the existing
+at exact head `8461914a5bf04f9732add77761dd121bbec00103` exposes the existing
 Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
-evidence, not released consumer evidence. The owner PR is ready for review after
-the current source has no unresolved review thread, but it remains Draft while
-hosted jobs are queued and no independent approval exists. It does not open the routing gate without a
-preregistered buyer matrix, multiplicity plan, and threshold.
+evidence, not released consumer evidence. A detached exact-head audit passes 44
+focused fitstats, control-safety, and result-contract tests in 4.71 seconds plus
+`git diff --check`; the current source has no unresolved review thread. The PR
+nevertheless remains Draft, `REVIEW_REQUIRED`, and blocked, while its hosted
+rollup is not green and no independent approval exists. It does not open the
+routing gate without a preregistered buyer matrix, multiplicity plan, and
+threshold.
 CO source commit `92b9309b` adds probability calibration to the paired accuracy
 gate rather than relying only on Brier, log loss, and winner regret. Synthetic
 held-out calibration slope moves from `0.991445` to `1.014030`, and logit RMSE
