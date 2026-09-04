@@ -558,6 +558,8 @@ def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() ->
         {
             "agent_id": "free_primary",
             "model": "free-primary-model",
+            "provider_name": "free-primary",
+            "attempt_number": 1,
             "error_code": "provider_connection_error",
             "client_status": 502,
             "provider_status": None,
@@ -569,6 +571,8 @@ def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() ->
         {
             "agent_id": "free_backup",
             "model": "free-backup-model",
+            "provider_name": "free-backup",
+            "attempt_number": 2,
             "error_code": "provider_connection_error",
             "client_status": 502,
             "provider_status": None,

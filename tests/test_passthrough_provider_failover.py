@@ -1263,6 +1263,8 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         {
             "agent_id": "primary_agent",
             "model": "primary-model",
+            "provider_name": "primary",
+            "attempt_number": 1,
             "error_code": "provider_connection_error",
             "client_status": 502,
             "provider_status": None,
@@ -1274,6 +1276,8 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         {
             "agent_id": "fallback_agent",
             "model": "fallback-model",
+            "provider_name": "fallback",
+            "attempt_number": 2,
             "error_code": "provider_connection_error",
             "client_status": 502,
             "provider_status": None,
@@ -1339,6 +1343,8 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
         {
             "agent_id": "primary_agent",
             "model": "primary-model",
+            "provider_name": "primary",
+            "attempt_number": 1,
             "error_code": "api_error",
             "client_status": 502,
             "provider_status": None,
@@ -1468,6 +1474,8 @@ def test_only_temporary_dns_failures_advance(
             {
                 "agent_id": "primary_agent",
                 "model": "primary-model",
+                "provider_name": "primary",
+                "attempt_number": 1,
                 "error_code": "provider_connection_error",
                 "client_status": 502,
                 "provider_status": None,
@@ -1481,7 +1489,7 @@ def test_only_temporary_dns_failures_advance(
 
 def test_ambiguous_timeout_is_not_replayed() -> None:
     """A timeout may follow provider acceptance, so passthrough fails closed."""
-    failure = TimeoutError("provider outcome unknown")
+    failure = TimeoutError("secret-bearing provider diagnostic")
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1499,6 +1507,8 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
         {
             "agent_id": "primary_agent",
             "model": "primary-model",
+            "provider_name": "primary",
+            "attempt_number": 1,
             "error_code": "provider_connection_error",
             "client_status": 502,
             "provider_status": None,
@@ -1508,6 +1518,7 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
             "failover_decision": "sticky_candidate_failure",
         }
     ]
+    assert "secret-bearing provider diagnostic" not in repr(caught.value.detail)
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 

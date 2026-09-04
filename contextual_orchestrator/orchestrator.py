@@ -1704,12 +1704,16 @@ def _passthrough_failure_phase(exc: ProviderUpstreamError) -> str:
 def _passthrough_attempt_record(
     exc: ProviderUpstreamError,
     *,
+    provider_name: str,
+    attempt_number: int,
     failover_decision: str,
 ) -> dict[str, Any]:
     """Return the public attempt receipt for one classified passthrough failure."""
     return {
         "agent_id": exc.agent_id,
         "model": exc.model,
+        "provider_name": provider_name,
+        "attempt_number": attempt_number,
         "error_code": exc.error_code,
         "client_status": exc.client_status,
         "provider_status": exc.provider_status,
@@ -4436,6 +4440,8 @@ class TaskOrchestrator:
                 attempt_receipts.append(
                     _passthrough_attempt_record(
                         classified,
+                        provider_name=candidate.provider_name,
+                        attempt_number=index + 1,
                         failover_decision=(
                             "advance_to_next_candidate"
                             if failover_eligible and has_remaining_candidates
