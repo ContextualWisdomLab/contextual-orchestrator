@@ -2215,6 +2215,12 @@ time. Five before/after local runs reduced median candidate decision p50 from
 `0.016083` to `0.009791` ms with unchanged Brier, log loss, and regret. The
 candidate-minus-baseline latency interval still crosses only positive values,
 so the latency and production gates remain closed.
+Source commit `00b2eef3` corrects the item-side language/domain owner status:
+`fast-mlsirm` 0.9.1 already exposes one multigroup item-covariate coefficient,
+so a preregistered difficulty contrast is `released_limited`, not wholly
+unimplemented. Language-specific discrimination and residual effects still
+require owner work, and no buyer observations or anchors have executed the
+available slice.
 
 ## 7. Delivery gates
 

@@ -37,7 +37,7 @@ fails closed to conducted orchestration when its reply violates the exact
 | Strict JSON triage verdict | LLM judges are reliable only under constrained output schemas; Zheng et al. (2023) show judge agreement collapses without structure. Fail-closed preserves verification guarantees. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
-| Language/domain validity boundary | IRT-Router treats LLMs as persons and queries as items, so query language cannot be inserted as a person-group DIF label. Multilingual-IRT instead models language difficulty deviations and separates language from content discrimination (Lior et al., 2026). | The synthetic report keeps `measurement_validity=false`; no language or domain label can open the production gate without a released item-side owner contract and buyer replication. |
+| Language/domain validity boundary | IRT-Router treats LLMs as persons and queries as items, so query language cannot be inserted as a person-group DIF label. A released explanatory-IRT covariate supports one item-side difficulty contrast (Debeer & Janssen, 2013); Multilingual-IRT additionally separates language from content discrimination (Lior et al., 2026). | The synthetic report keeps `measurement_validity=false`; the limited owner contract still needs preregistered covariates, anchors, and linked buyer observations, while language-specific discrimination and residual effects remain unavailable. |
 
 ## Accuracy and decision-latency KPI
 
@@ -124,6 +124,10 @@ context at observation time. Across five before/after local runs, median
 candidate p50 fell from `0.016083` to `0.009791` ms (39.12%) while Brier, log
 loss, and regret remained identical. The candidate-minus-baseline latency CI
 upper bound remained positive, so the production latency gate stays closed.
+Source commit `00b2eef3` corrects the item-side owner status from
+`not_implemented` to `released_limited`. The installed `fast-mlsirm` 0.9.1
+contract can estimate one multigroup item covariate coefficient; it cannot
+claim the richer language-specific discrimination or residual model.
 
 ## APA 7 references
 
@@ -134,6 +138,10 @@ using item response theory. *Journal of Educational and Behavioral Statistics,
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176
+
+Debeer, D., & Janssen, R. (2013). Modeling item-position effects within an IRT
+framework. *Journal of Educational Measurement, 50*(2), 164–185.
+https://doi.org/10.1111/jedm.12009
 
 Doebler, A. (2012). The problem of bias in person parameter estimation in
 adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.

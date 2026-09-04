@@ -83,13 +83,14 @@ person-group DIF result by passing buyer language or domain as the group vector.
 When enough versioned candidate deployments support a preregistered comparison,
 provider family or decode-policy cohort may be tested as a candidate-group DIF
 screen through the released `fast-mlsirm` API. Language and domain require an
-item-side model instead. Multilingual-IRT (Lior et al., 2026) supplies the
-research direction: explicit language difficulty deviations, separated
-language/content discrimination, and language-specific ability residuals.
-Those terms belong in the canonical psychometric owner before this gateway can
-consume a released contract. Until then, buyer-language and cross-domain
-measurement-validity gates remain false rather than re-labeling a routing
-predictor as an invariant measurement model.
+item-side model instead. The released multigroup item-covariate path supports
+one preregistered difficulty contrast by adapting Debeer and Janssen (2013).
+Multilingual-IRT (Lior et al., 2026) supplies the fuller research direction:
+explicit language difficulty deviations, separated language/content
+discrimination, and language-specific ability residuals. The latter terms
+remain canonical-owner gaps. Buyer-language and cross-domain validity gates
+therefore remain false rather than re-labeling a routing predictor as an
+invariant measurement model.
 
 ### Workflow triage without keywords
 
@@ -220,10 +221,15 @@ flowchart LR
   observation time. Five paired local runs reduced median candidate decision
   p50 from `0.016083` to `0.009791` ms with unchanged quality, but the positive
   paired latency-delta CI upper bound keeps the production gate closed.
+- Source commit `00b2eef3` records the released-but-limited multigroup
+  item-covariate owner contract. It supports one preregistered item-side
+  difficulty contrast, not language-specific discrimination or residuals, and
+  does not pass without linked buyer observations and anchors.
 
 ## References
 
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
-Song et al., 2025; Lior et al., 2026; Doebler, 2012; Finkelman et al., 2009).
+Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
+Finkelman et al., 2009).

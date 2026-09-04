@@ -90,6 +90,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Rust implementation already exists in `fast-mlsirm`; owner PR #1748 exposes
   it to Python without inventing a universal cutoff. CO adoption still requires
   a preregistered buyer matrix, multiplicity plan, and decision threshold.
+- Debeer, D., & Janssen, R. (2013). Modeling item-position effects within an
+  IRT framework. *Journal of Educational Measurement, 50*(2), 164–185.
+  https://doi.org/10.1111/jedm.12009
+  Grounds a limited explanatory-IRT adaptation: the released `fast-mlsirm`
+  multigroup item-covariate path can estimate one preregistered item-side
+  language/domain difficulty contrast. It does not estimate language-specific
+  discrimination or residual effects, and cannot pass without linked buyer
+  observations and anchors.
 - Doebler, A. (2012). The problem of bias in person parameter estimation in
   adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.
   https://doi.org/10.1177/0146621612443304
