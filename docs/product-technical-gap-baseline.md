@@ -2404,6 +2404,14 @@ correctly declines to fabricate an unseen candidate score. Query holdout
 evidence therefore cannot be reused as candidate-generalization evidence.
 `predictive_fit` remains closed until versioned buyer outcomes support separate
 held-out-query and held-out-candidate scoring.
+Source commit `f4513527` adds a bounded alternative to fabricated cold-start
+scores: released maximum-information EAP selection for candidate onboarding.
+Across 400 known synthetic candidates, it reaches target SE 0.5 after 7.1775
+calibration queries on average versus 10.47 for a random order, reduces theta
+RMSE from 0.607152 to 0.575996, and reduces unobserved-probability MSE from
+0.014671 to 0.007531. These are calibration-query and prediction-error KPIs,
+not live decision latency or buyer evidence; zero-observation candidate
+coverage and the production gate therefore remain unchanged.
 
 ## 7. Delivery gates
 

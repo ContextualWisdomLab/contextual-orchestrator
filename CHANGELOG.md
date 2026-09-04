@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- The held-out psychometric benchmark now compares released maximum-information
+  EAP calibration with random query ordering for unseen-candidate onboarding,
+  reporting calibration-query burden, score error, and unobserved-probability
+  error without treating synthetic efficiency as buyer or production evidence.
 - Research guidance now classifies IRT-Router's unconstrained discrimination
   vectors and unidentified multidimensional coordinates as predictive features,
   not invariant psychometric measurements; production admission requires

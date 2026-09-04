@@ -286,6 +286,20 @@ Buyer next action: call `run_equal_budget_ablation` and read
   `b4efa489` spreads 12 item difficulties across `[-2, 2]`, improving the
   worst information over trait points `[-2, 0, 2]` by `15.789%` and reducing
   worst conditional standard error from `0.890897` to `0.827931`.
+- Bock, R. D., & Mislevy, R. J. (1982). Adaptive EAP estimation of ability in
+  a microcomputer environment. *Applied Psychological Measurement, 6*(4),
+  431–444. https://doi.org/10.1177/014662168200600405
+- Hau, K.-T., & Chang, H.-H. (2001). Item selection in computerized adaptive
+  testing: Should more discriminating items be used first? *Journal of
+  Educational Measurement, 38*(3), 249–266.
+  https://doi.org/10.1111/j.1745-3984.2001.tb01126.x
+  These ground the released EAP scoring and maximum-information item-selection
+  path reused by source `f4513527`. Across 400 known synthetic candidate
+  deployments, adaptive selection reaches target SE 0.5 in 7.1775 queries on
+  average versus 10.47 for a seeded random order, while reducing theta RMSE
+  from 0.607152 to 0.575996 and unobserved-probability MSE from 0.014671 to
+  0.007531. This one-dimensional onboarding screen neither establishes an
+  invariant model ability nor measures live per-request decision latency.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

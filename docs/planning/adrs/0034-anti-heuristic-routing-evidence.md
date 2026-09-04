@@ -105,6 +105,17 @@ remain canonical-owner gaps. Buyer-language and cross-domain validity gates
 therefore remain false rather than re-labeling a routing predictor as an
 invariant measurement model.
 
+The missing-candidate path remains fail-closed at zero prediction coverage
+until observations exist. Source `f4513527` adds a separate onboarding design
+screen rather than fabricating a cold-start score. Across 400 known synthetic
+candidates and a 31-query bank, the released Rust-backed maximum-information
+EAP path reaches target SE 0.5 after 7.1775 queries on average, compared with
+10.47 for a seeded random order. It reduces theta RMSE from 0.607152 to
+0.575996 and unobserved-probability MSE from 0.014671 to 0.007531. The maximum
+of 12 calibration queries is an onboarding burden, not live routing latency;
+the one-dimensional synthetic bank does not establish construct validity,
+invariance, or buyer performance. Production admission remains unchanged.
+
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges
 after 941 iterations and recovers true `delta=-0.8` as `-0.789650` (absolute
