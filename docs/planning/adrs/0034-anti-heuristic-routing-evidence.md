@@ -233,6 +233,11 @@ flowchart LR
   attempts, selected deployment, and policy hash on every route, conducted
   workflow, and streaming trace row. The receipt marks deterministic propensity
   as `not_identified`; it is audit evidence, not a correction for missing outcomes.
+- Source commit `2c783b98` validates the next observation-design step without
+  changing production routing: a preregistered 20% ε-greedy simulation gives
+  each of four candidates probability at least 0.05. Across 24,000 fixed-seed
+  trials, inverse-propensity value RMSE is 0.008943 and all known true values
+  fall inside their 95% intervals. Buyer execution remains required.
 
 ## References
 
@@ -240,4 +245,5 @@ See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
 Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
-Finkelman et al., 2009; Barrada et al., 2007).
+Finkelman et al., 2009; Barrada et al., 2007; Horvitz & Thompson, 1952;
+Dudík et al., 2011; Swaminathan & Joachims, 2015).

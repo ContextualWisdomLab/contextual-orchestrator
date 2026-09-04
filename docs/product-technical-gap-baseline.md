@@ -2232,6 +2232,13 @@ ordered versioned candidate set, actual attempts, selected deployment, and
 policy hash, while deterministic propensity remains `not_identified`. Buyer
 outcomes under a preregistered randomized design or another defensible
 identification strategy are still required before the validity component passes.
+Source commit `2c783b98` makes the proposed observation design executable in
+the synthetic held-out benchmark without changing live routing. Its fixed
+20% ε-greedy policy assigns every one of four candidates probability at least
+0.05 across 24,000 trials. Horvitz-Thompson value RMSE is 0.008943 against known
+truth and all four 95% intervals cover their targets. This proves the logging
+and estimator contract only; buyer prompts, operational guardrails, variance
+limits, and protected-main evidence are still absent, so the gate stays closed.
 
 ## 7. Delivery gates
 

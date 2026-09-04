@@ -38,6 +38,7 @@ fails closed to conducted orchestration when its reply violates the exact
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
 | Language/domain validity boundary | IRT-Router treats LLMs as persons and queries as items, so query language cannot be inserted as a person-group DIF label. A released explanatory-IRT covariate supports one item-side difficulty contrast (Debeer & Janssen, 2013); Multilingual-IRT additionally separates language from content discrimination (Lior et al., 2026). | The synthetic report keeps `measurement_validity=false`; the limited owner contract still needs preregistered covariates, anchors, and linked buyer observations, while language-specific discrimination and residual effects remain unavailable. |
+| Positive-propensity logging design | Horvitz and Thompson (1952) establish unequal-probability weighting; Dudík et al. (2011) and Swaminathan and Joachims (2015) apply logged propensities to partial-feedback policy evaluation while warning about variance. | A fixed-seed ε-greedy simulation gives every candidate probability 0.05, observes every candidate, reports inverse-propensity value RMSE 0.008943, and covers all four known true values with its 95% intervals. Buyer validity remains unexecuted. |
 
 ## Accuracy and decision-latency KPI
 
@@ -139,6 +140,12 @@ deployments, actual attempts, selected deployment, and policy snapshot while
 labeling the current deterministic assignment propensity `not_identified`.
 This supplies an auditable observation denominator; it does not identify
 counterfactual outcomes or open the adaptive-exposure gate.
+Source commit `2c783b98` preregisters a benchmark-only ε-greedy logging policy
+with 20% exploration across four candidates and 24,000 fixed-seed trials. Every
+candidate receives probability at least 0.05; Horvitz-Thompson estimates reach
+RMSE 0.008943 against known synthetic truth and all four 95% intervals cover
+their targets. This validates executable propensity arithmetic, not buyer
+outcomes, and does not change production selection.
 
 ## APA 7 references
 
@@ -167,12 +174,21 @@ control method for multidimensional adaptive testing. *Journal of Educational
 Measurement, 46*(1), 84–103.
 https://doi.org/10.1111/j.1745-3984.2009.01070.x
 
+Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and
+learning. In *Proceedings of the 28th International Conference on Machine
+Learning* (pp. 1097–1104). https://arxiv.org/abs/1103.4601
+
 Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., &
 Rubin, D. B. (2013). *Bayesian data analysis* (3rd ed.). CRC Press.
 
 Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
 Computer Communication Review, 18*(4), 314–329.
 https://doi.org/10.1145/52325.52356
+
+Horvitz, D. G., & Thompson, D. J. (1952). A generalization of sampling without
+replacement from a finite universe. *Journal of the American Statistical
+Association, 47*(260), 663–685.
+https://doi.org/10.1080/01621459.1952.10483446
 
 Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
 parameters for unidimensional multidimensional logistic item response
@@ -207,6 +223,11 @@ Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
 (2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
 response theory* [Preprint]. arXiv.
 https://doi.org/10.48550/arXiv.2506.01048
+
+Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
+feedback through counterfactual risk minimization. *Journal of Machine Learning
+Research, 16*(52), 1731–1755.
+https://jmlr.org/papers/v16/swaminathan15a.html
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.

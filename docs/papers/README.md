@@ -121,6 +121,22 @@ Buyer next action: call `run_equal_budget_ablation` and read
   and administration probabilities used to limit item exposure are not logged
   gateway routing propensities and do not identify outcomes for candidates the
   gateway did not call.
+- Horvitz, D. G., & Thompson, D. J. (1952). A generalization of sampling
+  without replacement from a finite universe. *Journal of the American
+  Statistical Association, 47*(260), 663–685.
+  https://doi.org/10.1080/01621459.1952.10483446
+  Grounds inverse-probability weighting when inclusion probabilities are known.
+- Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and
+  learning. In *Proceedings of ICML 2011* (pp. 1097–1104).
+  https://arxiv.org/abs/1103.4601
+  Shows why partial-feedback policy evaluation needs the logging policy or a
+  reward model and why inverse propensity alone can have high variance.
+- Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
+  feedback through counterfactual risk minimization. *JMLR, 16*(52), 1731–1755.
+  https://jmlr.org/papers/v16/swaminathan15a.html
+  Grounds propensity-weighted risk with an explicit variance penalty. Source
+  commit `2c783b98` adds only the prerequisite fixed-seed logging-policy test;
+  production learning and buyer evidence remain out of scope until gated.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373
