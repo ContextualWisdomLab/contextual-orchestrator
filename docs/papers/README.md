@@ -68,6 +68,17 @@ Buyer next action: call `run_equal_budget_ablation` and read
 
 ## Psychometric routing accuracy-time frontier
 
+- Cox, D. R. (1958). Two further applications of a model for binary regression.
+  *Biometrika, 45*(3–4), 562–565.
+  https://doi.org/10.1093/biomet/45.3-4.562
+- Arrieta-Ibarra, I., Gujral, P., Tannen, J., Tygert, M., & Xu, C. (2022).
+  Metrics of calibration for probabilistic predictions. *Journal of Machine
+  Learning Research, 23*(351), 1–54.
+  https://www.jmlr.org/papers/v23/22-0658.html
+  Ground checking whether routing probabilities retain their stated meaning,
+  separately from ranking and aggregate proper scores. Source `92b9309b`
+  reduces paired held-out logit calibration RMSE from `0.231235` to `0.025803`;
+  the 95% candidate-minus-baseline interval is `[-0.208030, -0.202924]`.
 - Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
   R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
   item response theory* [Preprint]. arXiv.

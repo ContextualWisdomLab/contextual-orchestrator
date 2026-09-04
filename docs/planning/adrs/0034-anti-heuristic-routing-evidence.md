@@ -272,6 +272,12 @@ flowchart LR
   order. The Brier and log-loss intervals favor the candidate, but paired
   context-median latency is slower by `[0.0047666, 0.0054775]` ms; this
   strengthens the accuracy evidence without opening the production gate.
+- Source commit `92b9309b` adds calibration as a distinct paired accuracy gate.
+  Two-neighbor interpolation reduces held-out logit calibration RMSE from
+  `0.231235` to `0.025803`; its candidate-minus-baseline 95% interval is
+  `[-0.208030, -0.202924]`. Calibration slope moves from `0.991445` to
+  `1.014030`, while near-zero intercepts reflect the symmetric synthetic design.
+  Buyer outcomes remain required before probabilities are operationally trusted.
 - Report-contract commit `2cc8427f` makes every point delta explicit and fails
   the focused test if a metric loses its paired interval or falls outside it.
 - Gate commit `079b3f80` requires accuracy, latency, buyer-heldout, and

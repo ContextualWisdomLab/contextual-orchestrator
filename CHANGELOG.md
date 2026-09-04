@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now makes probability calibration a
+  paired accuracy KPI, reporting calibration slope, intercept, and logit RMSE
+  instead of relying on aggregate Brier and log loss alone.
 - The held-out psychometric benchmark now recovers a known alternate-form score
   transformation and reports bootstrap equating uncertainty, while keeping
   buyer score comparability unexecuted.
