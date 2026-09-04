@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Streaming automatic routing now fails when every worker candidate is excluded
+  from that role, matching non-streaming selection while preserving explicit
+  requested-model behavior. Benchmark propensity weights and workload receipts
+  now remain aligned with the candidate and item structure actually used.
 - The held-out psychometric benchmark now exercises released nonparametric
   person-fit diagnostics and ranks one injected inverted candidate response
   pattern first. It reports separation without inventing a universal cutoff or

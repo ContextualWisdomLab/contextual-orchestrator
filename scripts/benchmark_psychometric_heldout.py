@@ -182,7 +182,6 @@ def _validate_assignment_design(
         angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
         context = f"held_out_{context_index}"
         ranked = evidence.ranked_evidence(MODEL_IDS, context, _vector(angle))
-        selected_probability = minimum_probability
         probabilities = {model_id: minimum_probability for model_id in MODEL_IDS}
         probabilities[ranked[0][0]] += 1.0 - EXPLORATION_RATE
         draw = generator.random()
@@ -192,8 +191,8 @@ def _validate_assignment_design(
             cumulative += probabilities[model_id]
             if draw < cumulative:
                 selected = model_id
-                selected_probability = probabilities[model_id]
                 break
+        selected_probability = probabilities[selected]
         selected_index = MODEL_IDS.index(selected)
         reward = float(generator.random() < _probability(selected_index, angle))
         observations[selected] += 1

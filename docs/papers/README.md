@@ -197,6 +197,10 @@ Buyer next action: call `run_equal_budget_ablation` and read
   functioning using logistic regression procedures. *Journal of Educational
   Measurement, 27*(4), 361–370.
   https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
+  Grounds the requirement to distinguish uniform and nonuniform DIF after
+  conditioning on the measured trait. The current synthetic routing surface has
+  neither buyer groups nor an anchored matching variable, so it reports
+  `measurement_validity=false` instead of fabricating a DIF result.
 - French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
   use with logistic regression for differential item functioning detection.
   *Educational and Psychological Measurement, 67*(3), 373–393.
@@ -234,14 +238,6 @@ DIF, and log randomized exposure or propensities when routing controls which
 responses are observed. Without those conditions, the safe result is "no
 psychometric evidence", never a portable ability rank.
 
-- Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
-  functioning using logistic regression procedures. *Journal of Educational
-  Measurement, 27*(4), 361–370.
-  https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
-  Grounds the requirement to distinguish uniform and nonuniform DIF after
-  conditioning on the measured trait. The current synthetic routing surface has
-  neither buyer groups nor an anchored matching variable, so it reports
-  `measurement_validity=false` instead of fabricating a DIF result.
 - Lior, G., Frostig, T., Stanovsky, G., & Eyal, M. (2026). *Extending item
   response theory for efficient and meaningful multilingual evaluation*
   [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.15643

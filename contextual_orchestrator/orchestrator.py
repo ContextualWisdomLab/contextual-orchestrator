@@ -5214,6 +5214,8 @@ class TaskOrchestrator:
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
         agent = ranked_pool[0]
+        if requested is None and "worker" in agent.provider_exclusions:
+            raise RuntimeError("no eligible agent available for role=worker")
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -7105,9 +7107,10 @@ class TaskOrchestrator:
             )
             if self._store is not None:
                 context_id = self._psychometric_router.context_id(prompt_context)
+                records = self._psychometric_router.records()
                 record = next(
                     item
-                    for item in self._psychometric_router.records()
+                    for item in records
                     if item["context_id"] == context_id
                     and item["agent_id"] == candidate_id
                 )
@@ -7119,7 +7122,7 @@ class TaskOrchestrator:
                     hashlib.sha256(
                         f"{item['context_id']}\0{item['agent_id']}".encode()
                     ).hexdigest()
-                    for item in self._psychometric_router.records()
+                    for item in records
                 }
                 self._store.prune_keyed("psychometric_observation", retained)
 

@@ -16,6 +16,9 @@ from contextual_orchestrator.psychometric_routing import (  # noqa: E402
     PsychometricRoutingEvidence,
 )
 
+CONTEXT_COUNT = 512
+CRITERION_ITEMS_PER_OBSERVATION = 1
+
 
 def _require_runtime(version_info: tuple[int, ...] = sys.version_info) -> None:
     if tuple(version_info[:2]) < (3, 12):
@@ -31,8 +34,8 @@ def main() -> None:
     import numpy as np
 
     model_ids = [f"model_{model_index}" for model_index in range(4)]
-    evidence = PsychometricRoutingEvidence(max_contexts=512)
-    for context_index in range(512):
+    evidence = PsychometricRoutingEvidence(max_contexts=CONTEXT_COUNT)
+    for context_index in range(CONTEXT_COUNT):
         for model_index, model_id in enumerate(model_ids):
             accepted = (context_index + model_index) % 2 == 0
             evidence.observe(
@@ -81,9 +84,10 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "contexts": 512,
+                "contexts": CONTEXT_COUNT,
                 "models": len(model_ids),
-                "items_per_context": 2,
+                # Acceptance is item zero; irt_row adds one criterion item.
+                "items_per_context": 1 + CRITERION_ITEMS_PER_OBSERVATION,
                 "median_fit_and_rank_ms": statistics.median(samples_ms),
                 "median_observe_ms": statistics.median(observation_samples_ms),
                 "p95_observe_ms": sorted(observation_samples_ms)[95],

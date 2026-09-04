@@ -14,6 +14,8 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -375,6 +377,22 @@ def test_stream_route_yields_and_persists() -> None:
     assert design["propensity_status"] == "not_identified"
     assert design["candidate_deployment_ids"] == design["attempted_deployment_ids"]
     assert design["selected_deployment_id"] == design["candidate_deployment_ids"][0]
+
+
+def test_stream_route_rejects_automatically_ranked_excluded_worker() -> None:
+    excluded = ModelAgent(
+        "excluded_worker", "m-model", provider_exclusions=("worker",)
+    )
+    orchestrator = TaskOrchestrator([excluded])
+
+    with pytest.raises(RuntimeError, match="no eligible agent available for role=worker"):
+        list(orchestrator.stream_route([{"role": "user", "content": "stream"}]))
+
+    assert list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "stream"}], model_name="m-model"
+        )
+    )
 
 
 def test_stream_route_uses_canonical_provider_name_in_trace() -> None:
