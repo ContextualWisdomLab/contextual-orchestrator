@@ -405,6 +405,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
+        models_dev_provider_id="openrouter",
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -1597,7 +1598,7 @@ def discover_provider_models(
         else:
             metadata = models_dev_metadata
         payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
-    elif source.provider_name == "openrouter":
+    if source.provider_name == "openrouter":
         try:
             metadata = _fetch_json(_OPENROUTER_ZDR_ENDPOINTS_URL, api_key=api_key, timeout=timeout)
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
