@@ -1636,6 +1636,7 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
             return _Response(
                 {
                     "opencode-go": {
+                        "npm": "@ai-sdk/openai-compatible",
                         "models": {
                             "kimi-k3": {
                                 "cost": {"input": 0, "output": 0},
@@ -1644,6 +1645,7 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
                             "minimax-m3": {
                                 "cost": {"input": 2, "output": 12},
                                 "modalities": {"input": ["text"], "output": ["text"]},
+                                "provider": {"npm": "@ai-sdk/anthropic"},
                             },
                         }
                     }
@@ -1665,12 +1667,10 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
     assert discovered[0].is_free is False
     assert discovered[0].prompt_price_per_1k is None
     assert discovered[0].completion_price_per_1k is None
-    assert discovered[1].is_free is False
-    assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
-    assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
+    assert [model.model_id for model in discovered] == ["kimi-k3"]
 
 
-def test_opencode_go_metadata_failure_keeps_availability_but_not_free() -> None:
+def test_opencode_go_metadata_failure_fails_closed_on_unknown_protocol() -> None:
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
 
@@ -1685,7 +1685,7 @@ def test_opencode_go_metadata_failure_keeps_availability_but_not_free() -> None:
     ):
         discovered = discover_provider_models(source)
 
-    assert discovered[0].is_free is False
+    assert discovered == []
 
 
 def test_opencode_go_and_zen_share_one_credential_but_query_distinct_catalogs() -> None:
@@ -1695,6 +1695,7 @@ def test_opencode_go_and_zen_share_one_credential_but_query_distinct_catalogs() 
     assert sources["opencode_go"].credential_name == sources["opencode_zen"].credential_name
     assert sources["opencode_go"].list_url != sources["opencode_zen"].list_url
     assert sources["opencode_go"].models_dev_provider_id == "opencode-go"
+    assert sources["opencode_go"].required_models_dev_npm == "@ai-sdk/openai-compatible"
     assert sources["opencode_zen"].models_dev_provider_id == "opencode"
 
 
@@ -1871,6 +1872,7 @@ def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() ->
                 {
                     "opencode": {"models": {}},
                     "opencode-go": {
+                        "npm": "@ai-sdk/openai-compatible",
                         "models": {
                             "kimi-k3": {
                                 "cost": {"input": 0, "output": 0},

@@ -21,6 +21,7 @@ def test_opencode_go_paid_subscription_is_not_classified_free_from_zero_unit_rat
                     "output_modalities": ["text"],
                 },
                 "is_free": True,
+                "_models_dev_npm": "@ai-sdk/openai-compatible",
             }
         ]
     }

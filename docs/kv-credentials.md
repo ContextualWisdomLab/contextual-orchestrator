@@ -323,7 +323,9 @@ box, all resolved through `get_credential` (never fabricated, never read from
 
 OpenCode Go uses a distinct catalog and serving endpoint, but the same account
 credential as OpenCode Zen. Register `OPENCODE_ZEN_API_KEY` once in the KV;
-discovery never reads a second Go-specific secret from the environment.
+discovery never reads a second Go-specific secret from the environment. Only
+models.dev rows assigned to the OpenAI-compatible protocol enter this chat
+endpoint; Responses- and Anthropic-protocol rows fail closed.
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS

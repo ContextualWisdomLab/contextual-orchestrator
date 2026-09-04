@@ -344,6 +344,7 @@ class ProviderModelSource:
     bootstrap_required: bool = True
     evidence_only: bool = False
     models_dev_provider_id: str | None = None
+    required_models_dev_npm: str | None = None
     # True when serving this source at all costs money on a recurring plan
     # (OpenCode Go), independently of the per-token rates its catalog
     # reports. Such an endpoint reports zero token rates because tokens are
@@ -451,6 +452,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
         bootstrap_required=False,
         models_dev_provider_id="opencode-go",
+        required_models_dev_npm="@ai-sdk/openai-compatible",
         requires_paid_subscription=True,
     ),
     ProviderModelSource(
@@ -1326,6 +1328,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
+            continue
+        if (
+            source.required_models_dev_npm
+            and row.get("_models_dev_npm") != source.required_models_dev_npm
+        ):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
