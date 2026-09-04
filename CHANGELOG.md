@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now uses the released Oakes-information
+  API to report item-intercept RMSE, 95% Wald-interval coverage, and mean interval
+  width while keeping synthetic uncertainty evidence outside the buyer gate.
 - The held-out psychometric benchmark now estimates one known item-side context
   contrast through the released multigroup covariate API. It reports coefficient
   error and convergence separately while keeping synthetic recovery outside the

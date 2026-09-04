@@ -2266,6 +2266,13 @@ convergence separately and leaves
 `item_language_domain_effects` `not_executed`. IRT-Router remains an
 IRT-shaped prediction reference, not evidence that its learned coordinates are
 identified, invariant psychometric ability or difficulty measurements.
+Source commit `b0f3703f` reuses the released Oakes observed-information API on
+1,200 synthetic observations and six known item intercepts. The converged fit
+reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean
+interval width `0.295945`. Because the current API conditions on population
+parameters and rejects anchors, zero inflation, and item covariates, this is an
+implementation check rather than buyer uncertainty evidence;
+`parameter_uncertainty` remains `not_executed`.
 
 ## 7. Delivery gates
 

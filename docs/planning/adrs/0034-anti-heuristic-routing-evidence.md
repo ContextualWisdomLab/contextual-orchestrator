@@ -102,6 +102,14 @@ after 941 iterations and recovers true `delta=-0.8` as `-0.789650` (absolute
 error `0.010350`). The report still leaves the buyer language/domain component
 `not_executed`; synthetic recovery cannot establish buyer invariance.
 
+Source commit `b0f3703f` reuses the released Oakes observed-information API on
+1,200 synthetic observations and six known item intercepts. The converged fit
+reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean
+interval width `0.295945`. This checks the implemented uncertainty calculation,
+not buyer calibration: the API conditions on population parameters and does not
+support anchors, zero inflation, or item covariates, so `parameter_uncertainty`
+remains `not_executed`.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

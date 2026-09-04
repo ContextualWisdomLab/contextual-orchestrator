@@ -90,6 +90,21 @@ Buyer next action: call `run_equal_budget_ablation` and read
   against a known coefficient. It converges after 941 iterations and estimates
   `-0.789650` for true `-0.8` (absolute error `0.010350`). This synthetic
   recovery still does not establish buyer or invariant-scale validity.
+- Oakes, D. (1999). Direct calculation of the information matrix via the EM.
+  *Journal of the Royal Statistical Society: Series B, 61*(2), 479–482.
+  https://doi.org/10.1111/1467-9868.00188
+  Grounds the observed-information calculation reused by the released
+  `fast-mlsirm` standard-error API.
+- Pritikin, J. N. (2017). A comparison of parameter covariance estimation
+  methods for item response models in an expectation-maximization framework.
+  *Cogent Psychology, 4*(1), 1279435.
+  https://doi.org/10.1080/23311908.2017.1279435
+  Supports checking Oakes covariance estimates for accuracy and elapsed time in
+  item-factor models. Source commit `b0f3703f` recovers six known item
+  intercepts with RMSE `0.039160`; all six 95% Wald intervals cover their true
+  values and have mean width `0.295945`. The released API conditions on
+  population parameters and rejects anchors, zero inflation, and item
+  covariates, so buyer uncertainty remains unexecuted.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.
