@@ -37,6 +37,8 @@ ITEM_COVARIATE_SEED = 260_908
 UNCERTAINTY_SAMPLE_SIZE = 1_200
 UNCERTAINTY_SEED = 260_909
 INVARIANCE_DRIFT_TOLERANCE = 0.25
+PERSON_FIT_SAMPLE_SIZE = 1_000
+PERSON_FIT_SEED = 260_910
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -321,6 +323,36 @@ def _validate_parameter_invariance() -> dict[str, object]:
     }
 
 
+def _validate_response_pattern_fit() -> dict[str, object]:
+    """Rank one known inverted candidate pattern with nonparametric person fit."""
+    generator = np.random.default_rng(PERSON_FIT_SEED)
+    item_difficulty = np.linspace(-2.0, 2.0, 10)
+    ability = generator.normal(size=PERSON_FIT_SAMPLE_SIZE)
+    probabilities = 1.0 / (
+        1.0 + np.exp(-(ability[:, None] - item_difficulty[None, :]))
+    )
+    responses = (generator.random(probabilities.shape) < probabilities).astype(float)
+    injected_index = PERSON_FIT_SAMPLE_SIZE - 1
+    responses[injected_index] = np.asarray([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+    result = fast_mlsirm.person_fit_np(responses)
+    finite = np.isfinite(result.zu3)
+    ranked = np.flatnonzero(finite)[np.argsort(result.zu3[finite])[::-1]]
+    return {
+        "method": "nonparametric_zu3_rank",
+        "sample_size": PERSON_FIT_SAMPLE_SIZE,
+        "seed": PERSON_FIT_SEED,
+        "items": len(item_difficulty),
+        "finite_statistics": int(np.count_nonzero(finite)),
+        "injected_candidate_index": injected_index,
+        "highest_aberrance_candidate_index": int(ranked[0]),
+        "injected_zu3": float(result.zu3[injected_index]),
+        "next_highest_zu3": float(result.zu3[ranked[1]]),
+        "zu3_rank_separation": float(
+            result.zu3[injected_index] - result.zu3[ranked[1]]
+        ),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -500,6 +532,7 @@ def run_benchmark() -> dict[str, object]:
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
+    response_pattern_fit = _validate_response_pattern_fit()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -537,6 +570,7 @@ def run_benchmark() -> dict[str, object]:
     validity_components = {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "response_pattern_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -560,6 +594,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "the benchmark drift tolerance is an effect-size screen, not a "
                 "sampling-uncertainty or significance test"
+            ),
+        },
+        "response_pattern_fit": {
+            "owner_contract_status": "released_group_based_screen",
+            "required_evidence": (
+                "complete buyer candidate-by-criterion responses, a preregistered "
+                "action threshold, and human review of flagged patterns"
+            ),
+            "known_limit": (
+                "nonparametric person fit ranks unusual response patterns but does "
+                "not identify their cause or prove a candidate invalid"
             ),
         },
         "local_independence": {
@@ -635,6 +680,7 @@ def run_benchmark() -> dict[str, object]:
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
         "parameter_invariance_validation": parameter_invariance,
+        "response_pattern_fit_validation": response_pattern_fit,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

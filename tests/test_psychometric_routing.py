@@ -87,6 +87,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "response_pattern_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -101,6 +102,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "released_effect_size_screen"
     )
     assert "not a sampling-uncertainty" in requirements["parameter_invariance"][
+        "known_limit"
+    ]
+    assert requirements["response_pattern_fit"]["owner_contract_status"] == (
+        "released_group_based_screen"
+    )
+    assert "does not identify their cause" in requirements["response_pattern_fit"][
         "known_limit"
     ]
     assert (
@@ -163,6 +170,17 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert invariance["maximum_stable_item_drift"] == 0.0
     assert invariance["injected_item_drift"] == pytest.approx(0.5656854249492381)
     assert invariance["linking_converged"] is True
+    person_fit = report["response_pattern_fit_validation"]
+    assert person_fit["method"] == "nonparametric_zu3_rank"
+    assert person_fit["sample_size"] == heldout_benchmark.PERSON_FIT_SAMPLE_SIZE
+    assert person_fit["seed"] == heldout_benchmark.PERSON_FIT_SEED
+    assert person_fit["items"] == 10
+    assert person_fit["finite_statistics"] == 976
+    assert person_fit["injected_candidate_index"] == 999
+    assert person_fit["highest_aberrance_candidate_index"] == 999
+    assert person_fit["injected_zu3"] == pytest.approx(5.22635820493048)
+    assert person_fit["next_highest_zu3"] == pytest.approx(3.4076390572266213)
+    assert person_fit["zu3_rank_separation"] == pytest.approx(1.8187191477038587)
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
