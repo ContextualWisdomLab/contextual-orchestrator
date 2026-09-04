@@ -32,6 +32,8 @@ DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
 JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
+ITEM_COVARIATE_SAMPLE_SIZE = 1_200
+ITEM_COVARIATE_SEED = 260_908
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -343,6 +345,51 @@ def _validate_judge_effects() -> dict[str, object]:
     }
 
 
+def _validate_item_covariate_effect() -> dict[str, object]:
+    """Estimate one known item-side context contrast without claiming invariance."""
+    generator = np.random.default_rng(ITEM_COVARIATE_SEED)
+    item_count = 12
+    group_id = np.arange(ITEM_COVARIATE_SAMPLE_SIZE) % 2
+    covariate = np.vstack(
+        (np.linspace(0.0, 1.0, item_count), np.linspace(1.0, 0.0, item_count))
+    )
+    ability = generator.standard_normal(ITEM_COVARIATE_SAMPLE_SIZE)
+    intercept = np.linspace(-1.0, 1.0, item_count)
+    true_delta = -0.8
+    logits = ability[:, None] + intercept[None, :] + true_delta * covariate[group_id]
+    probabilities = 1.0 / (1.0 + np.exp(-logits))
+    responses = (generator.random(probabilities.shape) < probabilities).astype(float)
+    result = fast_mlsirm.fit(
+        responses,
+        np.zeros(item_count, dtype=np.int64),
+        fast_mlsirm.FitConfig(
+            model="ULSRM",
+            estimator="mmle",
+            max_iter=80,
+            latent_dim=1,
+            q_theta=15,
+            q_xi=7,
+            rust_device="cpu",
+            seed=ITEM_COVARIATE_SEED,
+        ),
+        group_id=group_id,
+        covariate={"w": covariate, "init_delta": 0.0},
+    )
+    estimated_delta = float(result.population["delta"])
+    return {
+        "method": "multigroup_item_covariate",
+        "sample_size": ITEM_COVARIATE_SAMPLE_SIZE,
+        "seed": ITEM_COVARIATE_SEED,
+        "contexts": len(covariate),
+        "items": item_count,
+        "true_delta": true_delta,
+        "estimated_delta": estimated_delta,
+        "absolute_error": abs(estimated_delta - true_delta),
+        "convergence_status": result.convergence_status,
+        "iterations": result.n_iter,
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
@@ -353,6 +400,7 @@ def run_benchmark() -> dict[str, object]:
     scale_linking = _validate_scale_linking()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
+    item_covariate_effect = _validate_item_covariate_effect()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -461,6 +509,7 @@ def run_benchmark() -> dict[str, object]:
         "scale_linking_validation": scale_linking,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
+        "item_language_domain_effect_validation": item_covariate_effect,
     }
     assert all(
         math.isfinite(value)
