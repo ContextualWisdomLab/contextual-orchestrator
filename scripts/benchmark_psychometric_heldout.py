@@ -30,6 +30,8 @@ ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
 DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
+JUDGE_SAMPLE_SIZE = 1_000
+JUDGE_SEED = 260_907
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -303,6 +305,44 @@ def _validate_candidate_group_dif() -> dict[str, object]:
     }
 
 
+def _validate_judge_effects() -> dict[str, object]:
+    """Recover known judge severities from a connected fully crossed design."""
+    generator = np.random.default_rng(JUDGE_SEED)
+    ability = generator.normal(size=JUDGE_SAMPLE_SIZE)
+    item_difficulty = np.linspace(-1.0, 1.0, 6)
+    true_severity = np.asarray([-0.7, 0.0, 0.7])
+    logits = (
+        ability[:, None, None]
+        - item_difficulty[None, :, None]
+        - true_severity[None, None, :]
+    )
+    probabilities = 1.0 / (1.0 + np.exp(-logits))
+    responses = (generator.random(probabilities.shape) < probabilities).astype(
+        np.float64
+    )
+    result = fast_mlsirm.fit_facets(responses, n_cat=2)
+    return {
+        "method": "many_facet_rasch",
+        "sample_size": JUDGE_SAMPLE_SIZE,
+        "seed": JUDGE_SEED,
+        "items": len(item_difficulty),
+        "judges": len(true_severity),
+        "connected": result.connected,
+        "converged": result.converged,
+        "iterations": result.n_iter,
+        "true_severity": true_severity.tolist(),
+        "estimated_severity": result.rater_severity.tolist(),
+        "severity_rmse": float(
+            np.sqrt(np.mean((result.rater_severity - true_severity) ** 2))
+        ),
+        "severity_order_recovered": bool(
+            np.array_equal(
+                np.argsort(result.rater_severity), np.argsort(true_severity)
+            )
+        ),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
@@ -312,6 +352,7 @@ def run_benchmark() -> dict[str, object]:
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
     candidate_group_dif = _validate_candidate_group_dif()
+    judge_effects = _validate_judge_effects()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -419,6 +460,7 @@ def run_benchmark() -> dict[str, object]:
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
         "candidate_group_dif_validation": candidate_group_dif,
+        "judge_effects_validation": judge_effects,
     }
     assert all(
         math.isfinite(value)

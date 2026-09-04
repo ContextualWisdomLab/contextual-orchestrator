@@ -144,6 +144,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert dif["false_positive_count"] == 0
     assert dif["purification_converged"] is True
     assert dif["anchor_items"] == 7
+    judge = report["judge_effects_validation"]
+    assert judge["method"] == "many_facet_rasch"
+    assert judge["connected"] is True
+    assert judge["converged"] is True
+    assert judge["severity_order_recovered"] is True
+    assert judge["severity_rmse"] == pytest.approx(0.018292059677437307)
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

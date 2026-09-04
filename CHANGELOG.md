@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now fits a many-facet Rasch model to a
+  connected synthetic respondent-item-judge design and reports judge-severity
+  RMSE, convergence, connectedness, and severity-order recovery.
 - The held-out psychometric benchmark now verifies purified logistic DIF on a
   known candidate-cohort item shift, reporting detection recall, false-positive
   count, anchor count, and purification convergence. Buyer DIF remains unexecuted.
