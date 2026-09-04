@@ -125,6 +125,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "generalizability_design": "not_executed",
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
+        "decision_utility": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -181,6 +182,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "cannot define the buyer decision" in requirements[
         "classification_decision"
     ]["known_limit"]
+    assert requirements["decision_utility"]["owner_contract_status"] == (
+        "released_selection_analogue"
+    )
+    assert "not a validated economic model" in requirements["decision_utility"][
+        "known_limit"
+    ]
     assert (
         requirements["local_independence"]["owner_contract_status"]
         == "owner_pr_pending"
@@ -424,6 +431,26 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert classification["accuracy_gain"] == pytest.approx(0.18271266803530306)
     assert classification["consistency_gain"] == pytest.approx(0.283553729829179)
+    utility = report["decision_utility_validation"]
+    assert utility["method"] == "taylor_russell_and_brogden_cronbach_gleser"
+    assert utility["baseline"]["selected_success_ratio"] == pytest.approx(
+        0.5002733590986017
+    )
+    assert utility["baseline"]["net_utility_gain"] == pytest.approx(
+        2042.2125814259748
+    )
+    assert utility["higher_validity"]["selected_success_ratio"] == pytest.approx(
+        0.7235151064637407
+    )
+    assert utility["higher_validity"]["net_utility_gain"] == pytest.approx(
+        5626.637744277923
+    )
+    assert utility["cost_exceeds_value"]["selected_success_ratio"] == pytest.approx(
+        utility["higher_validity"]["selected_success_ratio"]
+    )
+    assert utility["cost_exceeds_value"]["net_utility_gain"] == pytest.approx(
+        -2373.362255722077
+    )
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]

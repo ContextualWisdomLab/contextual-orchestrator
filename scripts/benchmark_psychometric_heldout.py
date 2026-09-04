@@ -807,6 +807,44 @@ def _validate_classification_decision() -> dict[str, object]:
     }
 
 
+def _validate_selection_utility() -> dict[str, object]:
+    """Show why predictive validity must be evaluated net of routing cost."""
+    conditions = {
+        "selected_requests": 1_000,
+        "outcome_value_sd": 10.0,
+        "selection_ratio": 0.25,
+        "base_success_rate": 0.4,
+    }
+
+    def evaluate(validity: float, total_cost: float) -> dict[str, float]:
+        utility = fast_mlsirm.selection_utility(
+            n=conditions["selected_requests"],
+            sdy=conditions["outcome_value_sd"],
+            rxy=validity,
+            sr=conditions["selection_ratio"],
+            cost_total=total_cost,
+        )
+        success = fast_mlsirm.taylor_russell(
+            rxy=validity,
+            sr=conditions["selection_ratio"],
+            br=conditions["base_success_rate"],
+        )
+        return {
+            "predictive_validity": validity,
+            "total_measurement_cost": total_cost,
+            "selected_success_ratio": success.success_ratio,
+            "net_utility_gain": utility.utility_gain,
+        }
+
+    return {
+        "method": "taylor_russell_and_brogden_cronbach_gleser",
+        **conditions,
+        "baseline": evaluate(0.2, 500.0),
+        "higher_validity": evaluate(0.6, 2_000.0),
+        "cost_exceeds_value": evaluate(0.6, 10_000.0),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -996,6 +1034,7 @@ def run_benchmark() -> dict[str, object]:
     generalizability_design = _validate_generalizability_design()
     conditional_information = _validate_conditional_information()
     classification_decision = _validate_classification_decision()
+    selection_utility = _validate_selection_utility()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -1047,6 +1086,7 @@ def run_benchmark() -> dict[str, object]:
         "generalizability_design": "not_executed",
         "conditional_information": "not_executed",
         "classification_decision": "not_executed",
+        "decision_utility": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -1168,6 +1208,17 @@ def run_benchmark() -> dict[str, object]:
                 "and standard errors; it cannot define the buyer decision or its cost"
             ),
         },
+        "decision_utility": {
+            "owner_contract_status": "released_selection_analogue",
+            "required_evidence": (
+                "buyer-valued outcome units, predictive validity, request volume, "
+                "routing cost, selection ratio, and preregistered utility target"
+            ),
+            "known_limit": (
+                "the personnel-selection normal model is an analogue, not a "
+                "validated economic model for multi-model routing"
+            ),
+        },
         "local_independence": {
             "owner_contract_status": "owner_pr_pending",
             "required_evidence": (
@@ -1251,6 +1302,7 @@ def run_benchmark() -> dict[str, object]:
         "generalizability_design_validation": generalizability_design,
         "conditional_information_validation": conditional_information,
         "classification_decision_validation": classification_decision,
+        "decision_utility_validation": selection_utility,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,
