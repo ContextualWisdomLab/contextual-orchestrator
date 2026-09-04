@@ -2285,6 +2285,14 @@ ranks first and has ZU3 separation `1.818719` from the next-highest pattern.
 Because unusual response patterns neither identify a cause nor prove invalidity,
 the report applies no universal cutoff and leaves `response_pattern_fit`
 `not_executed` pending complete buyer responses and a human-review policy.
+Source commit `73e07a8e` exercises the released Horn parallel-analysis API on
+1,000 synthetic binary response vectors and 12 items. It retains the two known
+dimensions; the first three adjusted eigenvalues are `1.683630`, `1.643308`,
+and `0.847486`. This only verifies that the implementation detects the seeded
+departure from a single latent dimension. Pearson-PCA parallel analysis on
+binary responses cannot identify the construct or replace confirmatory
+holdout fit, so `construct_dimensionality` remains `not_executed` pending a
+preregistered buyer construct structure and complete buyer responses.
 
 ## 7. Delivery gates
 

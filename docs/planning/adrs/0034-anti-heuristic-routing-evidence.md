@@ -127,6 +127,15 @@ signal, not a diagnosis: no universal cutoff or causal label is attached, and
 `response_pattern_fit` remains `not_executed` without complete buyer responses
 and a preregistered human-review policy.
 
+Source commit `73e07a8e` adds Horn (1965) parallel analysis as a bounded
+dimensionality screen. It recovers two known dimensions from 1,000 synthetic
+binary response vectors across 12 items. Tran and Formann (2009) show why that
+success cannot establish unidimensionality or construct validity: performance
+depends on sample size, discrimination, and the correlation matrix, and Pearson
+correlations are particularly weak for binary data. `construct_dimensionality`
+therefore remains `not_executed` until buyer responses, a preregistered construct
+structure, and confirmatory holdout fit exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

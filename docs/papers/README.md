@@ -132,6 +132,19 @@ Buyer next action: call `run_equal_budget_ablation` and read
   candidates with ZU3 separation `1.818719` from the next-highest pattern. The
   diagnostic does not explain the anomaly or supply a universal action cutoff,
   so buyer response-pattern fit remains unexecuted.
+- Horn, J. L. (1965). A rationale and test for the number of factors in factor
+  analysis. *Psychometrika, 30*(2), 179–185.
+  https://doi.org/10.1007/BF02289447
+  Grounds comparison of observed roots with roots attributable to sampling
+  error. Source commit `73e07a8e` recovers both known dimensions in a seeded
+  1,000-response, 12-item simulation.
+- Tran, U. S., & Formann, A. K. (2009). Performance of parallel analysis in
+  retrieving unidimensionality in the presence of binary data. *Educational
+  and Psychological Measurement, 69*(1), 50–61.
+  https://doi.org/10.1177/0013164408318761
+  Grounds the limitation: Pearson-correlation parallel analysis can perform
+  poorly on binary items. CO therefore treats the result as a synthetic screen,
+  not construct identification or buyer-validity evidence.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

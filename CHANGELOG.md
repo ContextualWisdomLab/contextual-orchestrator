@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now recovers two known latent dimensions
+  with the released Horn parallel-analysis screen. It keeps buyer construct
+  validity closed because Pearson-PCA screening on binary responses is not a
+  confirmatory measurement model.
 - Streaming automatic routing now fails when every worker candidate is excluded
   from that role, matching non-streaming selection while preserving explicit
   requested-model behavior. Benchmark propensity weights and workload receipts
