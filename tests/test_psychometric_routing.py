@@ -59,6 +59,13 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     for metric, point in report["delta"].items():
         lower, upper = report["delta_ci95"][metric]
         assert lower <= point <= upper
+    assert report["production_gates"] == {
+        "accuracy_noninferior": True,
+        "buyer_heldout": False,
+        "decision_latency_improved": False,
+        "measurement_validity": False,
+    }
+    assert report["production_default_change_allowed"] is False
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

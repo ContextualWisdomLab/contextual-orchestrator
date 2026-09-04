@@ -176,6 +176,15 @@ def run_benchmark() -> dict[str, object]:
         )
         for metric in candidate_samples
     }
+    gates = {
+        "accuracy_noninferior": all(
+            delta_ci95[metric][1] <= 0.0
+            for metric in ("brier_score", "log_loss", "top_choice_regret")
+        ),
+        "buyer_heldout": False,
+        "decision_latency_improved": delta_ci95["decision_median_ms"][1] < 0.0,
+        "measurement_validity": False,
+    }
     result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
@@ -186,6 +195,8 @@ def run_benchmark() -> dict[str, object]:
         "delta_ci95": delta_ci95,
         "models": len(MODEL_IDS),
         "latency_repetitions_per_context": LATENCY_REPETITIONS,
+        "production_default_change_allowed": all(gates.values()),
+        "production_gates": gates,
     }
     assert all(
         math.isfinite(value)
@@ -197,6 +208,7 @@ def run_benchmark() -> dict[str, object]:
         and delta_ci95[metric][0] <= delta[metric] <= delta_ci95[metric][1]
         for metric in delta
     )
+    assert result["production_default_change_allowed"] == all(gates.values())
     return result
 
 
