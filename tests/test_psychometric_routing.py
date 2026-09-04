@@ -101,8 +101,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert (
         requirements["item_language_domain_effects"]["owner_contract_status"]
-        == "not_implemented"
+        == "released_limited"
     )
+    assert "not implemented" in requirements["item_language_domain_effects"][
+        "known_limit"
+    ]
     assert (
         requirements["adaptive_exposure"]["owner_contract_status"]
         == "not_implemented"

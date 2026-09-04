@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Item-side language/domain validity evidence now reports the released but
+  limited multigroup item-covariate contract instead of claiming no owner
+  implementation exists. Unexecuted buyer evidence remains fail-closed.
 - Psychometric routing now normalizes retained context embeddings once when
   they are observed. Five before/after local runs reduced median candidate
   decision p50 from `0.016083` to `0.009791` ms without changing quality metrics.

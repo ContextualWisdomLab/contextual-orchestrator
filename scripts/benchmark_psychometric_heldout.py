@@ -218,9 +218,14 @@ def run_benchmark() -> dict[str, object]:
             ),
         },
         "item_language_domain_effects": {
-            "owner_contract_status": "not_implemented",
+            "owner_contract_status": "released_limited",
             "required_evidence": (
-                "item-side language and domain parameters on linked buyer observations"
+                "preregistered item covariates, anchors, and linked multigroup buyer "
+                "observations"
+            ),
+            "known_limit": (
+                "one shared covariate coefficient; language-specific discrimination "
+                "and residual effects are not implemented"
             ),
         },
         "judge_effects": {
