@@ -150,12 +150,12 @@ flowchart LR
   tests cover exact and interpolated scoring, iterable candidates, persistence,
   and routing integration. Buyer-held-out and protected-main evidence remain
   open, so two-neighbor interpolation remains disabled in production.
-- Source commit `a4f87f94` compares baseline and candidate within each held-out
+- Source commit `94615dff` compares baseline and candidate within each held-out
   context, adds deterministic 2,000-resample paired bootstrap intervals, and
-  repeats decision timing 200 times per context. The Brier and log-loss
-  intervals favor the candidate, but paired context-median latency is slower by
-  `[0.0022120, 0.0023610]` ms; this strengthens the accuracy evidence without
-  opening the production gate.
+  repeats decision timing 200 times per context with alternating execution
+  order. The Brier and log-loss intervals favor the candidate, but paired
+  context-median latency is slower by `[0.0047666, 0.0054775]` ms; this
+  strengthens the accuracy evidence without opening the production gate.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted
