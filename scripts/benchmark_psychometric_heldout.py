@@ -53,6 +53,7 @@ EQUATING_SEED = 260_914
 ROSTER_INVARIANCE_SEED = 260_915
 GENERALIZABILITY_SEED = 260_916
 SEQUENTIAL_DRIFT_SEED = 260_917
+SEQUENTIAL_DRIFT_HOLDOUT_SEED = 270_917
 SEQUENTIAL_DRIFT_REPLICATIONS = 500
 
 
@@ -472,11 +473,11 @@ def _validate_sequential_drift() -> dict[str, object]:
     after_probability = 0.3
     change_after = 100
 
-    def evaluate(threshold: float) -> dict[str, float | int]:
+    def evaluate(seed: int, threshold: float) -> dict[str, float | int]:
         false_alarms = 0
         detection_delays: list[int] = []
         for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
-            generator = random.Random(SEQUENTIAL_DRIFT_SEED + replication)
+            generator = random.Random(seed + replication)
             statistic = 0.0
             alarm_observation: int | None = None
             for observation_index in range(250):
@@ -503,9 +504,24 @@ def _validate_sequential_drift() -> dict[str, object]:
             else:
                 detection_delays.append(alarm_observation - change_after)
         ordered_delays = sorted(detection_delays)
+        false_alarm_rate = false_alarms / SEQUENTIAL_DRIFT_REPLICATIONS
+        z_95 = 1.959963984540054
+        denominator = 1.0 + (z_95**2 / SEQUENTIAL_DRIFT_REPLICATIONS)
+        false_alarm_upper_95 = (
+            false_alarm_rate
+            + z_95**2 / (2 * SEQUENTIAL_DRIFT_REPLICATIONS)
+            + z_95
+            * math.sqrt(
+                false_alarm_rate
+                * (1.0 - false_alarm_rate)
+                / SEQUENTIAL_DRIFT_REPLICATIONS
+                + z_95**2 / (4 * SEQUENTIAL_DRIFT_REPLICATIONS**2)
+            )
+        ) / denominator
         return {
             "threshold_log_likelihood_ratio": threshold,
-            "false_alarm_rate": false_alarms / SEQUENTIAL_DRIFT_REPLICATIONS,
+            "false_alarm_rate": false_alarm_rate,
+            "false_alarm_rate_upper_95": false_alarm_upper_95,
             "post_change_detection_rate_among_no_false_alarm": (
                 len(detection_delays)
                 / (SEQUENTIAL_DRIFT_REPLICATIONS - false_alarms)
@@ -516,16 +532,18 @@ def _validate_sequential_drift() -> dict[str, object]:
             ],
         }
 
-    baseline = evaluate(math.log(100.0))
+    calibration_baseline = evaluate(SEQUENTIAL_DRIFT_SEED, math.log(100.0))
     threshold_candidates = [value / 10.0 for value in range(60, 71)]
-    evaluated_candidates = [evaluate(value) for value in threshold_candidates]
+    evaluated_candidates = [
+        evaluate(SEQUENTIAL_DRIFT_SEED, value) for value in threshold_candidates
+    ]
     eligible_candidates = [
         value
         for value in evaluated_candidates
-        if value["false_alarm_rate"] <= 0.05
+        if value["false_alarm_rate_upper_95"] <= 0.05
         and value["detection_delay_p95_observations"] <= 25
     ]
-    candidate = min(
+    calibration_candidate = min(
         eligible_candidates,
         key=lambda value: (
             value["detection_delay_p95_observations"],
@@ -533,15 +551,21 @@ def _validate_sequential_drift() -> dict[str, object]:
             value["threshold_log_likelihood_ratio"],
         ),
     )
+    selected_threshold = calibration_candidate["threshold_log_likelihood_ratio"]
+    baseline = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, math.log(100.0))
+    candidate = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, selected_threshold)
     return {
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
+        "holdout_seed": SEQUENTIAL_DRIFT_HOLDOUT_SEED,
         "replications": SEQUENTIAL_DRIFT_REPLICATIONS,
         "before_probability": before_probability,
         "after_probability": after_probability,
         "change_after_observations": change_after,
         "baseline": baseline,
         "candidate": candidate,
+        "calibration_baseline": calibration_baseline,
+        "calibration_candidate": calibration_candidate,
         "threshold_search": {
             "minimum": threshold_candidates[0],
             "maximum": threshold_candidates[-1],
@@ -549,7 +573,8 @@ def _validate_sequential_drift() -> dict[str, object]:
             "candidates": len(threshold_candidates),
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
-                "candidates meeting both synthetic targets"
+                "calibration candidates whose 95% false-alarm upper bound and "
+                "p95 delay meet both synthetic targets"
             ),
         },
         "synthetic_targets": {
@@ -557,7 +582,7 @@ def _validate_sequential_drift() -> dict[str, object]:
             "maximum_detection_delay_p95_observations": 25,
         },
         "candidate_meets_synthetic_targets": (
-            candidate["false_alarm_rate"] <= 0.05
+            candidate["false_alarm_rate_upper_95"] <= 0.05
             and candidate["detection_delay_p95_observations"] <= 25
         ),
     }

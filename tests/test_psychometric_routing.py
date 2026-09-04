@@ -310,15 +310,23 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     sequential_drift = report["sequential_drift_validation"]
     assert sequential_drift["method"] == "one_stream_bernoulli_cusum_screen"
     assert sequential_drift["seed"] == heldout_benchmark.SEQUENTIAL_DRIFT_SEED
+    assert sequential_drift["holdout_seed"] == 270_917
     assert sequential_drift["replications"] == 500
     assert sequential_drift["change_after_observations"] == 100
-    assert sequential_drift["baseline"]["false_alarm_rate"] == 0.212
+    assert sequential_drift["baseline"]["false_alarm_rate"] == 0.178
     assert sequential_drift["baseline"]["detection_delay_p50_observations"] == 6
-    assert sequential_drift["baseline"]["detection_delay_p95_observations"] == 17
+    assert sequential_drift["baseline"]["detection_delay_p95_observations"] == 15
     assert sequential_drift["threshold_search"]["candidates"] == 11
-    assert sequential_drift["candidate"]["threshold_log_likelihood_ratio"] == 6.1
-    assert sequential_drift["candidate"]["false_alarm_rate"] == 0.048
-    assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 8
+    assert sequential_drift["calibration_candidate"][
+        "threshold_log_likelihood_ratio"
+    ] == 6.6
+    assert sequential_drift["calibration_candidate"]["false_alarm_rate"] == 0.026
+    assert sequential_drift["candidate"]["threshold_log_likelihood_ratio"] == 6.6
+    assert sequential_drift["candidate"]["false_alarm_rate"] == 0.024
+    assert sequential_drift["candidate"]["false_alarm_rate_upper_95"] == pytest.approx(
+        0.041477057463900756
+    )
+    assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 10
     assert sequential_drift["candidate"]["detection_delay_p95_observations"] == 20
     assert sequential_drift["candidate_meets_synthetic_targets"] is True
     person_fit = report["response_pattern_fit_validation"]
