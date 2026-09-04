@@ -99,6 +99,8 @@ class PsychometricRoutingEvidence:
                 if not comparable:
                     return []
                 neighbors = sorted(comparable, reverse=True)[:2]
+                if neighbors[0][0] <= 0:
+                    return []
                 if len(neighbors) == 1 or neighbors[1][0] <= 0:
                     context_scores = self._scores[neighbors[0][1]]
                 else:

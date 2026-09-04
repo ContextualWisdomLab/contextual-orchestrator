@@ -202,3 +202,16 @@ def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
         ("model_a", 0.6),
         ("model_b", 0.4),
     ]
+
+
+def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
+    evidence._scores = {
+        evidence.context_id("opposite"): {"model_a": 0.9, "model_b": 0.1}
+    }
+    evidence._fit_revision = evidence._revision
+
+    assert evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 0.0]
+    ) == []
