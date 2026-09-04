@@ -561,6 +561,38 @@ def _validate_conditional_information() -> dict[str, object]:
     }
 
 
+def _validate_classification_decision() -> dict[str, object]:
+    """Verify that lower score error improves one cut-score decision."""
+    measures = np.asarray([-1.0, -0.5, 0.5, 1.0])
+
+    def classify(standard_error: float) -> dict[str, float]:
+        result = fast_mlsirm.rudner_classification(
+            measures,
+            np.full(len(measures), standard_error),
+            [0.0],
+        )
+        return {
+            "standard_error": standard_error,
+            "accuracy": result.simultaneous_accuracy,
+            "consistency": result.simultaneous_consistency,
+            "minimum_conditional_accuracy": float(
+                np.min(result.conditional_simultaneous_accuracy)
+            ),
+        }
+
+    uncertain = classify(0.8)
+    precise = classify(0.2)
+    return {
+        "method": "rudner_normal_approximation",
+        "decision_cut": 0.0,
+        "measures": measures.tolist(),
+        "uncertain_scores": uncertain,
+        "precise_scores": precise,
+        "accuracy_gain": precise["accuracy"] - uncertain["accuracy"],
+        "consistency_gain": precise["consistency"] - uncertain["consistency"],
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -745,6 +777,7 @@ def run_benchmark() -> dict[str, object]:
     global_model_fit = _validate_global_model_fit()
     score_reliability = _validate_score_reliability()
     conditional_information = _validate_conditional_information()
+    classification_decision = _validate_classification_decision()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -787,6 +820,7 @@ def run_benchmark() -> dict[str, object]:
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
         "conditional_information": "not_executed",
+        "classification_decision": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -868,6 +902,17 @@ def run_benchmark() -> dict[str, object]:
                 "bank; it cannot establish construct validity or buyer coverage"
             ),
         },
+        "classification_decision": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "a buyer-defined routing cut, linked candidate measures, valid "
+                "standard errors, decision costs, and preregistered targets"
+            ),
+            "known_limit": (
+                "normal-approximation classification assumes valid linked measures "
+                "and standard errors; it cannot define the buyer decision or its cost"
+            ),
+        },
         "local_independence": {
             "owner_contract_status": "owner_pr_pending",
             "required_evidence": (
@@ -946,6 +991,7 @@ def run_benchmark() -> dict[str, object]:
         "global_model_fit_validation": global_model_fit,
         "score_reliability_validation": score_reliability,
         "conditional_information_validation": conditional_information,
+        "classification_decision_validation": classification_decision,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

@@ -92,6 +92,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
         "conditional_information": "not_executed",
+        "classification_decision": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -135,6 +136,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert "cannot establish construct validity" in requirements[
         "conditional_information"
+    ]["known_limit"]
+    assert requirements["classification_decision"]["owner_contract_status"] == (
+        "released"
+    )
+    assert "cannot define the buyer decision" in requirements[
+        "classification_decision"
     ]["known_limit"]
     assert (
         requirements["local_independence"]["owner_contract_status"]
@@ -289,6 +296,24 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert information["worst_case_information_gain"] == pytest.approx(
         0.1578915220340864
     )
+    classification = report["classification_decision_validation"]
+    assert classification["method"] == "rudner_normal_approximation"
+    assert classification["decision_cut"] == 0.0
+    assert classification["measures"] == [-1.0, -0.5, 0.5, 1.0]
+    assert classification["uncertain_scores"]["accuracy"] == pytest.approx(
+        0.8141823561518077
+    )
+    assert classification["uncertain_scores"]["consistency"] == pytest.approx(
+        0.7102748784842168
+    )
+    assert classification["precise_scores"]["accuracy"] == pytest.approx(
+        0.9968950241871108
+    )
+    assert classification["precise_scores"]["consistency"] == pytest.approx(
+        0.9938286083133958
+    )
+    assert classification["accuracy_gain"] == pytest.approx(0.18271266803530306)
+    assert classification["consistency_gain"] == pytest.approx(0.283553729829179)
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
