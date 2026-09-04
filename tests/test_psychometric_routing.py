@@ -7,6 +7,18 @@ from pathlib import Path
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
+from scripts.benchmark_psychometric_routing import _require_runtime
+
+
+def test_psychometric_benchmark_requires_python_312() -> None:
+    try:
+        _require_runtime((3, 11))
+    except SystemExit as error:
+        assert "uv run --python 3.12" in str(error)
+    else:
+        raise AssertionError("Python 3.11 must not enter the benchmark dependency path")
+
+    _require_runtime((3, 12))
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:
