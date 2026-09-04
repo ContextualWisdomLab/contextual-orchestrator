@@ -7,6 +7,7 @@ import numpy as np
 from dataclasses import replace
 from pathlib import Path
 import pytest
+import scripts.benchmark_psychometric_heldout as heldout_benchmark
 
 from contextual_orchestrator import (
     ModelAgent,
@@ -46,6 +47,18 @@ def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
 def test_paired_bootstrap_interval_rejects_unpaired_samples() -> None:
     with pytest.raises(ValueError, match="non-empty and equal length"):
         _paired_bootstrap_mean_ci([0.1], [])
+
+
+def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None:
+    monkeypatch.setattr(heldout_benchmark, "LATENCY_REPETITIONS", 2)
+
+    report = heldout_benchmark.run_benchmark()
+
+    assert report["latency_repetitions_per_context"] == 2
+    assert report["delta"].keys() == report["delta_ci95"].keys()
+    for metric, point in report["delta"].items():
+        lower, upper = report["delta_ci95"][metric]
+        assert lower <= point <= upper
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

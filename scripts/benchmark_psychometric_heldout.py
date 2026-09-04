@@ -152,8 +152,8 @@ def _measure_paired_latency(
     )
 
 
-def main() -> None:
-    """Print paired held-out accuracy uncertainty and decision latency."""
+def run_benchmark() -> dict[str, object]:
+    """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
@@ -165,18 +165,25 @@ def main() -> None:
     candidate.update(candidate_latency)
     baseline_samples["decision_median_ms"] = baseline_medians
     candidate_samples["decision_median_ms"] = candidate_medians
-    result = {
+    delta = {
+        metric: statistics.fmean(candidate_samples[metric])
+        - statistics.fmean(baseline_samples[metric])
+        for metric in candidate_samples
+    }
+    delta_ci95 = {
+        metric: _paired_bootstrap_mean_ci(
+            candidate_samples[metric], baseline_samples[metric]
+        )
+        for metric in candidate_samples
+    }
+    result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
         "bootstrap_samples": BOOTSTRAP_SAMPLES,
         "contexts_held_out": TRAIN_CONTEXTS,
         "contexts_train": TRAIN_CONTEXTS,
-        "delta_ci95": {
-            metric: _paired_bootstrap_mean_ci(
-                candidate_samples[metric], baseline_samples[metric]
-            )
-            for metric in candidate_samples
-        },
+        "delta": delta,
+        "delta_ci95": delta_ci95,
         "models": len(MODEL_IDS),
         "latency_repetitions_per_context": LATENCY_REPETITIONS,
     }
@@ -185,6 +192,17 @@ def main() -> None:
         for metrics in (baseline, candidate)
         for value in metrics.values()
     )
+    assert all(
+        math.isfinite(delta[metric])
+        and delta_ci95[metric][0] <= delta[metric] <= delta_ci95[metric][1]
+        for metric in delta
+    )
+    return result
+
+
+def main() -> None:
+    """Print the held-out benchmark report as stable JSON."""
+    result = run_benchmark()
     print(json.dumps(result, sort_keys=True))
 
 
