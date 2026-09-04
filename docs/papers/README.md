@@ -160,6 +160,18 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds the limitation that M2 sensitivity varies with the multidimensional
   structure. A detected synthetic misspecification therefore does not establish
   buyer construct validity or universal model-fit thresholds.
+- Bechger, T. M., Maris, G., Verstralen, H. H. F. M., & Béguin, A. A. (2003).
+  Using classical test theory in combination with item response theory.
+  *Applied Psychological Measurement, 27*(5), 319–334.
+  https://doi.org/10.1177/0146621603257518
+  Grounds posterior-variance decomposition as an empirical score-reliability
+  summary. Source commit `5b50e10c` raises reliability from `0.366437` to
+  `0.800436` when true item discrimination increases from `0.45` to `1.5`.
+- Stanley, L. M., & Edwards, M. C. (2016). Reliability and model fit.
+  *Educational and Psychological Measurement, 76*(6), 976–985.
+  https://doi.org/10.1177/0013164416638900
+  Grounds treating reliability and model fit as distinct evidence. High score
+  precision cannot repair a misspecified model or establish validity.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

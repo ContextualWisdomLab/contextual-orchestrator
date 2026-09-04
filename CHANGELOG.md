@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now verifies that posterior empirical
+  reliability rises when known item information increases. Reliability remains
+  separate from model fit and cannot open the buyer-validity gate by itself.
 - The held-out psychometric benchmark now distinguishes a fitted one-factor
   design from known two-factor misspecification with the released M2 global-fit
   diagnostics, while keeping buyer model fit and construct validity closed.

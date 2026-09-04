@@ -145,6 +145,15 @@ this synthetic separation cannot establish a construct or universal cutoff.
 `global_model_fit` remains `not_executed` until a converged buyer calibration,
 complete responses, a preregistered model, and held-out review exist.
 
+Source commit `5b50e10c` adds empirical reliability as a separate precision
+screen following Bechger et al. (2003). With 1,200 synthetic responses and 12
+items, raising true item discrimination from `0.45` to `1.5` raises posterior
+reliability from `0.366437` to `0.800436`. Stanley and Edwards (2016) show why
+this cannot substitute for model fit; it also says nothing by itself about
+invariance or construct validity. `score_reliability` therefore remains
+`not_executed` until buyer calibration, posterior errors, a purpose-specific
+target, and separate model-fit evidence exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

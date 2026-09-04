@@ -2301,6 +2301,13 @@ and RMSEA `0.077517`. This verifies detection for one known misspecification,
 not universal sensitivity or buyer construct validity. `global_model_fit`
 remains `not_executed` pending converged buyer calibration, complete responses,
 a preregistered model, and held-out review.
+Source commit `5b50e10c` exercises the released posterior empirical-reliability
+calculation on two seeded 1,200-response, 12-item cases. Reliability rises from
+`0.366437` with true discrimination `0.45` to `0.800436` with discrimination
+`1.5`, a separation of `0.433999`. This verifies sensitivity to known item
+information, not buyer score precision or validity. Reliability and model fit
+remain separate evidence, so `score_reliability` stays `not_executed` pending
+buyer calibration, posterior errors, a purpose-specific target, and fit review.
 
 ## 7. Delivery gates
 
