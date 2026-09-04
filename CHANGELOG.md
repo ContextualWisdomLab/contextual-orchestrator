@@ -20,10 +20,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- Unseen prompt contexts now interpolate the two nearest positive-cosine
-  psychometric score rows instead of copying one neighbor; the seeded held-out
-  benchmark reports Brier score, log loss, top-choice regret, and decision
-  p50/p95 without changing production routing defaults.
+- The seeded held-out benchmark can now opt into interpolation of the two
+  nearest positive-cosine psychometric score rows and reports Brier score, log
+  loss, top-choice regret, and decision p50/p95. Live routing retains the
+  validated single-neighbor default until buyer-held-out gates pass.
+- Psychometric observations are keyed by the complete declared deployment
+  configuration, so reused agent IDs cannot carry scores across model or
+  endpoint changes; overflow-safe cosine normalization rejects unusable
+  similarity evidence instead of returning non-finite routing scores.
 - Psychometric observation replacement now removes only the existing row's
   contiguous trailing items instead of scanning the complete response ledger;
   the checked-in benchmark reports fit/rank and observation p50/p95 separately.
