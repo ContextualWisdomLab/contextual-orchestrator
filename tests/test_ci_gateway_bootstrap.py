@@ -189,6 +189,7 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
         chat_blob = json.dumps(chat_body)
         assert "router-secret" not in chat_blob
         assert "OPENROUTER_API_KEY" not in chat_blob
+        assert discovered.chat_base_url not in chat_blob
         assert "mock://" not in chat_blob
     finally:
         server.shutdown()

@@ -36,12 +36,16 @@ from seed-only unit coverage to the real Actions-facing startup path:
 - the test serves real HTTP, verifies authenticated `GET /v1/models` exposes
   `orchestrator/free`, and verifies authenticated `POST /v1/chat/completions`
   with `model="orchestrator/free"` succeeds through owner-side routing;
+- the same two endpoints now also prove both missing and invalid Bearer tokens
+  fail with the documented `401 unauthorized` contract before any owner-route
+  success is accepted;
 - a second regression proves the same bootstrap path fails closed when
   discovery exposes only paid chat candidates: `orchestrator/free` is omitted
   from `/v1/models`, the same authenticated chat request returns
   `400 invalid_model`, and no paid/provider-specific bypass is taken;
 - the wire-visible responses stay secret-safe: no provider credential names,
-  credential values, or `mock://` transport internals are exposed.
+  credential values, exact configured `chat_base_url` strings, or `mock://`
+  transport internals are exposed.
 
 This does not complete issue `#1023`'s full immutable-release, provenance, or
 short-lived-auth scope. It closes one smaller owner-boundary proof that a
@@ -51,7 +55,7 @@ gateway's authenticated free pool.
 ### Exact local verification
 
 - `uv run pytest tests/test_ci_gateway_bootstrap.py -q`
-  -> `3 passed in 1.95s`
+  -> `3 passed in 1.86s`
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
