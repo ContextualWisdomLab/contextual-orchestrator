@@ -63,6 +63,15 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+# The live Go catalog exposes only id/object/created/owned_by. Keep the one
+# serving allowlist to the official Chat Completions table; every other row is
+# retained as evidence-only until the API reports a protocol or an adapter exists.
+_OPENCODE_GO_CHAT_MODELS = frozenset({
+    "glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "kimi-k3",
+    "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "deepseek-v4-pro",
+    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "mimo-v2.5",
+    "mimo-v2.5-pro", "hy4-preview", "hy3",
+})
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
@@ -405,6 +414,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
+        models_dev_provider_id="openrouter",
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -414,6 +424,14 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
         bootstrap_required=False,
         models_dev_provider_id="opencode",
+    ),
+    ProviderModelSource(
+        provider_name="opencode_go",
+        credential_name="OPENCODE_ZEN_API_KEY",
+        list_url="https://opencode.ai/zen/go/v1/models",
+        chat_base_url="https://opencode.ai/zen/go/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -1390,6 +1408,10 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 image_generation_endpoint=(
                     "images" if source.provider_name == "openrouter" else None
                 ),
+                evidence_only=(
+                    source.provider_name == "opencode_go"
+                    and model_id not in _OPENCODE_GO_CHAT_MODELS
+                ),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1610,7 +1632,7 @@ def discover_provider_models(
         else:
             metadata = models_dev_metadata
         payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
-    elif source.provider_name == "openrouter":
+    if source.provider_name == "openrouter":
         try:
             metadata = _fetch_json(_OPENROUTER_ZDR_ENDPOINTS_URL, api_key=api_key, timeout=timeout)
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
@@ -1654,7 +1676,10 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [
+        replace(model, evidence_only=source.evidence_only or model.evidence_only)
+        for model in discovered
+    ]
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
             "discovery_result account=%s model_count=%d elapsed_ms=%.1f",

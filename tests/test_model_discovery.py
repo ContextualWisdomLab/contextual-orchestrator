@@ -34,6 +34,8 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ProviderDiscoveryError,
     ProviderModelSource,
     _MODELS_DEV_FETCH_ATTEMPTS,
+    _OPENROUTER_PROVIDER_POLICIES_URL,
+    _OPENROUTER_ZDR_ENDPOINTS_URL,
     _bytez_meter_price_is_free,
     _deduplicate_discovered_models,
     _fetch_json,
@@ -92,6 +94,71 @@ def test_openrouter_empty_zdr_inventory_keeps_support_unknown() -> None:
     merged = _merge_openrouter_zdr_metadata(payload, {"data": []})
 
     assert "supports_zero_data_retention" not in merged["data"][0]
+
+
+def test_openrouter_composes_models_dev_price_with_fail_closed_privacy() -> None:
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "openrouter"
+    )
+    register_credential("OPENROUTER_API_KEY", "openrouter-key")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            return _Response(
+                {
+                    "openrouter": {
+                        "models": {
+                            "vendor/model": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                            }
+                        }
+                    }
+                }
+            )
+        if request.full_url == _OPENROUTER_ZDR_ENDPOINTS_URL:
+            return _Response({"data": [{"model_id": "vendor/model"}]})
+        if request.full_url == _OPENROUTER_PROVIDER_POLICIES_URL:
+            return _Response(
+                {
+                    "data": [
+                        {
+                            "slug": "private",
+                            "dataPolicy": {
+                                "training": False,
+                                "retainsPrompts": False,
+                            },
+                        },
+                        {
+                            "slug": "retaining",
+                            "dataPolicy": {
+                                "training": True,
+                                "retainsPrompts": True,
+                            },
+                        },
+                    ]
+                }
+            )
+        if request.full_url.endswith("/vendor/model/endpoints"):
+            return _Response(
+                {"data": {"endpoints": [{"tag": "private"}, {"tag": "retaining"}]}}
+            )
+        return _Response({"data": [{"id": "vendor/model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is True
+    assert discovered[0].supports_zero_data_retention is True
+    assert discovered[0].supports_no_training is None
+    assert discovered[0].supports_no_prompt_retention is None
 
 
 def test_openrouter_provider_privacy_preserves_terms_and_withholds_mixed_claims() -> None:
