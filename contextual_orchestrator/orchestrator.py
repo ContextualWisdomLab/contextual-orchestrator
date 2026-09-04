@@ -7018,11 +7018,18 @@ class TaskOrchestrator:
             candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
 
-    @staticmethod
-    def _psychometric_candidate_id(agent: ModelAgent) -> str:
-        """Bind routing evidence to the complete declared deployment configuration."""
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind routing evidence to the declared deployment and decode policy."""
+        effort_catalog = (
+            snapshot_role_effort_catalog(self.role_effort_catalog).snapshot_hash
+            if self.role_effort_catalog is not None
+            else None
+        )
         configuration = json.dumps(
-            agent.to_config(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
         )
         revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
         return f"{agent.id}:{revision}"

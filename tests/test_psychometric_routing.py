@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import math
 import numpy as np
+from dataclasses import replace
 from pathlib import Path
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    ModelAgent,
+    TaskOrchestrator,
+    default_role_effort_catalog,
+)
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 from scripts.benchmark_psychometric_routing import _require_runtime
 from scripts.benchmark_psychometric_heldout import _expected_brier
@@ -184,7 +189,7 @@ def test_contextual_judge_observation_survives_restart_without_raw_prompt(
     records = second._psychometric_router.records()
     second.close()
 
-    candidate_id = TaskOrchestrator._psychometric_candidate_id(agents[0])
+    candidate_id = second._psychometric_candidate_id(agents[0])
     assert records == [
         {
             "context_id": PsychometricRoutingEvidence.context_id(
@@ -226,6 +231,31 @@ def test_contextual_judge_observation_does_not_survive_deployment_change(
     reverted.close()
 
     assert reverted_records == []
+
+
+def test_contextual_judge_observation_does_not_survive_decode_policy_change(
+    tmp_path: Path,
+) -> None:
+    state_db = str(tmp_path / "state.sqlite3")
+    agents = [ModelAgent("model_a", "model-a")]
+    original = default_role_effort_catalog()
+    changed = dict(original)
+    changed["worker"] = replace(original["worker"], temperature=0.8)
+    first = TaskOrchestrator(
+        agents, state_db=state_db, role_effort_catalog=original
+    )
+    first._observe_contextual_quality(
+        "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+    )
+    first.close()
+
+    second = TaskOrchestrator(
+        agents, state_db=state_db, role_effort_catalog=changed
+    )
+    records = second._psychometric_router.records()
+    second.close()
+
+    assert records == []
 
 
 def test_runtime_deployment_change_discards_contextual_judge_observation() -> None:
@@ -286,7 +316,7 @@ def test_semantic_warm_start_defaults_to_validated_single_neighbor() -> None:
 
 
 def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
-    evidence = PsychometricRoutingEvidence()
+    evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
     evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
     evidence._scores = {
         evidence.context_id("opposite"): {"model_a": 0.9, "model_b": 0.1}
@@ -296,6 +326,19 @@ def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
     assert evidence.ranked_evidence(
         ("model_a", "model_b"), "held-out", [1.0, 0.0]
     ) == []
+
+
+def test_default_single_neighbor_preserves_non_positive_fallback() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
+    evidence._scores = {
+        evidence.context_id("opposite"): {"model_a": 0.9, "model_b": 0.1}
+    }
+    evidence._fit_revision = evidence._revision
+
+    assert evidence.ranked_evidence(
+        ("model_a", "model_b"), "held-out", [1.0, 0.0]
+    ) == [("model_a", 0.9), ("model_b", 0.1)]
 
 
 def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
@@ -324,10 +367,25 @@ def test_cosine_is_finite_for_large_finite_embeddings() -> None:
 def test_deployment_configuration_changes_psychometric_identity() -> None:
     before = ModelAgent("model_a", "model-a", base_url="https://one.example/v1")
     after = ModelAgent("model_a", "model-b", base_url="https://two.example/v1")
+    orchestrator = TaskOrchestrator([before])
 
-    assert TaskOrchestrator._psychometric_candidate_id(
+    assert orchestrator._psychometric_candidate_id(
         before
-    ) != TaskOrchestrator._psychometric_candidate_id(after)
+    ) != orchestrator._psychometric_candidate_id(after)
+    orchestrator.close()
+
+
+def test_decode_policy_changes_psychometric_identity() -> None:
+    agent = ModelAgent("model_a", "model-a")
+    original = default_role_effort_catalog()
+    changed = dict(original)
+    changed["worker"] = replace(original["worker"], reasoning_effort="high")
+    before = TaskOrchestrator([agent], role_effort_catalog=original)
+    after = TaskOrchestrator([agent], role_effort_catalog=changed)
+
+    assert before._psychometric_candidate_id(agent) != after._psychometric_candidate_id(agent)
+    before.close()
+    after.close()
 
 
 def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
@@ -343,7 +401,7 @@ def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
             ),
         ]
     )
-    old_candidate_id = TaskOrchestrator._psychometric_candidate_id(old_agent)
+    old_candidate_id = orchestrator._psychometric_candidate_id(old_agent)
     context = "versioned system/user interaction"
     orchestrator._psychometric_router.observe(
         context, old_candidate_id, True, None

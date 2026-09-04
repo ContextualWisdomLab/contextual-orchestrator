@@ -110,9 +110,11 @@ class PsychometricRoutingEvidence:
                     return []
                 neighbor_limit = 2 if self.semantic_warm_start_enabled else 1
                 neighbors = sorted(comparable, reverse=True)[:neighbor_limit]
-                if neighbors[0][0] <= 0:
+                if self.semantic_warm_start_enabled and neighbors[0][0] <= 0:
                     return []
-                if len(neighbors) == 1 or neighbors[1][0] <= 0:
+                if len(neighbors) == 1 or (
+                    self.semantic_warm_start_enabled and neighbors[1][0] <= 0
+                ):
                     context_scores = self._scores[neighbors[0][1]]
                 else:
                     context_scores = {
