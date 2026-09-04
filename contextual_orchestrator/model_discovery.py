@@ -933,6 +933,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
             continue
         cost = model.get("cost")
         pricing: dict[str, str] = {}
+        original_pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         if isinstance(cost, dict):
             for source_key, target_key in (("input", "prompt"), ("output", "completion")):
                 value = cost.get(source_key)
@@ -956,8 +957,9 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
         enriched.append(
             {
                 **row,
-                "pricing": pricing,
+                "pricing": {**original_pricing, **pricing},
                 "architecture": {
+                    **original_architecture,
                     "input_modalities": (
                         modalities.get("input")
                         if modalities.get("input") is not None

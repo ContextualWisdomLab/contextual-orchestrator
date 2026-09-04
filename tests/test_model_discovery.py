@@ -778,7 +778,9 @@ def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence(
                 "architecture": {
                     "input_modalities": ["text", "image"],
                     "output_modalities": ["text"],
+                    "tokenizer": "provider-tokenizer",
                 },
+                "pricing": {"prompt": "0.000001", "image": "0.02"},
             }
         ]
     }
@@ -802,6 +804,12 @@ def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence(
     assert row["architecture"] == {
         "input_modalities": ["text", "image"],
         "output_modalities": ["text"],
+        "tokenizer": "provider-tokenizer",
+    }
+    assert row["pricing"] == {
+        "prompt": "0",
+        "completion": "0",
+        "image": "0.02",
     }
     assert row["context_window"] == 128000
     assert row["max_output_tokens"] == 4096

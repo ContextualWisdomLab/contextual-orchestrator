@@ -85,9 +85,11 @@ declared configuration. `ProviderModelSource` gains
 `"opencode"` (replacing the deleted `_MODELS_DEV_OPENCODE_PROVIDER` module
 constant and its `provider_name == "opencode_zen"` special case with the same
 value, now expressed as data), `nvidia_nim` and `nvidia_nim_sub` both set it
-to `"nvidia"`, and `openai` sets it to `"openai"`. `openrouter` and `bytez`
-keep the `None` default: OpenRouter already reports its own real per-token
-pricing, and there is no
+to `"nvidia"`, `openai` sets it to `"openai"`, and `openrouter` sets it to
+`"openrouter"`. OpenRouter's availability row and provider-reported fields are
+unioned with Models.dev metadata; neither source erases fields omitted by the
+other. Models.dev remains authoritative only for `is_free`. `bytez` keeps the
+`None` default because there is no
 Models.dev signal to join for Bytez.
 
 The invocation site in `discover_provider_models` becomes `if
@@ -176,6 +178,15 @@ still leaves `is_free = False` once the retry budget is genuinely exhausted;
 nothing about the retry can turn a paid model free. Motivated by the
 `orchestrator/free` review-sidecar reliability gap in
 `ContextualWisdomLab/.github` PR #1433.
+
+## Amendment (2026-09-05): preserve both OpenRouter and Models.dev evidence
+
+The join now unions pricing and architecture at field granularity. OpenRouter
+fields survive when Models.dev omits them, while a present Models.dev field
+wins for the same key. The independent `is_free` decision remains derived only
+from the complete Models.dev cost object, so preserving provider data cannot
+self-certify a model as free. Models.dev's per-model SDK override is retained as
+protocol evidence for consumers that expose more than one wire protocol.
 
 ## References
 
