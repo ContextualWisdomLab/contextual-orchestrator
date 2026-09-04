@@ -517,7 +517,22 @@ def _validate_sequential_drift() -> dict[str, object]:
         }
 
     baseline = evaluate(math.log(100.0))
-    candidate = evaluate(7.0)
+    threshold_candidates = [value / 10.0 for value in range(60, 71)]
+    evaluated_candidates = [evaluate(value) for value in threshold_candidates]
+    eligible_candidates = [
+        value
+        for value in evaluated_candidates
+        if value["false_alarm_rate"] <= 0.05
+        and value["detection_delay_p95_observations"] <= 25
+    ]
+    candidate = min(
+        eligible_candidates,
+        key=lambda value: (
+            value["detection_delay_p95_observations"],
+            value["detection_delay_p50_observations"],
+            value["threshold_log_likelihood_ratio"],
+        ),
+    )
     return {
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
@@ -527,6 +542,16 @@ def _validate_sequential_drift() -> dict[str, object]:
         "change_after_observations": change_after,
         "baseline": baseline,
         "candidate": candidate,
+        "threshold_search": {
+            "minimum": threshold_candidates[0],
+            "maximum": threshold_candidates[-1],
+            "step": 0.1,
+            "candidates": len(threshold_candidates),
+            "selection_rule": (
+                "minimum p95 delay, then p50 delay, then threshold among "
+                "candidates meeting both synthetic targets"
+            ),
+        },
         "synthetic_targets": {
             "maximum_false_alarm_rate": 0.05,
             "maximum_detection_delay_p95_observations": 25,

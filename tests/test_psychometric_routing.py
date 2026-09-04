@@ -315,9 +315,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert sequential_drift["baseline"]["false_alarm_rate"] == 0.212
     assert sequential_drift["baseline"]["detection_delay_p50_observations"] == 6
     assert sequential_drift["baseline"]["detection_delay_p95_observations"] == 17
-    assert sequential_drift["candidate"]["false_alarm_rate"] == 0.014
-    assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 10
-    assert sequential_drift["candidate"]["detection_delay_p95_observations"] == 22
+    assert sequential_drift["threshold_search"]["candidates"] == 11
+    assert sequential_drift["candidate"]["threshold_log_likelihood_ratio"] == 6.1
+    assert sequential_drift["candidate"]["false_alarm_rate"] == 0.048
+    assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 8
+    assert sequential_drift["candidate"]["detection_delay_p95_observations"] == 20
     assert sequential_drift["candidate_meets_synthetic_targets"] is True
     person_fit = report["response_pattern_fit_validation"]
     assert person_fit["method"] == "nonparametric_zu3_rank"
