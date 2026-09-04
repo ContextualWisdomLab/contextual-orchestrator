@@ -89,6 +89,15 @@ Buyer next action: call `run_equal_budget_ablation` and read
   psychometric measurement model: monotonicity alone does not identify a scale
   or establish construct validity, and the paper's selected model-pair and
   two-query examples do not supply uncertainty or invariant measurement proof.
+  In its MIRT equation, the query discrimination vector is an unconstrained
+  learned transform of the query embedding. The paper does not establish a
+  positive orientation for each coordinate, so increasing one fitted ability
+  coordinate need not increase the predicted success probability. Its
+  25-dimensional coordinates also lack anchors or another reported
+  identification convention that would make their axes invariant to rotation,
+  reflection, or rescaling. Binary cross-entropy prediction and face-valid
+  examples therefore cannot, by themselves, prove the claimed monotonic or
+  construct interpretation.
   The gateway does not adopt the paper's stronger interpretation of fitted
   coordinates as stable LLM abilities or query properties. The paper and its
   public implementation report predictive metrics, but do not establish scale

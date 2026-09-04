@@ -2278,6 +2278,12 @@ convergence separately and leaves
 `item_language_domain_effects` `not_executed`. IRT-Router remains an
 IRT-shaped prediction reference, not evidence that its learned coordinates are
 identified, invariant psychometric ability or difficulty measurements.
+Its published MIRT discrimination transform has no reported positive-coordinate
+orientation, and its 25-dimensional latent coordinates have no reported anchor
+or equivalent rotation/scale identification convention. Predictive loss and
+selected examples therefore do not establish monotonic score meaning. CO keeps
+production admission closed until orientation, identification/linking,
+item/model fit, and uncertainty are separately executed on buyer evidence.
 Source commit `b0f3703f` reuses the released Oakes observed-information API on
 1,200 synthetic observations and six known item intercepts. The converged fit
 reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean

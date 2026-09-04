@@ -10,6 +10,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Research guidance now classifies IRT-Router's unconstrained discrimination
+  vectors and unidentified multidimensional coordinates as predictive features,
+  not invariant psychometric measurements; production admission requires
+  explicit orientation, scale identification/linking, fit, and uncertainty.
+
 ### Deprecated
 
 - Internal callers now use
