@@ -12,7 +12,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - The synthetic classification benchmark now chooses a reject-option threshold
   on a development seed under a 2.5% Wilson error ceiling and evaluates it on
-  an independent seed, reporting coverage, selective risk, and query burden.
+  an independent seed against a paired 95% baseline, reporting coverage,
+  selective risk, all-candidate query burden, and directional coverage.
 - The classification screen now reports confidence-resolved coverage and
   conditional accuracy, preserving unresolved candidates instead of hiding
   forced decisions inside aggregate accuracy.

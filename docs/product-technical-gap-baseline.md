@@ -2435,12 +2435,14 @@ into forced classification. The interval resolves 42.5% of candidates with
 1.0 conditional synthetic accuracy, but resolves only 3% within 0.5 of the
 cut. Unresolved candidates therefore remain a buyer-policy and fallback gap;
 this selective result does not change the production gate.
-Source commit `a718b290` measures the risk–coverage frontier without choosing
+Source commit `e1ff2e61` measures the risk–coverage frontier without choosing
 on the evaluation sample. A development-seed rule maximizes coverage subject
-to a 2.5% Wilson 95% error upper bound and selects `z=1.645`. On an independent
-seed it resolves 56% of candidates with zero observed error, a 1.686% upper
-bound, and 5.5625 mean queries among resolved candidates, improving the 95%
-screen's 42.5% coverage and 7.0-query mean. This remains a synthetic KPI:
+to a 2.5% Wilson 95% error upper bound and selects `z=1.645`. On the same
+independent responses, it raises coverage from the `z=1.96` baseline's 44.25%
+to 56% and lowers all-candidate mean queries from 9.88 to 8.395. Paired 95%
+intervals are `[8.75, 14.75]` percentage points and `[-1.715, -1.2625]` queries.
+Observed selective risk is zero with a 1.686% Wilson upper bound; directional
+coverage differs by 3 points. This remains a synthetic KPI:
 buyer-valued rejection cost, fallback behavior, subgroup coverage, calibrated
 intervals, and live provider latency are still missing.
 

@@ -138,11 +138,14 @@ Source `e2cb547f` also reports the abstention boundary directly. The interval
 resolves 42.5% of all candidates with 1.0 conditional synthetic accuracy, but
 only 3% within 0.5 of the cut. Unresolved candidates remain unresolved evidence;
 the benchmark must not silently turn them into production routing decisions.
-Source `a718b290` adds a development-selected, independent-seed reject-option
+Source `e1ff2e61` adds a development-selected, independent-seed reject-option
 screen. Maximizing coverage subject to a 2.5% Wilson 95% error upper bound
-selects `z=1.645`; the held-out seed resolves 56% with zero observed error, a
-1.686% error upper bound, and 5.5625 mean queries among resolved candidates.
-This is a synthetic risk–coverage KPI, not an adopted buyer threshold.
+selects `z=1.645`. Against `z=1.96` on the same holdout responses, coverage
+rises from 44.25% to 56% with paired interval `[8.75, 14.75]` percentage points,
+while all-candidate mean queries fall from 9.88 to 8.395 with paired interval
+`[-1.715, -1.2625]`. Observed selective risk is zero, its Wilson upper bound is
+1.686%, and the positive/negative coverage gap is 3 points. This is a synthetic
+risk–coverage KPI, not an adopted buyer threshold.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

@@ -333,10 +333,12 @@ Buyer next action: call `run_equal_budget_ablation` and read
   classification. *Journal of Machine Learning Research, 11*, 1605–1641.
   https://www.jmlr.org/papers/v11/el-yaniv10a.html
   Grounds risk–coverage evaluation for classification with a reject option.
-  Source `a718b290` selects `z=1.645` on a development seed under a 2.5% Wilson
-  error-upper-bound rule. On an independent seed it resolves 56% of candidates
-  with zero observed error, a 1.686% Wilson upper bound, and 5.5625 mean queries
-  among resolved candidates; buyer costs and live coverage remain unexecuted.
+  Source `e1ff2e61` selects `z=1.645` on a development seed under a 2.5% Wilson
+  error-upper-bound rule. Against `z=1.96` on the same independent responses,
+  coverage rises from 44.25% to 56% and all-candidate mean queries fall from
+  9.88 to 8.395; paired intervals are `[8.75, 14.75]` percentage points and
+  `[-1.715, -1.2625]`. Observed selective risk is zero with a 1.686% Wilson
+  upper bound; buyer costs and live coverage remain unexecuted.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.
