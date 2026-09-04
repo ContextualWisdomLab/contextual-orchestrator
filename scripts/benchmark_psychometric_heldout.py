@@ -10,6 +10,9 @@ import statistics
 import sys
 import time
 
+import fast_mlsirm
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.psychometric_routing import (  # noqa: E402
@@ -232,6 +235,39 @@ def _validate_assignment_design(
     }
 
 
+def _validate_scale_linking() -> dict[str, object]:
+    """Recover a known affine metric change from versioned common-item anchors."""
+    old_discrimination = np.asarray([0.7, 0.9, 1.1, 1.3, 1.5, 1.8])
+    old_intercept = np.asarray([-1.2, -0.5, 0.1, 0.7, 1.3, 1.8])
+    true_slope = 1.3
+    true_intercept = -0.4
+    result = fast_mlsirm.irt_link(
+        old_discrimination,
+        old_intercept,
+        old_discrimination * true_slope,
+        old_intercept + old_discrimination * true_intercept,
+        method="stocking_lord",
+    )
+    return {
+        "method": result.method,
+        "anchor_items": len(old_discrimination),
+        "converged": result.converged,
+        "termination_reason": result.termination_reason,
+        "estimated_slope": result.slope,
+        "estimated_intercept": result.intercept,
+        "true_slope": true_slope,
+        "true_intercept": true_intercept,
+        "true_parameter_rmse": math.sqrt(
+            statistics.fmean(
+                (
+                    (result.slope - true_slope) ** 2,
+                    (result.intercept - true_intercept) ** 2,
+                )
+            )
+        ),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
@@ -239,6 +275,7 @@ def run_benchmark() -> dict[str, object]:
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
     assignment_design = _validate_assignment_design(candidate_evidence)
+    scale_linking = _validate_scale_linking()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -344,6 +381,7 @@ def run_benchmark() -> dict[str, object]:
         "measurement_validity_components": validity_components,
         "measurement_validity_requirements": validity_requirements,
         "assignment_design_validation": assignment_design,
+        "scale_linking_validation": scale_linking,
     }
     assert all(
         math.isfinite(value)

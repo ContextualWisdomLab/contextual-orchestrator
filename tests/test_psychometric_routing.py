@@ -126,6 +126,16 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         0.008942720293704905
     )
     assert assignment["true_value_coverage_rate"] == 1.0
+    linking = report["scale_linking_validation"]
+    assert linking["method"] == "stocking_lord"
+    assert linking["anchor_items"] == 6
+    assert linking["converged"] is True
+    assert linking["termination_reason"] == "tolerance_met"
+    assert linking["estimated_slope"] == pytest.approx(linking["true_slope"])
+    assert linking["estimated_intercept"] == pytest.approx(
+        linking["true_intercept"]
+    )
+    assert linking["true_parameter_rmse"] < 1e-12
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

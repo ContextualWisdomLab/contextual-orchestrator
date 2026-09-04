@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now verifies Stocking–Lord scale linking
+  against a known affine transformation of six common-item anchors and reports
+  convergence plus true-parameter RMSE. Buyer anchors remain unexecuted.
 - The held-out psychometric benchmark now validates a preregistered ε-greedy
   logging design with positive assignment probability for every candidate,
   inverse-propensity value RMSE, and true-value confidence-interval coverage.
