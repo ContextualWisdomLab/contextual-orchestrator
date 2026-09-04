@@ -208,10 +208,14 @@ flowchart LR
   accuracy is `passed`, decision latency is `failed`, and buyer-heldout plus
   measurement-validity work is `not_executed`. Compatibility Booleans remain
   false unless the state is `passed`, so missing evidence cannot authorize use.
+- Source commit `c690ebe7` decomposes measurement validity into scale linking,
+  local independence, candidate-group DIF, item language/domain effects, judge
+  effects, and adaptive exposure. Every component is presently `not_executed`;
+  an aggregate label can no longer hide which evidence is absent.
 
 ## References
 
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
-Song et al., 2025; Lior et al., 2026).
+Song et al., 2025; Lior et al., 2026; Doebler, 2012; Finkelman et al., 2009).

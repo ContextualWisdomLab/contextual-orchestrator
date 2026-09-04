@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The psychometric benchmark now enumerates scale linking, local independence,
+  candidate-group DIF, item language/domain effects, judge effects, and adaptive
+  exposure as separate measurement-validity evidence components instead of one
+  opaque unavailable flag.
 - Psychometric benchmark gates now distinguish `not_executed` buyer and
   measurement-validity evidence from a measured `failed` latency result while
   preserving the existing fail-closed Boolean compatibility fields.

@@ -90,6 +90,20 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Rust implementation already exists in `fast-mlsirm`; owner PR #1748 exposes
   it to Python without inventing a universal cutoff. CO adoption still requires
   a preregistered buyer matrix, multiplicity plan, and decision threshold.
+- Doebler, A. (2012). The problem of bias in person parameter estimation in
+  adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.
+  https://doi.org/10.1177/0146621612443304
+  Shows that item-calibration error and unmodeled testlet/item-generation effects
+  can systematically bias adaptive estimates even when calibration errors are
+  unbiased. Routing therefore cannot treat adaptively observed cells as a dense,
+  ignorable sample.
+- Finkelman, M., Nering, M. L., & Roussos, L. A. (2009). A conditional exposure
+  control method for multidimensional adaptive testing. *Journal of Educational
+  Measurement, 46*(1), 84–103.
+  https://doi.org/10.1111/j.1745-3984.2009.01070.x
+  Grounds explicit randomized exposure control. CO must record the actual
+  selection design/probability before any propensity correction; deterministic
+  winner-only history is not sufficient evidence.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373

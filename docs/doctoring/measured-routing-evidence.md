@@ -111,6 +111,10 @@ Source commit `1309b3ce` separates observed failure from absent evidence:
 accuracy is `passed`, latency is `failed`, and buyer-heldout plus
 measurement-validity gates are `not_executed`. The legacy Boolean view derives
 strictly from `status == "passed"`, preserving fail-closed compatibility.
+Source commit `c690ebe7` makes the measurement-validity denominator explicit:
+scale linking, local independence, correctly oriented candidate-group DIF,
+item-side language/domain effects, judge effects, and adaptive exposure must
+each carry evidence. All six currently report `not_executed`.
 
 ## APA 7 references
 
@@ -121,6 +125,15 @@ using item response theory. *Journal of Educational and Behavioral Statistics,
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176
+
+Doebler, A. (2012). The problem of bias in person parameter estimation in
+adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.
+https://doi.org/10.1177/0146621612443304
+
+Finkelman, M., Nering, M. L., & Roussos, L. A. (2009). A conditional exposure
+control method for multidimensional adaptive testing. *Journal of Educational
+Measurement, 46*(1), 84–103.
+https://doi.org/10.1111/j.1745-3984.2009.01070.x
 
 Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., &
 Rubin, D. B. (2013). *Bayesian data analysis* (3rd ed.). CRC Press.

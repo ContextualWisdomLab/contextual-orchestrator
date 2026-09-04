@@ -2202,6 +2202,10 @@ CO source commit `1309b3ce` also stops conflating this absent evidence with a
 failed measurement: its report marks buyer-heldout and validity gates
 `not_executed`, the measured latency gate `failed`, and accuracy `passed`; only
 `passed` maps to the compatibility Boolean or production authorization.
+Source commit `c690ebe7` expands the validity denominator into six named
+components. All remain `not_executed`; in particular, winner-only adaptive
+history carries no recorded randomized exposure probability and therefore
+cannot support an invented propensity correction.
 
 ## 7. Delivery gates
 
