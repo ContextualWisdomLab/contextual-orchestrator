@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now measures sequential probability-drift
+  detection delay and pre-change false alarms with a bounded one-stream CUSUM
+  screen, without claiming the cited multistream compound-risk procedure.
 - The held-out psychometric benchmark now distinguishes prediction for unseen
   queries from prediction for unseen candidate deployments. The latter remains
   separate and reports zero psychometric prediction coverage instead of

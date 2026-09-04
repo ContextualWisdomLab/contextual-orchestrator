@@ -119,6 +119,14 @@ not a significance test. `parameter_invariance` remains `not_executed` until
 versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
+Source commit `fafa7bee` adds detection delay as a separate temporal KPI,
+motivated by Chen, Lee, and Li (2022). In a seeded one-stream Bernoulli screen,
+success probability changes from `0.8` to `0.3` after observation 100 and the
+CUSUM alarm occurs at observation 107 without a pre-change alarm. This bounded
+calculation is not the paper's multistream Bayesian compound-risk procedure.
+`sequential_drift` remains `not_executed` until buyer time-series observations,
+declared change risks, and preregistered false-alarm and delay targets exist.
+
 Source commit `5c6ba17a` adds a separate candidate-roster invariance screen
 motivated by Tinsley and Dawis (1975). Full and reduced synthetic rosters are
 calibrated independently and linked through 200 common items. For the 16

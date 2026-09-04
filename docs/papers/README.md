@@ -213,6 +213,16 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Source commit `54833bd8` executes the latter path across 24 contexts and
   records zero psychometric prediction coverage. It therefore cannot claim
   cold-start predictive fit for a newly introduced or changed deployment.
+- Chen, Y., Lee, Y.-H., & Li, X. (2022). Item pool quality control in
+  educational testing: Change point model, compound risk, and sequential
+  detection. *Journal of Educational and Behavioral Statistics, 47*(3),
+  322–352. https://doi.org/10.3102/10769986211059085
+  Grounds monitoring psychometric drift as a sequential decision with explicit
+  false-detection and missed-detection risks. Source commit `fafa7bee` adds a
+  narrower one-stream Bernoulli CUSUM calculation: a seeded shift from success
+  probability `0.8` to `0.3` alarms after seven post-change observations with
+  no pre-change alarm. It is not the paper's multistream Bayesian compound-risk
+  procedure and supplies no buyer threshold.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.
   https://doi.org/10.1007/BF02289447
