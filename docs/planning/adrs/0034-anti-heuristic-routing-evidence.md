@@ -158,6 +158,9 @@ flowchart LR
   strengthens the accuracy evidence without opening the production gate.
 - Report-contract commit `2cc8427f` makes every point delta explicit and fails
   the focused test if a metric loses its paired interval or falls outside it.
+- Gate commit `079b3f80` requires accuracy, latency, buyer-heldout, and
+  measurement-validity decisions to all pass. The synthetic run passes only
+  accuracy and therefore emits `production_default_change_allowed=false`.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted

@@ -83,6 +83,10 @@ cannot alter live routing while the latency and buyer-validity gates remain open
 Report-contract commit `2cc8427f` emits each candidate-minus-baseline point
 delta beside its interval and tests that the metric sets match and every point
 lies inside its reported interval.
+Fail-closed gate commit `079b3f80` separately reports accuracy non-inferiority,
+decision-latency improvement, buyer-heldout status, and measurement validity.
+This synthetic run passes only accuracy; therefore
+`production_default_change_allowed` is false.
 
 ## APA 7 references
 

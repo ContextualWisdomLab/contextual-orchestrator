@@ -26,6 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Decision timing repeats 200 times per context, alternates baseline/candidate
   execution order, and reports each point delta beside its paired interval, so
   an accuracy interval cannot silently authorize a slower production route.
+  The report also fails closed across accuracy, decision latency, buyer-heldout,
+  and measurement-validity gates; synthetic evidence alone always leaves the
+  production-default decision false.
 - The seeded held-out benchmark can now opt into interpolation of the two
   nearest positive-cosine psychometric score rows and reports Brier score, log
   loss, top-choice regret, and decision p50/p95. Live routing retains the
