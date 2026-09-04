@@ -82,6 +82,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   exist, fitted values remain deployment- and sample-conditional routing
   evidence rather than psychometric measurements that can be compared across
   model versions, provider policies, domains, or time.
+- Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
+  using item response theory. *Journal of Educational and Behavioral
+  Statistics, 22*(3), 265–289.
+  https://doi.org/10.3102/10769986022003265
+  Grounds pairwise signed X2/G2 diagnostics for dichotomous responses. The
+  Rust implementation already exists in `fast-mlsirm`; owner PR #1748 exposes
+  it to Python without inventing a universal cutoff. CO adoption still requires
+  a preregistered buyer matrix, multiplicity plan, and decision threshold.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373

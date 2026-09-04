@@ -200,10 +200,14 @@ flowchart LR
   correction have no buyer-held-out evidence yet. Consequently these fitted
   values may order candidates only inside the current deployment sample and
   cannot be published as stable model abilities.
+- `fast-mlsirm` owner PR #1748 at `f47095edc631a2364e9b3517c315f6d5de0efc5d`
+  exposes its existing Rust Chen-Thissen signed X2/G2 local-dependence indices
+  to Python. This closes an API prerequisite only; it does not satisfy the gate
+  until a buyer matrix, multiplicity plan, and threshold are preregistered.
 
 ## References
 
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
-Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
+Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
 Song et al., 2025; Lior et al., 2026).

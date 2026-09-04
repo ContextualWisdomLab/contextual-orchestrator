@@ -110,6 +110,10 @@ and production gates remain closed because the interval upper bound is positive.
 
 ## APA 7 references
 
+Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
+using item response theory. *Journal of Educational and Behavioral Statistics,
+22*(3), 265–289. https://doi.org/10.3102/10769986022003265
+
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176

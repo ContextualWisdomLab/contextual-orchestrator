@@ -2192,6 +2192,13 @@ live work item.
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
 | P2 | Frontend component inventory is not applicable to the operative admin console. | An unwired `admin_ui/` React + Storybook scaffold and workspace entry exist, but the inline stdlib admin remains the served interface. | Keep the existing Figma artifact record; defer Storybook adoption until the frontend is built and wired under ADR 0033's triggers. |
 
+The local-independence prerequisite now has an owner-side implementation path:
+`fast-mlsirm` PR [#1748](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1748)
+at exact head `f47095edc631a2364e9b3517c315f6d5de0efc5d` exposes the existing
+Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
+evidence, not released consumer evidence, and it does not open the routing gate
+without a preregistered buyer matrix, multiplicity plan, and threshold.
+
 ## 7. Delivery gates
 
 For each PR, perform the following loop on the current head: inspect changed
