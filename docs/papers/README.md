@@ -127,6 +127,19 @@ Buyer next action: call `run_equal_budget_ablation` and read
   drift item and reduces synthetic TCC-area difference from `0.123355` to zero.
   The released backward-only heuristic uses a fixed threshold and is not the
   paper's complete entry-and-removal procedure.
+- American Educational Research Association, American Psychological
+  Association, & National Council on Measurement in Education. (2014).
+  *Standards for educational and psychological testing*. American Educational
+  Research Association. https://www.testingstandards.net/open-access-files.html
+  Standards 5.16–5.18 require evidence that scores retain comparable meaning
+  across alternate item sets and that linking limitations are documented.
+- Moses, T. P., & Holland, P. W. (2008). Notes on a general framework for
+  observed score equating (Research Report No. RR-08-59). Educational Testing
+  Service. https://doi.org/10.1002/j.2333-8504.2008.tb02145.x
+  Grounds observed-score equating and its uncertainty boundary. Source commit
+  `1dce9688` recovers a known slope `2` and intercept `1`: raw cross-form RMSE
+  `6.782330` falls to zero, and 300-bootstrap 95% intervals cover all 11 known
+  equivalent scores. Comparable buyer populations or anchors remain required.
 - Meijer, R. R. (1996). Person-fit research: An introduction. *Applied
   Measurement in Education, 9*(1), 3–8.
   https://doi.org/10.1207/s15324818ame0901_2

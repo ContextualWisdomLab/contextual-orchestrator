@@ -126,6 +126,15 @@ item and reduces the remaining difference to zero. Its caller-supplied `0.05`
 threshold and no-reentry search are narrower than the published method, so the
 result cannot supply a universal drift decision or open the buyer gate.
 
+Source commit `1dce9688` adds the alternate-form score-comparability boundary
+required by AERA, APA, and NCME (2014, Standards 5.16–5.18). A released linear
+equating API recovers known slope `2` and intercept `1`, reducing raw cross-form
+RMSE from `6.782330` to zero; 300-bootstrap 95% intervals cover all 11 known
+equivalent scores. Equal synthetic form populations make this a calculation
+contract, not evidence that versioned buyer forms are interchangeable.
+`score_equating` remains `not_executed` pending buyer forms, comparable
+populations or anchors, and preregistered equating-error targets.
+
 Source commit `a18e25f7` adds the response-pattern screen described by Meijer
 (1996) and Tendeiro et al. (2016). The released nonparametric ZU3 calculation
 ranks one injected inverted pattern first among 1,000 synthetic candidates and

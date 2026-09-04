@@ -2293,6 +2293,14 @@ one iteration. This complements parameter-distance screening but uses a fixed
 synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
 stepwise method. Buyer recalibrations and preregistered review rules remain
 absent, so the validity gate stays closed.
+Source commit `1dce9688` adds a separate alternate-form score-equating check.
+For 1,100 observations per form under a known `y = 2x + 1` transformation,
+raw cross-form RMSE is `6.782330`; released linear equating recovers slope `2`
+and intercept `1` exactly, reducing RMSE to zero. Three hundred bootstrap 95%
+intervals cover all 11 known equivalent scores, with maximum standard error
+`0.351886`. Equal synthetic form populations do not prove buyer score
+comparability, so `score_equating` remains `not_executed` pending versioned
+buyer forms, comparable populations or anchors, and registered error targets.
 Source commit `a18e25f7` exercises the released nonparametric person-fit API on
 1,000 synthetic candidate response patterns. The injected inverted pattern
 ranks first and has ZU3 separation `1.818719` from the next-highest pattern.

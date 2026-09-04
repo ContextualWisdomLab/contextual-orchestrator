@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now recovers a known alternate-form score
+  transformation and reports bootstrap equating uncertainty, while keeping
+  buyer score comparability unexecuted.
 - The held-out psychometric benchmark now distinguishes linked parameter drift
   from its aggregate test-characteristic-curve impact and detects the one
   injected function-changing item without claiming a universal cutoff.
