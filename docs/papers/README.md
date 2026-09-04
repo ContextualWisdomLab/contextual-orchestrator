@@ -304,6 +304,18 @@ Buyer next action: call `run_equal_budget_ablation` and read
   interval includes zero, so that accuracy improvement is not established.
   This one-dimensional onboarding screen neither identifies an invariant model
   ability nor measures live per-request decision latency.
+- Luo, X., Kim, D., & Dickison, P. (2018). Projection-based stopping rules for
+  computerized adaptive testing in licensure testing. *Applied Psychological
+  Measurement, 42*(4), 275–290.
+  https://doi.org/10.1177/0146621617726790
+  Grounds distinguishing classification-oriented confidence-interval stopping
+  from a uniform score-precision target. Source `f4cceb59` stops when the 95%
+  normal interval excludes a declared zero cut or at 12 queries. Across 400
+  known synthetic candidates it averages 9.875 queries, stops early for 41%,
+  and exactly matches the fixed-length decisions and 0.9125 accuracy; the
+  paired query-delta interval is `[-2.425, -1.835]` and the accuracy-delta
+  interval is `[0, 0]`. Near-cut behavior, normal-interval calibration, buyer
+  decision costs, and live query latency remain unvalidated.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

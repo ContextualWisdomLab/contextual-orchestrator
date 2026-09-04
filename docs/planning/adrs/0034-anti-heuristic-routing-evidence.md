@@ -120,6 +120,16 @@ live routing latency; the one-dimensional synthetic bank does not establish
 construct validity, invariance, or buyer performance. Production admission
 remains unchanged.
 
+Source `f4cceb59` adds a decision-oriented stopping screen at an explicit
+synthetic cut of zero. A 95% normal interval that excludes the cut stops
+calibration early; otherwise it truncates at 12 queries. Across the same 400
+known candidates, it averages 9.875 queries and stops early for 41%, while its
+decisions and 0.9125 accuracy exactly match the fixed-length path. The paired
+query-delta interval is `[-2.425, -1.835]` and the accuracy-delta interval is
+`[0, 0]`. This does not establish calibrated interval coverage, acceptable
+near-cut risk, buyer decision costs, or provider-call latency. It remains a
+benchmark design candidate, not a production stopping rule.
+
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges
 after 941 iterations and recovers true `delta=-0.8` as `-0.789650` (absolute

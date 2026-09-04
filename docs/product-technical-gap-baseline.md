@@ -2416,6 +2416,14 @@ interval includes zero, so no general theta-accuracy improvement is claimed.
 These are calibration-query and prediction-error KPIs, not live decision
 latency or buyer evidence; zero-observation candidate coverage and the
 production gate therefore remain unchanged.
+Source commit `f4cceb59` separately tests classification-oriented stopping at a
+declared synthetic cut of zero. Stopping when a 95% normal interval excludes
+the cut, with a 12-query maximum, averages 9.875 queries and stops early for
+41% of 400 candidates. It exactly matches the fixed-length decisions and
+0.9125 accuracy; paired intervals are `[-2.425, -1.835]` queries and `[0, 0]`
+accuracy. Buyer cuts and costs, near-cut risk, interval calibration, and live
+provider latency remain absent, so this result does not change the production
+gate.
 
 ## 7. Delivery gates
 
