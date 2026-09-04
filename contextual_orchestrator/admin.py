@@ -1207,7 +1207,9 @@ Summarize this research thread and verify claims.</textarea>
           throw new Error("Audit state request failed with HTTP " + response.status);
         }
         const payload = await response.json();
+        state.agents = payload.agents || [];
         state.recent_audit_events = payload.recent_audit_events || [];
+        renderAgents();
         renderAudit();
         return true;
       } catch (error) {
