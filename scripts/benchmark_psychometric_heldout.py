@@ -42,6 +42,8 @@ PERSON_FIT_SEED = 260_910
 DIMENSIONALITY_SAMPLE_SIZE = 1_000
 DIMENSIONALITY_SEED = 260_911
 DIMENSIONALITY_ITERATIONS = 360
+MODEL_FIT_SAMPLE_SIZE = 1_200
+MODEL_FIT_SEED = 260_912
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -388,6 +390,72 @@ def _validate_construct_dimensionality() -> dict[str, object]:
     }
 
 
+def _validate_global_model_fit() -> dict[str, object]:
+    """Separate a fitted one-factor design from known two-factor misspecification."""
+    item_count = 10
+    item_difficulty = np.tile(np.linspace(-1.2, 1.2, item_count // 2), 2)
+    factor_id = np.zeros(item_count, dtype=np.int64)
+    config = fast_mlsirm.FitConfig(
+        model="MIRT",
+        estimator="mmle",
+        max_iter=1_000,
+        latent_dim=1,
+        q_theta=15,
+        q_xi=7,
+        rust_device="cpu",
+        seed=MODEL_FIT_SEED,
+    )
+
+    def fit_case(dimensions: int) -> dict[str, float | bool | str]:
+        generator = np.random.default_rng(MODEL_FIT_SEED)
+        ability = generator.normal(size=(MODEL_FIT_SAMPLE_SIZE, dimensions))
+        item_dimension = np.repeat(np.arange(dimensions), item_count // dimensions)
+        probabilities = 1.0 / (
+            1.0
+            + np.exp(-(ability[:, item_dimension] - item_difficulty[None, :]))
+        )
+        responses = (generator.random(probabilities.shape) < probabilities).astype(
+            float
+        )
+        result = fast_mlsirm.fit(responses, factor_id, config)
+        diagnostics = fast_mlsirm.fit_diagnostics(
+            responses,
+            result.params,
+            factor_id,
+            model="MIRT",
+            include_m2=True,
+            m2_q_theta=15,
+            estimator="mmle",
+            population=result.population,
+            convergence_status=result.convergence_status,
+        ).model_fit
+        return {
+            "convergence_status": result.convergence_status,
+            "m2": float(diagnostics["m2"]),
+            "degrees_of_freedom": float(diagnostics["m2_df"]),
+            "p_value": float(diagnostics["m2_p_value"]),
+            "rmsea": float(diagnostics["rmsea"]),
+            "srmr": float(diagnostics["srmr"]),
+            "cfi": float(diagnostics["cfi"]),
+            "inference_valid": bool(diagnostics["m2_inference_valid"]),
+        }
+
+    fitted_case = fit_case(1)
+    misspecified_case = fit_case(2)
+    return {
+        "method": "limited_information_m2",
+        "sample_size_per_case": MODEL_FIT_SAMPLE_SIZE,
+        "seed": MODEL_FIT_SEED,
+        "items": item_count,
+        "fitted_one_factor": fitted_case,
+        "misspecified_two_factor": misspecified_case,
+        "known_misspecification_detected": (
+            fitted_case["p_value"] >= 0.05
+            and misspecified_case["p_value"] < 0.05
+        ),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -569,6 +637,7 @@ def run_benchmark() -> dict[str, object]:
     parameter_invariance = _validate_parameter_invariance()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
+    global_model_fit = _validate_global_model_fit()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -608,6 +677,7 @@ def run_benchmark() -> dict[str, object]:
         "parameter_invariance": "not_executed",
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
+        "global_model_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -654,6 +724,17 @@ def run_benchmark() -> dict[str, object]:
                 "Pearson-correlation PCA parallel analysis on dichotomous responses "
                 "is a dimensionality screen, not construct identification or "
                 "confirmatory factor validation"
+            ),
+        },
+        "global_model_fit": {
+            "owner_contract_status": "released_limited_information",
+            "required_evidence": (
+                "converged buyer calibration, complete candidate-by-criterion "
+                "responses, a preregistered model, and held-out fit review"
+            ),
+            "known_limit": (
+                "M2 sensitivity depends on the misspecification and sample design; "
+                "one global statistic cannot establish construct validity"
             ),
         },
         "local_independence": {
@@ -731,6 +812,7 @@ def run_benchmark() -> dict[str, object]:
         "parameter_invariance_validation": parameter_invariance,
         "response_pattern_fit_validation": response_pattern_fit,
         "construct_dimensionality_validation": construct_dimensionality,
+        "global_model_fit_validation": global_model_fit,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

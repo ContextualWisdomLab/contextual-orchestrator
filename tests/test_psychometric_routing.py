@@ -89,6 +89,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "parameter_invariance": "not_executed",
         "response_pattern_fit": "not_executed",
         "construct_dimensionality": "not_executed",
+        "global_model_fit": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -117,6 +118,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "not construct identification" in requirements[
         "construct_dimensionality"
     ]["known_limit"]
+    assert requirements["global_model_fit"]["owner_contract_status"] == (
+        "released_limited_information"
+    )
+    assert "cannot establish construct validity" in requirements["global_model_fit"][
+        "known_limit"
+    ]
     assert (
         requirements["local_independence"]["owner_contract_status"]
         == "owner_pr_pending"
@@ -209,6 +216,27 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert dimensionality["leading_adjusted_eigenvalues"] == pytest.approx(
         [1.68362962, 1.64330776, 0.84748594]
     )
+    model_fit = report["global_model_fit_validation"]
+    assert model_fit["method"] == "limited_information_m2"
+    assert (
+        model_fit["sample_size_per_case"]
+        == heldout_benchmark.MODEL_FIT_SAMPLE_SIZE
+    )
+    assert model_fit["seed"] == heldout_benchmark.MODEL_FIT_SEED
+    assert model_fit["items"] == 10
+    assert model_fit["known_misspecification_detected"] is True
+    fitted_case = model_fit["fitted_one_factor"]
+    misspecified_case = model_fit["misspecified_two_factor"]
+    assert fitted_case["convergence_status"] == "converged"
+    assert fitted_case["inference_valid"] is True
+    assert fitted_case["m2"] == pytest.approx(45.74431659142287)
+    assert fitted_case["p_value"] == pytest.approx(0.10561931269955144)
+    assert fitted_case["rmsea"] == pytest.approx(0.01600095060876691)
+    assert misspecified_case["convergence_status"] == "converged"
+    assert misspecified_case["inference_valid"] is True
+    assert misspecified_case["m2"] == pytest.approx(287.1636779430094)
+    assert misspecified_case["p_value"] == pytest.approx(2.2660557889816854e-41)
+    assert misspecified_case["rmsea"] == pytest.approx(0.07751712400695583)
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
