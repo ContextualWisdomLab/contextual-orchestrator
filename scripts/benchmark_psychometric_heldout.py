@@ -104,6 +104,9 @@ def _evaluate_quality(
 ) -> tuple[dict[str, float], dict[str, list[float]]]:
     context_brier: list[float] = []
     context_log_loss: list[float] = []
+    context_calibration_logit_rmse: list[float] = []
+    predicted_logits: list[float] = []
+    truth_logits: list[float] = []
     regrets: list[float] = []
     for context_index in range(TRAIN_CONTEXTS):
         angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
@@ -117,25 +120,43 @@ def _evaluate_quality(
         }
         brier_scores: list[float] = []
         log_losses: list[float] = []
+        calibration_logit_errors: list[float] = []
         for model_id in MODEL_IDS:
             probability = min(max(predicted[model_id], 1e-12), 1.0 - 1e-12)
-            target = truth[model_id]
+            target = min(max(truth[model_id], 1e-12), 1.0 - 1e-12)
+            predicted_logit = math.log(probability / (1.0 - probability))
+            truth_logit = math.log(target / (1.0 - target))
+            predicted_logits.append(predicted_logit)
+            truth_logits.append(truth_logit)
+            calibration_logit_errors.append((predicted_logit - truth_logit) ** 2)
             brier_scores.append(_expected_brier(probability, target))
             log_losses.append(
                 -(target * math.log(probability) + (1.0 - target) * math.log(1.0 - probability))
             )
         context_brier.append(statistics.fmean(brier_scores))
         context_log_loss.append(statistics.fmean(log_losses))
+        context_calibration_logit_rmse.append(
+            math.sqrt(statistics.fmean(calibration_logit_errors))
+        )
         selected = ranked[0][0]
         regrets.append(max(truth.values()) - truth[selected])
 
+    calibration_slope, calibration_intercept = statistics.linear_regression(
+        predicted_logits, truth_logits
+    )
     return {
         "brier_score": statistics.fmean(context_brier),
         "log_loss": statistics.fmean(context_log_loss),
+        "calibration_intercept": calibration_intercept,
+        "calibration_slope": calibration_slope,
+        "calibration_logit_rmse": statistics.fmean(
+            context_calibration_logit_rmse
+        ),
         "top_choice_regret": statistics.fmean(regrets),
     }, {
         "brier_score": context_brier,
         "log_loss": context_log_loss,
+        "calibration_logit_rmse": context_calibration_logit_rmse,
         "top_choice_regret": regrets,
     }
 
@@ -903,7 +924,12 @@ def run_benchmark() -> dict[str, object]:
     gate_status = {
         "accuracy_noninferior": "passed" if all(
             delta_ci95[metric][1] <= 0.0
-            for metric in ("brier_score", "log_loss", "top_choice_regret")
+            for metric in (
+                "brier_score",
+                "log_loss",
+                "calibration_logit_rmse",
+                "top_choice_regret",
+            )
         ) else "failed",
         "buyer_heldout": "not_executed",
         "decision_latency_improved": (

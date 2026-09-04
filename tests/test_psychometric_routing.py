@@ -84,6 +84,22 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "decision_latency_improved": "failed",
         "measurement_validity": "not_executed",
     }
+    assert report["baseline"]["calibration_slope"] == pytest.approx(
+        0.9914448613738104
+    )
+    assert report["calibration_slope"] == pytest.approx(1.014029928095512)
+    assert report["baseline"]["calibration_logit_rmse"] == pytest.approx(
+        0.2312349809472711
+    )
+    assert report["calibration_logit_rmse"] == pytest.approx(
+        0.025803494528640156
+    )
+    assert report["delta"]["calibration_logit_rmse"] == pytest.approx(
+        -0.20543148641863096
+    )
+    assert report["delta_ci95"]["calibration_logit_rmse"] == pytest.approx(
+        [-0.20803038507771457, -0.20292440265781464]
+    )
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
             "parameter_invariance": "not_executed",
