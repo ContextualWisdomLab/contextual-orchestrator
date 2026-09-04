@@ -9,6 +9,7 @@ import random
 import statistics
 import sys
 import time
+from types import SimpleNamespace
 
 import fast_mlsirm
 import numpy as np
@@ -342,6 +343,41 @@ def _validate_parameter_invariance() -> dict[str, object]:
         "maximum_stable_item_drift": float(np.max(item_drift[anchor_items])),
         "injected_item_drift": float(item_drift[expected_drift_items[0]]),
         "linking_converged": linking.converged,
+    }
+
+
+def _validate_functional_drift() -> dict[str, object]:
+    """Detect the known item whose drift changes the test characteristic curve."""
+    old = SimpleNamespace(
+        alpha=np.zeros(8),
+        b=np.linspace(-1.4, 1.4, 8),
+        zeta=np.zeros((8, 1)),
+        tau=-30.0,
+    )
+    new = SimpleNamespace(
+        alpha=old.alpha.copy(),
+        b=old.b.copy(),
+        zeta=old.zeta.copy(),
+        tau=old.tau,
+    )
+    expected_drift_items = [6]
+    new.b[expected_drift_items] += 0.8
+    result = fast_mlsirm.tcc_drift(
+        old,
+        new,
+        np.zeros(8, dtype=np.int64),
+        "MIRT",
+        threshold=0.05,
+        q_theta=21,
+        q_xi=5,
+    )
+    return {
+        "method": "backward_tcc_area_elimination",
+        "expected_drift_items": expected_drift_items,
+        "detected_drift_items": result["drifted"],
+        "area_trace": result["area_trace"],
+        "iterations": result["iterations"],
+        "termination_reason": result["termination_reason"],
     }
 
 
@@ -788,6 +824,7 @@ def run_benchmark() -> dict[str, object]:
     assignment_design = _validate_assignment_design(candidate_evidence)
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
+    functional_drift = _validate_functional_drift()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
@@ -1002,6 +1039,7 @@ def run_benchmark() -> dict[str, object]:
         "assignment_design_validation": assignment_design,
         "scale_linking_validation": scale_linking,
         "parameter_invariance_validation": parameter_invariance,
+        "functional_drift_validation": functional_drift,
         "response_pattern_fit_validation": response_pattern_fit,
         "construct_dimensionality_validation": construct_dimensionality,
         "global_model_fit_validation": global_model_fit,

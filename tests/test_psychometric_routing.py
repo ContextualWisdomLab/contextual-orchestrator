@@ -209,6 +209,15 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert invariance["maximum_stable_item_drift"] == 0.0
     assert invariance["injected_item_drift"] == pytest.approx(0.5656854249492381)
     assert invariance["linking_converged"] is True
+    functional_drift = report["functional_drift_validation"]
+    assert functional_drift["method"] == "backward_tcc_area_elimination"
+    assert functional_drift["expected_drift_items"] == [6]
+    assert functional_drift["detected_drift_items"] == [6]
+    assert functional_drift["area_trace"] == pytest.approx(
+        [0.12335534738279283, 0.0]
+    )
+    assert functional_drift["iterations"] == 1
+    assert functional_drift["termination_reason"] == "threshold_met"
     person_fit = report["response_pattern_fit_validation"]
     assert person_fit["method"] == "nonparametric_zu3_rank"
     assert person_fit["sample_size"] == heldout_benchmark.PERSON_FIT_SAMPLE_SIZE
