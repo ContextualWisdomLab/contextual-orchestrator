@@ -316,7 +316,7 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
-| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Bytez               | `BYTEZ_API_KEY`          | raw token          |
 | Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
@@ -330,9 +330,14 @@ When serving the persisted agents, pass the same host with
 `--allowed-provider-host`; startup discovery reads this injected runtime policy
 and never re-reads or promotes gateway environment values.
 
-Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
+Bytez discovery sends the provider token without the OpenAI-compatible
+`Bearer` prefix. That provider-specific behavior is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
-doesn't use the OpenAI-compatible default.
+doesn't use the default. Discovery checks `task=chat` first and then the
+documented chat-completion-compatible `task=text-generation` catalog. It does
+not issue an unfiltered request. If both catalogs are empty or fail, refresh
+fails closed with a bounded error code; a persisted last-known-good catalog is
+kept unchanged.
 
 Register any subset of the provider keys, then discover:
 

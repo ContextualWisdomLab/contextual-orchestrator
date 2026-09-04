@@ -25,8 +25,8 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
-from urllib.parse import quote, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from .chat_capability import (
     is_general_chat_agent_model_id,
@@ -339,6 +339,7 @@ class ProviderModelSource:
     auth_scheme: str = "Bearer"
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
+    fallback_task_filters: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     privacy_policy_urls: tuple[str, ...] = ()
     bootstrap_required: bool = True
@@ -457,6 +458,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
+        fallback_task_filters=("text-generation",),
         capabilities=("chat",),
     ),
 )
@@ -1479,6 +1481,92 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
     return _deduplicate_discovered_models(discovered)
 
 
+def _url_with_task_filter(url: str, task_filter: str) -> str:
+    """Return a provider URL with one encoded task filter."""
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["task"] = task_filter
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
+
+
+def _fetch_provider_json_with_retry(
+    fetch: Callable[..., Any],
+    url: str,
+    *,
+    timeout: float,
+    fetch_kwargs: Mapping[str, Any],
+) -> tuple[Any, Exception | None]:
+    """Fetch one catalog with the shared bounded transient retry contract."""
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
+        try:
+            return fetch(url, timeout=attempt_timeout, **fetch_kwargs), None
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            OSError,
+            RuntimeError,
+        ) as exc:
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    return None, last_exc
+
+
+def _discover_bytez_task_catalog(
+    source: ProviderModelSource,
+    *,
+    fetch: Callable[..., Any],
+    timeout: float,
+    fetch_kwargs: Mapping[str, Any],
+) -> list[DiscoveredModel]:
+    """Discover the first non-empty documented chat-compatible Bytez task."""
+    task_filters = tuple(
+        dict.fromkeys((source.task_filter, *source.fallback_task_filters))
+    )
+    last_exc: Exception | None = None
+    for task_filter in task_filters:
+        if not task_filter:
+            continue
+        payload, failure = _fetch_provider_json_with_retry(
+            fetch,
+            _url_with_task_filter(source.list_url, task_filter),
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
+        )
+        if failure is not None:
+            last_exc = failure
+            _LOGGER.info(
+                "discovery_task_result account=%s task=%s outcome=failed error_code=%s",
+                source.provider_name,
+                task_filter,
+                _provider_discovery_error_code(failure),
+            )
+            continue
+        discovered = _parse_bytez(payload, source)
+        _LOGGER.info(
+            "discovery_task_result account=%s task=%s outcome=%s model_count=%d",
+            source.provider_name,
+            task_filter,
+            "succeeded" if discovered else "empty",
+            len(discovered),
+        )
+        if discovered:
+            return discovered
+    if last_exc is not None:
+        raise ProviderDiscoveryError(
+            source.provider_name,
+            _provider_discovery_error_code(last_exc),
+        ) from None
+    raise ProviderDiscoveryError(source.provider_name, "empty_provider_catalog")
+
+
 def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
     """Read public OpenRouter ZDR evidence for discovered provider models."""
     api_key = get_credential("OPENROUTER_API_KEY") or ""
@@ -1572,7 +1660,7 @@ def discover_provider_models(
     started = time.monotonic()
     url = source.list_url
     if source.task_filter:
-        url = f"{url}?task={source.task_filter}"
+        url = _url_with_task_filter(url, source.task_filter)
     fetch = (
         _fetch_configured_gateway_json
         if source.provider_name == "configured_gateway"
@@ -1583,25 +1671,19 @@ def discover_provider_models(
         "auth_scheme": source.auth_scheme,
         **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
     }
-    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
-    payload: Any = None
-    last_exc: Exception | None = None
-    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
-        try:
-            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
-            last_exc = None
-            break
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
-            # OSError covers ConnectionError/reset failures that are not URLError
-            # subclasses, and RuntimeError covers the configured-gateway transport's
-            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
-            # validation failures, so a raw provider transport failure can never
-            # escape the discovery boundary with provider text attached.
-            last_exc = exc
-            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
-            if is_last_attempt or not is_transient_error(exc):
-                break
-            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if source.style == "bytez" and source.fallback_task_filters:
+        return _discover_bytez_task_catalog(
+            source,
+            fetch=fetch,
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
+        )
+    payload, last_exc = _fetch_provider_json_with_retry(
+        fetch,
+        url,
+        timeout=timeout,
+        fetch_kwargs=fetch_kwargs,
+    )
     if last_exc is not None:
         error_code = _provider_discovery_error_code(last_exc)
         if _LOGGER.isEnabledFor(logging.DEBUG):

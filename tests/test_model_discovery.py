@@ -1921,6 +1921,98 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert discovered[0].is_free is False
 
 
+def test_discover_bytez_falls_back_to_chat_compatible_task_catalogs() -> None:
+    """An empty chat filter must not hide text-generation chat candidates."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    seen_urls: list[str] = []
+
+    def urlopen(request, timeout=None, **_kwargs):
+        seen_urls.append(request.full_url)
+        if request.full_url.endswith("task=chat"):
+            return _Response({"error": None, "output": []})
+        if request.full_url.endswith("task=text-generation"):
+            return _Response(
+                {
+                    "error": None,
+                    "output": [
+                        {
+                            "modelId": "Qwen/Qwen3-4B",
+                            "task": "text-generation",
+                            "meterPrice": "0 / sec",
+                        }
+                    ],
+                }
+            )
+        raise AssertionError(f"unexpected Bytez task request: {request.full_url}")
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert [model.model_id for model in discovered] == ["Qwen/Qwen3-4B"]
+    assert seen_urls == [
+        "https://api.bytez.com/models/v2/list/models?task=chat",
+        "https://api.bytez.com/models/v2/list/models?task=text-generation",
+    ]
+
+
+def test_discover_bytez_all_empty_is_explicit_fail_closed_evidence() -> None:
+    """Successful empty task catalogs are not a healthy zero-model refresh."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=_Response({"error": None, "output": []}),
+    ):
+        with pytest.raises(ProviderDiscoveryError) as excinfo:
+            discover_provider_models(source)
+
+    assert excinfo.value.error_code == "empty_provider_catalog"
+
+
+def test_discover_bytez_failure_telemetry_excludes_response_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Task fallback telemetry exposes only allowlisted failure classes."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urllib.error.HTTPError(
+                source.list_url,
+                500,
+                "upstream-secret-detail",
+                hdrs=None,
+                fp=None,
+            ),
+        ),
+        caplog.at_level(logging.INFO),
+        pytest.raises(ProviderDiscoveryError) as excinfo,
+    ):
+        discover_provider_models(source)
+
+    assert excinfo.value.error_code == "http_status_500"
+    assert "task=chat outcome=failed error_code=http_status_500" in caplog.text
+    assert (
+        "task=text-generation outcome=failed error_code=http_status_500"
+        in caplog.text
+    )
+    assert "upstream-secret-detail" not in caplog.text
+    assert "bytez-secret" not in caplog.text
+
+
 def test_discover_bytez_marks_zero_meter_price_as_free() -> None:
     """A Bytez row whose real ``meterPrice`` rate is exactly zero is free.
 

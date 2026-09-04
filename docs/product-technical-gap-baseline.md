@@ -117,6 +117,30 @@ Focused and proportional verification run on the exact local head:
 
 Total exact local evidence for this unit: `163 passed` across the touched
 discovery, persistence, client-boundary, CLI, and contract surfaces.
+## 2026-09-04 Bytez discovery: filtered empty catalogs and upstream 5xx are distinct fail-closed states
+
+At `origin/main` `60c562de`, an authenticated, bounded live probe loaded only
+`BYTEZ_API_KEY` from the operator's local `.env` and emitted no token, response
+body, or upstream error text. The earlier `task=chat` HTTP 200 response with an
+empty `output` is a successful transport with no usable catalog, whereas an
+unfiltered HTTP 500 is an upstream server failure. A fresh probe found the
+upstream condition had widened: `chat`, `text-generation`, the other documented
+chat-completion-compatible task filters, and the unfiltered request all returned
+HTTP 500 with a small JSON object and empty `output`. Raw-token and `Key`-prefixed
+authorization produced the same status, so the prefix does not explain the
+failure.
+
+The canonical discovery boundary now queries only `task=chat` and then
+`task=text-generation`. Bytez documents both as compatible with its OpenAI-style
+chat-completions API; audio, image, and video task catalogs are intentionally not
+admitted to the ordinary text-chat pool. Discovery never uses the failing
+unfiltered endpoint as a fallback. A non-empty filtered catalog is parsed through
+the existing Bytez model contract. If both filtered catalogs are empty or fail,
+refresh records only task, outcome, model count, and an allowlisted error code;
+it retains the durable last-known-good catalog and fails closed when none exists.
+The current upstream 5xx therefore remains a first-bootstrap blocker, not a
+reason to fabricate usable models.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
