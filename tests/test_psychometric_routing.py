@@ -90,6 +90,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
         "judge_effects": "not_executed",
+        "parameter_uncertainty": "not_executed",
         "adaptive_exposure": "not_executed",
     }
     requirements = report["measurement_validity_requirements"]
@@ -112,6 +113,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert "does not record gateway propensities" in requirements[
         "adaptive_exposure"
+    ]["known_limit"]
+    assert requirements["parameter_uncertainty"]["owner_contract_status"] == (
+        "released_limited"
+    )
+    assert "condition on population parameters" in requirements[
+        "parameter_uncertainty"
     ]["known_limit"]
     assert report["production_default_change_allowed"] is False
     assignment = report["assignment_design_validation"]
@@ -159,6 +166,17 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert covariate["absolute_error"] == pytest.approx(0.010350190571035478)
     assert covariate["convergence_status"] == "converged"
     assert covariate["iterations"] == 941
+    uncertainty = report["parameter_uncertainty_validation"]
+    assert uncertainty["method"] == "oakes_information_wald_interval"
+    assert uncertainty["sample_size"] == heldout_benchmark.UNCERTAINTY_SAMPLE_SIZE
+    assert uncertainty["seed"] == heldout_benchmark.UNCERTAINTY_SEED
+    assert uncertainty["convergence_status"] == "converged"
+    assert uncertainty["iterations"] == 25
+    assert uncertainty["intercept_rmse"] == pytest.approx(0.03915967506825319)
+    assert uncertainty["interval_95_coverage_rate"] == 1.0
+    assert uncertainty["mean_interval_95_width"] == pytest.approx(
+        0.2959451647652092
+    )
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:

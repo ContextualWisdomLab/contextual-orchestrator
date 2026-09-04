@@ -34,6 +34,8 @@ JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
 ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
+UNCERTAINTY_SAMPLE_SIZE = 1_200
+UNCERTAINTY_SEED = 260_909
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -390,6 +392,60 @@ def _validate_item_covariate_effect() -> dict[str, object]:
     }
 
 
+def _validate_parameter_uncertainty() -> dict[str, object]:
+    """Check Oakes interval coverage for known item intercepts."""
+    generator = np.random.default_rng(UNCERTAINTY_SEED)
+    item_count = 6
+    ability = generator.standard_normal(UNCERTAINTY_SAMPLE_SIZE)
+    true_intercept = np.linspace(-1.0, 1.0, item_count)
+    probabilities = 1.0 / (
+        1.0 + np.exp(-(ability[:, None] + true_intercept[None, :]))
+    )
+    responses = (generator.random(probabilities.shape) < probabilities).astype(float)
+    factor_id = np.zeros(item_count, dtype=np.int64)
+    config = fast_mlsirm.FitConfig(
+        model="MIRT",
+        estimator="mmle",
+        max_iter=1_000,
+        latent_dim=1,
+        q_theta=21,
+        q_xi=7,
+        rust_device="cpu",
+        seed=UNCERTAINTY_SEED,
+    )
+    result = fast_mlsirm.fit(responses, factor_id, config)
+    uncertainty = fast_mlsirm.oakes_standard_errors(
+        result, responses, factor_id, config
+    )
+    label_positions = {
+        label: index for index, label in enumerate(uncertainty["labels"])
+    }
+    estimated_intercept = np.asarray(result.params.b)
+    standard_error = np.asarray(
+        [
+            uncertainty["se"][label_positions[f"b:{index}"]]
+            for index in range(item_count)
+        ]
+    )
+    lower = estimated_intercept - 1.96 * standard_error
+    upper = estimated_intercept + 1.96 * standard_error
+    return {
+        "method": "oakes_information_wald_interval",
+        "sample_size": UNCERTAINTY_SAMPLE_SIZE,
+        "seed": UNCERTAINTY_SEED,
+        "items": item_count,
+        "convergence_status": result.convergence_status,
+        "iterations": result.n_iter,
+        "intercept_rmse": float(
+            np.sqrt(np.mean((estimated_intercept - true_intercept) ** 2))
+        ),
+        "interval_95_coverage_rate": float(
+            np.mean((lower <= true_intercept) & (true_intercept <= upper))
+        ),
+        "mean_interval_95_width": float(np.mean(upper - lower)),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
@@ -401,6 +457,7 @@ def run_benchmark() -> dict[str, object]:
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
+    parameter_uncertainty = _validate_parameter_uncertainty()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)
     )
@@ -437,6 +494,7 @@ def run_benchmark() -> dict[str, object]:
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
         "judge_effects": "not_executed",
+        "parameter_uncertainty": "not_executed",
         "adaptive_exposure": "not_executed",
     }
     validity_requirements = {
@@ -478,6 +536,17 @@ def run_benchmark() -> dict[str, object]:
                 "identities"
             ),
         },
+        "parameter_uncertainty": {
+            "owner_contract_status": "released_limited",
+            "required_evidence": (
+                "converged buyer calibration, identified estimands, standard errors, "
+                "and preregistered interval coverage rules"
+            ),
+            "known_limit": (
+                "Oakes standard errors condition on population parameters and do not "
+                "support anchors, zero inflation, or item covariates"
+            ),
+        },
         "adaptive_exposure": {
             "owner_contract_status": "released_exposure_control_only",
             "required_evidence": (
@@ -510,6 +579,7 @@ def run_benchmark() -> dict[str, object]:
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,
+        "parameter_uncertainty_validation": parameter_uncertainty,
     }
     assert all(
         math.isfinite(value)
