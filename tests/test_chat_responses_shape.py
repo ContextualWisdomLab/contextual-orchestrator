@@ -529,6 +529,101 @@ def test_responses_shaped_request_routed_to_chat_completions_only_agent_translat
     assert result["output_text"] == "Hi there"
 
 
+def test_chat_only_endpoint_rejects_file_id_image_before_provider_egress() -> None:
+    agent = ModelAgent(
+        "chat_only_agent",
+        "chat-only-model",
+        base_url="https://chat-only.example.test/v1",
+        tags=("api:chat_completions_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_send_raw_with_retry",
+    ) as send, pytest.raises(ValueError, match="file_id"):
+        client.proxy_send(agent, "responses", {
+            "input": [{"type": "message", "role": "user", "content": [
+                {"type": "input_image", "file_id": "file_123"},
+            ]}],
+        })
+    send.assert_not_called()
+
+
+def test_responses_only_endpoint_preserves_flat_tool_shape_and_controls() -> None:
+    agent = ModelAgent(
+        "responses_only_agent",
+        "responses-model",
+        base_url="https://responses-only.example.test/v1",
+        tags=("api:responses_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"status": "completed", "output": []},
+    ) as send:
+        client.proxy_send(agent, "chat/completions", {
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "name": "lookup", "parameters": {}}],
+            "tool_choice": {"type": "function", "name": "lookup"},
+            "store": True,
+            "service_tier": "flex",
+            "reasoning": {"effort": "high"},
+        })
+
+    forwarded = send.call_args.args[2]
+    assert forwarded["tools"][0]["name"] == "lookup"
+    assert forwarded["tool_choice"] == {"type": "function", "name": "lookup"}
+    assert forwarded["store"] is True
+    assert forwarded["service_tier"] == "flex"
+    assert forwarded["reasoning"] == {"effort": "high"}
+
+
+def test_chat_only_endpoint_preserves_nested_tool_shape() -> None:
+    agent = ModelAgent(
+        "chat_only_agent",
+        "chat-only-model",
+        base_url="https://chat-only.example.test/v1",
+        tags=("api:chat_completions_only",),
+    )
+    client = ModelClient(max_retries=0)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        },
+    ) as send:
+        client.proxy_send(agent, "responses", {
+            "input": "hi",
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}},
+            }],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        })
+
+    forwarded = send.call_args.args[2]
+    assert forwarded["tools"][0]["function"]["name"] == "lookup"
+    assert forwarded["tool_choice"] == {
+        "type": "function", "function": {"name": "lookup"},
+    }
+
+
+def test_endpoint_rejects_conflicting_exclusivity_tags_before_provider_egress() -> None:
+    agent = ModelAgent(
+        "conflicting_agent",
+        "model",
+        base_url="https://provider.example.test/v1",
+        tags=("api:chat_completions_only", "api:responses_only"),
+    )
+    client = ModelClient(max_retries=0)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_send_raw_with_retry",
+    ) as send, pytest.raises(ValueError, match="conflicting API shape tags"):
+        client.proxy_send(agent, "responses", {"input": "hi"})
+    send.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Per-provider API-version mechanism
 # ---------------------------------------------------------------------------
