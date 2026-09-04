@@ -291,6 +291,16 @@ def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
 
 
 def test_explicit_structured_group_model_pins_every_provider_call() -> None:
+    """Every provider call, including the post-synthesis realtime judge, stays pinned.
+
+    The realtime judge that ``_orchestrated_provider_completion`` now calls
+    once synthesis succeeds (observation-only) picks its own verifier from
+    the same group; the transport ledger already favors the member that
+    just served (``_group_router.observe_success`` ran immediately before),
+    so it lands on ``selected_member`` too -- covered here as a sixth
+    ``evidence_or_judge`` call after synthesis.
+    """
+
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:
             super().__init__('{"decision":"ACCEPT","reason":"Exact judge passed."}')
@@ -331,6 +341,7 @@ def test_explicit_structured_group_model_pins_every_provider_call() -> None:
     assert client.calls_by_kind == [
         *(('evidence_or_judge', selected.id) for _ in range(5)),
         ("synthesis", selected.id),
+        ("evidence_or_judge", selected.id),
     ]
 
 
