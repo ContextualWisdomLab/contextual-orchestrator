@@ -76,6 +76,21 @@ adaptively missing outcomes do not turn the incumbent policy into ground truth.
 Failure of any required check yields no psychometric evidence and preserves the
 existing measured order.
 
+IRT-Router defines LLM deployments as test takers and queries as items. Under
+that orientation, query language or domain is an item/context property, not a
+person-group label. The gateway therefore will not manufacture a conventional
+person-group DIF result by passing buyer language or domain as the group vector.
+When enough versioned candidate deployments support a preregistered comparison,
+provider family or decode-policy cohort may be tested as a candidate-group DIF
+screen through the released `fast-mlsirm` API. Language and domain require an
+item-side model instead. Multilingual-IRT (Lior et al., 2026) supplies the
+research direction: explicit language difficulty deviations, separated
+language/content discrimination, and language-specific ability residuals.
+Those terms belong in the canonical psychometric owner before this gateway can
+consume a released contract. Until then, buyer-language and cross-domain
+measurement-validity gates remain false rather than re-labeling a routing
+predictor as an invariant measurement model.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is
@@ -179,4 +194,4 @@ flowchart LR
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
-Song et al., 2025).
+Song et al., 2025; Lior et al., 2026).

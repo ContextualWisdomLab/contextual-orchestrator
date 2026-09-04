@@ -111,6 +111,14 @@ psychometric evidence", never a portable ability rank.
   conditioning on the measured trait. The current synthetic routing surface has
   neither buyer groups nor an anchored matching variable, so it reports
   `measurement_validity=false` instead of fabricating a DIF result.
+- Lior, G., Frostig, T., Stanovsky, G., & Eyal, M. (2026). *Extending item
+  response theory for efficient and meaningful multilingual evaluation*
+  [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.15643
+  Grounds a safer multilingual extension: language is modeled with explicit
+  difficulty deviations, language/content discrimination components, and
+  language-specific residuals rather than being forced into a person-group DIF
+  variable. Its reported predictive gains do not establish invariance for this
+  gateway; buyer-language replication and anchor continuity remain required.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 

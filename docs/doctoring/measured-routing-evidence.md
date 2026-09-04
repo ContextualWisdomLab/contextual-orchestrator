@@ -37,6 +37,7 @@ fails closed to conducted orchestration when its reply violates the exact
 | Strict JSON triage verdict | LLM judges are reliable only under constrained output schemas; Zheng et al. (2023) show judge agreement collapses without structure. Fail-closed preserves verification guarantees. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
+| Language/domain validity boundary | IRT-Router treats LLMs as persons and queries as items, so query language cannot be inserted as a person-group DIF label. Multilingual-IRT instead models language difficulty deviations and separates language from content discrimination (Lior et al., 2026). | The synthetic report keeps `measurement_validity=false`; no language or domain label can open the production gate without a released item-side owner contract and buyer replication. |
 
 ## Accuracy and decision-latency KPI
 
@@ -126,6 +127,10 @@ Computational Linguistics. https://doi.org/10.18653/v1/2020.emnlp-main.550
 Laplace, P.-S. (1774). Mémoire sur la probabilité des causes par les
 événements. *Mémoires de l'Académie Royale des Sciences de Paris, 6*,
 621–656. (Rule of succession; modern treatment in Gelman et al., 2013.)
+
+Lior, G., Frostig, T., Stanovsky, G., & Eyal, M. (2026). *Extending item
+response theory for efficient and meaningful multilingual evaluation*
+[Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.15643
 
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs
