@@ -221,7 +221,10 @@ Source commit `68831dff` applies Stenhaug and Domingue's (2022) predictive-fit
 split. The current held-out contexts test unseen queries for four already
 observed candidate deployments; they do not test a new deployment's complete
 response vector. The report now records those axes separately and leaves the
-unseen-candidate task `not_executed`. `predictive_fit` cannot pass until
+unseen-candidate task separate. Source commit `54833bd8` executes that path
+across 24 contexts and records zero psychometric prediction coverage because
+the router does not fabricate a score for an unobserved candidate.
+`predictive_fit` cannot pass until
 versioned buyer outcomes support both held-out-query and held-out-candidate
 scoring.
 

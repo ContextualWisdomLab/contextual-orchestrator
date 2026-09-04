@@ -210,7 +210,8 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Separates prediction of missing responses for observed persons from prediction
   of complete responses for new persons. Source commit `68831dff` maps those
   tasks to unseen queries for known deployments and unseen candidate deployments.
-  The synthetic benchmark executes only the first task, so it cannot claim
+  Source commit `54833bd8` executes the latter path across 24 contexts and
+  records zero psychometric prediction coverage. It therefore cannot claim
   cold-start predictive fit for a newly introduced or changed deployment.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.

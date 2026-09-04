@@ -2378,10 +2378,13 @@ and a preregistered target.
 Source commit `68831dff` applies the predictive-fit distinction from Stenhaug
 and Domingue (2022). Existing Brier and log-loss results cover held-out queries
 for known candidate deployments only. The report now exposes cold-start
-prediction for an unseen candidate deployment as a separate `not_executed`
-task, so query holdout evidence cannot be reused as candidate-generalization
-evidence. `predictive_fit` remains closed until versioned buyer outcomes support
-separate held-out-query and held-out-candidate scoring.
+prediction for an unseen candidate deployment as a separate task. Source
+commit `54833bd8` executes that synthetic path across 24
+contexts and measures zero psychometric prediction coverage; the router
+correctly declines to fabricate an unseen candidate score. Query holdout
+evidence therefore cannot be reused as candidate-generalization evidence.
+`predictive_fit` remains closed until versioned buyer outcomes support separate
+held-out-query and held-out-candidate scoring.
 
 ## 7. Delivery gates
 
