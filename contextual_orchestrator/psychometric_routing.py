@@ -143,6 +143,24 @@ class PsychometricRoutingEvidence:
         with self._lock:
             return bool(self._responses)
 
+    def retain_agents(self, agent_ids: Iterable[str]) -> None:
+        """Discard observations from deployment candidates that are no longer active."""
+        allowed = set(agent_ids)
+        with self._lock:
+            responses = {
+                key: value for key, value in self._responses.items() if key[0] in allowed
+            }
+            if len(responses) == len(self._responses):
+                return
+            self._responses = responses
+            retained_contexts = {context_id for _agent_id, context_id, _item in responses}
+            self._contexts = OrderedDict(
+                (context_id, vector)
+                for context_id, vector in self._contexts.items()
+                if context_id in retained_contexts
+            )
+            self._revision += 1
+
     def records(self) -> list[dict[str, object]]:
         """Return prompt-free observations suitable for durable state storage."""
         with self._lock:

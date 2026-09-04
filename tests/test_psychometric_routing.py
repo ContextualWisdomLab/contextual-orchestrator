@@ -201,6 +201,37 @@ def test_contextual_judge_observation_survives_restart_without_raw_prompt(
     )
 
 
+def test_contextual_judge_observation_does_not_survive_deployment_change(
+    tmp_path: Path,
+) -> None:
+    state_db = str(tmp_path / "state.sqlite3")
+    first = TaskOrchestrator([ModelAgent("model_a", "model-a")], state_db=state_db)
+    first._observe_contextual_quality(
+        "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+    )
+    first.close()
+
+    second = TaskOrchestrator(
+        [ModelAgent("model_a", "model-b")], state_db=state_db
+    )
+    records = second._psychometric_router.records()
+    second.close()
+
+    assert records == []
+
+
+def test_runtime_deployment_change_discards_contextual_judge_observation() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("model_a", "model-a")])
+    orchestrator._observe_contextual_quality(
+        "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+    )
+
+    orchestrator.patch_agent("default", "model_a", {"priority": 2})
+
+    assert orchestrator._psychometric_router.records() == []
+    orchestrator.close()
+
+
 def test_replacing_judge_row_removes_stale_trailing_items() -> None:
     evidence = PsychometricRoutingEvidence()
     evidence.observe("prompt", "model", True, None, (1, 0, 1))

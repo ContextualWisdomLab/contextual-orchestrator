@@ -4078,7 +4078,12 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        candidate_ids = {
+            self._psychometric_candidate_id(agent) for agent in self.candidates
+        }
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -6188,6 +6193,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -7077,6 +7083,21 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Keep evidence only for the pool's current deployment configurations."""
+        self._psychometric_router.retain_agents(
+            self._psychometric_candidate_id(agent) for agent in self.candidates
+        )
+        if self._store is not None:
+            retained = {
+                hashlib.sha256(
+                    f"{item['context_id']}\0{item['agent_id']}".encode()
+                ).hexdigest()
+                for item in self._psychometric_router.records()
+            }
+            self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
