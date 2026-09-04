@@ -188,6 +188,14 @@ def run_benchmark() -> dict[str, object]:
         "measurement_validity": "not_executed",
     }
     gates = {name: status == "passed" for name, status in gate_status.items()}
+    validity_components = {
+        "scale_linking": "not_executed",
+        "local_independence": "not_executed",
+        "candidate_group_dif": "not_executed",
+        "item_language_domain_effects": "not_executed",
+        "judge_effects": "not_executed",
+        "adaptive_exposure": "not_executed",
+    }
     result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
@@ -201,6 +209,7 @@ def run_benchmark() -> dict[str, object]:
         "production_default_change_allowed": all(gates.values()),
         "production_gate_status": gate_status,
         "production_gates": gates,
+        "measurement_validity_components": validity_components,
     }
     assert all(
         math.isfinite(value)

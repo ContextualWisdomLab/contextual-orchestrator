@@ -84,6 +84,14 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "decision_latency_improved": "failed",
         "measurement_validity": "not_executed",
     }
+    assert report["measurement_validity_components"] == {
+        "scale_linking": "not_executed",
+        "local_independence": "not_executed",
+        "candidate_group_dif": "not_executed",
+        "item_language_domain_effects": "not_executed",
+        "judge_effects": "not_executed",
+        "adaptive_exposure": "not_executed",
+    }
     assert report["production_default_change_allowed"] is False
 
 
