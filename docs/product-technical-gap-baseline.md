@@ -2194,7 +2194,7 @@ live work item.
 
 The local-independence prerequisite now has an owner-side implementation path:
 `fast-mlsirm` PR [#1748](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1748)
-at exact head `f47095edc631a2364e9b3517c315f6d5de0efc5d` exposes the existing
+at exact head `c48af6af811cbd9ffa7d087fdde65d1dddd4fe1a` exposes the existing
 Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
 evidence, not released consumer evidence, and it does not open the routing gate
 without a preregistered buyer matrix, multiplicity plan, and threshold.
