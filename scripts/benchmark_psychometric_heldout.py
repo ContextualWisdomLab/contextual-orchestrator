@@ -52,6 +52,7 @@ EQUATING_BOOTSTRAPS = 300
 EQUATING_SEED = 260_914
 ROSTER_INVARIANCE_SEED = 260_915
 GENERALIZABILITY_SEED = 260_916
+SEQUENTIAL_DRIFT_SEED = 260_917
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -461,6 +462,45 @@ def _validate_functional_drift() -> dict[str, object]:
         "area_trace": result["area_trace"],
         "iterations": result["iterations"],
         "termination_reason": result["termination_reason"],
+    }
+
+
+def _validate_sequential_drift() -> dict[str, object]:
+    """Measure detection delay for one preregistered synthetic probability shift."""
+    before_probability = 0.8
+    after_probability = 0.3
+    change_after = 100
+    threshold = math.log(100.0)
+    generator = random.Random(SEQUENTIAL_DRIFT_SEED)
+    statistic = 0.0
+    alarm_observation: int | None = None
+    for observation_index in range(200):
+        probability = (
+            before_probability
+            if observation_index < change_after
+            else after_probability
+        )
+        accepted = generator.random() < probability
+        log_likelihood_ratio = (
+            math.log(after_probability / before_probability)
+            if accepted
+            else math.log((1.0 - after_probability) / (1.0 - before_probability))
+        )
+        statistic = max(0.0, statistic + log_likelihood_ratio)
+        if statistic >= threshold:
+            alarm_observation = observation_index + 1
+            break
+    assert alarm_observation is not None
+    return {
+        "method": "one_stream_bernoulli_cusum_screen",
+        "seed": SEQUENTIAL_DRIFT_SEED,
+        "before_probability": before_probability,
+        "after_probability": after_probability,
+        "change_after_observations": change_after,
+        "threshold_log_likelihood_ratio": threshold,
+        "alarm_observation": alarm_observation,
+        "false_alarm": alarm_observation <= change_after,
+        "detection_delay_observations": alarm_observation - change_after,
     }
 
 
@@ -1058,6 +1098,7 @@ def run_benchmark() -> dict[str, object]:
     parameter_invariance = _validate_parameter_invariance()
     candidate_roster_invariance = _validate_candidate_roster_invariance()
     functional_drift = _validate_functional_drift()
+    sequential_drift = _validate_sequential_drift()
     score_equating = _validate_score_equating()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
@@ -1109,6 +1150,7 @@ def run_benchmark() -> dict[str, object]:
     validity_components = {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "sequential_drift": "not_executed",
         "candidate_roster_invariance": "not_executed",
         "score_equating": "not_executed",
         "response_pattern_fit": "not_executed",
@@ -1143,6 +1185,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "the benchmark drift tolerance is an effect-size screen, not a "
                 "sampling-uncertainty or significance test"
+            ),
+        },
+        "sequential_drift": {
+            "owner_contract_status": "benchmark_screen_only",
+            "required_evidence": (
+                "versioned buyer observations over time, declared change risks, "
+                "and preregistered false-alarm and detection-delay targets"
+            ),
+            "known_limit": (
+                "the one-stream known-probability CUSUM screen is not the paper's "
+                "multistream Bayesian compound-risk procedure"
             ),
         },
         "candidate_roster_invariance": {
@@ -1338,6 +1391,7 @@ def run_benchmark() -> dict[str, object]:
         "parameter_invariance_validation": parameter_invariance,
         "candidate_roster_invariance_validation": candidate_roster_invariance,
         "functional_drift_validation": functional_drift,
+        "sequential_drift_validation": sequential_drift,
         "score_equating_validation": score_equating,
         "response_pattern_fit_validation": response_pattern_fit,
         "construct_dimensionality_validation": construct_dimensionality,

@@ -116,6 +116,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert report["measurement_validity_components"] == {
         "scale_linking": "not_executed",
         "parameter_invariance": "not_executed",
+        "sequential_drift": "not_executed",
         "candidate_roster_invariance": "not_executed",
         "score_equating": "not_executed",
         "response_pattern_fit": "not_executed",
@@ -141,6 +142,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "released_effect_size_screen"
     )
     assert "not a sampling-uncertainty" in requirements["parameter_invariance"][
+        "known_limit"
+    ]
+    assert requirements["sequential_drift"]["owner_contract_status"] == (
+        "benchmark_screen_only"
+    )
+    assert "not the paper's multistream" in requirements["sequential_drift"][
         "known_limit"
     ]
     assert requirements["response_pattern_fit"]["owner_contract_status"] == (
@@ -300,6 +307,13 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert functional_drift["iterations"] == 1
     assert functional_drift["termination_reason"] == "threshold_met"
+    sequential_drift = report["sequential_drift_validation"]
+    assert sequential_drift["method"] == "one_stream_bernoulli_cusum_screen"
+    assert sequential_drift["seed"] == heldout_benchmark.SEQUENTIAL_DRIFT_SEED
+    assert sequential_drift["change_after_observations"] == 100
+    assert sequential_drift["alarm_observation"] == 107
+    assert sequential_drift["false_alarm"] is False
+    assert sequential_drift["detection_delay_observations"] == 7
     person_fit = report["response_pattern_fit_validation"]
     assert person_fit["method"] == "nonparametric_zu3_rank"
     assert person_fit["sample_size"] == heldout_benchmark.PERSON_FIT_SAMPLE_SIZE
