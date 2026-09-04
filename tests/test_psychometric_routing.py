@@ -195,7 +195,7 @@ def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
     evidence._fit_revision = evidence._revision
 
     ranked = evidence.ranked_evidence(
-        ("model_a", "model_b"), "held-out", [1.0, 1.0]
+        iter(("model_a", "model_b")), "held-out", [1.0, 1.0]
     )
 
     assert [(agent_id, round(score, 6)) for agent_id, score in ranked] == [

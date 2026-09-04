@@ -81,6 +81,7 @@ class PsychometricRoutingEvidence:
         vector: list[float] | None,
     ) -> list[tuple[str, float]]:
         """Return only candidates with a fitted contextual success estimate."""
+        agent_ids = tuple(agent_ids)
         with self._lock:
             self._fit_locked()
             if not self._scores:
