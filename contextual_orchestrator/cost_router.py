@@ -59,6 +59,7 @@ _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
+_DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0
 _BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
@@ -243,7 +244,11 @@ class CostRoutingCoordinator:
             claim_lease_seconds=(
                 client_timeout
                 if self.job_registry.durable and client_timeout > 0
-                else None
+                else (
+                    _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
+                    if self.job_registry.durable
+                    else None
+                )
             ),
             execution_timeout_seconds=client_timeout if client_timeout > 0 else None,
         )
@@ -1837,9 +1842,9 @@ class CostRoutingCoordinator:
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
-        Local backends complete immediately. Callers that require a synchronous
-        provider result pass ``wait_timeout``; a timed-out queued job is
-        cancelled so the synchronous surface does not leave orphaned work.
+        Local backends complete immediately. ``wait_timeout=None`` waits without
+        an application deadline; a timed-out queued job is cancelled only when
+        the caller supplied a finite deadline.
         """
         job = self.submit_embeddings_batch(
             inputs,
@@ -1851,9 +1856,13 @@ class CostRoutingCoordinator:
             owner_id=owner_id,
         )
         backend = self._embedding_backend_for(job)
-        if wait_timeout is not None and hasattr(backend, "wait"):
+        if hasattr(backend, "wait"):
             status = backend.wait(job, timeout=wait_timeout)
-            if not status.get("is_complete") and hasattr(backend, "cancel"):
+            if (
+                wait_timeout is not None
+                and not status.get("is_complete")
+                and hasattr(backend, "cancel")
+            ):
                 backend.cancel(job, reason="synchronous request deadline elapsed")
         return self.embeddings_batch_document(job.job_id, owner_id=owner_id)
 

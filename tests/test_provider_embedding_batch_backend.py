@@ -5,11 +5,7 @@ import time
 
 import pytest
 
-from contextual_orchestrator.batch_routing import (
-    EmbeddingBatchRequest,
-    ProviderEmbeddingBatchBackend,
-)
-from contextual_orchestrator.batch_job_registry import JobRegistryFactory
+import contextual_orchestrator.cost_router as cost_router_module
 from contextual_orchestrator import (
     CostRoutingCoordinator,
     InMemoryConfigStore,
@@ -17,6 +13,11 @@ from contextual_orchestrator import (
     PriceBook,
     PriceEntry,
     TaskOrchestrator,
+)
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory
+from contextual_orchestrator.batch_routing import (
+    EmbeddingBatchRequest,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -57,6 +58,49 @@ def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> N
 
     assert backend._execution_timeout_seconds == 604_800
     assert backend._claim_lease_seconds is None
+    backend.close()
+
+
+def test_durable_claim_lease_does_not_depend_on_model_timeout(monkeypatch) -> None:
+    """A null model timeout still supplies the durable registry a positive lease."""
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([], allow_empty_agents=True),
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+    coordinator.job_registry._client = object()
+    captured = {}
+
+    def capture_backend(*_args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cost_router_module, "ProviderEmbeddingBatchBackend", capture_backend)
+
+    coordinator._provider_embedding_backend()
+
+    assert captured["claim_lease_seconds"] == 30.0
+    assert captured["execution_timeout_seconds"] is None
+
+
+def test_unbounded_synchronous_embedding_waits_for_provider_completion() -> None:
+    """No application deadline means wait, rather than return an unfinished document."""
+    def delayed_runner(requests):
+        time.sleep(0.05)
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(delayed_runner)
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([], allow_empty_agents=True),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["delayed provider input"], model="synthetic-model"
+    )
+
+    assert document["status"] == "completed"
+    assert document["embeddings"][0]["embedding"] == [1.0]
     backend.close()
 
 
