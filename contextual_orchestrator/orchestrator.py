@@ -3879,6 +3879,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -7046,30 +7047,34 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        candidate_id = self._psychometric_candidate_id(self._agent(served_id))
-        self._psychometric_router.observe(
-            prompt_context,
-            candidate_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
-        )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == candidate_id
+        with self._psychometric_persistence_lock:
+            candidate_id = self._psychometric_candidate_id(self._agent(served_id))
+            self._psychometric_router.observe(
+                prompt_context,
+                candidate_id,
+                accepted,
+                self._embed_cached(prompt_context),
+                irt_row,
             )
-            key = hashlib.sha256(f"{context_id}\0{candidate_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                record = next(
+                    item
+                    for item in self._psychometric_router.records()
+                    if item["context_id"] == context_id
+                    and item["agent_id"] == candidate_id
+                )
+                key = hashlib.sha256(
+                    f"{context_id}\0{candidate_id}".encode()
                 ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -7095,17 +7100,18 @@ class TaskOrchestrator:
 
     def _retain_psychometric_candidates(self) -> None:
         """Keep evidence only for the pool's current deployment configurations."""
-        self._psychometric_router.retain_agents(
-            self._psychometric_candidate_id(agent) for agent in self.candidates
-        )
-        if self._store is not None:
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
-                ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_id(agent) for agent in self.candidates
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
