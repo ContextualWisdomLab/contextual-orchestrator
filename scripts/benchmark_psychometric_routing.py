@@ -65,6 +65,19 @@ def main() -> None:
             samples_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
 
     assert len(ranked) == len(model_ids)
+    observation_samples_ms: list[float] = []
+    for sample_index in range(101):
+        started_ns = time.perf_counter_ns()
+        evidence.observe(
+            "context_511",
+            "model_3",
+            bool(sample_index % 2),
+            None,
+            irt_row=(int(not sample_index % 2),),
+        )
+        observation_samples_ms.append(
+            (time.perf_counter_ns() - started_ns) / 1_000_000
+        )
     print(
         json.dumps(
             {
@@ -72,6 +85,8 @@ def main() -> None:
                 "models": len(model_ids),
                 "items_per_context": 2,
                 "median_fit_and_rank_ms": statistics.median(samples_ms),
+                "median_observe_ms": statistics.median(observation_samples_ms),
+                "p95_observe_ms": sorted(observation_samples_ms)[95],
                 "samples_ms": samples_ms,
             },
             sort_keys=True,
