@@ -2291,6 +2291,14 @@ injected drift item, and reports no stable-item false positive. The fixed `0.25`
 tolerance is an effect-size rule rather than a significance test; versioned
 buyer recalibrations and sampling uncertainty are still absent, so
 `parameter_invariance` remains `not_executed`.
+Source commit `5c6ba17a` adds a separate candidate-roster invariance screen.
+It independently calibrates synthetic rosters of 20 and 16 candidates and
+links the scales through 200 common items. The 16 retained candidates have
+linked-score RMSE `0.010866`, correlation `0.999999`, and maximum absolute
+shift `0.016498`. This verifies the released calculation path only. Without
+versioned buyer rosters, common buyer items, identified linking, and registered
+score-shift targets, `candidate_roster_invariance` remains `not_executed` and
+the production gate stays closed.
 Source commit `c7c4a13f` adds a separate test-function impact check. A known
 shift in item 6 creates TCC-area difference `0.123355`; the released backward
 elimination identifies item 6 and reduces the residual difference to zero in

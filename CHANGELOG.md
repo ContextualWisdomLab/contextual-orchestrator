@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now separately calibrates full and
+  reduced candidate rosters, links them through common items, and reports
+  common-candidate score stability without treating synthetic recovery as
+  buyer invariance.
 - The held-out psychometric benchmark now makes probability calibration a
   paired accuracy KPI, reporting calibration slope, intercept, and logit RMSE
   instead of relying on aggregate Brier and log loss alone.

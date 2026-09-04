@@ -130,6 +130,16 @@ Buyer next action: call `run_equal_budget_ablation` and read
   through seven stable anchors, flags the one injected drift item, and produces
   no stable-item false positive. Its fixed `0.25` tolerance is a preregistered
   effect-size screen, not an inferential cutoff or buyer invariance proof.
+- Tinsley, H. E. A., & Dawis, R. V. (1975). An investigation of the Rasch
+  simple logistic model: Sample free item and test calibration. *Educational
+  and Psychological Measurement, 35*(2), 325–336.
+  https://doi.org/10.1177/001316447503500211
+  Grounds checking whether calibration survives a changed respondent sample
+  and ties any invariance claim to adequate sampling, design, and model fit.
+  Source commit `5c6ba17a` separately fits 20- and 16-candidate synthetic
+  rosters, links 200 common items, and reports linked common-score RMSE
+  `0.010866`, correlation `0.999999`, and maximum shift `0.016498`. Buyer
+  roster invariance remains unexecuted.
 - Guo, R., Zheng, Y., & Chang, H.-H. (2015). A stepwise test characteristic
   curve method to detect item parameter drift. *Journal of Educational
   Measurement, 52*(3), 280–300. https://doi.org/10.1111/jedm.12077

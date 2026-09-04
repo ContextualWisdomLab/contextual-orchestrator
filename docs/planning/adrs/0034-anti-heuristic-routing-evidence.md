@@ -119,6 +119,15 @@ not a significance test. `parameter_invariance` remains `not_executed` until
 versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
+Source commit `5c6ba17a` adds a separate candidate-roster invariance screen
+motivated by Tinsley and Dawis (1975). Full and reduced synthetic rosters are
+calibrated independently and linked through 200 common items. For the 16
+retained candidates, linked-score RMSE is `0.010866`, correlation is
+`0.999999`, and maximum absolute shift is `0.016498`. This is a calculation
+check, not a general sample-free claim: `candidate_roster_invariance` remains
+`not_executed` until versioned buyer rosters, common buyer items, identified
+linking, and preregistered shift targets exist.
+
 Source commit `c7c4a13f` adds the distinct functional-impact screen motivated
 by Guo, Zheng, and Chang (2015). One injected item shift creates synthetic TCC
 area difference `0.123355`; the released backward elimination identifies that
