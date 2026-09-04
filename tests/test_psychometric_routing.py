@@ -91,6 +91,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
+        "conditional_information": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -129,6 +130,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "cannot establish model fit" in requirements["score_reliability"][
         "known_limit"
     ]
+    assert requirements["conditional_information"]["owner_contract_status"] == (
+        "released"
+    )
+    assert "cannot establish construct validity" in requirements[
+        "conditional_information"
+    ]["known_limit"]
     assert (
         requirements["local_independence"]["owner_contract_status"]
         == "owner_pr_pending"
@@ -262,6 +269,25 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     )
     assert reliability["reliability_separation"] == pytest.approx(
         0.43399916807515376
+    )
+    information = report["conditional_information_validation"]
+    assert information["method"] == "fisher_test_information"
+    assert information["items"] == 12
+    assert information["trait_points"] == [-2.0, 0.0, 2.0]
+    assert information["center_only_test_information"] == pytest.approx(
+        [1.2599230248420783, 3.0, 1.2599230248420798]
+    )
+    assert information["range_matched_test_information"] == pytest.approx(
+        [1.4588541892655895, 2.1945285666378105, 1.4588541892655889]
+    )
+    assert information["center_only_worst_sem"] == pytest.approx(
+        0.8908971468449483
+    )
+    assert information["range_matched_worst_sem"] == pytest.approx(
+        0.8279308976837576
+    )
+    assert information["worst_case_information_gain"] == pytest.approx(
+        0.1578915220340864
     )
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"

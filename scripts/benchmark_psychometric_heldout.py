@@ -511,6 +511,56 @@ def _validate_score_reliability() -> dict[str, object]:
     }
 
 
+def _validate_conditional_information() -> dict[str, object]:
+    """Show that spreading item difficulty improves tail precision."""
+    item_count = 12
+    trait_points = np.asarray([[-2.0], [0.0], [2.0]])
+
+    def information(item_difficulty: np.ndarray) -> np.ndarray:
+        bundle = {
+            "schema_version": 1,
+            "n_items": item_count,
+            "n_dims": 1,
+            "latent_dim": 1,
+            "model": "MIRT",
+            "tau": 0.0,
+            "eps_distance": 1e-8,
+            "quadrature": {"q_theta": 21, "q_xi": 7},
+            "items": [
+                {
+                    "code": f"item_{index}",
+                    "factor_id": 0,
+                    "alpha": 0.0,
+                    "b": float(difficulty),
+                    "zeta": [0.0],
+                }
+                for index, difficulty in enumerate(item_difficulty)
+            ],
+            "population": None,
+            "eapsum_tables": None,
+        }
+        return fast_mlsirm.bank_information(
+            bundle, trait_points, device="cpu"
+        )["test_info"][:, 0]
+
+    center_only = information(np.zeros(item_count))
+    range_matched = information(np.linspace(-2.0, 2.0, item_count))
+    center_only_worst = float(np.min(center_only))
+    range_matched_worst = float(np.min(range_matched))
+    return {
+        "method": "fisher_test_information",
+        "items": item_count,
+        "trait_points": trait_points[:, 0].tolist(),
+        "center_only_test_information": center_only.tolist(),
+        "range_matched_test_information": range_matched.tolist(),
+        "center_only_worst_sem": 1.0 / math.sqrt(center_only_worst),
+        "range_matched_worst_sem": 1.0 / math.sqrt(range_matched_worst),
+        "worst_case_information_gain": (
+            range_matched_worst / center_only_worst - 1.0
+        ),
+    }
+
+
 def _validate_candidate_group_dif() -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification."""
     generator = np.random.default_rng(DIF_SEED)
@@ -694,6 +744,7 @@ def run_benchmark() -> dict[str, object]:
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
     score_reliability = _validate_score_reliability()
+    conditional_information = _validate_conditional_information()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
@@ -735,6 +786,7 @@ def run_benchmark() -> dict[str, object]:
         "construct_dimensionality": "not_executed",
         "global_model_fit": "not_executed",
         "score_reliability": "not_executed",
+        "conditional_information": "not_executed",
         "local_independence": "not_executed",
         "candidate_group_dif": "not_executed",
         "item_language_domain_effects": "not_executed",
@@ -803,6 +855,17 @@ def run_benchmark() -> dict[str, object]:
             "known_limit": (
                 "reliability summarizes score precision under the fitted model; "
                 "it cannot establish model fit, invariance, or construct validity"
+            ),
+        },
+        "conditional_information": {
+            "owner_contract_status": "released",
+            "required_evidence": (
+                "buyer-relevant trait regions, calibrated candidate-query items, "
+                "and preregistered conditional precision targets"
+            ),
+            "known_limit": (
+                "Fisher information is conditional on the fitted model and item "
+                "bank; it cannot establish construct validity or buyer coverage"
             ),
         },
         "local_independence": {
@@ -882,6 +945,7 @@ def run_benchmark() -> dict[str, object]:
         "construct_dimensionality_validation": construct_dimensionality,
         "global_model_fit_validation": global_model_fit,
         "score_reliability_validation": score_reliability,
+        "conditional_information_validation": conditional_information,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,
