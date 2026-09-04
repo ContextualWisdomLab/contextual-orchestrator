@@ -139,7 +139,8 @@ class SqliteRoutingObservationStore:
                 connection.execute(self._CREATE_INDEX_SQL)
                 connection.execute(self._CREATE_RETENTION_INDEX_SQL)
                 self._register_retention_window(connection)
-                self._refresh_registration(connection)
+                if start_heartbeat:
+                    self._refresh_registration(connection)
                 connection.commit()
             finally:
                 connection.close()
@@ -203,7 +204,7 @@ class SqliteRoutingObservationStore:
             )
 
     def _register_retention_window(self, connection: sqlite3.Connection) -> None:
-        """Persist the largest configured shared-retention window for this database."""
+        """Retain the historical maximum-window value for schema audit only."""
         connection.execute(
             "INSERT INTO routing_observation_metadata(metadata_key, metadata_value) "
             "VALUES(?, ?) "
@@ -244,7 +245,7 @@ class SqliteRoutingObservationStore:
         interval = min(
             float(self._window_seconds), self._HEARTBEAT_INTERVAL_MAX_SECONDS
         )
-        while not self._heartbeat_stop.wait(interval):
+        while not self._heartbeat_stop.is_set():
             with self._lock:
                 if self._closed:
                     return
@@ -260,6 +261,8 @@ class SqliteRoutingObservationStore:
                 finally:
                     if connection is not None:
                         connection.close()
+            if self._heartbeat_stop.wait(interval):
+                return
 
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
         """Return the physical prune boundary from the shared database-wide window."""
@@ -311,11 +314,12 @@ class SqliteRoutingObservationStore:
             raise TypeError("success must be a boolean")
         latency: float | None = None
         if success:
-            if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
-                raise TypeError("successful observations require numeric latency_seconds")
-            latency = float(latency_seconds)
-            if not math.isfinite(latency) or latency < 0:
-                raise ValueError("latency_seconds must be finite and nonnegative")
+            if latency_seconds is not None:
+                if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
+                    raise TypeError("latency_seconds must be numeric when provided")
+                latency = float(latency_seconds)
+                if not math.isfinite(latency) or latency < 0:
+                    raise ValueError("latency_seconds must be finite and nonnegative")
             if output_tokens is not None and (
                 isinstance(output_tokens, bool)
                 or type(output_tokens) is not int
@@ -372,7 +376,6 @@ class SqliteRoutingObservationStore:
         with self._lock:
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                self._refresh_registration(connection)
                 if active:
                     placeholders = ", ".join(["(?, ?)"] * len(active))
                     params: list[object] = [ledger_name.strip(), cutoff]

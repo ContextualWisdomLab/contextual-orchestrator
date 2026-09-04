@@ -7333,7 +7333,10 @@ def build_server(
                         last_embedding_error = RuntimeError(
                             f"embedding member ended with {document.get('status', 'unknown')}"
                         )
-                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        orchestrator._record_group_failure(
+                            embedding_agent.id,
+                            observation_context_key=observation_context_key,
+                        )
                         document = None
                     if document is None:
                         raise RequestError(

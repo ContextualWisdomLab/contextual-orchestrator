@@ -87,6 +87,39 @@ def test_batch_route_persists_runs_with_usage() -> None:
     assert row["output_tokens"] == 18  # 3 x 6 reported completion tokens
 
 
+def test_batch_route_judge_uses_execution_time_routing_context(monkeypatch) -> None:
+    original = ModelAgent(
+        "general_agent",
+        "model-x",
+        tags=("reasoning", "writing"),
+        credential_key="ORIGINAL_ACCOUNT",
+    )
+    replacement = replace(original, credential_key="REPLACEMENT_ACCOUNT")
+    client = _CountingClient()
+    orchestrator = TaskOrchestrator([original], client=client)
+    expected_context = orchestrator._routing_observation_context_for_agent(original)
+    batch_chat = client.batch_chat
+
+    def reassign_after_batch(*args, **kwargs):
+        result = batch_chat(*args, **kwargs)
+        orchestrator.agents = [replacement]
+        orchestrator.candidates = [replacement]
+        return result
+
+    observed_contexts: list[str | None] = []
+
+    def judge(**kwargs):
+        observed_contexts.append(kwargs["observation_context_key"])
+        return {"accepted": True, "reason": "test", "verifier_output": kwargs["answer"]}
+
+    monkeypatch.setattr(client, "batch_chat", reassign_after_batch)
+    monkeypatch.setattr(orchestrator, "_realtime_route_judge", judge)
+
+    orchestrator.batch_route(["task one"])
+
+    assert observed_contexts == [expected_context]
+
+
 def test_optimizer_use_batch_routes_via_batch_and_matches_serial() -> None:
     batch_client = _CountingClient()
     serial_client = _CountingClient()

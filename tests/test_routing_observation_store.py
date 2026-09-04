@@ -77,6 +77,27 @@ def test_store_shares_current_window_and_keeps_ledgers_separate(tmp_path) -> Non
     second.close()
 
 
+def test_store_persists_success_without_invented_latency(tmp_path) -> None:
+    store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
+    try:
+        store.append(
+            "quality",
+            "member_a",
+            context_key="member_a:v1",
+            observed_at=store.now(),
+            success=True,
+            latency_seconds=None,
+            output_tokens=7,
+        )
+        rows = store.load("quality")
+    finally:
+        store.close()
+
+    assert [(row.success, row.latency_seconds, row.output_tokens) for row in rows] == [
+        (True, None, 7)
+    ]
+
+
 def test_store_creates_retention_index_for_prune_path(tmp_path) -> None:
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
     try:
@@ -877,15 +898,16 @@ def test_heartbeat_retries_after_connection_failure(tmp_path, monkeypatch) -> No
     store.start_heartbeat()
     try:
         deadline = time.monotonic() + 1.0
-        while attempts < 2 and time.monotonic() < deadline:
+        lease = None
+        while lease is None and time.monotonic() < deadline:
             time.sleep(0.01)
+            with sqlite3.connect(path) as connection:
+                lease = connection.execute(
+                    "SELECT lease_expires_at FROM routing_observation_registrations "
+                    "WHERE registration_id = ?",
+                    (store._registration_id,),
+                ).fetchone()
         assert attempts >= 2
-        with sqlite3.connect(path) as connection:
-            lease = connection.execute(
-                "SELECT lease_expires_at FROM routing_observation_registrations "
-                "WHERE registration_id = ?",
-                (store._registration_id,),
-            ).fetchone()
         assert lease is not None and lease[0] > clock.value
     finally:
         store.close()
@@ -1006,15 +1028,20 @@ def test_failed_orchestrator_initialization_does_not_start_retention_heartbeat(
 
     monkeypatch.setattr(SqliteRoutingObservationStore, "start_heartbeat", record_start)
 
+    path = tmp_path / "state.sqlite"
     with pytest.raises(ValueError, match="tool_retry_attempts"):
         TaskOrchestrator(
             [ModelAgent("member_a", "mock-model")],
-            state_db=str(tmp_path / "state.sqlite"),
+            state_db=str(path),
             routing_observation_window_seconds=60,
             tool_retry_attempts=-1,
         )
 
     assert started == []
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM routing_observation_registrations"
+        ).fetchone() == (0,)
 
 
 def test_cli_requires_state_db_for_durable_observations(capsys) -> None:

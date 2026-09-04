@@ -997,6 +997,17 @@ rows older than the shared maximum retention window while preserving mixed-windo
 coexistence. Hosted protected checks, independent review, conflict resolution,
 and normal merge remain required before this becomes protected-main evidence.
 
+The September 4 review found that the historical maximum-window metadata no
+longer controls physical pruning after active leases were introduced. Current
+authority is the set of unexpired registration leases; the metadata row remains
+schema-compatibility and audit history only. Initialization now registers a
+lease only when the owning orchestrator reaches heartbeat startup, preventing a
+failed constructor from extending retention. Batch success without honest
+per-item latency remains durable, incomplete embedding attempts keep failover
+when observation persistence is unavailable, and batch quality observations
+retain the execution-time member context across reassignment. These repairs are
+open-PR evidence until current-head review, full tests, and protected merge pass.
+
 ## 2026-08-29 bounded routing-observation durability slice
 
 The multi-instance routing gap is now partially implemented behind an explicit

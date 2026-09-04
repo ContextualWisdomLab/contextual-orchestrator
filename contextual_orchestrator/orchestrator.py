@@ -5624,6 +5624,7 @@ class TaskOrchestrator:
         answers: dict[int, dict[str, Any]] = {}
         prepared_rows: dict[int, dict[str, Any]] = {}
         run_ids: dict[int, str] = {}
+        observation_context_keys: dict[int, str] = {}
         for agent_id, requests in requests_by_agent.items():
             # A prior group's spend is already reflected in the budget meter
             # by its own pending persist below, so a later group must not
@@ -5653,9 +5654,11 @@ class TaskOrchestrator:
                                 result=answers[pending_index],
                                 row=prepared_rows[pending_index],
                                 run_id=run_ids[pending_index],
+                                observation_context_key=observation_context_keys[pending_index],
                             )
                     raise BudgetExceededError("spend budget exceeded", detail=budget)
             agent = agents_by_id[agent_id]
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             effort_profile = self._role_effort_profile("worker")
             batch_started_at = time.perf_counter()
             batch = (
@@ -5714,6 +5717,7 @@ class TaskOrchestrator:
                         )
                         prepared_rows[index] = row
                         run_ids[index] = run_id
+                        observation_context_keys[index] = observation_context_key
                 raise
             for custom_id, result in results.items():
                 # _validate_batch_results already pinned every result key to the
@@ -5740,6 +5744,7 @@ class TaskOrchestrator:
                 )
                 prepared_rows[index] = row
                 run_ids[index] = run_id
+                observation_context_keys[index] = observation_context_key
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
@@ -5768,6 +5773,7 @@ class TaskOrchestrator:
                     result=answers[index],
                     row=prepared_rows[index],
                     run_id=run_ids[index],
+                    observation_context_key=observation_context_keys[index],
                 )
             )
         return records
@@ -5825,6 +5831,7 @@ class TaskOrchestrator:
         result: dict[str, Any],
         row: dict[str, Any],
         run_id: str,
+        observation_context_key: str,
     ) -> dict[str, Any]:
         """Judge one already-persisted pending batch row and record it as complete.
 
@@ -5856,6 +5863,7 @@ class TaskOrchestrator:
             latency_seconds=None,
             usage=result.get("usage"),
             free_only=False,
+            observation_context_key=observation_context_key,
         )
         row["realtime_judge"] = {
             "accepted": verification["accepted"],
