@@ -401,6 +401,22 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+    design = row["selection_design"]
+    assert design["assignment_mechanism"] == "deterministic_ranked"
+    assert design["propensity_status"] == "not_identified"
+    assert design["selected_probability"] is None
+    assert [value.split(":", 1)[0] for value in design["candidate_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert [value.split(":", 1)[0] for value in design["attempted_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert design["selected_deployment_id"].startswith("backup_worker:")
+    serialized_design = json.dumps(design)
+    assert "base_url" not in serialized_design
+    assert "api_key" not in serialized_design
 
 
 def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:

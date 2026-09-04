@@ -5209,9 +5209,11 @@ class TaskOrchestrator:
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(
+        requested = self._requested_agent(model_name)
+        ranked_pool = [requested] if requested is not None else self._ranked_agents(
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
+        agent = ranked_pool[0]
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -5261,6 +5263,9 @@ class TaskOrchestrator:
         }
         if isinstance(usage, dict):
             trace_step["usage"] = usage
+        trace_step["selection_design"] = self._selection_design_receipt(
+            ranked_pool, [agent], agent
+        )
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -6298,14 +6303,22 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
                 candidate,
                 messages,
                 text=text,
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
+                selection_design_sink=selection_design.append,
             )
             latency_seconds = time.perf_counter() - start
+            if not selection_design:
+                selection_design.append(
+                    self._selection_design_receipt(
+                        ranked_pool, [candidate], self._agent(attempt_served_id)
+                    )
+                )
             row = {
                 "id": attempt_index,
                 "role": "worker",
@@ -6336,6 +6349,7 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            row["selection_design"] = selection_design[0]
             trace_rows.append(row)
             if verification["accepted"]:
                 break
@@ -6545,6 +6559,7 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             output, served_id, _served_model, usage = self._invoke(
                 agent,
                 step_messages,
@@ -6554,8 +6569,15 @@ class TaskOrchestrator:
                     free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
+                selection_design_sink=selection_design.append,
             )
             elapsed = (time.perf_counter() - start) * 1000
+            if not selection_design:
+                selection_design.append(
+                    self._selection_design_receipt(
+                        [agent], [agent], self._agent(served_id)
+                    )
+                )
             outputs[step.id] = output
             row = step.as_dict()
             row["agent_id"] = agent.id
@@ -6568,6 +6590,7 @@ class TaskOrchestrator:
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
+            row["selection_design"] = selection_design[0]
             trace.append(row)
             if progress is not None:
                 progress(step.role, "completed")
@@ -7034,6 +7057,30 @@ class TaskOrchestrator:
         )
         revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
         return f"{agent.id}:{revision}"
+
+    def _selection_design_receipt(
+        self,
+        candidates: Iterable[ModelAgent],
+        attempted: Iterable[ModelAgent],
+        selected: ModelAgent,
+    ) -> dict[str, Any]:
+        """Describe the observed deterministic assignment without inventing propensity."""
+        policy = json.dumps(
+            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return {
+            "assignment_mechanism": "deterministic_ranked",
+            "propensity_status": "not_identified",
+            "selected_probability": None,
+            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
+            "candidate_deployment_ids": [
+                self._psychometric_candidate_id(agent) for agent in candidates
+            ],
+            "attempted_deployment_ids": [
+                self._psychometric_candidate_id(agent) for agent in attempted
+            ],
+            "selected_deployment_id": self._psychometric_candidate_id(selected),
+        }
 
     def _observe_contextual_quality(
         self,
@@ -7718,6 +7765,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -7755,6 +7803,7 @@ class TaskOrchestrator:
             ]
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        attempted: list[ModelAgent] = []
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
@@ -7777,6 +7826,7 @@ class TaskOrchestrator:
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
             try:
+                attempted.extend(race_members)
                 outcome = race_first_valid(
                 [
                     EndpointAttempt(
@@ -7810,6 +7860,12 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(
+                        candidates,
+                        attempted,
+                        self._agent(outcome.winner_endpoint_id),
+                    ))
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
@@ -7820,6 +7876,7 @@ class TaskOrchestrator:
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
+            attempted.append(agent)
             retry_attempt = 0
             while True:
                 try:
@@ -7929,6 +7986,10 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if selection_design_sink is not None:
+                    selection_design_sink(
+                        self._selection_design_receipt(candidates, attempted, agent)
+                    )
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None

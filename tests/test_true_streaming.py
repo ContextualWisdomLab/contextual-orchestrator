@@ -371,6 +371,10 @@ def test_stream_route_yields_and_persists() -> None:
     answer = "".join(deltas)
     assert answer.startswith("[general_agent:worker]")
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
+    design = next(iter(orchestrator._workflow_runs.values()))["trace"][0]["selection_design"]
+    assert design["propensity_status"] == "not_identified"
+    assert design["candidate_deployment_ids"] == design["attempted_deployment_ids"]
+    assert design["selected_deployment_id"] == design["candidate_deployment_ids"][0]
 
 
 def test_stream_route_uses_canonical_provider_name_in_trace() -> None:

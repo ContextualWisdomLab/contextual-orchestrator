@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Route, conducted-workflow, and streaming trace rows now retain a secret-free
+  deterministic selection-design receipt: the versioned candidate set, actual
+  attempted deployments, selected deployment, and policy hash. Propensity stays
+  explicitly unidentified; the receipt does not fabricate counterfactual evidence.
 - Adaptive-exposure evidence now distinguishes released CAT exposure control
   from the missing gateway propensity and counterfactual-observation contract.
   The unexecuted production gate remains closed.
