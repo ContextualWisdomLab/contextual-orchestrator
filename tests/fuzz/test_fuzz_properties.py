@@ -25,7 +25,9 @@ from fuzz.targets import (
     exercise_redaction,
     exercise_request_body,
     exercise_structured_output_error,
+    exercise_web_search_results,
 )
+from contextual_orchestrator.web_search import MAX_RESULTS
 
 _SETTINGS = settings(max_examples=200, deadline=None)
 _json_scalars = (
@@ -215,3 +217,34 @@ def test_nim_catalog_on_structured_entries(raw: bytes) -> None:
 @given(_json_values.map(lambda value: json.dumps(value).encode("utf-8")))
 def test_nim_catalog_on_arbitrary_json(raw: bytes) -> None:
     exercise_nim_catalog(raw)
+
+
+_searxng_result_row = st.fixed_dictionaries(
+    {},
+    optional={
+        "url": st.text(max_size=64) | st.integers() | st.none(),
+        "title": st.text(max_size=64) | st.integers() | st.none(),
+        "content": st.text(max_size=64) | st.integers() | st.none(),
+        "engine": st.text(max_size=16) | st.integers() | st.none(),
+        "score": st.floats(allow_nan=True, allow_infinity=True) | st.booleans() | st.text(max_size=8) | st.none(),
+        "publishedDate": st.text(max_size=32) | st.integers() | st.none(),
+    },
+)
+_searxng_envelope = st.fixed_dictionaries(
+    {},
+    optional={
+        "results": st.lists(_searxng_result_row | _json_values, max_size=8) | _json_values,
+    },
+)
+
+
+@_SETTINGS
+@given(_searxng_envelope, st.integers(min_value=1, max_value=MAX_RESULTS))
+def test_web_search_results_on_shaped_envelope(value: dict, max_results: int) -> None:
+    exercise_web_search_results(value, max_results)
+
+
+@_SETTINGS
+@given(_json_values, st.integers(min_value=1, max_value=MAX_RESULTS))
+def test_web_search_results_never_crashes_on_arbitrary_json(value: object, max_results: int) -> None:
+    exercise_web_search_results(value, max_results)
