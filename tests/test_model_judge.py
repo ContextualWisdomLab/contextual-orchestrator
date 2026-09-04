@@ -209,6 +209,65 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     assert budget_contribution["model-x"] > 0
 
 
+def test_judge_adapter_zero_aggregate_served_usage_is_not_treated_as_reported() -> None:
+    """A non-empty-but-all-zero ``served_usage`` must stay genuinely absent.
+
+    Devin review on `contextual-orchestrator#1002`: unlike `result.usage`
+    (fast-mlsirm's own aggregate, already guarded), `_FastMLSIJudgeAdapter`'s
+    `served_usage` comes straight from `ModelClient`'s provider-boundary
+    capture -- for the `mock://` transport that is exactly
+    `{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}`
+    (`ModelClient._mock_response`'s chat.completion branch), a non-empty
+    dict that is truthy in Python even though every count is 0. The plain
+    `if judge_adapter.served_usage:` check this function used to run
+    treated that as genuine reported-zero evidence, disagreeing with the
+    sibling `result.usage` guard a few lines above for the identical
+    fabricated shape. `_judge_adapter_accounting_fields` must reject it
+    exactly like `result.usage` already does.
+    """
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator=None,  # type: ignore[arg-type]
+        text="task",
+        judge="model",
+        served_agent_id="general_agent",
+        served_model="model-x",
+        served_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        served_output="judge rationale text",
+    )
+
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+
+    assert fields["judge_agent_id"] == "general_agent"
+    assert fields["judge_model"] == "model-x"
+    assert "judge_usage" not in fields
+    assert fields["judge_output_text"] == "judge rationale text"
+
+
+def test_judge_adapter_positive_served_usage_is_still_reported() -> None:
+    """A genuine positive token count in ``served_usage`` must still count.
+
+    The zero-aggregate guard above must not overcorrect into dropping real
+    provider-reported usage.
+    """
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator=None,  # type: ignore[arg-type]
+        text="task",
+        judge="model",
+        served_agent_id="general_agent",
+        served_model="model-x",
+        served_usage={"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        served_output="judge rationale text",
+    )
+
+    fields = TaskOrchestrator._judge_adapter_accounting_fields(adapter)
+
+    assert fields["judge_usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 34,
+        "total_tokens": 46,
+    }
+
+
 def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:
@@ -450,13 +509,17 @@ def test_judge_failure_fails_closed() -> None:
 
 
 def test_fast_mlsirm_path_is_used_when_available() -> None:
+    """Model judge verification drives the injected judge and keeps the adapter's own usage."""
+
     class _FakeJudge:
         def __init__(self, orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            """Store the injected adapter plus the requested mode and accept threshold."""
             self.adapter = orchestrator
             self.mode = mode
             self.accept_threshold = accept_threshold
 
         def judge(self, **_) -> object:
+            """Drive one adapter call and return a fixed, accepted structured verdict."""
             self.adapter.complete([{"role": "user", "content": "ping"}])
             return type("Result", (), {
                 "accepted": True,
@@ -472,6 +535,7 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
 
     class _Criterion:
         def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            """Store one rubric criterion's id, description, and weight."""
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -504,7 +568,11 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
     # candidate pool -- "backup_judge" is not a real pool member here.
     assert result["judge_model"] == "backup-model"
     assert result["judge_orchestration_mode"] == "route"
-    assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    # The adapter's own transport-boundary capture (_invoke's returned usage)
+    # is now preferred over fast-mlsirm's result.usage aggregate when both
+    # carry evidence, so this reflects served_usage exactly as _invoke
+    # returned it -- not backfilled from result.usage's fuller breakdown.
+    assert result["judge_usage"] == {"total_tokens": 7}
     assert result["judge_criterion_scores"] == {"evidence_quality": 0.8, "risk_signal": 0.9}
     assert result["judge_irt_item_type"] == "dichotomous"
     assert result["judge_irt_row"] == [1, 1]

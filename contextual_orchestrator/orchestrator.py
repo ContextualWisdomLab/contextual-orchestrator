@@ -366,6 +366,7 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     served_model: str | None = None
     served_usage: dict[str, Any] | None = None
+    served_usage_source: str | None = None
     served_output: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
@@ -381,10 +382,27 @@ class _FastMLSIJudgeAdapter:
         """Expose the existing gateway client capability to fast-mlsirm."""
         return self.orchestrator.client
 
+    @staticmethod
+    def _usage_source_for_agent(agent: ModelAgent, usage: Any) -> str | None:
+        """Classify transport-boundary usage without guessing from token counts."""
+        if not isinstance(usage, dict):
+            return None
+        return (
+            "synthetic_mock"
+            if agent.base_url.startswith("mock://")
+            else "provider_reported"
+        )
+
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
+        served_agent_at_call: ModelAgent | None = None
+
+        def _capture_serving_agent(agent: ModelAgent) -> None:
+            nonlocal served_agent_at_call
+            served_agent_at_call = agent
+
         output, served_id, served_model, usage = self.orchestrator._invoke(
             self._agent(),
             messages,
@@ -393,7 +411,36 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
             excluded_agent_ids=self.excluded_agent_ids,
+            on_success=_capture_serving_agent,
         )
+        # Prefer the exact ModelAgent _invoke's on_success callback captured
+        # atomically at the moment it served this call. A concurrent admin
+        # request can replace TaskOrchestrator.candidates (add/patch/remove
+        # candidate) with a different base_url under the same served_id in the
+        # gap between that provider call completing and this method resolving
+        # provenance; since ModelAgent is frozen and pool mutation always
+        # reassigns self.candidates rather than mutating it in place, the
+        # captured reference is immune to that race, unlike a fresh
+        # self.orchestrator._agent(served_id) lookup against the live mutable
+        # pool (Devin review on PR #1002).
+        #
+        # _invoke may also fail over to a candidate outside this orchestrator's
+        # own pool (e.g. a test double standing in for the served agent), and a
+        # custom _invoke test double may not accept/call on_success at all;
+        # unresolvable provenance must fail closed to unknown (None, treated as
+        # unmeasured downstream) rather than raise and drop this
+        # otherwise-successful call's accounting entirely.
+        if served_agent_at_call is not None:
+            self.served_usage_source = self._usage_source_for_agent(
+                served_agent_at_call, usage
+            )
+        else:
+            try:
+                served_agent = self.orchestrator._agent(served_id)
+            except KeyError:
+                self.served_usage_source = None
+            else:
+                self.served_usage_source = self._usage_source_for_agent(served_agent, usage)
         return self._completion_payload(
             output, served_id, served_model, usage, self.mode if mode is None else mode
         )
@@ -434,8 +481,12 @@ class _FastMLSIJudgeAdapter:
         # must survive validation failing on how to interpret its result.
         self.served_agent_id = agent.id
         self.served_model = agent.model
+        response_usage = response.get("usage")
         self.served_usage = (
-            response.get("usage") if isinstance(response.get("usage"), dict) else None
+            dict(response_usage) if isinstance(response_usage, dict) else None
+        )
+        self.served_usage_source = self._usage_source_for_agent(
+            agent, self.served_usage
         )
         output = ModelClient._response_content(agent, response)
         return self._completion_payload(
@@ -453,7 +504,8 @@ class _FastMLSIJudgeAdapter:
         """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
         self.served_model = served_model
-        self.served_usage = usage
+        usage_snapshot = dict(usage) if isinstance(usage, dict) else None
+        self.served_usage = usage_snapshot
         self.served_output = output
         trace = [
             {
@@ -464,8 +516,8 @@ class _FastMLSIJudgeAdapter:
                 "output": output,
             }
         ]
-        if usage is not None:
-            trace[0]["usage"] = usage
+        if usage_snapshot is not None:
+            trace[0]["usage"] = dict(usage_snapshot)
         return {
             "answer": output,
             "mode": mode,
@@ -7670,6 +7722,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        on_success: Callable[[ModelAgent], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -7680,6 +7733,21 @@ class TaskOrchestrator:
 
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
+
+        ``on_success``, when given, receives the exact ``ModelAgent`` that served
+        the winning call before this method returns. ``ModelAgent`` is a frozen
+        dataclass and ``candidates``/``race_members`` here are call-local lists
+        snapshotted before any provider transport; a pool-mutation API
+        (add/patch/remove candidate) only ever reassigns ``self.candidates`` to a
+        new list object and never mutates an existing one in place (see
+        ``_agent``), so this reference stays valid even if a concurrent request
+        replaces the same agent id in the live pool while this call is still in
+        flight or between this method returning and a caller's own follow-up
+        lookup. Callers that need serving-transport provenance (e.g. classifying
+        usage as provider-reported vs. synthetic) must prefer this over a
+        post-hoc ``self._agent(served_id)`` lookup, which reads the live mutable
+        pool and can silently resolve to a different agent (Devin review on
+        PR #1002).
         """
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
@@ -7762,6 +7830,11 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if on_success is not None:
+                    for candidate in race_members:
+                        if candidate.id == outcome.winner_endpoint_id:
+                            on_success(candidate)
+                            break
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
@@ -7881,6 +7954,8 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if on_success is not None:
+                    on_success(agent)
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
@@ -8168,18 +8243,14 @@ class TaskOrchestrator:
                 "judge": "model",
             }
             verification.update(self._judge_adapter_accounting_fields(judge_adapter))
-            # The adapter's provider-boundary capture is authoritative for
-            # usage. fast-mlsirm aggregates a missing trace usage into a
-            # non-empty zero-token mapping, which must not turn an unmeasured
-            # call into provider-reported zero spend here.
-            result_usage_has_positive_evidence = isinstance(result.usage, Mapping) and any(
-                type(result.usage.get(key)) is int and result.usage[key] > 0
-                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            )
-            if result.usage and (
-                judge_adapter.served_usage is not None or result_usage_has_positive_evidence
+            # Prefer the adapter's transport-boundary snapshot, including an
+            # authoritative all-zero provider report. Only fall back to a
+            # positive fast-mlsirm aggregate when no boundary usage survived.
+            if (
+                "judge_usage" not in verification
+                and self._usage_has_positive_evidence(result.usage)
             ):
-                verification["judge_usage"] = result.usage
+                verification["judge_usage"] = dict(result.usage)
             verification["judge_orchestration_mode"] = result.orchestration_mode
             # The provider call has already completed by this point (result
             # is a real response, with judge_agent_id/judge_model/judge_usage
@@ -8247,6 +8318,35 @@ class TaskOrchestrator:
             }
 
     @staticmethod
+    def _usage_has_positive_evidence(usage: Any) -> bool:
+        """Return whether Chat or Responses usage reports a positive token count.
+
+        This remains the compatibility rule for aggregate usage whose origin
+        is unknown. A provider-boundary zero measurement is handled separately
+        by ``_usage_is_reported_token_mapping`` plus explicit provenance.
+        """
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
+        )
+        return any(type(value) is int and value > 0 for value in counts)
+
+    @staticmethod
+    def _usage_is_reported_token_mapping(usage: Any) -> bool:
+        """Validate complete non-negative Chat or Responses token counters."""
+        if not isinstance(usage, Mapping):
+            return False
+        counts = (
+            usage.get("prompt_tokens", usage.get("input_tokens")),
+            usage.get("completion_tokens", usage.get("output_tokens")),
+            usage.get("total_tokens"),
+        )
+        return all(type(value) is int and value >= 0 for value in counts)
+
+    @staticmethod
     def _judge_adapter_accounting_fields(
         judge_adapter: "_FastMLSIJudgeAdapter | None",
     ) -> dict[str, Any]:
@@ -8270,15 +8370,18 @@ class TaskOrchestrator:
             fields["judge_agent_id"] = judge_adapter.served_agent_id
         if judge_adapter.served_model is not None:
             fields["judge_model"] = judge_adapter.served_model
-        if judge_adapter.served_usage:
-            # A falsy served_usage (missing/invalid response usage) is left
-            # genuinely absent rather than fabricated as reported-zero
-            # (Devin review on #961, on this same fix): judge_agent_id/
-            # judge_model above already keep a completed-but-unmeasured call
-            # attributable, and downstream budget/spend consumers derive an
-            # honest estimated fallback from the judge's own served_output
-            # text instead of trusting a fabricated "reported" usage dict.
-            fields["judge_usage"] = judge_adapter.served_usage
+        if TaskOrchestrator._usage_has_positive_evidence(
+            judge_adapter.served_usage
+        ) or (
+            judge_adapter.served_usage_source == "provider_reported"
+            and TaskOrchestrator._usage_is_reported_token_mapping(
+                judge_adapter.served_usage
+            )
+        ):
+            # Positive aggregate usage remains backward-compatible. Exact
+            # provider-boundary zero usage is accepted only with explicit
+            # provenance; synthetic mock/fast-mlsirm zero remains unmeasured.
+            fields["judge_usage"] = dict(judge_adapter.served_usage)
         if judge_adapter.served_output is not None:
             # The judge's own generated text, not the verifier_output text
             # it was judging (Devin review on #961, on this same fallback

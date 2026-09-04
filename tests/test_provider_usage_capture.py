@@ -2,7 +2,9 @@
 
 A gateway that already sees provider `usage` should bill on it, not a char heuristic.
 These assert reported completion_tokens flow into spend_analytics and are labeled,
-while the mock path stays unavailable.
+while the mock path stays unavailable.  Provider-worker accounting is isolated from
+the optional model-judge extra because that is a separate provider call with its own
+accounting contract.
 """
 
 from __future__ import annotations
@@ -42,15 +44,19 @@ def test_take_usage_returns_and_clears() -> None:
 
 
 def test_reported_usage_preferred_and_labeled() -> None:
+    """Provider-reported completion usage wins over a char-count estimate and is labeled 'reported'."""
     client = _ReportingClient(completion_tokens=50)
     orchestrator = TaskOrchestrator(
         [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
         client=client,
         price_per_million={"priced-model": 10.0},
     )
-    # Accounting contract, not dispatch: pin the single-step route path.
+    # Accounting contract, not dispatch: pin the single-step route path and
+    # disable the optional model judge so its independent call cannot consume
+    # or add usage to this worker-only assertion.
     orchestrator._triage_fn = lambda text: False
-    orchestrator.run([{"role": "user", "content": "do the work"}])
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "do the work"}])
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "priced-model")
 
     assert row["usage_source"] == "reported"
@@ -59,10 +65,12 @@ def test_reported_usage_preferred_and_labeled() -> None:
 
 
 def test_reported_prompt_tokens_surface_in_totals() -> None:
+    """Provider-reported prompt tokens roll up into spend_analytics totals labeled 'reported'."""
     client = _ReportingClient(completion_tokens=30)  # also reports prompt_tokens=5 per call
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
     orchestrator._triage_fn = lambda text: False  # single-step route accounting
-    orchestrator.run([{"role": "user", "content": "route once"}])
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "route once"}])
     totals = orchestrator.spend_analytics()["totals"]
     assert totals["prompt_tokens_source"] == "reported"
     assert totals["prompt_tokens"] == 5
