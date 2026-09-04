@@ -2306,12 +2306,13 @@ one iteration. This complements parameter-distance screening but uses a fixed
 synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
 stepwise method. Buyer recalibrations and preregistered review rules remain
 absent, so the validity gate stays closed.
-Source commit `fafa7bee` adds a temporal drift KPI motivated by Chen, Lee, and
-Li (2022). A seeded one-stream Bernoulli CUSUM screen observes a success-rate
-change from `0.8` to `0.3` after observation 100, raises no pre-change alarm,
-and detects the shift at observation 107. The seven-observation delay is a
-synthetic calculation contract, not the paper's multistream Bayesian
-compound-risk procedure or a buyer-approved threshold. `sequential_drift`
+Source commit `7c3e6e98` adds temporal drift KPIs motivated by Chen, Lee, and
+Li (2022). Across 500 seeded one-stream Bernoulli runs, raising the CUSUM
+threshold from `log(100)` to `7.0` reduces pre-change false alarms from `21.2%`
+to `1.4%`; detection-delay p50 rises from 6 to 10 observations and p95 from 17
+to 22. The tradeoff is a synthetic calculation contract, not the paper's
+multistream Bayesian compound-risk procedure or a buyer-approved threshold.
+`sequential_drift`
 remains `not_executed` pending versioned buyer time series, declared risk, and
 preregistered false-alarm and detection-delay targets.
 Source commit `1dce9688` adds a separate alternate-form score-equating check.

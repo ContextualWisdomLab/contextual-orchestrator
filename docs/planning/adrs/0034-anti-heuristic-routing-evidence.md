@@ -119,11 +119,12 @@ not a significance test. `parameter_invariance` remains `not_executed` until
 versioned buyer recalibrations, stable anchors, sampling uncertainty, and
 preregistered review rules exist.
 
-Source commit `fafa7bee` adds detection delay as a separate temporal KPI,
-motivated by Chen, Lee, and Li (2022). In a seeded one-stream Bernoulli screen,
-success probability changes from `0.8` to `0.3` after observation 100 and the
-CUSUM alarm occurs at observation 107 without a pre-change alarm. This bounded
-calculation is not the paper's multistream Bayesian compound-risk procedure.
+Source commit `7c3e6e98` adds false-alarm rate and detection-delay p50/p95 as
+separate temporal KPIs, motivated by Chen, Lee, and Li (2022). Across 500
+seeded one-stream Bernoulli runs, raising the CUSUM threshold from `log(100)`
+to `7.0` lowers pre-change false alarms from `21.2%` to `1.4%`; delay p50 rises
+from 6 to 10 observations and p95 from 17 to 22. This bounded calculation is
+not the paper's multistream Bayesian compound-risk procedure.
 `sequential_drift` remains `not_executed` until buyer time-series observations,
 declared change risks, and preregistered false-alarm and delay targets exist.
 
