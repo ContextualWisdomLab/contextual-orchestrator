@@ -115,6 +115,65 @@ psychometric evidence", never a portable ability rank.
   (same tasks, scorers, caps, and budgets). Distributed under the arXiv
 non-exclusive license / CC BY as marked on arXiv.
 
+## Repository-wide referenced research
+
+The following papers ground implementation or architecture elsewhere in this
+repository. This register deliberately excludes RFC, NIST, ISO, OWASP, and
+vendor documentation; those remain standards or product sources rather than
+academic papers. `tests/test_paper_contracts.py` normalizes arXiv URLs and DOI
+forms and fails when a scholarly identifier used by tracked Python or Markdown
+is absent here.
+
+- Bradley, R. A., & Terry, M. E. (1952). Rank analysis of incomplete block
+  designs: I. The method of paired comparisons. *Biometrika, 39*(3/4), 324–345.
+  https://doi.org/10.1093/biomet/39.3-4.324
+- Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
+  Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
+  *Chatbot Arena: An open platform for evaluating LLMs by human preference*
+  [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2403.04132
+- Li, H., Zhang, Q., Wu, Y., Xiao, X., Li, Z., Xia, S.-T., & Liu, H. (2025).
+  *Evaluating scoring bias in LLM-as-a-judge* [Preprint]. arXiv.
+  https://arxiv.org/abs/2506.22316
+- Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark
+  for multimodal LLM routing* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2601.17814
+- Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
+  parameters for unidimensional multidimensional logistic item response
+  models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+- Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
+  Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
+  (2023). *Judging LLM-as-a-judge with MT-Bench and Chatbot Arena* [Preprint].
+  arXiv. https://arxiv.org/abs/2306.05685
+- Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
+  & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
+  answering. In *Proceedings of EMNLP 2020* (pp. 6769–6781).
+  https://doi.org/10.18653/v1/2020.emnlp-main.550
+- Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM Computer
+  Communication Review, 18*(4), 314–329. https://doi.org/10.1145/52325.52356
+- Dean, J., & Barroso, L. A. (2013). The tail at scale. *Communications of the
+  ACM, 56*(2), 74–80. https://doi.org/10.1145/2408776.2408794
+- Gardner, K., Harchol-Balter, M., Scheller-Wolf, A., & Van Houdt, B. (2017).
+  Redundancy-d: The power of d choices for redundancy. *Operations Research,
+  65*(4), 1078–1094. https://doi.org/10.1287/opre.2016.1582
+- Codd, E. F. (1970). A relational model of data for large shared data banks.
+  *Communications of the ACM, 13*(6), 377–387.
+  https://doi.org/10.1145/362384.362685
+- Birrell, A. D., & Nelson, B. J. (1984). Implementing remote procedure calls.
+  *ACM Transactions on Computer Systems, 2*(1), 39–59.
+  https://doi.org/10.1145/2080.357392
+- Garcia-Molina, H., & Salem, K. (1987). Sagas. In *Proceedings of ACM SIGMOD*
+  (pp. 249–259). https://doi.org/10.1145/38713.38742
+- Yang, N., Barringer, H., & Zhang, N. (2007). A purpose-based access control
+  model. In *Proceedings of IAS 2007*. IEEE.
+  https://doi.org/10.1109/IAS.2007.29
+- Popa, R. A., Redfield, C. M. S., Zeldovich, N., & Balakrishnan, H. (2011).
+  CryptDB: Protecting confidentiality with encrypted query processing. In
+  *Proceedings of the 23rd ACM Symposium on Operating Systems Principles*
+  (pp. 85–100). https://doi.org/10.1145/2043556.2043566
+- Wolf, K., Pallas, F., & Tai, S. (2021). *Messaging with purpose limitation:
+  Privacy-compliant publish-subscribe systems* [Preprint]. arXiv.
+  https://arxiv.org/abs/2110.15150
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
