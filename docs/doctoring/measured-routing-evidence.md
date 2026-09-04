@@ -70,10 +70,14 @@ latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
 Brier 0.1438369123, log loss 0.4525311878, mean top-choice regret 0.0024259478,
 and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
 `50d91c9e`, carried by PR #1061, reports Brier 0.1418346845, log loss
-0.4475784303, zero top-choice regret, and p50 about 0.0204 ms. This seeded
-simulation isolates unseen-context interpolation; it is not a substitute for
-preregistered buyer prompts, observed judge outcomes, or end-to-end latency.
-The experimental result cannot alter live routing until those gates pass.
+0.4475784303, zero top-choice regret, and p50 near 0.02 ms. Source commit
+`63877ef7` adds paired, seeded 2,000-resample bootstrap intervals. Its current
+same-host run reports candidate-minus-baseline Brier `[-0.0022969, -0.0016986]`,
+log loss `[-0.0053736, -0.0045191]`, and regret `[-0.0072778, 0]`; candidate
+p50 was 0.0213 ms versus baseline 0.0191 ms. This seeded simulation isolates
+unseen-context interpolation; it is not a substitute for preregistered buyer
+prompts, observed judge outcomes, or end-to-end latency. The experimental result
+cannot alter live routing while the latency and buyer-validity gates remain open.
 
 ## APA 7 references
 

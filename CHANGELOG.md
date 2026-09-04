@@ -20,6 +20,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now compares the production baseline and
+  interpolation candidate on the same contexts and reports deterministic paired
+  bootstrap 95% intervals for Brier, log-loss, and top-choice-regret deltas.
+  Decision p50/p95 remain separate measured KPIs, so an accuracy interval cannot
+  silently authorize a slower production route.
 - The seeded held-out benchmark can now opt into interpolation of the two
   nearest positive-cosine psychometric score rows and reports Brier score, log
   loss, top-choice regret, and decision p50/p95. Live routing retains the
