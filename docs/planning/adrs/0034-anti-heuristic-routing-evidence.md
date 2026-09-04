@@ -96,12 +96,11 @@ remain canonical-owner gaps. Buyer-language and cross-domain validity gates
 therefore remain false rather than re-labeling a routing predictor as an
 invariant measurement model.
 
-Source commit `6162af9e` runs the released single-coefficient item-covariate
-path on 1,200 synthetic candidate observations and 12 items. The estimate
-recovers true `delta=-0.8` as `-0.792349` (absolute error `0.007651`), but the
-fit ends at `max_iter_reached` after 80 iterations. The report preserves both
-facts and leaves the buyer language/domain component `not_executed`; a close
-point estimate cannot override a failed convergence verdict.
+Source commit `0f875e3f` runs the released single-coefficient item-covariate
+path on 1,200 synthetic candidate observations and 12 items. The fit converges
+after 941 iterations and recovers true `delta=-0.8` as `-0.789650` (absolute
+error `0.010350`). The report still leaves the buyer language/domain component
+`not_executed`; synthetic recovery cannot establish buyer invariance.
 
 ### Workflow triage without keywords
 

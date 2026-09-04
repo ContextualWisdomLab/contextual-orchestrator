@@ -86,10 +86,10 @@ Buyer next action: call `run_equal_budget_ablation` and read
   exist, fitted values remain deployment- and sample-conditional routing
   evidence rather than psychometric measurements that can be compared across
   model versions, provider policies, domains, or time.
-  Source commit `6162af9e` exercises the released item-side covariate contract
-  against a known coefficient. It estimates `-0.792349` for true `-0.8`
-  (absolute error `0.007651`) but reaches the 80-iteration limit rather than a
-  convergence verdict, so this evidence explicitly does not pass validity.
+  Source commit `0f875e3f` exercises the released item-side covariate contract
+  against a known coefficient. It converges after 941 iterations and estimates
+  `-0.789650` for true `-0.8` (absolute error `0.010350`). This synthetic
+  recovery still does not establish buyer or invariant-scale validity.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

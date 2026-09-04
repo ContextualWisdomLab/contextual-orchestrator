@@ -21,9 +21,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - The held-out psychometric benchmark now estimates one known item-side context
-  contrast through the released multigroup covariate API. It reports the small
-  coefficient error and failed convergence separately, so synthetic recovery
-  cannot be mistaken for a passed buyer-validity gate.
+  contrast through the released multigroup covariate API. It reports coefficient
+  error and convergence separately while keeping synthetic recovery outside the
+  buyer-validity gate.
 - The held-out psychometric benchmark now fits a many-facet Rasch model to a
   connected synthetic respondent-item-judge design and reports judge-severity
   RMSE, convergence, connectedness, and severity-order recovery.
