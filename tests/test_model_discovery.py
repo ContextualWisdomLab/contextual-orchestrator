@@ -734,6 +734,110 @@ def test_models_dev_merge_preserves_limit_metadata() -> None:
     assert merged["data"][0]["max_output_tokens"] == 32768
 
 
+def test_models_dev_merge_preserves_model_protocol_override() -> None:
+    payload = {"data": [{"id": "chat-model"}, {"id": "messages-model"}]}
+    metadata = {
+        "openrouter": {
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "chat-model": {"cost": {"input": 0, "output": 0}},
+                "messages-model": {
+                    "cost": {"input": 0, "output": 0},
+                    "provider": {"npm": "@ai-sdk/anthropic"},
+                },
+            },
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openrouter")
+
+    assert [row["_models_dev_npm"] for row in merged["data"]] == [
+        "@ai-sdk/openai-compatible",
+        "@ai-sdk/anthropic",
+    ]
+
+
+def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence() -> None:
+    """Neither source may silently erase the other's field-level evidence.
+
+    Free-model classification stays Models.dev-authoritative (ADR 0041's
+    cost-safety argument: a compromised provider must never be able to
+    self-report "free"). Modality and capacity metadata carry no such safety argument, so
+    they are a field-level union: two partial records, each missing what the
+    other supplies, must combine rather than have the later source blank out
+    the earlier one's evidence.
+    """
+    # The provider's own catalog row reports real architecture/capacity
+    # evidence that Models.dev does not have for this model at all.
+    payload = {
+        "data": [
+            {
+                "id": "vendor/only-provider-knows-capacity",
+                "context_window": 128000,
+                "max_output_tokens": 4096,
+                "architecture": {
+                    "input_modalities": ["text", "image"],
+                    "output_modalities": ["text"],
+                },
+            }
+        ]
+    }
+    metadata = {
+        "openai": {
+            "models": {
+                # Matched by id, but Models.dev only has cost evidence here --
+                # no "modalities" or "limit" key at all for this model.
+                "vendor/only-provider-knows-capacity": {"cost": {"input": 0, "output": 0}},
+            }
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openai")
+    row = merged["data"][0]
+
+    # Models.dev's cost evidence is applied (is_free is third-party-verified)...
+    assert row["is_free"] is True
+    # ...while the provider's own architecture/capacity evidence, which
+    # Models.dev is silent on, survives instead of being blanked to None.
+    assert row["architecture"] == {
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+    }
+    assert row["context_window"] == 128000
+    assert row["max_output_tokens"] == 4096
+
+    # And when Models.dev *does* report a field, its value still wins over a
+    # provider's own (e.g. stale) value for that same field.
+    payload_with_stale = {
+        "data": [
+            {
+                "id": "vendor/models-dev-knows-more",
+                "context_window": 8000,
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            }
+        ]
+    }
+    metadata_with_fresh = {
+        "openai": {
+            "models": {
+                "vendor/models-dev-knows-more": {
+                    "cost": {"input": 0, "output": 0},
+                    "modalities": {"input": ["text", "audio"], "output": ["text"]},
+                    "limit": {"context": 200000},
+                }
+            }
+        }
+    }
+    merged_fresh = _merge_models_dev_metadata(payload_with_stale, metadata_with_fresh, "openai")
+    row_fresh = merged_fresh["data"][0]
+    assert row_fresh["context_window"] == 200000
+    assert row_fresh["architecture"]["input_modalities"] == ["text", "audio"]
+    # Models.dev did not report max_output_tokens for this model: the
+    # provider's own catalog row had none either, so the field stays absent
+    # rather than being fabricated.
+    assert row_fresh["max_output_tokens"] is None
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
