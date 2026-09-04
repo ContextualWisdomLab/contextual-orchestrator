@@ -163,6 +163,16 @@ precision is redistributed rather than created. `conditional_information`
 remains `not_executed` until buyer-relevant trait regions, calibrated items,
 and purpose-specific precision targets exist.
 
+Source commit `0b19116e` adds the decision-level consequence required by
+Rudner (2001, 2005). At a declared synthetic cut of zero, lowering score
+standard error from `0.8` to `0.2` raises expected classification accuracy
+from `0.814182` to `0.996895` and consistency from `0.710275` to `0.993829`.
+This confirms that measurement error propagates into routing decisions; it
+does not choose a buyer cut or encode asymmetric decision costs.
+`classification_decision` remains `not_executed` until buyer-linked measures,
+valid standard errors, an explicit cut and cost model, and preregistered targets
+exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

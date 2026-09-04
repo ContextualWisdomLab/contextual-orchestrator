@@ -2315,6 +2315,14 @@ worst conditional standard error from `0.890897` to `0.827931`; center
 information falls from `3.0` to `2.194529`, exposing the actual precision
 tradeoff. `conditional_information` remains `not_executed` until buyer-relevant
 regions, calibrated items, and preregistered precision targets exist.
+Source commit `0b19116e` exercises the released Rudner classification API at a
+declared synthetic cut of zero. Lowering standard error from `0.8` to `0.2`
+raises expected classification accuracy from `0.814182` to `0.996895`
+(`+0.182713`) and consistency from `0.710275` to `0.993829` (`+0.283554`).
+This converts measurement uncertainty into an observable decision-error KPI,
+but cannot define a buyer decision or its asymmetric costs.
+`classification_decision` remains `not_executed` pending buyer-linked measures,
+valid standard errors, a declared cut and cost model, and preregistered targets.
 
 ## 7. Delivery gates
 

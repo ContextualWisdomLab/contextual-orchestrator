@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now measures expected classification
+  accuracy and consistency at a declared decision cut. Lower score error improves
+  both measures, while buyer cuts, decision costs, and validity remain gated.
 - The held-out psychometric benchmark now reports conditional test information
   and standard error at the center and tails. A range-matched item bank improves
   worst-case information without treating average reliability as uniform precision.

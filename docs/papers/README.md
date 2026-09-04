@@ -132,6 +132,17 @@ Buyer next action: call `run_equal_budget_ablation` and read
   candidates with ZU3 separation `1.818719` from the next-highest pattern. The
   diagnostic does not explain the anomaly or supply a universal action cutoff,
   so buyer response-pattern fit remains unexecuted.
+- Rudner, L. M. (2001). Computing the expected proportions of misclassified
+  examinees. *Practical Assessment, Research & Evaluation, 7*(14), 1–5.
+  https://doi.org/10.7275/an9m-2035
+- Rudner, L. M. (2005). Expected classification accuracy. *Practical
+  Assessment, Research & Evaluation, 10*(13), 1–4.
+  https://doi.org/10.7275/56a5-6b14
+  Ground expected classification accuracy and consistency in the score-error
+  distribution around a declared decision cut. Source commit `0b19116e`
+  raises expected accuracy from `0.814182` to `0.996895` and consistency from
+  `0.710275` to `0.993829` when synthetic standard error falls from `0.8` to
+  `0.2`. The cut and costs are synthetic, so buyer decisions remain unexecuted.
 - Horn, J. L. (1965). A rationale and test for the number of factors in factor
   analysis. *Psychometrika, 30*(2), 179–185.
   https://doi.org/10.1007/BF02289447
