@@ -2,8 +2,8 @@
 
 These papers ground the design of the LLM **cost review** ledger and the
 **sync-vs-batch / upstream** routing added in `feat/cost-review-and-batch-routing`.
-All three are arXiv preprints distributed under licenses that permit
-redistribution; each is cited below with its arXiv identifier.
+Vendored PDFs are limited to papers whose redistribution terms were checked;
+the remaining sources are cited and linked without copying their files.
 
 ## Cost optimisation
 
@@ -84,7 +84,7 @@ Buyer next action: call `run_equal_budget_ablation` and read
   uses the smallest bounded form: two positive-cosine neighbors, with no
   learned bandwidth or claim of reproducing the paper's estimator.
 
-The current gateway does not claim either paper's estimator. Candidate changes
+The current gateway does not claim these papers' full estimators. Candidate changes
 must report held-out prediction quality or true-parameter RMSE together with
 route-decision latency; faster Python preparation alone is a latency result,
 not an accuracy improvement.
@@ -143,3 +143,6 @@ Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
 (2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
 response theory* [Preprint]. arXiv.
 https://doi.org/10.48550/arXiv.2506.01048
+
+Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
