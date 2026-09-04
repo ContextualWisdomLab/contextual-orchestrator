@@ -1235,6 +1235,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Provider hosts resolving to any non-globally-routable address are rejected,
   including RFC 6598 shared space; benchmark artifacts refuse secret leakage.
+- `ModelClient._validate_provider`'s allowlisted-host path now delegates its
+  SSRF and DNS-rebinding check to EgressWeave's `validate_egress_url_details`
+  instead of a hand-rolled resolve-then-check loop, reusing EgressWeave's
+  already-validated addresses directly so the pinned connection cannot diverge
+  from what was checked. The no-allowlist-configured default keeps the prior
+  hand-rolled check, since EgressWeave's allowlist model cannot express "no
+  host restriction" (an empty allowlist there rejects every host).
 
 ### References
 
