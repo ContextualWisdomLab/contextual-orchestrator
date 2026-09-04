@@ -2336,9 +2336,15 @@ class ModelClient:
             # declares api:chat_completions_only -- an untagged remote
             # provider still gets plain passthrough, unchanged from before
             # this branch existed (see agent_supports_responses's docstring).
+            # opencode_go's discovered agents are chat-only by provider
+            # contract but are not (yet) auto-tagged api:chat_completions_only
+            # by model_discovery.py, so the provider-name check added by the
+            # OpenCode Go discovery merge is preserved alongside the general
+            # tag-based check to avoid regressing that provider's translation.
             if normalized_endpoint == "responses" and (
                 _is_local_provider_url(agent.base_url)
                 or not agent_supports_responses(agent.tags)
+                or agent.provider_name == "opencode_go"
             ):
                 chat_payload = responses_request_to_chat_request(payload)
                 if "response_format" in chat_payload and not (
