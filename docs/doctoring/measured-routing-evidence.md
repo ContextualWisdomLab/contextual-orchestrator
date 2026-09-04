@@ -93,6 +93,14 @@ the single-neighbor default while retaining full top-2 ordering only inside the
 experiment. A same-process 512-row `timeit` comparison measured 5.5 µs for
 `max()` versus 27 µs for `sorted(..., reverse=True)[:1]`; this isolates neighbor
 selection and is not an end-to-end route-latency claim.
+Experimental source commit `972bd4a0` reads the two selected score maps once
+per candidate rather than rebuilding filtered numerator and denominator
+generators. Ten whole-process pairs alternated baseline/candidate order. The
+median candidate decision p50 fell from `0.0180415` to `0.016708` ms (7.39%);
+the paired context-median latency-delta CI upper bound fell from `0.0022899` to
+`0.0006677` ms (70.84%). Brier `0.1418346845`, log loss `0.4475784303`, and
+regret `0` were identical in every pair. Because the CI upper bound remains
+positive, this improvement does not open the latency or production gate.
 
 ## APA 7 references
 

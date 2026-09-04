@@ -183,6 +183,13 @@ flowchart LR
   production single-neighbor default. Its isolated 512-row selection evidence
   is 5.5 µs versus 27 µs for full sorting; the experimental top-2 path keeps
   sorting because it requires two ordered neighbors.
+- Source commit `972bd4a0` removes repeated generator and membership passes
+  from the experimental weighted interpolation while preserving candidates
+  present in only one neighbor. Across ten alternating whole-process pairs,
+  candidate decision p50 fell from median `0.0180415` to `0.016708` ms (7.39%)
+  and the paired latency-delta CI upper bound fell from median `0.0022899` to
+  `0.0006677` ms (70.84%). Brier, log loss, and regret were unchanged. The
+  upper bound remains positive, so the latency production gate stays closed.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted

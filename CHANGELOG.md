@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Experimental two-neighbor psychometric interpolation now reads each
+  neighbor's score map once per candidate instead of repeating generator and
+  membership passes; alternating-process measurements reduced candidate
+  decision p50 by 7.39% without changing Brier score, log loss, or regret.
 - Production single-neighbor psychometric selection again uses one-pass
   `max()` instead of sorting every retained context for an experimental top-2
   need; the isolated 512-row selection benchmark fell from 27 to 5.5 µs.
