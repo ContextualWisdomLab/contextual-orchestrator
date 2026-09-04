@@ -37,6 +37,7 @@ import certifi
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
+    declares_text_input,
     is_chat_compatible_model_id,
     is_general_chat_candidate,
     requires_non_text_input,
@@ -7084,6 +7085,46 @@ class TaskOrchestrator:
             tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
         )
 
+    @staticmethod
+    def _agent_has_verified_tool_call_support(agent: ModelAgent) -> bool:
+        """Return whether discovery evidence verified this agent accepts tool-calling requests.
+
+        Reads the ``tool_call:supported`` tag written only when a provider's
+        catalog row carried real ``supported_parameters`` evidence naming
+        ``"tools"``/``"tool_choice"`` (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``). Absence of the tag
+        means unverified, never a negative claim -- mirrors
+        :meth:`_agent_requires_non_text_input`'s tag-reading pattern.
+        """
+        return "tool_call:supported" in agent.tags
+
+    @staticmethod
+    def _agent_declares_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare text input.
+
+        Tool-call support alone cannot certify a model can serve a blind
+        text-only request -- an image-only model that also happens to accept
+        tool-calling parameters still cannot answer plain text (regression:
+        ``test_verified_tools_do_not_admit_image_only_restored_agent``).
+        Verified tool support is therefore only a meaningful exemption from
+        :meth:`_agent_requires_non_text_input`'s exclusion when the agent's
+        own declared input modalities *also* include ``text`` -- i.e. it is a
+        "text-plus-something-else" model, not an "only something else" one.
+
+        Delegates the actual "what counts as text" classification to
+        ``chat_capability.declares_text_input``, the single evidence-based
+        rule shared with ``model_discovery._declares_text_input`` (which
+        reads ``DiscoveredModel.input_modalities`` directly) so the two
+        representations of the same catalog evidence cannot drift on this
+        question independently of each other -- mirroring how the sibling
+        pair :meth:`_agent_requires_non_text_input` /
+        ``model_discovery._requires_non_text_input`` already share
+        ``chat_capability.requires_non_text_input``.
+        """
+        return declares_text_input(
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
+        )
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models.
 
@@ -7120,8 +7161,35 @@ class TaskOrchestrator:
         selection path shares -- including an agent row loaded from a durable
         pool store that was written before this exclusion existed, or one
         activated by a pool-construction path this repository adds later.
+
+        One additive exemption: an agent verified to accept tool-calling
+        requests (:meth:`_agent_has_verified_tool_call_support`, from a
+        ``tool_call:supported`` tag backed by real provider
+        ``supported_parameters`` evidence) that *also* declares text as one
+        of its own input modalities (:meth:`_agent_declares_text_input`) is
+        admitted even when it additionally declares a non-text input
+        modality. Both conditions are required together -- tool-call support
+        cannot substitute for text-input capability, or an image-only model
+        that happens to also accept tool-calling parameters would wrongly
+        pass despite being unable to answer a blind text-only request at all
+        (regression: ``test_verified_tools_do_not_admit_image_only_restored_agent``).
+        This is an OR with the existing exclusion, not a replacement: an
+        agent with no such evidence, or with verified evidence it does *not*
+        accept tools, or with no declared text input, still falls back to the
+        original blanket exclusion unchanged. Mirrors
+        ``model_discovery.general_free_serving_candidates``'s identical
+        exemption at discovery time -- see its docstring for why this does not
+        reopen ContextualWisdomLab/.github#1198 (NVIDIA NIM never reports
+        ``supported_parameters``, so its incident model can never carry this
+        tag).
         """
-        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
+        return self._is_free_agent(agent) and (
+            not self._agent_requires_non_text_input(agent)
+            or (
+                self._agent_has_verified_tool_call_support(agent)
+                and self._agent_declares_text_input(agent)
+            )
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 

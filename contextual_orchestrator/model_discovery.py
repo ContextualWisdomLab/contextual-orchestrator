@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
+    declares_text_input,
     is_general_chat_agent_model_id,
     is_general_chat_candidate,
     requires_non_text_input,
@@ -106,6 +107,35 @@ def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None
     if "parallel_tool_calls" in params:
         return True
     return None
+
+
+def _tool_call_support_evidence(supported_parameters: Any) -> bool | None:
+    """Return verified tool-calling support from a raw ``supported_parameters`` value.
+
+    Live OpenRouter verification (569 models; 75 zero-priced, non-text-input
+    rows; 8 of those declare ``"tools"``) shows a provider's
+    ``supported_parameters`` list is a real, deliberate declaration of which
+    request fields a model accepts -- not just missing data when it omits
+    ``"tools"``/``"tool_choice"``. So a returned list that lacks either name is
+    verified negative evidence (``False``), matching the tri-state contract
+    used for ``supports_zero_data_retention`` and its siblings.
+
+    Must be called with the *raw* ``row.get("supported_parameters")`` value,
+    not a field-absent-defaults-to-``[]`` local derived from it -- otherwise a
+    provider that never sends this field at all (e.g. NVIDIA NIM's
+    ``/v1/models``, which carries no ``supported_parameters`` key) would be
+    misread as having explicitly declared zero supported parameters, collapsing
+    honest absence of evidence (``None``) into a false verified-negative
+    (``False``).
+    """
+    if not isinstance(supported_parameters, list):
+        return None
+    params = {
+        value.strip().casefold()
+        for value in supported_parameters
+        if isinstance(value, str) and value.strip()
+    }
+    return "tools" in params or "tool_choice" in params
 
 
 def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
@@ -511,6 +541,7 @@ class DiscoveredModel:
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
+    supports_tool_calls: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
@@ -788,6 +819,13 @@ def _deduplicate_discovered_models(
     deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
+
+    Conflicting price, limit, and privacy claims are always withheld. Tool-call
+    support stays tri-state per its own evidence: duplicates that disagree stay
+    unknown, while duplicates that both explicitly say ``True`` or both
+    explicitly say ``False`` preserve that consensus. Otherwise provider row
+    order would erase verified tool support that the free-pool admission
+    contract legitimately depends on.
     """
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
@@ -810,6 +848,11 @@ def _deduplicate_discovered_models(
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
+            supports_tool_calls=(
+                previous.supports_tool_calls
+                if previous.supports_tool_calls == model.supports_tool_calls
+                else None
+            ),
             zdr_capable=False,
         )
     return list(unique.values())
@@ -983,6 +1026,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("context_window", None)
         row.pop("context_length", None)
         row.pop("max_completion_tokens", None)
+        row.pop("supported_parameters", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
@@ -998,6 +1042,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
         completion_limits: list[int | None] = []
         context_windows: list[int | None] = []
+        tool_support_values: list[bool | None] = []
         privacy_values = {
             key: []
             for key in (
@@ -1051,6 +1096,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             if info.get("supports_vision") is True and "image" not in inputs:
                 inputs = (*inputs, "image")
             deployment_inputs.append(inputs)
+            tool_support_values.append(
+                _tool_call_support_evidence(
+                    info.get("supported_parameters", params.get("supported_parameters"))
+                )
+            )
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
@@ -1114,6 +1164,14 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 row["context_window"] = unique_context_windows.pop()
             else:
                 row["_context_window_conflicted"] = True
+        if tool_support_values and all(value is not None for value in tool_support_values):
+            unique_tool_support = set(tool_support_values)
+            if len(unique_tool_support) == 1:
+                row["supported_parameters"] = (
+                    ["tools", "tool_choice"]
+                    if unique_tool_support.pop() is True
+                    else []
+                )
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
@@ -1273,11 +1331,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        raw_supported_parameters = row.get("supported_parameters")
         supported_parameters = (
-            row.get("supported_parameters")
-            if isinstance(row.get("supported_parameters"), list)
-            else []
+            raw_supported_parameters if isinstance(raw_supported_parameters, list) else []
         )
+        supports_tool_calls = _tool_call_support_evidence(raw_supported_parameters)
         top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
@@ -1394,6 +1452,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     if isinstance(row.get("supports_no_prompt_retention"), bool)
                     else None
                 ),
+                supports_tool_calls=supports_tool_calls,
                 privacy_policy_urls=_privacy_policy_urls(source, row),
                 evidence_only=(
                     source.provider_name == "opencode_go"
@@ -1817,6 +1876,24 @@ def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     )
 
 
+def tool_call_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
+    """Translate only explicit provider tool-calling evidence into agent tags.
+
+    Both directions are recorded, mirroring
+    :func:`privacy_tags_for_discovered`'s positive/negative tag pairs: a
+    provider row whose ``supported_parameters`` list is present but omits
+    ``"tools"``/``"tool_choice"`` is verified *unsupported*, which is real
+    evidence and not the same claim as "no evidence at all". Emitting only
+    the positive tag would collapse ``False`` into ``None`` on every catalog
+    round trip through ``provider_catalog_store._restore_model_semantics``,
+    silently discarding it. Unknown (``None``) still writes no tag.
+    """
+    return (
+        *(("tool_call:supported",) if discovered.supports_tool_calls is True else ()),
+        *(("tool_call:unsupported",) if discovered.supports_tool_calls is False else ()),
+    )
+
+
 def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
     """Return whether a discovered row is chat-compatible before serving policy.
 
@@ -1872,6 +1949,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
+            *tool_call_tags_for_discovered(discovered),
         ),
         priority=priority,
         disabled=True,
@@ -1914,6 +1992,25 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     other.
     """
     return requires_non_text_input(discovered.input_modalities)
+
+
+def _declares_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence lists text among this model's own input modalities.
+
+    Verified tool-call support cannot substitute for text-input capability:
+    an image-only model that also happens to accept tool-calling parameters
+    still cannot answer a blind text-only request. Delegates the actual
+    "what counts as text" classification to
+    ``chat_capability.declares_text_input``, the single evidence-based rule
+    shared with ``orchestrator.TaskOrchestrator._agent_declares_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other -- exactly the sharing arrangement the sibling pair
+    :func:`_requires_non_text_input` /
+    ``TaskOrchestrator._agent_requires_non_text_input`` already uses.
+    """
+    return declares_text_input(discovered.input_modalities)
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
@@ -2030,11 +2127,41 @@ def general_free_serving_candidates(
     to an ordinary chat agent -- excludes both here too, so this selector's
     count never overstates how many free models the general chat pool could
     actually serve.
+
+    A non-text-input model is exempted from :func:`_requires_non_text_input`'s
+    exclusion only when ``model.supports_tool_calls is True`` -- verified
+    provider evidence (a real ``supported_parameters`` list containing
+    ``"tools"``/``"tool_choice"``; see :func:`_tool_call_support_evidence`)
+    that this exact catalog row accepts tool-calling requests -- *and*
+    :func:`_declares_text_input` is also true for it. Both are required
+    together: tool-call support alone cannot substitute for text-input
+    capability, or an image-only model that also happens to accept
+    tool-calling parameters would wrongly pass despite being unable to
+    answer a blind text-only request at all (regression:
+    ``test_verified_tools_do_not_admit_image_only_discovered_model``). This
+    is an additive OR with the original exclusion, not a replacement:
+    ``supports_tool_calls`` unset (``None``, the fail-closed default
+    whenever a provider's row carries no ``supported_parameters`` evidence
+    at all), verified absent (``False``), or no declared text input all
+    leave the original exclusion in force. NVIDIA NIM's ``/v1/models`` never
+    returns ``supported_parameters``, so this incident's model
+    (``meta/llama-3.2-90b-vision-instruct``) gets ``supports_tool_calls=None``
+    unconditionally and stays excluded -- the exemption does not reopen
+    #1198. No separate "and output is text" clause is needed here: every row
+    that reaches this filter already passed ``is_routable_discovered_model``,
+    which (via ``is_discovered_chat_candidate``) already refuses a non-text
+    output row, so the exemption is already exactly as narrow as "non-text
+    input alongside text input, text output, verified tool support" without
+    re-deriving a check this selector already enforces one layer up.
     """
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if is_routable_discovered_model(model)
+        and (
+            not _requires_non_text_input(model)
+            or (model.supports_tool_calls is True and _declares_text_input(model))
+        )
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates
