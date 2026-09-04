@@ -81,6 +81,15 @@ def test_security_workflow_covers_core_repository_security_process():
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
 
 
+def test_security_workflow_supports_stacked_pull_requests():
+    workflow_text = read_text(".github/workflows/security.yml")
+    pull_request_trigger = workflow_text.split("  pull_request:\n", 1)[1].split(
+        "  schedule:\n", 1
+    )[0]
+
+    assert "branches:" not in pull_request_trigger
+
+
 def test_dependabot_tracks_actions_and_python_dependencies():
     dependabot_text = read_text(".github/dependabot.yml")
 
