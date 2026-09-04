@@ -243,6 +243,10 @@ flowchart LR
   synthetic anchors with a known affine scale change. It converges with
   true-parameter RMSE `3.24e-16`; the production component remains unexecuted
   until versioned buyer anchors establish invariance across recalibrations.
+- Source commit `d0d81e8f` validates purified logistic candidate-cohort DIF on
+  a known shifted item. Purification stabilizes with seven anchors, recall 1.0,
+  and zero false positives; the unpurified extra flag is retained as evidence
+  of matching-score contamination. Buyer DIF remains unexecuted.
 
 ## References
 
@@ -251,4 +255,5 @@ Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
 Chen et al., 2023; Chen & Thissen, 1997; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
 Song et al., 2025; Lior et al., 2026; Debeer & Janssen, 2013; Doebler, 2012;
 Finkelman et al., 2009; Barrada et al., 2007; Horvitz & Thompson, 1952;
-Dudík et al., 2011; Swaminathan & Joachims, 2015; Stocking & Lord, 1983).
+Dudík et al., 2011; Swaminathan & Joachims, 2015; Stocking & Lord, 1983;
+Swaminathan & Rogers, 1990; French & Maller, 2007).

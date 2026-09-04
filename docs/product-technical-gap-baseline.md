@@ -2247,6 +2247,12 @@ and recovers slope 1.3 and intercept -0.4 with true-parameter RMSE `3.24e-16`.
 Because these are synthetic anchors rather than stable items observed across
 buyer recalibrations, `scale_linking` remains `not_executed` and cannot open
 the aggregate validity gate.
+Source commit `d0d81e8f` exercises the released purified logistic DIF path on
+4,000 synthetic observations with one known candidate-cohort item shift. The
+unpurified screen produces one contamination-driven extra flag; purification
+stabilizes with seven anchors and reports recall 1.0 with zero false positives.
+This proves the computation and contamination guard, not candidate-group
+invariance on buyer data, so `candidate_group_dif` remains `not_executed`.
 
 ## 7. Delivery gates
 

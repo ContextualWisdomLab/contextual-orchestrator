@@ -152,6 +152,12 @@ Stocking–Lord linking converges and recovers both coefficients with
 true-parameter RMSE `3.24e-16`. These exact synthetic anchors prove the
 calculation path, not cross-version buyer invariance, so `scale_linking`
 remains `not_executed` for production.
+Source commit `d0d81e8f` validates candidate-cohort DIF screening with a
+known shifted item. The unpurified screen also flags an invariant item because
+the matching total is contaminated; iterative logistic purification stabilizes
+with seven anchors, detects the one injected item (recall 1.0), and has zero
+false positives. The result is synthetic contract evidence, so buyer DIF stays
+`not_executed`.
 
 ## APA 7 references
 
@@ -238,6 +244,16 @@ https://jmlr.org/papers/v16/swaminathan15a.html
 Stocking, M. L., & Lord, F. M. (1983). Developing a common metric in item
 response theory. *Applied Psychological Measurement, 7*(2), 201–210.
 https://doi.org/10.1177/014662168300700208
+
+French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
+use with logistic regression for differential item functioning detection.
+*Educational and Psychological Measurement, 67*(3), 373–393.
+https://doi.org/10.1177/0013164406294781
+
+Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
+functioning using logistic regression procedures. *Journal of Educational
+Measurement, 27*(4), 361–370.
+https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.

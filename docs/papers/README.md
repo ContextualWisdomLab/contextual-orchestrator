@@ -143,6 +143,17 @@ Buyer next action: call `run_equal_budget_ablation` and read
   Grounds characteristic-curve linking across separately calibrated forms.
   Source commit `ca6e9a75` recovers a known six-anchor affine transform with
   true-parameter RMSE `3.24e-16`; buyer anchors remain unexecuted.
+- Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
+  functioning using logistic regression procedures. *Journal of Educational
+  Measurement, 27*(4), 361–370.
+  https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
+- French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
+  use with logistic regression for differential item functioning detection.
+  *Educational and Psychological Measurement, 67*(3), 373–393.
+  https://doi.org/10.1177/0013164406294781
+  Together these ground logistic DIF and iterative removal of contaminated
+  matching items. Source commit `d0d81e8f` detects the single injected cohort
+  shift with recall 1.0 and zero false positives after purification.
 - He, Y., & Qi, Y. (2023). Using response time in multidimensional
   computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
   697–738. https://doi.org/10.1111/jedm.12373
