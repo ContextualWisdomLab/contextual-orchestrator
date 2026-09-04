@@ -105,6 +105,20 @@ Buyer next action: call `run_equal_budget_ablation` and read
   values and have mean width `0.295945`. The released API conditions on
   population parameters and rejects anchors, zero inflation, and item
   covariates, so buyer uncertainty remains unexecuted.
+- Millsap, R. E. (2010). Testing measurement invariance using item response
+  theory in longitudinal data: An introduction. *Child Development
+  Perspectives, 4*(1), 5–9.
+  https://doi.org/10.1111/j.1750-8606.2009.00109.x
+  Grounds the requirement that relations between observed outcomes and the
+  latent routing construct remain invariant across recalibrations.
+- Babcock, B., & Albano, A. D. (2012). Rasch scale stability in the presence of
+  item parameter and trait drift. *Applied Psychological Measurement, 36*(7),
+  565–580. https://doi.org/10.1177/0146621612455090
+  Grounds the warning that drift in common items can distort linked scores and
+  classifications. Source commit `2e129e2a` links two known parameter sets
+  through seven stable anchors, flags the one injected drift item, and produces
+  no stable-item false positive. Its fixed `0.25` tolerance is a preregistered
+  effect-size screen, not an inferential cutoff or buyer invariance proof.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now links two synthetic recalibrations
+  through seven stable anchors and detects the one injected item-parameter drift
+  with no stable-item false positive. The tolerance is explicitly an effect-size
+  screen, not a significance test or buyer-validity result.
 - The held-out psychometric benchmark now uses the released Oakes-information
   API to report item-intercept RMSE, 95% Wald-interval coverage, and mean interval
   width while keeping synthetic uncertainty evidence outside the buyer gate.

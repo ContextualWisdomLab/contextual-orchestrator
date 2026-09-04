@@ -110,6 +110,15 @@ not buyer calibration: the API conditions on population parameters and does not
 support anchors, zero inflation, or item covariates, so `parameter_uncertainty`
 remains `not_executed`.
 
+Source commit `2e129e2a` adds the distinct longitudinal-invariance check required
+by Millsap (2010) and the common-item drift risk described by Babcock and Albano
+(2012). Two known parameter sets are linked through seven stable anchors; the
+screen recovers the one injected drift item with no stable-item false positive.
+The fixed `0.25` tolerance is deliberately reported as an effect-size screen,
+not a significance test. `parameter_invariance` remains `not_executed` until
+versioned buyer recalibrations, stable anchors, sampling uncertainty, and
+preregistered review rules exist.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is

@@ -2273,6 +2273,12 @@ interval width `0.295945`. Because the current API conditions on population
 parameters and rejects anchors, zero inflation, and item covariates, this is an
 implementation check rather than buyer uncertainty evidence;
 `parameter_uncertainty` remains `not_executed`.
+Source commit `2e129e2a` adds a separate recalibration-invariance screen. It
+links two known parameter sets through seven stable anchors, recovers the one
+injected drift item, and reports no stable-item false positive. The fixed `0.25`
+tolerance is an effect-size rule rather than a significance test; versioned
+buyer recalibrations and sampling uncertainty are still absent, so
+`parameter_invariance` remains `not_executed`.
 
 ## 7. Delivery gates
 
