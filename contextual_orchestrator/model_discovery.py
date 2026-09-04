@@ -34,6 +34,7 @@ from .chat_capability import (
     requires_non_text_input,
 )
 from .credentials import get_credential
+from .opencode_go import NATIVE_ENDPOINTS as OPENCODE_GO_NATIVE_ENDPOINTS
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -415,6 +416,14 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
         bootstrap_required=False,
         models_dev_provider_id="opencode",
+    ),
+    ProviderModelSource(
+        provider_name="opencode_go",
+        credential_name="OPENCODE_ZEN_API_KEY",
+        list_url="https://opencode.ai/zen/go/v1/models",
+        chat_base_url="https://opencode.ai/zen/go/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -1253,6 +1262,8 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
+            continue
+        if source.provider_name == "opencode_go" and model_id not in OPENCODE_GO_NATIVE_ENDPOINTS:
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
