@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Psychometric benchmark gates now distinguish `not_executed` buyer and
+  measurement-validity evidence from a measured `failed` latency result while
+  preserving the existing fail-closed Boolean compatibility fields.
 - Semantic psychometric lookup now validates and normalizes the query embedding
   once per decision instead of once per retained context. Five paired local
   runs reduced candidate decision p50 median from `0.023167` to `0.015042` ms

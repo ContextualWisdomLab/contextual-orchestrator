@@ -2198,6 +2198,10 @@ at exact head `c48af6af811cbd9ffa7d087fdde65d1dddd4fe1a` exposes the existing
 Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
 evidence, not released consumer evidence, and it does not open the routing gate
 without a preregistered buyer matrix, multiplicity plan, and threshold.
+CO source commit `1309b3ce` also stops conflating this absent evidence with a
+failed measurement: its report marks buyer-heldout and validity gates
+`not_executed`, the measured latency gate `failed`, and accuracy `passed`; only
+`passed` maps to the compatibility Boolean or production authorization.
 
 ## 7. Delivery gates
 

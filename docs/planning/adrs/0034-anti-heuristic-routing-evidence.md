@@ -204,6 +204,10 @@ flowchart LR
   exposes its existing Rust Chen-Thissen signed X2/G2 local-dependence indices
   to Python. This closes an API prerequisite only; it does not satisfy the gate
   until a buyer matrix, multiplicity plan, and threshold are preregistered.
+- Source commit `1309b3ce` reports gate evidence state explicitly: synthetic
+  accuracy is `passed`, decision latency is `failed`, and buyer-heldout plus
+  measurement-validity work is `not_executed`. Compatibility Booleans remain
+  false unless the state is `passed`, so missing evidence cannot authorize use.
 
 ## References
 

@@ -107,6 +107,10 @@ local runs, median candidate p50 fell from `0.023167` to `0.015042` ms (35.07%)
 and the median paired latency-delta CI upper bound fell from `0.0008368` to
 `0.0006112` ms. Brier, log loss, and regret remained bit-identical. The latency
 and production gates remain closed because the interval upper bound is positive.
+Source commit `1309b3ce` separates observed failure from absent evidence:
+accuracy is `passed`, latency is `failed`, and buyer-heldout plus
+measurement-validity gates are `not_executed`. The legacy Boolean view derives
+strictly from `status == "passed"`, preserving fail-closed compatibility.
 
 ## APA 7 references
 
