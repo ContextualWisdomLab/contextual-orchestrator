@@ -140,6 +140,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   rosters, links 200 common items, and reports linked common-score RMSE
   `0.010866`, correlation `0.999999`, and maximum shift `0.016498`. Buyer
   roster invariance remains unexecuted.
+- Huebner, A., & Lucht, M. (2019). Generalizability theory in R. *Practical
+  Assessment, Research, and Evaluation, 24*, Article 5.
+  https://openpublishing.library.umass.edu/pare/article/id/1593/
+  Grounds the crossed persons-by-items-by-occasions G-study and D-study used to
+  distinguish candidate signal from query, repeat, and interaction error.
+  Source commit `015c4bf6` raises synthetic dependability from `0.401565` for
+  one query and one occasion to `0.849616` for 12 queries and four occasions;
+  a balanced synthetic tensor does not establish buyer generalizability.
 - Guo, R., Zheng, Y., & Chang, H.-H. (2015). A stepwise test characteristic
   curve method to detect item parameter drift. *Journal of Educational
   Measurement, 52*(3), 280–300. https://doi.org/10.1111/jedm.12077

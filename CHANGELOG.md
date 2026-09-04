@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now decomposes candidate, query,
+  occasion, and interaction variance with a two-facet G-study and reports
+  D-study generalizability and dependability across proposed evidence designs.
 - The held-out psychometric benchmark now separately calibrates full and
   reduced candidate rosters, links them through common items, and reports
   common-candidate score stability without treating synthetic recovery as

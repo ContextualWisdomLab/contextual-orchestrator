@@ -2343,6 +2343,14 @@ calculation on two seeded 1,200-response, 12-item cases. Reliability rises from
 information, not buyer score precision or validity. Reliability and model fit
 remain separate evidence, so `score_reliability` stays `not_executed` pending
 buyer calibration, posterior errors, a purpose-specific target, and fit review.
+Source commit `015c4bf6` exercises the released two-facet G-theory API on an
+80-candidate, 12-query, four-occasion synthetic tensor. Its D-study separates
+candidate signal from query, occasion, and interaction error: dependability is
+`0.401565` for one query and one occasion, `0.730184` for six and two, and
+`0.849616` for 12 and four. A complete balanced synthetic design and clamped
+ANOVA components do not establish live buyer generalizability, so
+`generalizability_design` remains `not_executed` pending complete observations,
+random-facet justification, and a registered dependability target.
 Source commit `b4efa489` exercises the released test-information calculation at
 trait points `[-2, 0, 2]`. Spreading 12 item difficulties across `[-2, 2]`
 raises worst information from `1.259923` to `1.458854` (`15.789%`) and lowers

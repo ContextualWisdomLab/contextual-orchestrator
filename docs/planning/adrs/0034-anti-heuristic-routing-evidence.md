@@ -179,6 +179,15 @@ invariance or construct validity. `score_reliability` therefore remains
 `not_executed` until buyer calibration, posterior errors, a purpose-specific
 target, and separate model-fit evidence exist.
 
+Source commit `015c4bf6` adds a two-facet G-study and D-study following Huebner
+and Lucht (2019). An 80-candidate, 12-query, four-occasion synthetic design
+separates candidate, query, occasion, and interaction variance. Dependability
+rises from `0.401565` for one query and one occasion to `0.849616` for 12 and
+four. The calculation clamps negative ANOVA components for D-study quantities
+and assumes a complete balanced design, so `generalizability_design` remains
+`not_executed` until buyer observations, random-facet justification, and a
+preregistered dependability target exist.
+
 Source commit `b4efa489` adds the conditional precision screen required by
 Lord's test-information tradition and the released Magis (2013) calculation.
 Across trait points `[-2, 0, 2]`, spreading 12 item difficulties across
