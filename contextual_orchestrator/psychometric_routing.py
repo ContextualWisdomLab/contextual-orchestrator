@@ -100,8 +100,16 @@ class PsychometricRoutingEvidence:
             if exact_id in self._scores:
                 context_scores = self._scores[exact_id]
             elif vector is not None:
+                vector_norm = self._finite_norm(vector)
+                if vector_norm is None:
+                    return []
                 comparable = [
-                    (self._cosine(vector, stored_vector), stored_id)
+                    (
+                        self._cosine_with_left_norm(
+                            vector, vector_norm, stored_vector
+                        ),
+                        stored_id,
+                    )
                     for stored_id, stored_vector in self._contexts.items()
                     if stored_id in self._scores and stored_vector is not None
                 ]
@@ -244,16 +252,30 @@ class PsychometricRoutingEvidence:
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float | None:
         """Cosine similarity for two finite, equal-length embedding vectors."""
-        if (
-            not left
-            or len(left) != len(right)
-            or not all(math.isfinite(value) for value in left)
-            or not all(math.isfinite(value) for value in right)
-        ):
+        left_norm = PsychometricRoutingEvidence._finite_norm(left)
+        if left_norm is None:
             return None
-        left_norm = math.hypot(*left)
-        right_norm = math.hypot(*right)
-        if left_norm == 0.0 or right_norm == 0.0:
+        return PsychometricRoutingEvidence._cosine_with_left_norm(
+            left, left_norm, right
+        )
+
+    @staticmethod
+    def _finite_norm(vector: list[float]) -> float | None:
+        """Return a usable Euclidean norm for one finite embedding vector."""
+        if not vector or not all(math.isfinite(value) for value in vector):
+            return None
+        norm = math.hypot(*vector)
+        return norm if norm else None
+
+    @staticmethod
+    def _cosine_with_left_norm(
+        left: list[float], left_norm: float, right: list[float]
+    ) -> float | None:
+        """Cosine similarity when the validated left norm is already known."""
+        if len(left) != len(right):
+            return None
+        right_norm = PsychometricRoutingEvidence._finite_norm(right)
+        if right_norm is None:
             return None
         similarity = math.fsum(
             (left_value / left_norm) * (right_value / right_norm)
