@@ -55,6 +55,10 @@ GENERALIZABILITY_SEED = 260_916
 SEQUENTIAL_DRIFT_SEED = 260_917
 SEQUENTIAL_DRIFT_HOLDOUT_SEED = 270_917
 SEQUENTIAL_DRIFT_REPLICATIONS = 500
+ADAPTIVE_CALIBRATION_CANDIDATES = 400
+ADAPTIVE_CALIBRATION_ITEMS = 31
+ADAPTIVE_CALIBRATION_MAX_ITEMS = 12
+ADAPTIVE_CALIBRATION_TARGET_SE = 0.5
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -1140,12 +1144,119 @@ def _validate_parameter_uncertainty() -> dict[str, object]:
     }
 
 
+def _validate_adaptive_candidate_calibration() -> dict[str, object]:
+    """Compare information-selected and random onboarding queries on known truth."""
+    from fast_mlsirm import cat_next_item
+
+    discrimination = 1.5
+    difficulties = [
+        -3.0 + 6.0 * index / (ADAPTIVE_CALIBRATION_ITEMS - 1)
+        for index in range(ADAPTIVE_CALIBRATION_ITEMS)
+    ]
+    bundle = {
+        "schema_version": 1,
+        "model": "MIRT",
+        "n_items": ADAPTIVE_CALIBRATION_ITEMS,
+        "n_dims": 1,
+        "latent_dim": 1,
+        "quadrature": {"q_theta": 41, "q_xi": 7},
+        "eps_distance": 1e-8,
+        "tau": 0.0,
+        "population": None,
+        "eapsum_tables": None,
+        "items": [
+            {
+                "code": f"calibration_{index}",
+                "factor_id": 0,
+                "alpha": math.log(discrimination),
+                "b": difficulty,
+                "zeta": [0.0],
+            }
+            for index, difficulty in enumerate(difficulties)
+        ],
+    }
+
+    def probability(theta: float, difficulty: float) -> float:
+        return 1.0 / (1.0 + math.exp(-discrimination * (theta + difficulty)))
+
+    def evaluate(*, adaptive: bool) -> dict[str, float]:
+        squared_errors: list[float] = []
+        prediction_errors: list[float] = []
+        administered_counts: list[int] = []
+        target_reached = 0
+        for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+            generator = random.Random(10_000 + candidate_index)
+            theta = -2.0 + 4.0 * (
+                candidate_index + 0.5
+            ) / ADAPTIVE_CALIBRATION_CANDIDATES
+            responses: dict[str, int] = {}
+            random_order = list(range(ADAPTIVE_CALIBRATION_ITEMS))
+            random.Random(20_000 + candidate_index).shuffle(random_order)
+            for step in range(ADAPTIVE_CALIBRATION_MAX_ITEMS):
+                state = cat_next_item(bundle, responses, device="cpu")
+                item_index = (
+                    state["ranked_items"][0] if adaptive else random_order[step]
+                )
+                code = f"calibration_{item_index}"
+                responses[code] = int(
+                    generator.random() < probability(theta, difficulties[item_index])
+                )
+                state = cat_next_item(bundle, responses, device="cpu")
+                if state["theta_sd"][0] <= ADAPTIVE_CALIBRATION_TARGET_SE:
+                    target_reached += 1
+                    break
+            estimate = state["theta_eap"][0]
+            squared_errors.append((estimate - theta) ** 2)
+            administered_counts.append(len(responses))
+            prediction_errors.extend(
+                (
+                    probability(estimate, difficulty)
+                    - probability(theta, difficulty)
+                )
+                ** 2
+                for item_index, difficulty in enumerate(difficulties)
+                if f"calibration_{item_index}" not in responses
+            )
+        return {
+            "theta_rmse": math.sqrt(statistics.fmean(squared_errors)),
+            "unobserved_probability_mse": statistics.fmean(prediction_errors),
+            "mean_calibration_queries": statistics.fmean(administered_counts),
+            "target_se_reached_rate": target_reached
+            / ADAPTIVE_CALIBRATION_CANDIDATES,
+        }
+
+    adaptive = evaluate(adaptive=True)
+    random_baseline = evaluate(adaptive=False)
+    return {
+        "method": "maximum_fisher_information_eap_screen",
+        "candidates": ADAPTIVE_CALIBRATION_CANDIDATES,
+        "item_bank_size": ADAPTIVE_CALIBRATION_ITEMS,
+        "maximum_queries": ADAPTIVE_CALIBRATION_MAX_ITEMS,
+        "target_standard_error": ADAPTIVE_CALIBRATION_TARGET_SE,
+        "adaptive": adaptive,
+        "random_baseline": random_baseline,
+        "mean_query_reduction": random_baseline["mean_calibration_queries"]
+        - adaptive["mean_calibration_queries"],
+        "theta_rmse_reduction": random_baseline["theta_rmse"]
+        - adaptive["theta_rmse"],
+        "unobserved_probability_mse_reduction": random_baseline[
+            "unobserved_probability_mse"
+        ]
+        - adaptive["unobserved_probability_mse"],
+        "known_limit": (
+            "synthetic one-dimensional onboarding query efficiency is not live "
+            "decision latency, buyer calibration, or invariant model ability"
+        ),
+    }
+
+
 def run_benchmark() -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency."""
     baseline_evidence = _build_evidence(two_neighbor=False)
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    adaptive_candidate_calibration = _validate_adaptive_candidate_calibration()
     unseen_predictions = sum(
         bool(
             candidate_evidence.ranked_evidence(
@@ -1175,6 +1286,7 @@ def run_benchmark() -> dict[str, object]:
                 "the router emits no psychometric estimate for an unseen "
                 "candidate deployment"
             ),
+            "calibration_screen": adaptive_candidate_calibration,
         },
     }
     assignment_design = _validate_assignment_design(candidate_evidence)
@@ -1486,6 +1598,7 @@ def run_benchmark() -> dict[str, object]:
         "classification_decision_validation": classification_decision,
         "decision_utility_validation": selection_utility,
         "predictive_fit_validation": predictive_fit,
+        "adaptive_candidate_calibration_validation": adaptive_candidate_calibration,
         "candidate_group_dif_validation": candidate_group_dif,
         "judge_effects_validation": judge_effects,
         "item_language_domain_effect_validation": item_covariate_effect,

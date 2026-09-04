@@ -500,6 +500,27 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert predictive_fit["missing_persons"]["contexts"] == 24
     assert predictive_fit["missing_persons"]["prediction_coverage"] == 0.0
     assert "no psychometric estimate" in predictive_fit["missing_persons"]["known_limit"]
+    adaptive = report["adaptive_candidate_calibration_validation"]
+    assert predictive_fit["missing_persons"]["calibration_screen"] == adaptive
+    assert adaptive["method"] == "maximum_fisher_information_eap_screen"
+    assert adaptive["candidates"] == 400
+    assert adaptive["item_bank_size"] == 31
+    assert adaptive["maximum_queries"] == 12
+    assert adaptive["target_standard_error"] == 0.5
+    assert adaptive["adaptive"]["theta_rmse"] == pytest.approx(0.5759957156385006)
+    assert adaptive["adaptive"]["mean_calibration_queries"] == 7.1775
+    assert adaptive["adaptive"]["target_se_reached_rate"] == 1.0
+    assert adaptive["random_baseline"]["theta_rmse"] == pytest.approx(
+        0.6071517533210733
+    )
+    assert adaptive["random_baseline"]["mean_calibration_queries"] == 10.47
+    assert adaptive["random_baseline"]["target_se_reached_rate"] == 0.87
+    assert adaptive["mean_query_reduction"] == pytest.approx(3.2925)
+    assert adaptive["theta_rmse_reduction"] == pytest.approx(0.0311560376825727)
+    assert adaptive["unobserved_probability_mse_reduction"] == pytest.approx(
+        0.007139810493868
+    )
+    assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
     assert dif["expected_dif_items"] == [0]
