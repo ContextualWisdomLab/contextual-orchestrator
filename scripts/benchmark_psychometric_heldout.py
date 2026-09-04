@@ -53,6 +53,7 @@ EQUATING_SEED = 260_914
 ROSTER_INVARIANCE_SEED = 260_915
 GENERALIZABILITY_SEED = 260_916
 SEQUENTIAL_DRIFT_SEED = 260_917
+SEQUENTIAL_DRIFT_REPLICATIONS = 500
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -466,41 +467,74 @@ def _validate_functional_drift() -> dict[str, object]:
 
 
 def _validate_sequential_drift() -> dict[str, object]:
-    """Measure detection delay for one preregistered synthetic probability shift."""
+    """Measure the false-alarm and detection-delay tradeoff for a known shift."""
     before_probability = 0.8
     after_probability = 0.3
     change_after = 100
-    threshold = math.log(100.0)
-    generator = random.Random(SEQUENTIAL_DRIFT_SEED)
-    statistic = 0.0
-    alarm_observation: int | None = None
-    for observation_index in range(200):
-        probability = (
-            before_probability
-            if observation_index < change_after
-            else after_probability
-        )
-        accepted = generator.random() < probability
-        log_likelihood_ratio = (
-            math.log(after_probability / before_probability)
-            if accepted
-            else math.log((1.0 - after_probability) / (1.0 - before_probability))
-        )
-        statistic = max(0.0, statistic + log_likelihood_ratio)
-        if statistic >= threshold:
-            alarm_observation = observation_index + 1
-            break
-    assert alarm_observation is not None
+
+    def evaluate(threshold: float) -> dict[str, float | int]:
+        false_alarms = 0
+        detection_delays: list[int] = []
+        for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
+            generator = random.Random(SEQUENTIAL_DRIFT_SEED + replication)
+            statistic = 0.0
+            alarm_observation: int | None = None
+            for observation_index in range(250):
+                probability = (
+                    before_probability
+                    if observation_index < change_after
+                    else after_probability
+                )
+                accepted = generator.random() < probability
+                log_likelihood_ratio = (
+                    math.log(after_probability / before_probability)
+                    if accepted
+                    else math.log(
+                        (1.0 - after_probability) / (1.0 - before_probability)
+                    )
+                )
+                statistic = max(0.0, statistic + log_likelihood_ratio)
+                if statistic >= threshold:
+                    alarm_observation = observation_index + 1
+                    break
+            assert alarm_observation is not None
+            if alarm_observation <= change_after:
+                false_alarms += 1
+            else:
+                detection_delays.append(alarm_observation - change_after)
+        ordered_delays = sorted(detection_delays)
+        return {
+            "threshold_log_likelihood_ratio": threshold,
+            "false_alarm_rate": false_alarms / SEQUENTIAL_DRIFT_REPLICATIONS,
+            "post_change_detection_rate_among_no_false_alarm": (
+                len(detection_delays)
+                / (SEQUENTIAL_DRIFT_REPLICATIONS - false_alarms)
+            ),
+            "detection_delay_p50_observations": statistics.median(detection_delays),
+            "detection_delay_p95_observations": ordered_delays[
+                math.ceil(0.95 * len(ordered_delays)) - 1
+            ],
+        }
+
+    baseline = evaluate(math.log(100.0))
+    candidate = evaluate(7.0)
     return {
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
+        "replications": SEQUENTIAL_DRIFT_REPLICATIONS,
         "before_probability": before_probability,
         "after_probability": after_probability,
         "change_after_observations": change_after,
-        "threshold_log_likelihood_ratio": threshold,
-        "alarm_observation": alarm_observation,
-        "false_alarm": alarm_observation <= change_after,
-        "detection_delay_observations": alarm_observation - change_after,
+        "baseline": baseline,
+        "candidate": candidate,
+        "synthetic_targets": {
+            "maximum_false_alarm_rate": 0.05,
+            "maximum_detection_delay_p95_observations": 25,
+        },
+        "candidate_meets_synthetic_targets": (
+            candidate["false_alarm_rate"] <= 0.05
+            and candidate["detection_delay_p95_observations"] <= 25
+        ),
     }
 
 

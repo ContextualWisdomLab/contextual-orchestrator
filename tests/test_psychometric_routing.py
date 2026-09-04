@@ -310,10 +310,15 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     sequential_drift = report["sequential_drift_validation"]
     assert sequential_drift["method"] == "one_stream_bernoulli_cusum_screen"
     assert sequential_drift["seed"] == heldout_benchmark.SEQUENTIAL_DRIFT_SEED
+    assert sequential_drift["replications"] == 500
     assert sequential_drift["change_after_observations"] == 100
-    assert sequential_drift["alarm_observation"] == 107
-    assert sequential_drift["false_alarm"] is False
-    assert sequential_drift["detection_delay_observations"] == 7
+    assert sequential_drift["baseline"]["false_alarm_rate"] == 0.212
+    assert sequential_drift["baseline"]["detection_delay_p50_observations"] == 6
+    assert sequential_drift["baseline"]["detection_delay_p95_observations"] == 17
+    assert sequential_drift["candidate"]["false_alarm_rate"] == 0.014
+    assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 10
+    assert sequential_drift["candidate"]["detection_delay_p95_observations"] == 22
+    assert sequential_drift["candidate_meets_synthetic_targets"] is True
     person_fit = report["response_pattern_fit_validation"]
     assert person_fit["method"] == "nonparametric_zu3_rank"
     assert person_fit["sample_size"] == heldout_benchmark.PERSON_FIT_SAMPLE_SIZE
