@@ -45,10 +45,11 @@ The replacement ordering ladder is evidence-only:
 
 An exact previously judged context keeps its fitted model probabilities. The
 production default for an unseen context remains the previously validated
-single nearest positive-cosine context. The experimental held-out harness may
-enable two-neighbor interpolation and average each available candidate
-probability using those similarities as weights. No usable vector returns no
-psychometric evidence and falls back to the existing measured order.
+single nearest finite-cosine context, including its existing non-positive
+fallback. The experimental held-out harness may enable two-neighbor
+interpolation, require positive similarity, and average each available
+candidate probability using those similarities as weights. No usable vector
+returns no psychometric evidence and falls back to the existing measured order.
 
 This bounded Nadaraya-style local interpolation replaces a discontinuous
 nearest-context copy without adding a trained router or bandwidth parameter.
@@ -58,8 +59,11 @@ matrix shows non-inferior accuracy and acceptable end-to-end latency.
 
 The fitted value is a conditional success estimate for one versioned deployment
 candidate: endpoint, model revision, system prompt, decoding policy, and enabled
-tools. Declared candidate configuration is hashed into the evidence identity;
-a changed model, endpoint, capability, or policy cannot inherit earlier rows.
+tools. Declared candidate configuration and the active role effort/sampling
+catalog are hashed into the evidence identity; a changed model, endpoint,
+capability, or decode policy cannot inherit earlier rows. Source commit
+`0554b3ac` preserves the production similarity rule and adds policy-change and
+restart invalidation tests.
 It is not a context-free "LLM ability" measurement. Scores must not be
 linked across candidate-catalog, policy, domain, or time changes unless anchor
 interactions establish scale continuity. Production calibration must also test
