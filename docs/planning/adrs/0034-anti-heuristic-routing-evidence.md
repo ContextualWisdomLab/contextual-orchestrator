@@ -156,6 +156,8 @@ flowchart LR
   order. The Brier and log-loss intervals favor the candidate, but paired
   context-median latency is slower by `[0.0047666, 0.0054775]` ms; this
   strengthens the accuracy evidence without opening the production gate.
+- Report-contract commit `2cc8427f` makes every point delta explicit and fails
+  the focused test if a metric loses its paired interval or falls outside it.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted

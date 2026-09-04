@@ -24,8 +24,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   interpolation candidate on the same contexts and reports deterministic paired
   bootstrap 95% intervals for Brier, log-loss, and top-choice-regret deltas.
   Decision timing repeats 200 times per context, alternates baseline/candidate
-  execution order, and reports its own paired context-median interval, so an
-  accuracy interval cannot silently authorize a slower production route.
+  execution order, and reports each point delta beside its paired interval, so
+  an accuracy interval cannot silently authorize a slower production route.
 - The seeded held-out benchmark can now opt into interpolation of the two
   nearest positive-cosine psychometric score rows and reports Brier score, log
   loss, top-choice regret, and decision p50/p95. Live routing retains the
