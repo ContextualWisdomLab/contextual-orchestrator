@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Production single-neighbor psychometric selection again uses one-pass
+  `max()` instead of sorting every retained context for an experimental top-2
+  need; the isolated 512-row selection benchmark fell from 27 to 5.5 µs.
 - The held-out psychometric benchmark now compares the production baseline and
   interpolation candidate on the same contexts and reports deterministic paired
   bootstrap 95% intervals for Brier, log-loss, and top-choice-regret deltas.

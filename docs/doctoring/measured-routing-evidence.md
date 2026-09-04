@@ -87,6 +87,11 @@ Fail-closed gate commit `079b3f80` separately reports accuracy non-inferiority,
 decision-latency improvement, buyer-heldout status, and measurement validity.
 This synthetic run passes only accuracy; therefore
 `production_default_change_allowed` is false.
+Production-path source commit `70cfc91f` restores one-pass `max()` selection for
+the single-neighbor default while retaining full top-2 ordering only inside the
+experiment. A same-process 512-row `timeit` comparison measured 5.5 µs for
+`max()` versus 27 µs for `sorted(..., reverse=True)[:1]`; this isolates neighbor
+selection and is not an end-to-end route-latency claim.
 
 ## APA 7 references
 

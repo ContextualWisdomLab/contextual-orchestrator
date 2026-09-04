@@ -164,6 +164,10 @@ flowchart LR
 - Gate commit `079b3f80` requires accuracy, latency, buyer-heldout, and
   measurement-validity decisions to all pass. The synthetic run passes only
   accuracy and therefore emits `production_default_change_allowed=false`.
+- Source commit `70cfc91f` restores constant-space `max()` selection for the
+  production single-neighbor default. Its isolated 512-row selection evidence
+  is 5.5 µs versus 27 µs for full sorting; the experimental top-2 path keeps
+  sorting because it requires two ordered neighbors.
 - Measurement-validity gate remains open: versioned measurement units, anchors,
   local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
   correction have no buyer-held-out evidence yet. Consequently these fitted
