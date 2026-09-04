@@ -232,7 +232,10 @@ class CostRoutingCoordinator:
 
     def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
         client = getattr(self.orchestrator, "client", None)
-        client_timeout = float(getattr(client, "timeout", 0))
+        configured_timeout = getattr(client, "timeout", None)
+        client_timeout = (
+            float(configured_timeout) if configured_timeout is not None else 0.0
+        )
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,

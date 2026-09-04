@@ -46,6 +46,20 @@ class _SyntheticExactCounter:
         return len(text.split())
 
 
+def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> None:
+    """A null model timeout does not break the existing batch-retention boundary."""
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([], allow_empty_agents=True),
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+
+    backend = coordinator._provider_embedding_backend()
+
+    assert backend._execution_timeout_seconds == 604_800
+    assert backend._claim_lease_seconds is None
+    backend.close()
+
+
 def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
     """A byte-safe request completes only after the provider supplies exact usage."""
     agent = ModelAgent(

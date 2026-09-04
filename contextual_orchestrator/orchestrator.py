@@ -1030,7 +1030,7 @@ def _local_provider_state(base_url: str) -> _LocalProviderState:
 def _local_provider_slot(
     agent: ModelAgent,
     capacity: int,
-    timeout: float,
+    timeout: float | None,
 ):
     """Bound local requests and serialize model switches on a shared endpoint."""
     if not _is_local_provider_url(agent.base_url):
@@ -1038,7 +1038,7 @@ def _local_provider_slot(
         return
 
     state = _local_provider_state(agent.base_url)
-    deadline = time.monotonic() + max(float(timeout), 0.0)
+    deadline = None if timeout is None else time.monotonic() + max(float(timeout), 0.0)
     with state.condition:
         while True:
             if state.active == 0:
@@ -1051,8 +1051,8 @@ def _local_provider_slot(
                 state.active += 1
                 break
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise TimeoutError("local provider endpoint is busy past its request deadline")
             state.condition.wait(remaining)
 
@@ -1693,7 +1693,7 @@ class ModelClient:
 
     def __init__(
         self,
-        timeout: int = 90,
+        timeout: float | None = None,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,

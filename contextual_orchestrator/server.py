@@ -7286,25 +7286,32 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    embedding_deadline = time.monotonic() + float(
-                        orchestrator.client.timeout
+                    configured_timeout = orchestrator.client.timeout
+                    embedding_deadline = (
+                        None
+                        if configured_timeout is None
+                        else time.monotonic() + float(configured_timeout)
                     )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
-                        remaining_timeout = embedding_deadline - time.monotonic()
-                        if remaining_timeout <= 0:
+                        remaining_timeout = (
+                            None
+                            if embedding_deadline is None
+                            else embedding_deadline - time.monotonic()
+                        )
+                        if remaining_timeout is not None and remaining_timeout <= 0:
                             break
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                            document = self._run(lambda agent=embedding_agent, wait_timeout=remaining_timeout: coordinator.complete_embeddings_batch(
                                 inputs,
                                 model=agent.model,
                                 attribution=attribution,
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
-                                wait_timeout=remaining_timeout,
+                                wait_timeout=wait_timeout,
                                 owner_id=security.principal_id(self.headers),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
