@@ -1194,8 +1194,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             responses: dict[str, int] = {}
             random_order = list(range(ADAPTIVE_CALIBRATION_ITEMS))
             random.Random(20_000 + candidate_index).shuffle(random_order)
+            state = cat_next_item(bundle, responses, device="cpu")
             for step in range(ADAPTIVE_CALIBRATION_MAX_ITEMS):
-                state = cat_next_item(bundle, responses, device="cpu")
                 item_index = (
                     state["ranked_items"][0] if adaptive else random_order[step]
                 )
@@ -1249,6 +1249,63 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         )
         for metric in adaptive_samples
     }
+
+    confidence_z = 1.96
+    sequential_correct: list[float] = []
+    fixed_correct: list[float] = []
+    sequential_queries: list[float] = []
+    for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+        generator = random.Random(30_000 + candidate_index)
+        theta = -2.0 + 4.0 * (
+            candidate_index + 0.5
+        ) / ADAPTIVE_CALIBRATION_CANDIDATES
+        responses: dict[str, int] = {}
+        state = cat_next_item(bundle, responses, device="cpu")
+        early_decision: tuple[int, bool] | None = None
+        for step in range(ADAPTIVE_CALIBRATION_MAX_ITEMS):
+            item_index = state["ranked_items"][0]
+            code = f"calibration_{item_index}"
+            responses[code] = int(
+                generator.random() < probability(theta, difficulties[item_index])
+            )
+            state = cat_next_item(bundle, responses, device="cpu")
+            if early_decision is None and abs(state["theta_eap"][0]) > (
+                confidence_z * state["theta_sd"][0]
+            ):
+                early_decision = (step + 1, state["theta_eap"][0] >= 0.0)
+        fixed_decision = state["theta_eap"][0] >= 0.0
+        if early_decision is None:
+            early_decision = (ADAPTIVE_CALIBRATION_MAX_ITEMS, fixed_decision)
+        true_decision = theta >= 0.0
+        sequential_queries.append(float(early_decision[0]))
+        sequential_correct.append(float(early_decision[1] == true_decision))
+        fixed_correct.append(float(fixed_decision == true_decision))
+
+    classification_stopping = {
+        "method": "confidence_interval_classification_stopping",
+        "decision_cut": 0.0,
+        "confidence_z": confidence_z,
+        "sequential_mean_queries": statistics.fmean(sequential_queries),
+        "fixed_queries": ADAPTIVE_CALIBRATION_MAX_ITEMS,
+        "early_stop_rate": statistics.fmean(
+            float(value < ADAPTIVE_CALIBRATION_MAX_ITEMS)
+            for value in sequential_queries
+        ),
+        "sequential_accuracy": statistics.fmean(sequential_correct),
+        "fixed_accuracy": statistics.fmean(fixed_correct),
+        "decision_agreement_rate": statistics.fmean(
+            float(left == right)
+            for left, right in zip(sequential_correct, fixed_correct)
+        ),
+        "query_delta_ci95": _paired_bootstrap_mean_ci(
+            sequential_queries,
+            [float(ADAPTIVE_CALIBRATION_MAX_ITEMS)]
+            * ADAPTIVE_CALIBRATION_CANDIDATES,
+        ),
+        "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
+            sequential_correct, fixed_correct
+        ),
+    }
     return {
         "method": "maximum_fisher_information_eap_screen",
         "candidates": ADAPTIVE_CALIBRATION_CANDIDATES,
@@ -1259,6 +1316,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         "random_baseline": random_baseline,
         "paired_delta": paired_delta,
         "paired_delta_ci95": paired_delta_ci95,
+        "classification_stopping": classification_stopping,
         "mean_query_reduction": random_baseline["mean_calibration_queries"]
         - adaptive["mean_calibration_queries"],
         "theta_rmse_reduction": random_baseline["theta_rmse"]

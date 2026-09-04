@@ -536,6 +536,18 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert adaptive["paired_delta_ci95"]["target_se_reached"] == pytest.approx(
         [0.1, 0.1625]
     )
+    stopping = adaptive["classification_stopping"]
+    assert stopping["method"] == "confidence_interval_classification_stopping"
+    assert stopping["decision_cut"] == 0.0
+    assert stopping["confidence_z"] == 1.96
+    assert stopping["sequential_mean_queries"] == 9.875
+    assert stopping["fixed_queries"] == 12
+    assert stopping["early_stop_rate"] == 0.41
+    assert stopping["sequential_accuracy"] == 0.9125
+    assert stopping["fixed_accuracy"] == 0.9125
+    assert stopping["decision_agreement_rate"] == 1.0
+    assert stopping["query_delta_ci95"] == pytest.approx([-2.425, -1.835])
+    assert stopping["accuracy_delta_ci95"] == [0.0, 0.0]
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
