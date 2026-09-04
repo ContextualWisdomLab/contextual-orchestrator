@@ -1151,6 +1151,141 @@ def test_classified_ambiguous_connection_error_does_not_fail_over() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+def test_free_virtual_model_fails_over_on_classified_retryable_transport_502() -> None:
+    """A free virtual-model request may advance after one retryable 502 transport failure."""
+    failure = ProviderUpstreamError(
+        agent_id="primary_agent",
+        model="primary-model",
+        error_code="provider_connection_error",
+        message="the provider primary_agent connection failed or did not finish in time",
+        client_status=502,
+        provider_status=None,
+        retryable=True,
+        transport="passthrough",
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> None:
+    """Exhausted free passthrough keeps typed candidate evidence on the final 502."""
+    primary = ProviderUpstreamError(
+        agent_id="primary_agent",
+        model="primary-model",
+        error_code="provider_connection_error",
+        message="the provider primary_agent connection failed or did not finish in time",
+        client_status=502,
+        provider_status=None,
+        retryable=True,
+        transport="passthrough",
+    )
+    fallback = ProviderUpstreamError(
+        agent_id="fallback_agent",
+        model="fallback-model",
+        error_code="provider_connection_error",
+        message="the provider fallback_agent connection failed or did not finish in time",
+        client_status=502,
+        provider_status=None,
+        retryable=True,
+        transport="passthrough",
+    )
+    client = SequencedProxyClient(
+        {"primary_agent": primary, "fallback_agent": fallback}
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert caught.value.agent_id == "fallback_agent"
+    assert caught.value.detail["terminal_reason"] == "eligible_candidates_exhausted"
+    assert caught.value.detail["selected_candidate_ids"] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert caught.value.detail["attempts"] == [
+        {
+            "agent_id": "primary_agent",
+            "model": "primary-model",
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "connecting",
+            "failover_decision": "advance_to_next_candidate",
+        },
+        {
+            "agent_id": "fallback_agent",
+            "model": "fallback-model",
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "connecting",
+            "failover_decision": "eligible_candidates_exhausted",
+        },
+    ]
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_explicit_model_classified_transport_502_remains_sticky() -> None:
+    """A concrete model id keeps single-provider stickiness for retryable transport failures."""
+    failure = ProviderUpstreamError(
+        agent_id="primary_agent",
+        model="primary-model",
+        error_code="provider_connection_error",
+        message="the provider primary_agent connection failed or did not finish in time",
+        client_status=502,
+        provider_status=None,
+        retryable=True,
+        transport="passthrough",
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        _build(client).proxy_completion(
+            {"model": "primary-model", "messages": [{"role": "user", "content": "x"}]}
+        )
+
+    assert caught.value is failure
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_suppressed_transient_context_does_not_authorize_failover() -> None:
     """A deliberately hidden exception context cannot become a routing signal."""
     try:

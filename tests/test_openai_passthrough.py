@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     _responses_to_chat_payload,
 )
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     SecurityConfig,
     build_server,
@@ -487,6 +488,97 @@ def test_http_virtual_structured_synthesis_failure_returns_provider_error() -> N
     assert body["error"]["code"] == "provider_connection_error"
     assert body["error"]["detail"]["retryable"] is True
     assert "synthetic provider outage" not in json.dumps(body)
+
+
+def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() -> None:
+    """Free tool-loop 502s keep request-scoped candidate evidence on the wire."""
+
+    class ConnectingFreePool(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            del endpoint, payload
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message=f"the provider {agent.id} connection failed or did not finish in time",
+                client_status=502,
+                provider_status=None,
+                retryable=True,
+                transport="passthrough",
+            )
+
+        proxy_send = proxy_send_once
+
+    token = "passthrough_token"
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary",
+                "free-primary-model",
+                tags=("cost:free",),
+                provider_name="free-primary",
+                priority=2,
+            ),
+            ModelAgent(
+                "free_backup",
+                "free-backup-model",
+                tags=("cost:free",),
+                provider_name="free-backup",
+                priority=1,
+            ),
+        ],
+        client=ConnectingFreePool(),  # type: ignore[arg-type]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 502
+    assert body["error"]["code"] == "provider_connection_error"
+    assert body["error"]["detail"]["selected_candidate_ids"] == [
+        "free_primary",
+        "free_backup",
+    ]
+    assert body["error"]["detail"]["terminal_reason"] == "eligible_candidates_exhausted"
+    assert body["error"]["detail"]["attempts"] == [
+        {
+            "agent_id": "free_primary",
+            "model": "free-primary-model",
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "connecting",
+            "failover_decision": "advance_to_next_candidate",
+        },
+        {
+            "agent_id": "free_backup",
+            "model": "free-backup-model",
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "connecting",
+            "failover_decision": "eligible_candidates_exhausted",
+        },
+    ]
+    assert "use the tool" not in json.dumps(body)
 
 
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:

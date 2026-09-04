@@ -1,5 +1,76 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-04 Autonomous Commercialization Loop: issue #1045 root-cause fix for orchestrator/free passthrough 502 evidence
+
+Observation time: 2026-09-04 Asia/Seoul.
+
+GitHub authentication was re-verified first with `gh api user`. The primary
+checkout was dirty, so work continued in a clean linked worktree at
+`.worktrees/commercial-loop-20260904-issue1045`. Open PR heads and prior
+`commercial-loop-*` worktrees were re-fetched before editing. No existing
+open PR head covered this exact contract: PR [#1046](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1046)
+was only queued behind hosted checks for an unrelated EgressWeave SSRF change,
+while the active `orchestrator/free` queue items [#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
+and [#993](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/993)
+were preserved as distinct in-flight contracts. The highest-leverage
+independent unit was therefore issue
+[#1045](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1045):
+typed attempt evidence and bounded failover for long `orchestrator/free`
+tool-loop transport failures.
+
+### Root cause confirmed on current `main`
+
+The live Noema review incidents in issue `#1045` reproduced the single-agent
+tool-loop path, not `route_once()`. `/v1/chat/completions` tool-bearing
+requests call `proxy_completion(..., single_agent=True)`, which performs
+virtual-model passthrough failover inside `TaskOrchestrator.proxy_completion`.
+
+Current-head RCA:
+
+- raw HTTP 5xx passthrough failures already advanced across distinct virtual
+  candidates, but a pre-classified `ProviderUpstreamError` with
+  `transport="passthrough"`, `retryable=True`, `client_status=502`, and no
+  upstream status did not;
+- when every eligible free candidate failed, the final gateway error collapsed
+  to one typed exception without any request-scoped candidate ledger, leaving
+  consumers with `served_model=unknown` and no bounded receipt of which
+  candidates were selected or attempted.
+
+### Local fix completed
+
+The worktree change makes one surgical contract extension:
+
+- `proxy_completion` now preserves a bounded per-request passthrough attempt
+  ledger for classified failures: selected candidate ids, per-attempt
+  candidate/model identity, typed failure class, retryability, lifecycle phase,
+  failover decision, and terminal reason;
+- `orchestrator/free` virtual passthrough now advances to the next distinct
+  eligible candidate when a candidate returns a classified retryable transport
+  `502` with no upstream provider status, while explicit concrete-model
+  requests remain sticky;
+- wrapped transient errors that were already eligible for failover through
+  `__cause__` inspection retain that prior behavior unchanged.
+
+The public error detail remains bounded and secret-safe: no credentials, raw
+provider bodies, or prompt text are emitted. The new lifecycle phase is
+`connecting` for pre-provider transport/TLS failures, which distinguishes them
+from provider-response failures without inventing provider acceptance.
+
+### Exact local verification
+
+- Added RED tests for free-pool classified transport `502` failover,
+  exhausted free-pool attempt receipts, sticky explicit concrete-model
+  transport failure, and the HTTP error-detail surface for tool-bearing
+  `/v1/chat/completions`.
+- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -k 'classified_ambiguous_connection_error or classified_retryable_transport_502 or bounded_attempt_evidence or explicit_model_classified_transport_502 or all_candidates_chain_the_last_failure or non_transient_error_is_not_replayed or http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502 or virtual_passthrough_advances_once or http_virtual_structured_synthesis_failure_returns_provider_error' -q`
+  -> `13 passed, 82 deselected in 1.63s`
+- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py tests/test_provider_error_taxonomy.py tests/test_chat_orchestration_mode_http_honesty.py -q`
+  -> `124 passed in 21.73s`
+
+Hosted exact-head checks, protected merge, and the unchanged LifeOS/Noema
+consumer canary remain future steps because this invocation stopped at one
+completed local root-cause work unit, per the hourly-loop boundary.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
