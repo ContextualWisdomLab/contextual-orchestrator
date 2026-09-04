@@ -70,6 +70,10 @@ def test_security_workflow_covers_core_repository_security_process():
     for duplicate_scanner in removed_duplicate_scanners:
         assert duplicate_scanner not in workflow_text
 
+    assert "security-${{ github.repository }}-${{ github.event_name }}-${{" in workflow_text
+    assert "github.event.pull_request.number || github.ref" in workflow_text
+    assert "cancel-in-progress: true" in workflow_text
+
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
