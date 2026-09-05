@@ -127,14 +127,14 @@ issuing five calls.
 Actual access cost and hypothetical production cost are separate fields and
 separate evidence classes.
 
-As reviewed on 2026-08-05, NVIDIA's NIM General FAQ states that NVIDIA Developer
+As reviewed on 2026-09-05, NVIDIA's Run NIM Anywhere page states that NVIDIA Developer
 Program members have free access to hosted NIM API endpoints for prototyping.
 The same source distinguishes development, testing, research, and evaluation
 from production and states that production requires NVIDIA AI Enterprise. The
 report therefore records `actual_cost_usd = 0.0` only for the reviewed hosted
 endpoint access context, includes the exact source, review date, validity
 horizon, program scope, production distinction, and uncertainty, and refuses a
-live run after 2026-09-04 until the source is reviewed again.
+live run after 2026-10-05 until the source is reviewed again.
 
 No NVIDIA model price is embedded or inferred. A live hypothetical pricing
 scenario is optional; absence means `unknown`. If supplied, it must be marked
@@ -237,8 +237,9 @@ Cosgrove, C., Manning, C. D., Ré, C., Acosta-Navas, D., Hudson, D. A., … Kore
 Y. (2023). Holistic evaluation of language models. *Transactions on Machine
 Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 
-NVIDIA Corporation. (n.d.). *General FAQ*. NVIDIA NIM Documentation. Retrieved
-August 5, 2026, from https://docs.api.nvidia.com/nim/docs/product
+NVIDIA Corporation. (n.d.). *Run NIM Anywhere*. NVIDIA NIM Documentation.
+Retrieved September 5, 2026, from
+https://docs.api.nvidia.com/nim/docs/run-anywhere
 
 NVIDIA Corporation. (2026, June 4). *NIM offerings*. NVIDIA NIM for Large
 Language Models. https://docs.nvidia.com/nim/large-language-models/2.0.5/about-nim-llm/nim-offerings.html
