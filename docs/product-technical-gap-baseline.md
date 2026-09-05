@@ -1,5 +1,84 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-04 Autonomous Commercialization Loop: issue #1045 root-cause fix for orchestrator/free passthrough 502 evidence
+
+Observation time: 2026-09-04 Asia/Seoul.
+
+GitHub authentication was re-verified first with `gh api user`. The primary
+checkout was dirty, so work continued in a clean linked worktree at
+`.worktrees/commercial-loop-20260904-issue1045`. Open PR heads and prior
+`commercial-loop-*` worktrees were re-fetched before editing. No existing
+open PR head covered this exact contract: PR [#1046](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1046)
+was only queued behind hosted checks for an unrelated EgressWeave SSRF change,
+while the active `orchestrator/free` queue items [#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
+and [#993](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/993)
+were preserved as distinct in-flight contracts. The highest-leverage
+independent unit was therefore issue
+[#1045](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1045):
+typed attempt evidence and bounded failover for long `orchestrator/free`
+tool-loop transport failures.
+
+### Root cause confirmed on current `main`
+
+The live Noema review incidents in issue `#1045` reproduced the single-agent
+tool-loop path, not `route_once()`. `/v1/chat/completions` tool-bearing
+requests call `proxy_completion(..., single_agent=True)`, which performs
+virtual-model passthrough failover inside `TaskOrchestrator.proxy_completion`.
+
+Current-head RCA:
+
+- raw HTTP passthrough failures were already classified and could participate
+  in bounded failover, but raw provider transport exceptions such as
+  `TimeoutError`, `urllib.error.URLError`, `ConnectionError`, and wrapped DNS
+  failures were not classified inside the multi-candidate passthrough loop;
+- `classify_provider_failure()` already mapped those raw exceptions to bounded
+  typed 502 surfaces, but `proxy_completion()` only invoked the classifier for
+  `HTTPError` and already-classified `ProviderUpstreamError` instances;
+- for `orchestrator/free`, retryable raw transport failures therefore stopped
+  at the first selected candidate instead of advancing to the next eligible
+  free provider, and sticky raw failures had no request-scoped attempt receipt
+  explaining why the gateway did not retry.
+
+### Local fix completed
+
+The worktree change makes one surgical contract extension:
+
+- `proxy_completion()` now classifies every caught passthrough provider
+  exception before deciding whether failover is permitted;
+- `orchestrator/free` virtual passthrough now advances to the next distinct
+  eligible candidate when a provider raises a raw retryable transport failure
+  that classifies to a passthrough 502 with no upstream provider status;
+- sticky failures now record the distinct failover decision
+  `sticky_candidate_failure` instead of incorrectly reusing
+  `eligible_candidates_exhausted`, while explicit concrete-model requests
+  remain single-provider sticky.
+
+The public error detail remains bounded and secret-safe: no credentials, raw
+provider bodies, or prompt text are emitted. The new lifecycle phase is
+`connecting` for pre-provider transport/TLS failures, which distinguishes them
+from provider-response failures without inventing provider acceptance.
+
+### Exact local verification
+
+- Added focused regressions for raw timeout failover in the in-process
+  free-model passthrough loop, raw timeout failover through the real
+  `/v1/chat/completions` HTTP path, and bounded sticky attempt evidence for
+  non-failover raw wrapper, permanent DNS, and ambiguous timeout cases.
+- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `97 passed in 12.75s`
+- `uv run pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `118 passed in 14.68s`
+
+### Branch-local quality note
+
+- `uv run ruff check contextual_orchestrator/orchestrator.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py`
+  could not run in this worktree because the pinned environment does not
+  currently expose a `ruff` executable (`No such file or directory`).
+
+Hosted exact-head checks, protected merge, and the unchanged LifeOS/Noema
+consumer canary remain future steps because this invocation stopped at one
+completed local root-cause work unit, per the hourly-loop boundary.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.

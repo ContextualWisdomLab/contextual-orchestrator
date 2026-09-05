@@ -1688,6 +1688,56 @@ def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
     return False
 
 
+def _passthrough_failure_phase(exc: ProviderUpstreamError) -> str:
+    """Map one classified passthrough failure onto a bounded lifecycle phase."""
+    if exc.error_code in {
+        "provider_connection_error",
+        "tls_failure",
+        "tls_verification_failed",
+    }:
+        return "connecting"
+    if exc.error_code == "request_too_large":
+        return "request_validation"
+    return "provider_response"
+
+
+def _passthrough_attempt_record(
+    exc: ProviderUpstreamError,
+    *,
+    provider_name: str,
+    attempt_number: int,
+    failover_decision: str,
+) -> dict[str, Any]:
+    """Return the public attempt receipt for one classified passthrough failure."""
+    return {
+        "agent_id": exc.agent_id,
+        "model": exc.model,
+        "provider_name": provider_name,
+        "attempt_number": attempt_number,
+        "error_code": exc.error_code,
+        "client_status": exc.client_status,
+        "provider_status": exc.provider_status,
+        "retryable": exc.retryable,
+        "transport": exc.transport,
+        "phase": _passthrough_failure_phase(exc),
+        "failover_decision": failover_decision,
+    }
+
+
+def _set_passthrough_attempt_evidence(
+    exc: ProviderUpstreamError,
+    *,
+    selected_candidate_ids: list[str],
+    attempts: list[dict[str, Any]],
+    terminal_reason: str,
+) -> ProviderUpstreamError:
+    """Attach bounded request-scoped passthrough evidence to one final error."""
+    exc.selected_candidate_ids = tuple(selected_candidate_ids)
+    exc.attempts = tuple(dict(item) for item in attempts)
+    exc.terminal_reason = terminal_reason
+    return exc
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -4350,7 +4400,9 @@ class TaskOrchestrator:
             candidates.append(candidate)
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
-        for candidate in candidates:
+        selected_candidate_ids = [candidate.id for candidate in candidates]
+        attempt_receipts: list[dict[str, Any]] = []
+        for index, candidate in enumerate(candidates):
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
@@ -4371,16 +4423,50 @@ class TaskOrchestrator:
                     send_once = self.client.proxy_send
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                if not _is_passthrough_failover_error(exc):
-                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                        raise classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="passthrough",
-                        ) from None
-                    raise
-                last_failure = (exc, candidate)
+                classified = classify_provider_failure(
+                    exc,
+                    agent_id=candidate.id,
+                    model=candidate.model,
+                    transport="passthrough",
+                )
+                failover_eligible = _is_passthrough_failover_error(exc) or (
+                    requested_model == self.FREE_MODEL
+                    and classified.transport == "passthrough"
+                    and classified.retryable
+                    and classified.client_status == 502
+                    and classified.provider_status is None
+                )
+                has_remaining_candidates = index + 1 < len(candidates)
+                attempt_receipts.append(
+                    _passthrough_attempt_record(
+                        classified,
+                        provider_name=(
+                            candidate.provider_name
+                            or self._infer_provider_name(candidate.base_url)
+                        ),
+                        attempt_number=index + 1,
+                        failover_decision=(
+                            "advance_to_next_candidate"
+                            if failover_eligible and has_remaining_candidates
+                            else (
+                                "eligible_candidates_exhausted"
+                                if failover_eligible
+                                else "sticky_candidate_failure"
+                            )
+                        ),
+                    )
+                )
+                if not failover_eligible:
+                    raise _set_passthrough_attempt_evidence(
+                        classified,
+                        selected_candidate_ids=selected_candidate_ids,
+                        attempts=attempt_receipts,
+                        terminal_reason="terminal_provider_failure",
+                    ) from None
+                last_failure = (
+                    classified,
+                    candidate,
+                )
                 request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
                     every_failure_was_request_too_large
@@ -4399,16 +4485,26 @@ class TaskOrchestrator:
                 )
             return result
         if last_failure is not None and every_failure_was_request_too_large:
-            raise ProviderRequestTooLargeError(
-                "request body exceeds every eligible provider limit"
+            raise _set_passthrough_attempt_evidence(
+                ProviderRequestTooLargeError(
+                    "request body exceeds every eligible provider limit"
+                ),
+                selected_candidate_ids=selected_candidate_ids,
+                attempts=attempt_receipts,
+                terminal_reason="request_too_large_exhausted",
             ) from None
         if last_failure is not None:
             last_error, failed_candidate = last_failure
-            raise classify_provider_failure(
-                last_error,
-                agent_id=failed_candidate.id,
-                model=failed_candidate.model,
-                transport="passthrough",
+            raise _set_passthrough_attempt_evidence(
+                classify_provider_failure(
+                    last_error,
+                    agent_id=failed_candidate.id,
+                    model=failed_candidate.model,
+                    transport="passthrough",
+                ),
+                selected_candidate_ids=selected_candidate_ids,
+                attempts=attempt_receipts,
+                terminal_reason="eligible_candidates_exhausted",
             ) from None
         raise RuntimeError("passthrough has no eligible provider candidate")
 
