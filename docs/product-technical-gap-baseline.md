@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 internal measurement documentation audit
+
+Strict `interrogate -c /dev/null --fail-under 100` on
+`contextual_orchestrator/psychometric_routing.py`,
+`scripts/benchmark_psychometric_routing.py`, and
+`scripts/benchmark_psychometric_heldout.py` found 20 undocumented entities among
+61 at `ae704491fc24cd4618c709b036cc9353ea9923e5`: **67.2%** coverage.
+This empty-config scope includes initializers, private helpers, and nested
+functions rather than inheriting repository exclusions.
+
+Documentation-only `f8b142aab59e651ed5864dda8d344f27b06fc4a9` reaches **61/61,
+100%**, with identical docstring-stripped ASTs and 48 focused tests passing in
+24.99 seconds. Contracts now distinguish injected oracle probabilities from
+estimated parameters, expected losses from observed responses, resolved-only
+risk from all-candidate query burden, and local ranking time from end-to-end
+latency. The class description also separates default single-neighbor behavior
+from the opt-in positive two-neighbor experiment.
+
+The lint run exposed a pre-existing unread `neighbor_limit` assignment;
+stdin lint of `ae704491` independently reproduced F841. Follow-up
+`1710cfe76485e9a3b25041a3810b7865eb5d1ed0` removes only that assignment.
+All three files then pass Ruff and strict documentation coverage; the same
+48 tests pass in 18.24 seconds. ASTs match the baseline after removing
+docstrings and that one explicitly identified assignment. These are focused
+local results, not a new full-suite result or protected delivery evidence.
+
+This closes the declared three-file documentation gap, not CodeRabbit's wider
+107-function scope. Entity documentation coverage does not establish complete
+measurement validity, buyer accuracy, latency improvement, or release readiness.
+Reproduction and interpretation boundaries are in the
+[doctoring audit](doctoring/measured-routing-evidence.md#internal-benchmark-contract-audit-2026-09-05).
+
 ## 2026-09-05 exact-head gate verification and paper distribution audit
 
 The frozen, clean `47ae9d65c2bc013c553f4fb045964867363f4e94` tree completed the
