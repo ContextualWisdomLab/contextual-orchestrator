@@ -235,22 +235,31 @@ class ProviderResponseError(RuntimeError):
         super().__init__(message)
         self.attempts = attempts
         self.stop_reason = stop_reason
+        self._detail: dict[str, Any] = {}
 
     @property
     def detail(self) -> dict[str, Any]:
-        """Return caller-set attempts/stop_reason evidence, or an empty dict.
+        """Return the caller-owned detail dict with failover evidence kept current.
 
-        Never echoes the raw malformed-response text that produced this
-        error (CWE-209): only the same machine-readable
-        ``_failover_attempt_record`` fields (``reason_code``/``retry_safe``
-        and friends) a caller may have set here after construction, exactly
-        like :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError.detail`.
+        The same mutable dict is returned on every read, so sibling error
+        types and callers may assign or extend it (``error.detail = {...}``,
+        ``error.detail["key"] = ...``) and their writes persist. Whenever
+        ``attempts``/``stop_reason`` are set, they are mirrored into it on
+        read so the evidence never goes stale. Never echoes the raw
+        malformed-response text that produced this error (CWE-209): only the
+        same machine-readable ``_failover_attempt_record`` fields
+        (``reason_code``/``retry_safe`` and friends), exactly like
+        :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError.detail`.
         """
-        detail: dict[str, Any] = {}
         if self.attempts or self.stop_reason is not None:
-            detail["attempts"] = self.attempts or []
-            detail["stop_reason"] = self.stop_reason or "unknown"
-        return detail
+            self._detail["attempts"] = self.attempts or []
+            self._detail["stop_reason"] = self.stop_reason or "unknown"
+        return self._detail
+
+    @detail.setter
+    def detail(self, value: dict[str, Any]) -> None:
+        """Adopt a caller-supplied detail dict; failover evidence is re-mirrored on read."""
+        self._detail = value
 
 
 class ProviderRequestTooLargeError(ProviderUpstreamError):
