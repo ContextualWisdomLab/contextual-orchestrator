@@ -2444,9 +2444,26 @@ def paired_policy_comparisons(
 ) -> list[dict[str, Any]]:
     """Compare delivered score and terminal-outcome time on all shared tasks."""
     policy_cells: dict[str, dict[str, dict[str, Any]]] = {}
-    for cell in cells:
-        policy_cells.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell
-    summaries = summarize_policies(cells)
+    locked_cells = [cell for cell in cells if cell["task_split"] == "locked"]
+    for cell in locked_cells:
+        task_cells = policy_cells.setdefault(cell["policy_name"], {})
+        if cell["task_id"] in task_cells:
+            raise BenchmarkContractError("duplicate policy/task observation")
+        if cell["run_outcome"] not in ("success", "failure", "timeout"):
+            raise BenchmarkContractError("invalid run_outcome for paired comparison")
+        latency_ms = cell["end_to_end_latency_ms"]
+        if (
+            type(latency_ms) not in (int, float)
+            or not math.isfinite(latency_ms)
+            or latency_ms < 0
+        ):
+            raise BenchmarkContractError("invalid end_to_end_latency_ms observation")
+        if cell["run_outcome"] == "success":
+            task_score = cell["task_score"]
+            if type(task_score) not in (int, float) or not 0 <= task_score <= 1:
+                raise BenchmarkContractError("invalid successful task_score observation")
+        task_cells[cell["task_id"]] = cell
+    summaries = summarize_policies(locked_cells)
     hindsight = best_single_worker_hindsight(summaries)
     comparison_pairs = [
         ("conduct_bounded", "route_once"),
@@ -2729,7 +2746,7 @@ _REPORT_REQUIRED_PATHS = (
 
 
 def validate_report_schema(report: dict[str, Any]) -> None:
-    """Fail closed when any required report path is absent."""
+    """Require the current comparison semantics and every required report path."""
     missing = []
     for path in _REPORT_REQUIRED_PATHS:
         node: Any = report
@@ -2742,6 +2759,8 @@ def validate_report_schema(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             f"benchmark report is missing required paths: {missing}"
         )
+    if report["benchmark_schema_version"] != BENCHMARK_SCHEMA_VERSION:
+        raise BenchmarkContractError("unsupported benchmark schema; regenerate the report")
 
 
 _CSV_CELL_COLUMNS = (
@@ -2827,19 +2846,36 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             f"{row['mean_latency_ms']} | {row['mean_hypothetical_cost_usd']} "
             f"| {row['actual_cost_usd']} |"
         )
-    lines += ["", "## Paired comparisons (95% bootstrap CI)", ""]
+    lines += [
+        "",
+        "## Paired comparisons (95% bootstrap CI)",
+        "",
+        "Differences are A minus B on all shared locked tasks. Failed delivery "
+        "earns zero task reward; the original unscored answer remains unknown. "
+        "Elapsed time includes failures and timeouts, so faster termination "
+        "alone does not establish better service.",
+        "",
+    ]
     for comparison in report["evaluation"]["paired_comparisons"]:
+        latency = comparison["end_to_end_latency_ms"]
+        pair_count = comparison["pair_count"]
         lines.append(
             f"- `{comparison['policy_a']}` vs `{comparison['policy_b']}`: "
-            f"mean diff {comparison['mean_difference']} "
-            f"[{comparison['ci_low']}, {comparison['ci_high']}]"
+            f"mean delivered score difference {comparison['mean_difference']} "
+            f"[{comparison['ci_low']}, {comparison['ci_high']}]; "
+            f"mean elapsed-time difference {latency['mean_difference']} "
+            f"[{latency['ci_low']}, {latency['ci_high']}] ms; "
+            f"successful outcomes A/B {comparison['policy_a_success_count']}/{pair_count} "
+            f"and {comparison['policy_b_success_count']}/{pair_count}; "
+            f"unpaired tasks A/B {comparison['policy_a_unpaired_task_count']} "
+            f"and {comparison['policy_b_unpaired_task_count']}"
         )
     evidence = report["actual_cost_evidence"]
     lines += [
         "",
         "## Evidence sufficiency",
         "",
-        f"- paired tasks: {report['evaluation']['observed_paired_task_count']} "
+        f"- jointly successful paired tasks: {report['evaluation']['observed_paired_task_count']} "
         f"/ {report['evaluation']['minimum_paired_task_count']} required",
         f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
         f"/ {report['evaluation']['required_completion_fraction']} required",
