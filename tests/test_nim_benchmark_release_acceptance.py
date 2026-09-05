@@ -83,13 +83,19 @@ def test_package_import_does_not_eagerly_load_optional_benchmark() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_live_run_rejects_unreviewed_pricing_before_egress(tmp_path: Path) -> None:
+def test_live_run_rejects_unreviewed_pricing_before_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Schema-demo prices can support dry runs but can never drive a live policy."""
+    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     scenario = json.loads(EXAMPLE_PRICING_PATH.read_text(encoding="utf-8"))
     scenario_path = _write_json(tmp_path / "unreviewed_pricing.json", scenario)
 
-    with pytest.raises(nb.BenchmarkContractError, match="reviewed"):
+    with pytest.raises(
+        nb.BenchmarkContractError,
+        match=r"^live benchmark pricing scenario must be independently reviewed$",
+    ):
         nb.run_benchmark(
             "live",
             TASK_MANIFEST_PATH,
@@ -104,8 +110,10 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(tmp_path: Path) -> No
 
 def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Live hypothetical prices need complete, current, independently reviewed evidence."""
+    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     incomplete = _reviewed_pricing_scenario()
     del incomplete["reviewed_by"]
@@ -128,7 +136,7 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             reviewed_at_date="1999-01-01", valid_until_date="2000-01-01"
         ),
     )
-    with pytest.raises(nb.BenchmarkContractError, match="expired"):
+    with pytest.raises(nb.BenchmarkContractError, match=r"^reviewed pricing evidence expired$"):
         nb.run_benchmark(
             "live",
             TASK_MANIFEST_PATH,

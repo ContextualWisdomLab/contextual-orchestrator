@@ -12,6 +12,8 @@ import math
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -263,6 +265,83 @@ def test_production_gate_rejects_junk_and_estimated_status() -> None:
     unlocked["robustness_passed"] = True
     unlocked["measurement_status"] = "estimated"
     assert production_default_change_allowed(unlocked) is False
+
+
+@pytest.mark.parametrize(
+    "status_fields",
+    (
+        {},
+        {"measurement_status": None},
+        {"measurement_status": ""},
+        {"measurement_status": "unknown"},
+        {"measurement_status": "estimated"},
+        {"measurement_status": True},
+    ),
+)
+def test_production_gate_requires_explicit_measured_status(status_fields: dict) -> None:
+    """Missing or unrecognized evidence cannot authorize a default change."""
+    report = {
+        "single_model_baseline": {"rmse": 1.0},
+        "role_differentiated": {"rmse": 0.1},
+        "robustness_passed": True,
+        **status_fields,
+    }
+    assert production_default_change_allowed(report) is False
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate"),
+    (
+        (1.0, -0.1),
+        (True, 0.1),
+        (1.0, False),
+        ("1", 0.1),
+        (1.0, "0.1"),
+        (math.nan, 0.1),
+        (1.0, math.nan),
+        (math.inf, 0.1),
+        (1.0, math.inf),
+        (0.0, 0.0),
+        (-1.0, 0.0),
+        (10**400, 0.1),
+        (1.0, 10**400),
+        (None, 0.1),
+        (1.0, None),
+        (1.0, []),
+    ),
+)
+def test_production_gate_rejects_invalid_rmse_values(baseline: object, candidate: object) -> None:
+    """RMSE inputs must be finite numbers in their mathematical domain."""
+    report = {
+        "single_model_baseline": {"rmse": baseline},
+        "role_differentiated": {"rmse": candidate},
+        "measurement_status": "measured",
+        "robustness_passed": True,
+    }
+    assert production_default_change_allowed(report) is False
+
+
+@pytest.mark.parametrize("report", (None, [], "measured"))
+def test_production_gate_rejects_non_object_reports(report: object) -> None:
+    """Malformed reports fail closed instead of supplying evidence."""
+    assert production_default_change_allowed(report) is False  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    ((0, True), (0.45, True), (math.nextafter(0.45, math.inf), False)),
+)
+def test_production_gate_preserves_zero_and_threshold_boundary(
+    candidate: float, expected: bool
+) -> None:
+    """Zero RMSE is valid, while improvement below the threshold is not."""
+    report = {
+        "single_model_baseline": {"rmse": 1},
+        "role_differentiated": {"rmse": candidate},
+        "measurement_status": "measured",
+        "robustness_passed": True,
+    }
+    assert production_default_change_allowed(report) is expected
 
 
 def test_profile_validation_covers_numeric_bounds_and_fallbacks() -> None:
