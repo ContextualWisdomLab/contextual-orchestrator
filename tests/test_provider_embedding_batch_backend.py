@@ -64,7 +64,7 @@ def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
         embedding_token_counter=UnavailableEmbeddingTokenCounter(),
     )
 
-    document = coordinator.complete_embeddings_batch(["synthetic input"])
+    document = coordinator.complete_embeddings_batch(["synthetic input"], wait_timeout=1)
 
     assert document["status"] == "completed"
     assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
@@ -124,7 +124,7 @@ def test_unknown_tokenizer_byte_bound_never_becomes_recorded_usage(text) -> None
         embedding_token_counter=UnavailableEmbeddingTokenCounter(),
     )
 
-    document = coordinator.complete_embeddings_batch([text])
+    document = coordinator.complete_embeddings_batch([text], wait_timeout=1)
 
     assert document["total_tokens"] == len(text.encode("utf-8"))
 
