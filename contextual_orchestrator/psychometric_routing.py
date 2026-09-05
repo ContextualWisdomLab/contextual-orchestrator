@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import hashlib
 import math
+import operator
 import threading
 from typing import Iterable
 
@@ -290,9 +291,7 @@ class PsychometricRoutingEvidence:
         """Cosine similarity for two validated unit vectors."""
         if len(left) != len(right):
             return None
-        similarity = math.fsum(
-            left_value * right_value for left_value, right_value in zip(left, right)
-        )
+        similarity = math.fsum(map(operator.mul, left, right))
         if not math.isfinite(similarity):
             return None
         return max(-1.0, min(1.0, similarity))
