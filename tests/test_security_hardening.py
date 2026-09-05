@@ -507,18 +507,44 @@ def test_provider_allowlist_ignores_request_time_environment_changes() -> None:
         base_url="https://provider.example/v1",
         credential_key="remote-key",
     )
+    # An allowlisted host is validated via EgressWeave, which resolves DNS
+    # itself (socket.getaddrinfo) rather than through ModelClient._resolve_addresses
+    # — patch at that shared boundary so both the old and new code paths agree.
     with patch.dict(
         "contextual_orchestrator.orchestrator.os.environ",
         {"CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "other.example"},
     ), patch(
         "contextual_orchestrator.orchestrator.get_credential",
         return_value="secret",
-    ), patch.object(
-        client,
-        "_resolve_addresses",
-        return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
+    ), patch(
+        "socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     ):
         assert client._validate_provider(agent) == (socket.AF_INET, ("93.184.216.34", 443))
+
+
+def test_provider_allowlist_rejects_allowlisted_host_resolving_to_private_address() -> None:
+    """EgressWeave's per-address check still applies to an allowlisted host."""
+    client = ModelClient(allowed_provider_hosts={"provider.example"})
+    agent = ModelAgent(
+        "remote_agent",
+        "remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="remote-key",
+    )
+    with patch(
+        "contextual_orchestrator.orchestrator.get_credential",
+        return_value="secret",
+    ), patch(
+        "socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    ):
+        try:
+            client._validate_provider(agent)
+        except RuntimeError as exc:
+            assert "allowlisted" in str(exc)
+        else:
+            raise AssertionError("allowlisted host resolving to a private address should fail")
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:

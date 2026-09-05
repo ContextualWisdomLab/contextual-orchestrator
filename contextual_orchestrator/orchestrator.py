@@ -34,6 +34,7 @@ import urllib.error
 import urllib.request
 
 import certifi
+from egressweave import EgressNotAllowedError, EgressPolicy, validate_egress_url_details
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
@@ -2791,8 +2792,8 @@ class ModelClient:
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
-        if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+        if self.allowed_provider_hosts:
+            return self._validate_allowlisted_provider(agent)
         addresses = self._resolve_addresses(hostname, parsed.port or 443)
         for _family, sockaddr in addresses:
             ip_address = ipaddress.ip_address(sockaddr[0])
@@ -2805,6 +2806,35 @@ class ModelClient:
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
         return addresses[0]
+
+    def _validate_allowlisted_provider(self, agent: ModelAgent) -> ProviderDestination:
+        """Validate an allowlisted https provider via EgressWeave's SSRF/DNS-rebinding guard.
+
+        Delegates the host-allowlist match and per-address global-routability
+        check to EgressWeave (CWE-918/CWE-350) instead of the hand-rolled loop
+        above; that loop stays only for the no-allowlist-configured default,
+        which EgressWeave's allowlist model cannot express (an empty
+        allowlist there rejects every host, not none).
+        """
+        policy = EgressPolicy.from_hosts(self.allowed_provider_hosts, allow_local=False)
+        try:
+            validated = validate_egress_url_details(agent.base_url, policy=policy)
+        except EgressNotAllowedError as exc:
+            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+        if validated is None:
+            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+        # Reuse EgressWeave's already-validated, already-resolved addresses
+        # directly rather than re-resolving — re-resolving here would reopen
+        # the validate-then-connect DNS-rebinding gap EgressWeave closes.
+        return self._egress_address_to_destination(validated.addresses[0], validated.port)
+
+    @staticmethod
+    def _egress_address_to_destination(address: str, port: int) -> ProviderDestination:
+        """Build a (family, sockaddr) pair from one already-validated EgressWeave address."""
+        ip_address = ipaddress.ip_address(address)
+        if isinstance(ip_address, ipaddress.IPv6Address):
+            return (socket.AF_INET6, (address, port, 0, 0))
+        return (socket.AF_INET, (address, port))
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
