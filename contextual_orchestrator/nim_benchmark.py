@@ -84,7 +84,7 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-BENCHMARK_SCHEMA_VERSION = "1.0.0"
+BENCHMARK_SCHEMA_VERSION = "2.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
@@ -2442,14 +2442,28 @@ def best_single_worker_hindsight(
 def paired_policy_comparisons(
     cells: list[dict[str, Any]], seed: int
 ) -> list[dict[str, Any]]:
-    """Paired task-level bootstrap comparisons between the headline policies."""
-    scores: dict[str, dict[str, float]] = {}
-    for cell in cells:
+    """Compare delivered score and terminal-outcome time on all shared tasks."""
+    policy_cells: dict[str, dict[str, dict[str, Any]]] = {}
+    locked_cells = [cell for cell in cells if cell["task_split"] == "locked"]
+    for cell in locked_cells:
+        task_cells = policy_cells.setdefault(cell["policy_name"], {})
+        if cell["task_id"] in task_cells:
+            raise BenchmarkContractError("duplicate policy/task observation")
+        if cell["run_outcome"] not in ("success", "failure", "timeout"):
+            raise BenchmarkContractError("invalid run_outcome for paired comparison")
+        latency_ms = cell["end_to_end_latency_ms"]
+        if (
+            type(latency_ms) not in (int, float)
+            or not math.isfinite(latency_ms)
+            or latency_ms < 0
+        ):
+            raise BenchmarkContractError("invalid end_to_end_latency_ms observation")
         if cell["run_outcome"] == "success":
-            scores.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell[
-                "task_score"
-            ]
-    summaries = summarize_policies(cells)
+            task_score = cell["task_score"]
+            if type(task_score) not in (int, float) or not 0 <= task_score <= 1:
+                raise BenchmarkContractError("invalid successful task_score observation")
+        task_cells[cell["task_id"]] = cell
+    summaries = summarize_policies(locked_cells)
     hindsight = best_single_worker_hindsight(summaries)
     comparison_pairs = [
         ("conduct_bounded", "route_once"),
@@ -2460,18 +2474,42 @@ def paired_policy_comparisons(
         comparison_pairs.append(("conduct_bounded", hindsight["policy_name"]))
     comparisons = []
     for policy_a, policy_b in comparison_pairs:
-        tasks_a, tasks_b = scores.get(policy_a), scores.get(policy_b)
+        tasks_a, tasks_b = policy_cells.get(policy_a), policy_cells.get(policy_b)
         if not tasks_a or not tasks_b:
             continue
         shared_tasks = sorted(set(tasks_a) & set(tasks_b))
         if not shared_tasks:
             continue
-        pairs = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        paired_cells = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        score_pairs = [
+            (
+                cell_a["task_score"] if cell_a["run_outcome"] == "success" else 0.0,
+                cell_b["task_score"] if cell_b["run_outcome"] == "success" else 0.0,
+            )
+            for cell_a, cell_b in paired_cells
+        ]
+        latency_pairs = [
+            (cell_a["end_to_end_latency_ms"], cell_b["end_to_end_latency_ms"])
+            for cell_a, cell_b in paired_cells
+        ]
         comparisons.append(
             {
                 "policy_a": policy_a,
                 "policy_b": policy_b,
-                **paired_bootstrap_mean_difference(pairs, seed=seed),
+                "score_basis": "successful_task_score_else_zero",
+                "pairing_basis": "all_shared_locked_tasks",
+                "policy_a_success_count": sum(
+                    cell_a["run_outcome"] == "success" for cell_a, _ in paired_cells
+                ),
+                "policy_b_success_count": sum(
+                    cell_b["run_outcome"] == "success" for _, cell_b in paired_cells
+                ),
+                "policy_a_unpaired_task_count": len(tasks_a) - len(shared_tasks),
+                "policy_b_unpaired_task_count": len(tasks_b) - len(shared_tasks),
+                **paired_bootstrap_mean_difference(score_pairs, seed=seed),
+                "end_to_end_latency_ms": paired_bootstrap_mean_difference(
+                    latency_pairs, seed=seed
+                ),
             }
         )
     return comparisons
@@ -2708,7 +2746,7 @@ _REPORT_REQUIRED_PATHS = (
 
 
 def validate_report_schema(report: dict[str, Any]) -> None:
-    """Fail closed when any required report path is absent."""
+    """Require the current comparison semantics and every required report path."""
     missing = []
     for path in _REPORT_REQUIRED_PATHS:
         node: Any = report
@@ -2721,6 +2759,8 @@ def validate_report_schema(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             f"benchmark report is missing required paths: {missing}"
         )
+    if report["benchmark_schema_version"] != BENCHMARK_SCHEMA_VERSION:
+        raise BenchmarkContractError("unsupported benchmark schema; regenerate the report")
 
 
 _CSV_CELL_COLUMNS = (
@@ -2806,19 +2846,36 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             f"{row['mean_latency_ms']} | {row['mean_hypothetical_cost_usd']} "
             f"| {row['actual_cost_usd']} |"
         )
-    lines += ["", "## Paired comparisons (95% bootstrap CI)", ""]
+    lines += [
+        "",
+        "## Paired comparisons (95% bootstrap CI)",
+        "",
+        "Differences are A minus B on all shared locked tasks. Failed delivery "
+        "earns zero task reward; the original unscored answer remains unknown. "
+        "Elapsed time includes failures and timeouts, so faster termination "
+        "alone does not establish better service.",
+        "",
+    ]
     for comparison in report["evaluation"]["paired_comparisons"]:
+        latency = comparison["end_to_end_latency_ms"]
+        pair_count = comparison["pair_count"]
         lines.append(
             f"- `{comparison['policy_a']}` vs `{comparison['policy_b']}`: "
-            f"mean diff {comparison['mean_difference']} "
-            f"[{comparison['ci_low']}, {comparison['ci_high']}]"
+            f"mean delivered score difference {comparison['mean_difference']} "
+            f"[{comparison['ci_low']}, {comparison['ci_high']}]; "
+            f"mean elapsed-time difference {latency['mean_difference']} "
+            f"[{latency['ci_low']}, {latency['ci_high']}] ms; "
+            f"successful outcomes A/B {comparison['policy_a_success_count']}/{pair_count} "
+            f"and {comparison['policy_b_success_count']}/{pair_count}; "
+            f"unpaired tasks A/B {comparison['policy_a_unpaired_task_count']} "
+            f"and {comparison['policy_b_unpaired_task_count']}"
         )
     evidence = report["actual_cost_evidence"]
     lines += [
         "",
         "## Evidence sufficiency",
         "",
-        f"- paired tasks: {report['evaluation']['observed_paired_task_count']} "
+        f"- jointly successful paired tasks: {report['evaluation']['observed_paired_task_count']} "
         f"/ {report['evaluation']['minimum_paired_task_count']} required",
         f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
         f"/ {report['evaluation']['required_completion_fraction']} required",

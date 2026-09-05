@@ -167,12 +167,211 @@ is met, production routing remains a human decision and
 `routing_recommendation` stays null.
 
 Paired bootstrap intervals preserve task pairing and expose uncertainty in mean
-score differences. Pareto frontiers show quality against latency and reviewed
+delivered-score and terminal-outcome-time differences. Pareto frontiers show quality against latency and reviewed
 hypothetical cost; policies with unknown cost are excluded from that cost
 frontier and named explicitly. HELM motivates standardized multi-metric
 conditions and visible incompleteness. FrugalGPT and RouteLLM motivate measuring
 cost-quality routing trade-offs, but their results are not treated as evidence
 for this repository's models or tasks.
+
+### Failure-inclusive comparison repair (2026-09-05, proposed)
+
+The previous paired comparison selected only jointly successful cells even
+though policy summaries included failure in their denominators. This changed
+the quantity being estimated between the summary and its uncertainty interval.
+The regression fixture gives policy A one successful answer and one failure,
+and policy B two successful answers. The old comparison drops the failed pair
+and reports a tie. Version 2 retains both pairs and reports mean delivered-score
+difference `-0.5`, with percentile interval `[-1, 0]`. Elapsed-time differences
+of `-50` and `1950` ms give a mean of `950` ms and interval `[-50, 1950]`.
+These hand-checked unit-test values validate calculations, not model accuracy
+or a production latency improvement.
+
+The product requirement is to compare successful task delivery per attempted
+task. The technical contract reuses the existing paired mean-bootstrap routine
+with the same sorted task identities and seed for score and elapsed time.
+Successful-outcome and unmatched-task counts expose the denominator; duplicate
+observations, invalid outcomes, non-finite or negative elapsed times, and
+invalid successful scores fail closed. Raw unscored responses remain null.
+No failure reward is written into the psychometric response ledger.
+
+Efron (1979) grounds resampling observed units; choosing task delivery as the
+reward is this product's declared evaluation decision. The rejected alternative
+was conditioning the headline comparison on both policies succeeding, which
+hides reliability differences. The retained limitation is inference conditional
+on the observed shared tasks and selected policies. A one-sided missing task is
+reported but cannot be imputed, and the hindsight baseline's selection
+uncertainty is not included. The 30-successful-pair and completion gates remain
+unchanged, and routing recommendations remain absent. Task-level resampling
+assumes independent task units; shared task families or time dependence require
+a corresponding grouped sampling design before population inference.
+
+```mermaid
+sequenceDiagram
+    participant Runs as Policy runs
+    participant Cells as Observed task cells
+    participant Pairs as Locked-task pairing
+    participant Report as Comparison report
+    Runs->>Cells: Outcome, optional answer score, elapsed time
+    Cells->>Pairs: Match policy observations by task identity
+    Pairs->>Report: Shared and unmatched task counts
+    Pairs->>Report: Delivered-score difference and interval
+    Pairs->>Report: Terminal-outcome-time difference and interval
+    Note over Cells,Report: Failed raw scores remain null; production gates still apply
+```
+
+The [released RankWeave `v0.18.0` comparison API](https://github.com/ContextualWisdomLab/RankWeave/blob/61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6/src/rankweave/comparison.py) is restricted to retrieval
+metrics and paired randomization. It does not accept generic response times or
+provide a paired p95 interval, so this repair does not add that dependency or
+reinterpret retrieval scores as latency. A future p95 comparison needs a
+released statistical-owner contract that resamples shared task pairs and
+subtracts the two policy quantiles within each resample, plus a declared
+sampling/error design. Mean intervals are not p95 evidence.
+
+The coverage audit also exposed two price-validation tests that accepted the
+unrelated, earlier hosted-access-expiry error. Commit `9b4cc199` isolates that
+separate precondition and checks the exact intended price-rejection category.
+The actual hosted-access expiry tests and production validation remain intact.
+All 149 focused tests then pass, with 1,223 statements and 446 branches covered
+at 100% and public docstring coverage at 100% on that source commit.
+
+### Public response-time evidence audit (2026-09-05, proposed)
+
+The next product requirement is a reproducible accuracy/time comparison on
+observed responses. A public benchmark is useful input only after its observation
+and sampling contracts are established; it is not automatically representative
+buyer evidence. This audit changes no production default, estimator, or dependency.
+
+Two similarly named sources must remain distinct:
+
+| Source | Evidence inspected | Admission decision |
+| --- | --- | --- |
+| Feng et al. (2026), LLMRouter / xRouteBench | Paper v1; dataset revision `ea4b6e1b29d9a734f55f0a637baf326bad6aa681`; collection-code revision `da3430baaea672743c3957457b0c76faba19876e` | Candidate for further provenance review, not admitted as failure-inclusive latency evidence. |
+| Li et al. (2026), LLMRouterBench | ACL paper, Section 4.2.2 and Figure 8, PDF p. 9 (proceedings p. 37741) | Its latency analysis uses token counts and serving statistics to estimate response time. It cannot establish observed request-level p95 or this gateway's decision overhead. |
+
+The pinned [xRouteBench card](https://huggingface.co/datasets/ulab-ai/xRouteBench/blob/ea4b6e1b29d9a734f55f0a637baf326bad6aa681/README.md)
+describes response times in seconds and generic train/test matrices of 80,802 and
+67,122 rows. These are publisher metadata, not locally audited row counts.
+Its blanket 18-candidate statement cannot be applied to personalized data:
+the same card lists 2,464 rows for 2,235 training queries. Do not assume complete
+pairing from the dataset name, total size, or a generic scenario's dimensions.
+
+The [outer collector](https://github.com/ulab-uiuc/LLMRouter/blob/da3430baaea672743c3957457b0c76faba19876e/llmrouter/data/api_calling_evaluation.py)
+times normal returns but writes zero duration when an exception escapes the
+call. The [inner API helper](https://github.com/ulab-uiuc/LLMRouter/blob/da3430baaea672743c3957457b0c76faba19876e/llmrouter/utils/api_calling.py)
+instead catches ordinary provider errors and preserves elapsed time. Thus the
+claim that *all API failures have zero latency* would be incorrect. The outer
+row also omits the inner structured error field; a separate success Boolean
+is returned to the collection loop, but the published card does not specify a
+terminal-outcome column.
+
+An isolated execution of the reviewed outer function, extracted with Python's
+standard-library AST without importing the upstream package, passed these three
+controlled checks. No provider call or dataset row was executed:
+
+| Controlled call result | Recorded seconds | Returned success flag |
+| --- | --- | --- |
+| Successful return; controlled clock advances seven seconds | 7 | true |
+| Returned API-error result; same controlled clock | 7 | false |
+| Exception escapes the call | 0 | false |
+
+This is a code-level counterexample, not evidence that published rows contain
+zero-duration failures. The dataset's generating code revision, attempt
+timestamps, retry history, and error counts remain unverified. A read-only
+dataset-viewer filter request timed out; no zero count, completeness finding,
+or tail estimate is inferred from that failure. The collector also uses
+model-dependent timeouts and wall-clock timing; its records are not proof of
+this gateway's current timeout policy or monotonic end-to-end measurement.
+
+The pinned dataset API/card declares no dataset license and contains no license
+file. Public access, the library's MIT code license, and the paper's CC BY 4.0
+license do not establish redistribution rights for constituent task data.
+Only the licensed paper is attached; no response rows, prompts, or dataset copy
+are committed. Missing permission metadata is an unresolved provenance item,
+not a conclusion that every research use is prohibited.
+
+Before using an observed matrix, record and verify:
+
+- the dataset revision, file hashes, permitted use, task/scorer versions, and
+  versioned model/deployment plus prompt/decode/tool settings;
+- unique task-model-attempt identities, train/test disjointness at the task
+  family or conversation level, intended/observed cell counts, and explicit
+  terminal outcomes including failures and timeouts;
+- observed versus estimated duration, the measured start/end events, retries,
+  censoring, and a declared treatment of missing duration that neither inserts
+  zero nor silently drops failed tasks from the headline population;
+- the target population, sampling and dependence units, error/precision goal,
+  quality non-inferiority margin, and locked policy choices before test scoring.
+
+The intended KPIs remain held-out delivered-score difference and separately
+measured decision-time and end-to-end p95 differences. A joint admission decision
+requires the preregistered accuracy margin and latency improvement with their
+uncertainty bounds; the existing 30-task floor is not a tail-precision argument.
+Any new generic quantile implementation belongs in a released Rust RankWeave
+contract before consumer adoption. The smaller current change is this admission
+record, not another unvalidated estimator.
+
+For psychometrics, a mixed collection of exact-match, F1, and judge scores in
+the same numeric range does not by itself define one latent response scale.
+Model/query orientation, scorer effects, local dependence, anchors, and
+invariance still require validation. A delivery reward can support a declared
+routing decision without becoming a portable model-ability estimate. This is
+our measurement-validity requirement, not a claim made by either benchmark.
+
+#### Follow-up: actual generic-matrix audit
+
+The later audit read **all 147,924 rows** of the pinned revision's
+`llmrouter_generic` train/test files, not the other scenarios. It supersedes
+the earlier metadata-only status for these two files. The files were fetched
+once for local read-only research, then decoded with the already available
+PyArrow 25.0.1 reader while network access was denied. No package was installed,
+no provider called, and no prompt or response was printed or committed.
+The [aggregate evidence](../research/xroute-generic-observation-audit.json)
+records file hashes, byte counts, identity definitions, and results.
+
+| Observed property | Train | Test |
+| --- | ---: | ---: |
+| Rows read, matching Parquet metadata | 80,802 | 67,122 |
+| Distinct model labels | 18 | 18 |
+| Distinct exact query strings | 4,487 | 3,729 |
+| Distinct scored-task fingerprints | 4,488 | 3,729 |
+| Repeated scored-task/model rows beyond the first | 18 | 0 |
+| Missing pairs in the observed task-by-model rectangle | 0 | 0 |
+| Empty response strings | 948 | 1,120 |
+| Null task identifiers | 54,900 | 46,800 |
+| Fractional scores strictly between zero and one | 6,763 | 806 |
+| Zero, negative, or non-finite durations | 0 | 0 |
+| Literal `ERROR` / `API Error` response prefixes | 0 | 0 |
+
+The scored-task fingerprint uses exact task name, query, choices, metric, and
+reference answer; the stimulus fingerprint omits the metric and reference.
+These content identities are audit definitions, not publisher attempt IDs.
+Query-only counts agree with the card. A different stimulus/scoring count does
+not contradict that card: choices and scoring context also identify a task.
+No exact stimulus fingerprint crosses train/test, but semantic, task-family,
+or training-corpus leakage was not tested.
+
+All 18 repeated pair groups belong to one ARC-Challenge scored-task fingerprint,
+with two rows per model and different embedding identifiers. None is an exact
+duplicate row: six groups differ in response text and seventeen in recorded
+time. All have equal scores within the group. They may be repeat executions;
+without attempt provenance they must not be silently discarded or treated as
+independent new items merely because their embedding identifiers differ.
+
+All 2,068 empty responses have zero output tokens and scores, positive input
+and total tokens, and positive recorded time. They occur in the two `gpt-oss`
+model labels. These are blank-output observations, not confirmed HTTP failures,
+model incapacity, or known censored reasoning. The files have no explicit
+terminal-status, attempt-ID, or collection-time columns. Zero error-prefix
+matches therefore do not establish zero failed attempts.
+
+This evidence **does not confirm zero-duration contamination** in the inspected
+data. It redirects the next action to outcome observability and repeated-item
+dependence. Before fitting a response model, preserve the empty/unknown outcome
+distinction, explain repeated attempts, and choose a scorer-compatible response
+model. Before latency inference, establish timing and sampling provenance.
+Raw rows remain unchanged; no p95, ability rank, accuracy gain, or production
+admission is inferred from this audit.
 
 ## Workflow and credential separation
 
@@ -225,11 +424,26 @@ Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
 models while reducing cost and improving performance. *arXiv*.
 https://doi.org/10.48550/arXiv.2305.05176
 
+Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
+*The Annals of Statistics, 7*(1), 1–26.
+https://doi.org/10.1214/aos/1176344552
+
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110;
 STD 97). RFC Editor. https://doi.org/10.17487/RFC9110
 
+Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2608.06867
+
 Hinden, R., & Haberman, B. (2005). *Unique local IPv6 unicast addresses*
 (RFC 4193). RFC Editor. https://doi.org/10.17487/RFC4193
+
+Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
+Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
+and unified framework for LLM routing. In *Findings of the Association for
+Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
+Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
 
 Liang, P., Bommasani, R., Lee, T., Tsipras, D., Soylu, D., Yasunaga, M., Zhang,
 Y., Narayanan, D., Wu, Y., Kumar, A., Newman, B., Yuan, B., Yan, B., Zhang, C.,

@@ -1,5 +1,96 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 measurement-boundary parent synchronization
+
+The next normal integration joins existing child
+`e2f3e2af8e6b723c6870fb6c4dcee2b4f7bc31af` with parent #1067
+`ae704491fc24cd4618c709b036cc9353ea9923e5`, retaining both document additions.
+The child NIM comparison, failure-denominator tests, observed-data audit, and
+licensed LLMRouter paper are unchanged. Parent measurement-declaration guards,
+IRT interpretation corrections, and paper distribution corrections are retained.
+The removed paper files stay removed; the child does not restore them.
+
+The previous child `e2f3e2af` passed 3,447 tests with two skips in 677.14 seconds
+on an unchanged clean tree. The parent source `47ae9d65` and later documentation
+`ae704491` have separate verification records below. Neither previous result is
+an integration-head result. Both PRs remain Draft pending their own terminal
+hosted evidence and independent review, with parent-first protected delivery.
+
+## 2026-09-05 paired-evidence parent synchronization
+
+The normal two-parent integration joins child
+`f3b50f3bdc4c2c951463abb6962bebe2949ca04b` with parent #1067
+`cbf1b4c462c46ccd1deb4e239758efbe0657aaa8`. Both independent additions to this
+baseline and the changelog are retained. The child-specific benchmark code,
+failure-denominator tests, observed-data audit, and licensed paper remain
+unchanged from the child source; parent benchmark boundary corrections and
+research qualifications remain unchanged from the parent source.
+
+This is branch integration, not protected release or a new accuracy claim.
+PR #1074 stays Draft and targets the unmerged parent branch; it must not be
+retargeted to `main` or consumed as a released statistical contract. Its
+merged tree needs its own terminal local/hosted evidence and independent
+review. A skipped draft review is not approval. The existing raw-missing
+versus delivered-zero distinction, full failure denominator, and mean-versus-p95
+boundary remain mandatory.
+
+## 2026-09-05 observed-data admission audit
+
+The follow-up [file-level audit](research/xroute-generic-observation-audit.json)
+read all 147,924 generic train/test rows at the pinned dataset revision.
+It found no zero/negative/non-finite durations, 2,068 blank response strings,
+and 18 repeated scored-task/model rows. The repeated rows are not exact copies;
+their attempt identity and dependence need explanation before fitting. Blank
+outputs have positive input/total tokens and time but zero output tokens and
+scores; their terminal cause is unknown. This corrects the suspicion of actual
+zero-time contamination without asserting complete failure observability.
+No data row was changed, dropped, printed, or redistributed. The next gate is
+outcome and repeated-attempt provenance, not a new latency estimator.
+
+The [response-time research audit](doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+distinguishes xRouteBench's advertised observations from LLMRouterBench's
+estimated latency. Three controlled cases confirm that the inspected xRouteBench
+collector preserves returned API-error elapsed time but replaces an escaped
+exception's duration with zero. This is source-contract evidence, not an audited
+failure count in the published dataset. Data-to-code lineage, outcome coverage,
+sampling validity, and dataset redistribution permission remain unresolved.
+
+No buyer accuracy or p95 result is claimed. The admissible next step is the
+declared observed-matrix audit, followed by any missing statistical-owner release;
+no new estimator or production policy is introduced here. The licensed LLMRouter
+paper, citation inventory, and research record travel with draft PR #1074.
+Its preceding exact executable head `1600b1d547ca121f022cb63d622672851ddf1745`
+passed 3,432 local tests with two skips in 664.58 seconds. These documentation
+and paper additions need their own inventory validation and protected review;
+that earlier full-suite result is not a new-head hosted-check claim.
+
+## 2026-09-05 paired outcome and latency evidence repair
+
+The NIM policy summary counted failures in the denominator, but its paired
+comparison dropped every task where either policy failed. Source commit
+`42f774d6` repairs that mismatch and adds mean elapsed-time comparisons using
+the existing paired-bootstrap implementation. The report now preserves failed
+and timed-out pairs, shows success and unmatched-task counts, and leaves raw
+unscored answers null. Report version 2 distinguishes this delivery estimand
+from the success-conditioned version 1 results.
+
+The unit regression changes the known delivered-score difference from an
+incorrect tie to `-0.5` on two paired tasks. It also reports the hand-checked
+`950` ms mean elapsed-time difference with interval `[-50, 1950]`. These are
+calculation-contract checks, not buyer accuracy or latency gains. The focused
+NIM, release-acceptance, and workflow-contract suites passed 149 tests on
+`42f774d6`; subsequent commits must carry their own verification record.
+
+This proposed slice depends on the psychometric integration in PR #1067.
+Protected parent delivery, independent review, and hosted validation remain
+required. Existing 30-jointly-successful-pair and completion gates are unchanged.
+The [technical and research record](doctoring/nim-benchmark-evidence-grade.md)
+contains the product requirement, comparison contract, UML sequence, alternatives,
+and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
+migration. Paired p95 inference and representative buyer observations remain
+open. RankWeave's released retrieval comparison API does not provide the
+needed response-time quantile contract.
+
 ## 2026-09-05 exact-head gate verification and paper distribution audit
 
 The frozen, clean `47ae9d65c2bc013c553f4fb045964867363f4e94` tree completed the

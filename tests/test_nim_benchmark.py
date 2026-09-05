@@ -1719,13 +1719,107 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_one", 0.0),
         _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
-        # Failed cells carry no score and must stay out of the pairing.
+        # A task observed for only one policy cannot form a pair.
         _synthetic_cell("route_once", "task_three", None, outcome="failure"),
     ]
     comparisons = nb.paired_policy_comparisons(cells, seed=3)
     pairs = {(row["policy_a"], row["policy_b"]) for row in comparisons}
     assert ("conduct_bounded", "route_once") in pairs
     assert ("route_once", "direct_single_worker:vendor/model-a") in pairs
+
+
+@pytest.mark.parametrize("failure_outcome", ["failure", "timeout"])
+def test_paired_comparisons_retain_failed_delivery_and_elapsed_time(
+    failure_outcome: str,
+) -> None:
+    """Dropping a failed task must not turn worse delivery into an apparent tie."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+        _synthetic_cell("conduct_bounded", "task_two", None, failure_outcome),
+        _synthetic_cell("route_once", "task_two", 1.0),
+        _synthetic_cell("route_once", "unpaired_task", 1.0),
+    ]
+    for cell, latency in zip(cells, [100.0, 150.0, 2000.0, 50.0, 5.0]):
+        cell["end_to_end_latency_ms"] = latency
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 2
+    assert comparison["mean_difference"] == -0.5
+    assert (comparison["ci_low"], comparison["ci_high"]) == (-1.0, 0.0)
+    assert comparison["policy_a_success_count"] == 1
+    assert comparison["policy_b_success_count"] == 2
+    assert comparison["policy_a_unpaired_task_count"] == 0
+    assert comparison["policy_b_unpaired_task_count"] == 1
+    latency = comparison["end_to_end_latency_ms"]
+    assert latency["pair_count"] == 2
+    assert latency["mean_difference"] == 950.0
+    assert (latency["ci_low"], latency["ci_high"]) == (-50.0, 1950.0)
+    assert cells[2]["task_score"] is None
+
+
+def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> None:
+    """Absent scored answers stay absent even when delivery reward is zero."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", None, "timeout"),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    assert (comparison["ci_low"], comparison["ci_high"]) == (0.0, 0.0)
+    assert comparison["policy_a_success_count"] == 0
+    assert comparison["policy_b_success_count"] == 0
+    assert comparison["end_to_end_latency_ms"]["mean_difference"] == 200.0
+    assert all(cell["task_score"] is None for cell in cells)
+    evidence = nb._evaluation_evidence_summary(cells, 1)
+    assert evidence["evidence_status"] == "insufficient_evidence"
+    assert evidence["routing_recommendation"] is None
+
+
+def test_paired_comparisons_exclude_exploratory_tasks_and_reject_duplicate_cells() -> None:
+    """Neither exploratory outcomes nor silent overwrites may change pairing."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "locked_task", 1.0),
+        _synthetic_cell("route_once", "locked_task", 1.0),
+        _synthetic_cell("conduct_bounded", "exploratory_task", 0.0),
+        _synthetic_cell("route_once", "exploratory_task", 1.0),
+    ]
+    cells[2]["task_split"] = cells[3]["task_split"] = "exploratory"
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    with pytest.raises(nb.BenchmarkContractError, match="duplicate policy/task"):
+        nb.paired_policy_comparisons([*cells, cells[0]], seed=3)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("end_to_end_latency_ms", float("nan")),
+        ("end_to_end_latency_ms", float("inf")),
+        ("end_to_end_latency_ms", -1.0),
+        ("end_to_end_latency_ms", True),
+        ("task_score", None),
+        ("task_score", float("nan")),
+        ("task_score", -0.1),
+        ("task_score", 1.1),
+        ("task_score", True),
+        ("run_outcome", "unobserved"),
+    ],
+)
+def test_paired_comparisons_reject_invalid_observations(
+    field_name: str, invalid_value: object
+) -> None:
+    """Invalid measurements cannot produce numeric-looking comparison evidence."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0][field_name] = invalid_value
+    with pytest.raises(nb.BenchmarkContractError, match=field_name):
+        nb.paired_policy_comparisons(cells, seed=3)
 
 
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
@@ -1790,6 +1884,26 @@ def _dry_report(output_dir: str) -> dict:
         output_dir,
         max_total_requests=900,
     )
+
+
+def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Path) -> None:
+    """Published uncertainty must show the new denominator, time, and schema."""
+    report = _dry_report(str(tmp_path / "current_report"))
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(cells, 3)
+    summary = nb.render_markdown_summary(report)
+    assert "-1.0 [-1.0, -1.0]" in summary
+    assert "200.0 [200.0, 200.0] ms" in summary
+    assert "successful outcomes A/B 0/1 and 1/1" in summary
+    assert report["benchmark_schema_version"] == "2.0.0"
+    report["benchmark_schema_version"] = "1.0.0"
+    with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
+        nb.validate_report_schema(report)
 
 
 def test_evaluation_contract_failure_publishes_no_artifacts(

@@ -187,6 +187,30 @@ when the floor is met; a human review remains required.
 - Only locked tasks enter reported comparisons; exploratory tasks remain outside
   the decision evidence.
 
+### Comparison report version 2
+
+Version 2 compares every locked task attempted by both policies, including
+failures and timeouts. The delivered-task score is the scorer's value after a
+successful run and zero when no answer was delivered successfully. The original
+failure record retains `task_score: null`; zero delivery reward is not an
+estimate of an unobserved answer's correctness or a psychometric response.
+
+Each comparison reports A-minus-B mean delivered-score and elapsed-time
+differences with paired 95% bootstrap intervals, successful outcome counts on
+the shared tasks, and unmatched task counts. Elapsed time ends at the recorded
+terminal outcome, including a failure or timeout. A fast failure is therefore
+visible alongside its zero delivery reward; lower elapsed time alone is not an
+improvement in service. The intervals condition on the common task set and the
+selected policies, including the explicitly labelled hindsight worker.
+
+Reports using version 1 compared only jointly successful tasks. Their values
+must not be pooled with version 2, and the validator rejects the old schema.
+Regenerate comparison evidence using the original task observations. The
+production review floor still requires 30 **jointly successful** paired tasks
+and the existing completion fraction; including failed pairs does not relax it.
+These mean intervals do not establish p95 performance, population
+representativeness, or uncertainty from choosing the hindsight winner.
+
 ## Fail-closed contract
 
 A run aborts without artifacts when live provenance is absent, the credential is

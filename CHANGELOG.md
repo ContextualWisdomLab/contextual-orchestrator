@@ -50,6 +50,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- NIM policy comparisons include failed and timed-out tasks, show successful
+  outcome counts, and report paired mean elapsed-time uncertainty. Report
+  version 2 replaces the previous success-conditioned comparison; original
+  unscored answers remain unknown, and production review gates still apply.
 - Research materials now retain citations and source links when permission to
   bundle a paper has not been established. Licensed copies include their
   specific attribution and redistribution terms.
