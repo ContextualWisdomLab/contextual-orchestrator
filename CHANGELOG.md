@@ -10,6 +10,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- **Cross-session agent know-how in `AGENTS.md`.** Added two append-only
+  sections — "Recurring bug class: hardcoded review-cadence dates" (the
+  `nim_benchmark.py` evidence-gate ticking-time-bomb pattern found and
+  repaired three times this cycle: `tests/test_nim_benchmark.py`,
+  `tests/test_spend_analytics.py`, `tests/test_nim_benchmark_release_acceptance.py`)
+  and "Central review sidecar/egress gap (tracked, not yet closed)" (the
+  org-central review sidecar still injecting five raw provider secrets and
+  building this repo fresh per invocation, per `issue #1041` comment
+  `5550412102` and `ContextualWisdomLab/.github` `issue #1759`) — plus one
+  pointer bullet in `CLAUDE.md`. Documentation only: no code, test, or
+  behavior change.
+
 ### Deprecated
 
 - Internal callers now use
