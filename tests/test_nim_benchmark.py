@@ -2085,18 +2085,25 @@ def test_dry_run_accepts_explicit_transport() -> None:
         )
 
 
-def test_live_run_without_evidence_fixture_still_fails_closed_on_expired_evidence() -> (
-    None
-):
+def test_live_run_without_evidence_fixture_still_fails_closed_on_expired_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A test that does not request ``current_actual_cost_evidence`` must still
-    observe the literal, human-reviewed ``nb.ACTUAL_COST_EVIDENCE`` dict and
-    fail closed once it is expired -- proving the fixture above is opt-in per
-    test, not file-wide, even though this module also collects tests that do
-    request it. A registered credential is present so the run reaches the
-    evidence gate (the first live-mode check) rather than failing earlier for
-    an unrelated reason.
+    observe the literal ``nb.ACTUAL_COST_EVIDENCE`` dict rather than some
+    other test's artificially-extended window -- proving the fixture above is
+    opt-in per test, not file-wide, even though this module also collects
+    tests that do request it. Deliberately expires the dict itself here
+    (rather than relying on real wall-clock time happening to be past
+    whatever the production ``valid_until_date`` currently is) so this
+    assertion stays stable across routine evidence refreshes such as #1073 --
+    a prior version of this test depended on that real-world timing and broke
+    the moment the production evidence was refreshed. A registered credential
+    is present so the run reaches the evidence gate (the first live-mode
+    check) rather than failing earlier for an unrelated reason.
     """
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2020-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2020-02-01")
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(nb.BenchmarkContractError, match="expired"):
             nb.run_benchmark(
