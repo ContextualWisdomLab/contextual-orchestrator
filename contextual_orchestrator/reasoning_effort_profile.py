@@ -79,7 +79,10 @@ def apply_request_profile(
     if not isinstance(profile, ReasoningEffortProfile):
         raise EffortProfileError("effort profile must be a ReasoningEffortProfile")
     validated = parse_reasoning_effort_profile(profile.as_dict())
-    if not supports_reasoning_effort and validated.unsupported_provider_fallback != "omit":
+    if (
+        not supports_reasoning_effort
+        and validated.unsupported_provider_fallback != "omit"
+    ):
         raise EffortProfileError(
             "provider reasoning_effort support is unproven; profile requested "
             f"{validated.unsupported_provider_fallback!r}"
@@ -159,7 +162,9 @@ def _reject_non_finite_number(value: Any, field_name: str) -> None:
         raise EffortProfileError(f"{field_name} must be finite, not {value!r}")
 
 
-def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEffortProfile:
+def parse_reasoning_effort_profile(
+    raw: Mapping[str, Any] | None,
+) -> ReasoningEffortProfile:
     """Validate and return one profile. Unknown keys and unsafe numbers fail closed.
 
     Buyer next action: omit unknown knobs; send ``reasoning_effort`` as
@@ -196,7 +201,10 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
     ):
         _reject_non_finite_number(merged[field_name], field_name)
         if field_name != "temperature" and field_name != "top_p":
-            if int(merged[field_name]) != merged[field_name] or int(merged[field_name]) < 0:
+            if (
+                int(merged[field_name]) != merged[field_name]
+                or int(merged[field_name]) < 0
+            ):
                 raise EffortProfileError(f"{field_name} must be a non-negative integer")
             merged[field_name] = int(merged[field_name])
         else:
@@ -213,7 +221,9 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
     if merged["access_list_scope"] not in ACCESS_LIST_SCOPES:
         raise EffortProfileError("access_list_scope must be none, role, or workflow")
     if merged["unsupported_provider_fallback"] not in UNSUPPORTED_FALLBACKS:
-        raise EffortProfileError("unsupported_provider_fallback must be abstain, omit, or error")
+        raise EffortProfileError(
+            "unsupported_provider_fallback must be abstain, omit, or error"
+        )
     if merged["max_calls"] < 1 or merged["max_workflow_steps"] < 1:
         raise EffortProfileError("max_calls and max_workflow_steps must be at least 1")
     version = merged.get("profile_version")
@@ -281,7 +291,9 @@ def snapshot_role_effort_catalog(
         profile = catalog[role]
         if not isinstance(profile, ReasoningEffortProfile):
             raise EffortProfileError(f"{role} must be a ReasoningEffortProfile")
-        role_profiles[role] = parse_reasoning_effort_profile(profile.as_dict()).as_dict()
+        role_profiles[role] = parse_reasoning_effort_profile(
+            profile.as_dict()
+        ).as_dict()
     canonical = json.dumps(
         {"profile_version": PROFILE_VERSION, "role_profiles": role_profiles},
         sort_keys=True,
@@ -357,7 +369,9 @@ def estimate_theta(
     _reject_non_finite_number(extra_recursion_depth, "extra_recursion_depth")
     _reject_non_finite_number(temperature, "temperature")
     if extra_workflow_steps < 0 or extra_recursion_depth < 0:
-        raise EffortProfileError("workflow steps and recursion depth must be non-negative")
+        raise EffortProfileError(
+            "workflow steps and recursion depth must be non-negative"
+        )
     shrink = _shrinkage_weight(
         reasoning_effort,
         float(extra_workflow_steps),
@@ -468,18 +482,30 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
         "one_factor_ablations": {
             "reasoning_effort": {
                 "medium": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    temperature=0.2,
                 ),
                 "high": estimate_theta_rmse(
-                    theta, reasoning_effort="high", extra_workflow_steps=0, temperature=0.2
+                    theta,
+                    reasoning_effort="high",
+                    extra_workflow_steps=0,
+                    temperature=0.2,
                 ),
             },
             "temperature": {
                 "0.2": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    temperature=0.2,
                 ),
                 "1.0": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=1.0
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    temperature=1.0,
                 ),
             },
             "recursion_depth": {
@@ -500,10 +526,16 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
             },
             "workflow_steps": {
                 "1": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    temperature=0.2,
                 ),
                 "4": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=3, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=3,
+                    temperature=0.2,
                 ),
             },
             "access_list_scope": {
@@ -534,20 +566,28 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
 
 
 def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
-    """Return whether a live default change is allowed from this ablation.
+    """Check the declared measurement prerequisites for a default change.
 
     Buyer next action: keep current route/conduct defaults when this is false.
-    A later slice may unlock only after RMSE improvement, a non-estimated
-    measurement, and robustness all clear the predeclared gate.
+    Only an explicitly measured report with valid RMSE values and robustness
+    can pass the predeclared improvement gate. This input check does not
+    authenticate evidence or itself change production defaults.
     """
+    if (
+        not isinstance(report, Mapping)
+        or report.get("measurement_status") != "measured"
+    ):
+        return False
     try:
-        baseline = float(report["single_model_baseline"]["rmse"])
-        candidate = float(report["role_differentiated"]["rmse"])
-    except (KeyError, TypeError, ValueError):
+        baseline = report["single_model_baseline"]["rmse"]
+        candidate = report["role_differentiated"]["rmse"]
+        _reject_non_finite_number(baseline, "baseline RMSE")
+        _reject_non_finite_number(candidate, "candidate RMSE")
+        baseline = float(baseline)
+        candidate = float(candidate)
+    except (KeyError, TypeError, ValueError, OverflowError):
         return False
-    if not math.isfinite(baseline) or not math.isfinite(candidate) or baseline <= 0:
-        return False
-    if report.get("measurement_status") == "estimated":
+    if baseline <= 0 or candidate < 0:
         return False
     if report.get("robustness_passed") is not True:
         return False
