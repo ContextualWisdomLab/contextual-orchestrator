@@ -1,5 +1,44 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 psychometric successor reconciliation
+
+PR [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+is the consolidation target on a base-repository branch. Its initial head
+`845d09dc666bee4a212710f517b0f1c9f38a0c52` has exactly the same Git tree as
+PR #1058. The following source heads are all ancestors of #1064's
+`ba010d5a023f69204df73e0a8e4d9b0a5bf7ee2f`:
+
+| Source PR | Preserved head |
+| --- | --- |
+| #1058 | `3c22bf31c33520b128cb2c449d03e3762e1f4c75` |
+| #1059 | `99efa19ea7846f7b2c47934bc1cf15bf0635d0da` |
+| #1061 | `c5a09630b4473d6981f3fbc5c555fbbcd9406a74` |
+| #1062 | `cafdc7c7b381e9b3d22ea0b8b34de49b39a2ae0b` |
+| #1064 | `ba010d5a023f69204df73e0a8e4d9b0a5bf7ee2f` |
+
+Integration commit `e44ee9087c369b8846b0a143578de5725aae389f` preserves both
+histories and exactly reproduces the #1064 tree
+`8735f953c2fecca07c2b6c1951275689742be92e`. Tree equality and ancestry justify
+the history-only merge: the original successor contributes no independent
+change to discard. Later documentation commits record this audit. Recheck
+every source head and the complete effective delta before retiring a source
+PR; all five remain open pending protected delivery.
+
+The full local suite on source `ba010d5a` passed **3,417 tests, with two skips,
+in 666.99 seconds**. This is evidence for that source tree; the new successor
+commit still needs its own required hosted workflows and independent review.
+The branch-rule snapshot requires at least one independent approving review,
+approval after the last push, resolved conversations, and the seven required
+organization workflows; additional approval rules for unattributed changes
+also apply. The snapshot found no approvals or unresolved threads on #1067.
+
+This consolidation removes the external-fork admission obstacle without
+authorizing production routing. The accuracy and time evidence, measurement
+limitations, and owner boundaries remain in
+[ADR 0034](planning/adrs/0034-anti-heuristic-routing-evidence.md) and the
+[research evidence](doctoring/measured-routing-evidence.md). Buyer response
+calibration, end-to-end latency, and measurement validity remain unexecuted.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
