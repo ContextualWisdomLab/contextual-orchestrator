@@ -864,11 +864,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   date in production (a real re-review is required for it to move), but
   the five tests above were coupled to it by accident: once wall-clock
   time passed the recorded review window, they started failing for a
-  reason unrelated to what each one actually asserts. Added an autouse
-  fixture that pins the evidence window to real "now" for this file only,
-  leaving `contextual_orchestrator/nim_benchmark.py`'s production evidence
-  and `tests/test_nim_benchmark_release_acceptance.py`'s explicit-`today`
-  coverage of the review-cadence invariant itself untouched.
+  reason unrelated to what each one actually asserts. Added an opt-in
+  (not autouse) `current_actual_cost_evidence` fixture that a test requests
+  by name to pin the evidence window to real "now" for that test only,
+  leaving every other test in the file — and
+  `contextual_orchestrator/nim_benchmark.py`'s production evidence —
+  observing the literal review date by default.
+- **Same ticking-time-bomb class, third instance, in
+  `tests/test_nim_benchmark_release_acceptance.py`.** Its two pricing-scenario
+  contract tests (`test_live_run_rejects_unreviewed_pricing_before_egress`,
+  `test_live_run_rejects_incomplete_or_expired_pricing_before_egress`) are
+  designed to exercise `validate_live_pricing_scenario`'s own fail-closed
+  branches (lines 1708/1718: "must be independently reviewed" /
+  "reviewed pricing evidence expired"), but once the same literal
+  `ACTUAL_COST_EVIDENCE["valid_until_date"]` lapsed, `run_benchmark` started
+  raising `_require_current_actual_cost_evidence()`'s own "expired" error
+  first — before ever reaching the pricing-scenario check. Both tests kept
+  reporting green because their `pytest.raises(match=...)` substrings
+  ("reviewed" / "expired") happened to also match that earlier exception's
+  message, but the coverage gate caught what the green run hid: 0% branch
+  coverage on `validate_live_pricing_scenario`'s two fail-closed lines. Added
+  the same opt-in `current_actual_cost_evidence` fixture to this file (same
+  name and pattern as `tests/test_nim_benchmark.py`) and requested it from
+  both tests, restoring their intended coverage of the pricing-scenario gate
+  itself rather than the unrelated evidence-currency gate.
 
 ### Added
 
