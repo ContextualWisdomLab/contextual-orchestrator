@@ -94,7 +94,7 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(
 
     with pytest.raises(
         nb.BenchmarkContractError,
-        match="^live benchmark pricing scenario must be independently reviewed$",
+        match=r"^live benchmark pricing scenario must be independently reviewed$",
     ):
         nb.run_benchmark(
             "live",
@@ -136,7 +136,7 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             reviewed_at_date="1999-01-01", valid_until_date="2000-01-01"
         ),
     )
-    with pytest.raises(nb.BenchmarkContractError, match="^reviewed pricing evidence expired$"):
+    with pytest.raises(nb.BenchmarkContractError, match=r"^reviewed pricing evidence expired$"):
         nb.run_benchmark(
             "live",
             TASK_MANIFEST_PATH,

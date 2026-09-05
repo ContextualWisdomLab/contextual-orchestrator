@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -12,19 +13,20 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator.psychometric_routing import (  # noqa: E402
-    PsychometricRoutingEvidence,
-)
-
 CONTEXT_COUNT = 512
 CRITERION_ITEMS_PER_OBSERVATION = 1
+OBSERVATION_REPETITIONS = 101
 
 
-def _require_runtime(version_info: tuple[int, ...] = sys.version_info) -> None:
-    if tuple(version_info[:2]) < (3, 12):
+def _require_runtime(
+    version_info: tuple[int, ...] | None = None,
+    *,
+    benchmark_script: str = "scripts/benchmark_psychometric_routing.py",
+) -> None:
+    if tuple((sys.version_info if version_info is None else version_info)[:2]) < (3, 12):
         raise SystemExit(
             "psychometric routing benchmark requires Python 3.12 or newer; "
-            "run: uv run --python 3.12 python scripts/benchmark_psychometric_routing.py"
+            f"run: uv run --python 3.12 python {benchmark_script}"
         )
 
 
@@ -39,6 +41,7 @@ def main() -> None:
     """Print repeatable fit-preparation and ranking latency in milliseconds."""
     _require_runtime()
     import numpy as np
+    from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 
     model_ids = [f"model_{model_index}" for model_index in range(4)]
     last_context, last_vector = _last_context_request(CONTEXT_COUNT)
@@ -75,7 +78,7 @@ def main() -> None:
 
     assert len(ranked) == len(model_ids)
     observation_samples_ms: list[float] = []
-    for sample_index in range(101):
+    for sample_index in range(OBSERVATION_REPETITIONS):
         started_ns = time.perf_counter_ns()
         evidence.observe(
             last_context,
@@ -96,7 +99,9 @@ def main() -> None:
                 "items_per_context": 1 + CRITERION_ITEMS_PER_OBSERVATION,
                 "median_fit_and_rank_ms": statistics.median(samples_ms),
                 "median_observe_ms": statistics.median(observation_samples_ms),
-                "p95_observe_ms": sorted(observation_samples_ms)[95],
+                "p95_observe_ms": sorted(observation_samples_ms)[
+                    math.ceil(0.95 * len(observation_samples_ms)) - 1
+                ],
                 "samples_ms": samples_ms,
             },
             sort_keys=True,
