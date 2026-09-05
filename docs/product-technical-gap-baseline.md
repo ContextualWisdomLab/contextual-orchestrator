@@ -1,5 +1,70 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-01 issue 991: isolated application services require a published runtime boundary
+
+Issue [#991](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/991) assigns Chat,
+Agent, task/tool policy, tenant authorization, immutable application selection, secrets, and
+user-visible lifecycle to this repository. Rootless container lifecycle, isolation enforcement,
+resource limits, readiness, lease attestation, and cleanup belong to the external
+`quarantine-sandbox-runtime` bounded context. This repository must not vendor its source, read a
+sibling checkout, shell out to Podman/containerd, or invent an application-service schema.
+
+The upstream foundation is Draft PR
+[`quarantine-sandbox-runtime#1`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime/pull/1).
+Current source head `e4222208f0d1a6d28f570c45dc7385fd75b16a4b` fixes the DDD build boundary,
+guarantees lease cleanup after bounded connect/read/write assertions, binds every effective
+isolation-policy field into one canonical SHA-256 carried by both the Podman resource label and
+returned lease, versions that changed lease contract as `1.1.0`, and locks its canonical framing
+with a golden vector plus schema regression test. Real-Podman job `99758127137` passed isolation,
+readiness, cleanup, and leak rejection at that exact head. The remaining hosted gates are pending.
+This proves the profile on its Linux acceptance runner but not current-head release readiness. It
+does not prove that a consumable cross-process contract has been published or that protected upstream
+truth exists. The PR remains Draft, `REVIEW_REQUIRED`, and blocked while other exact-head gates are
+queued or pending.
+
+The dependency gate is therefore concrete, not a placeholder implementation task. The upstream
+crate currently exposes an embeddable Rust API but no supported authenticated process transport or
+generated Python binding. Its lease publishes `127.0.0.1`, which is usable only under a defined
+co-location/network-namespace topology. It also lacks caller-scoped lease ownership/idempotency,
+stable bounded wire errors and semantic response validation. The lease already reports immutable
+image, backend, policy identifier, and canonical effective-policy SHA-256, but its attestation lacks
+verified runtime artifact/build provenance and cryptographic signing; durable restart/orphan
+reclamation is also absent. Implementing this repository's
+ACL before those contracts exist would either duplicate privileged runtime behavior or fabricate an
+interface that the provider does not support.
+
+Research basis: NIST SP 800-190 recommends container-specific isolation, image integrity, least
+privilege, and lifecycle monitoring rather than treating a container boundary as sufficient by
+itself. NIST SP 800-207A further rejects trust based only on network location and requires granular
+application/service identity policy enforcement. Together they support the split here: the runtime
+must produce verifiable isolation and artifact evidence, while this gateway authenticates the
+caller and authorizes each lease instead of trusting loopback reachability.
+
+References (APA 7th): Souppaya, M., Morello, J., & Scarfone, K. (2017). *Application container
+security guide* (NIST SP 800-190). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-190. Chandramouli, R., & Butcher, Z. (2023). *A zero trust
+architecture model for access control in cloud-native applications in multi-location environments*
+(NIST SP 800-207A). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-207A.
+
+After an immutable upstream artifact is released with verified provenance, caller-scoped
+idempotency keys and defined duplicate-request responses, durable crash/restart container and
+network reclamation with no-leak evidence, and one versioned transport or supported binding with
+runtime peer authentication and message integrity, the smallest honest consumer slice is an explicit
+application-service lease API. It resolves an authorized `application_id` to an operator-owned image
+digest and fixed policy, sends only opaque task/session correlation, validates caller-bound lease,
+loopback/topology, expiry, runtime identity, policy and attestation evidence, persists owner-scoped
+lease state, and exposes status plus explicit termination. Unauthorized or mutable-image requests
+must fail before launch; success, cancellation, timeout, and orchestration failure must all terminate
+the lease; uncertain cleanup must remain an observable failure. Automatic LLM tool invocation waits
+for a real task/tool execution lifecycle rather than being simulated in this increment.
+
+**Status:** `WAIT_FOR_UPSTREAM_CONTRACT`. Continue fixing and verifying the upstream owner PR, but
+do not add a path dependency, fake adapter, direct container-engine call, ambient secret transport,
+or arbitrary egress here. Once the upstream release gate is real, add the local Anti-Corruption
+Layer, authorization/IDOR and no-secret-passthrough tests, lease lifecycle tests, API contract,
+threat/operations documentation, and authenticated end-to-end consumer evidence.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -117,6 +182,7 @@ Focused and proportional verification run on the exact local head:
 
 Total exact local evidence for this unit: `163 passed` across the touched
 discovery, persistence, client-boundary, CLI, and contract surfaces.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
