@@ -108,7 +108,7 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
             "failed",
             "succeeded",
         ]
-        assert refreshes[0]["error_code"] == "provider_discovery_error"
+        assert refreshes[0]["error_code"] == "unknown_error"
         assert refreshes[1]["error_code"] is None
         assert all(row["finished_at"].endswith("+00:00") for row in refreshes)
         assert set(second.selected_agent_ids) == {
@@ -116,6 +116,42 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
             "openrouter_router_new",
         }
         assert "secret-bearing detail" not in str(second.as_dict())
+    finally:
+        set_backend(None)
+
+
+def test_failed_refresh_persists_safe_http_status_and_keeps_last_known_good() -> None:
+    """Bytez HTTP failures retain LKG and a response-text-free status code."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = _source("bytez", "BYTEZ_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        first = bootstrap_provider_catalog_runtime(
+            environ={"BYTEZ_API_KEY": "secret"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: ([_model(source, "Qwen/Qwen3-4B")], []),
+        )
+        assert first.catalog_model_count == 1
+
+        second = bootstrap_provider_catalog_runtime(
+            environ={"BYTEZ_API_KEY": "secret"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: (
+                [],
+                [ProviderDiscoveryError("bytez", "http_status_500")],
+            ),
+        )
+
+        assert second.catalog_model_count == 1
+        assert second.last_known_good_model_count == 1
+        assert second.as_dict()["catalog_refreshes"][0]["error_code"] == (
+            "http_status_500"
+        )
+        assert "secret" not in str(second.as_dict())
     finally:
         set_backend(None)
 

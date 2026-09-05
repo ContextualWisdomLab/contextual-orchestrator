@@ -20,6 +20,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Bytez model discovery now treats a successful empty `task=chat` catalog as
+  unusable and checks the documented chat-completion-compatible
+  `task=text-generation` catalog before failing closed. It never broadens to an
+  unfiltered catalog request. Empty and upstream-failure refreshes emit only
+  bounded task/outcome/error-code telemetry, retain an existing last-known-good
+  catalog, and persist only allowlisted failure classes such as
+  `empty_provider_catalog` or `http_status_500`.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

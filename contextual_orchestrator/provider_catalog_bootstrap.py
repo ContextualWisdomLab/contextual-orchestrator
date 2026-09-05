@@ -451,7 +451,10 @@ def refresh_persisted_provider_catalog(
         account_models = live_by_account.get(_source_key(source), [])
         failed = source.provider_name in failed_names
         if failed:
-            store.record_failure(source, error_code="provider_discovery_error")
+            store.record_failure(
+                source,
+                error_code=raw_error_code_by_provider[source.provider_name],
+            )
             refresh_failures += 1
         elif not account_models:
             store.record_failure(source, error_code="empty_provider_catalog")
