@@ -665,7 +665,9 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert covariate["seed"] == heldout_benchmark.ITEM_COVARIATE_SEED
     assert covariate["true_delta"] == -0.8
     assert covariate["estimated_delta"] == pytest.approx(-0.7896498094289646)
-    assert covariate["absolute_error"] == pytest.approx(0.010350190571035478)
+    assert covariate["absolute_error"] == pytest.approx(
+        abs(covariate["estimated_delta"] - covariate["true_delta"])
+    )
     assert covariate["convergence_status"] == "converged"
     assert covariate["iterations"] == 941
     uncertainty = report["parameter_uncertainty_validation"]
