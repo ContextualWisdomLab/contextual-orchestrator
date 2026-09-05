@@ -2234,10 +2234,15 @@ National Institute of Standards and Technology. (2024). *Artificial
 intelligence risk management framework: Generative artificial intelligence
 profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1
 
+National Institute of Standards and Technology. (2020, updated 2023).
+*Security and privacy controls for information systems and organizations*
+(NIST SP 800-53 Rev. 5, release 5.1.1). https://doi.org/10.6028/NIST.SP.800-53r5
+
 These sources support the current product shape, OpenAI-compatible wire
-honesty, deep-versus-shallow orchestration allocation, cache safety, and
-generative-AI risk evidence. PDFs are attached only when redistribution is
-permitted; otherwise the canonical citation and link are retained.
+honesty, deep-versus-shallow orchestration allocation, cache safety,
+audit-evidence protection and retention, and generative-AI risk evidence. PDFs
+are attached only when redistribution is permitted; otherwise the canonical
+citation and link are retained.
 
 ## 9. Design and ecosystem record
 
@@ -2380,9 +2385,15 @@ Buyer-visible gaps now prioritized:
    keyboard/native-form REST editor; DB membership is normalized and legacy JSON
    membership migrates without data loss. Authenticated deployed-browser runtime
    evidence remains a release/UAT gate rather than an implementation gap.
-3. Free-model tests are deterministic catalog-contract tests. Add an opt-in,
-   spend-capped live OpenRouter canary selected from current zero-price metadata;
-   never pin a transient free model identifier in production or CI.
+3. **Implemented on protected `main`:** the OpenRouter free-model
+   canary is dry-run-only by default and selects a current chat row only when
+   prompt and completion prices are explicitly zero and comparable. Live mode
+   is unscheduled and requires positive request, output-token, timeout, evidence
+   retention, and output-path choices; it disables retries, pins no model id,
+   and persists neither credentials, prompts, nor responses. Its atomic,
+   path-serialized attempt ledger and operator-chosen retention implement the
+   audit-record protection and retention intent of NIST SP 800-53 Rev. 5.1
+   controls AU-9 and AU-11.
 4. Multi-instance routing observations remain process-local. Add a time-windowed
    durable observation model with calibrated decay before horizontal scaling.
 5. Protected main, not a feature-stack merge, remains the release boundary; do

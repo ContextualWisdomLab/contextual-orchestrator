@@ -133,10 +133,39 @@ Model-based conduct verification requires `fast-mlsirm` in the same runtime and 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
 Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
-Seed the credential into the KV once at bootstrap:
+`python -m contextual_orchestrator openrouter-free-canary` is a dry-run-only
+catalog check by default. It selects no pinned model: the lexically first
+current OpenRouter chat row with explicit zero prompt and completion prices,
+USD currency, and no incomparable unit price is reported without issuing a
+completion. Live mode is deliberately verbose and unscheduled:
 
 ```bash
-echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
+python -m contextual_orchestrator openrouter-free-canary --live \
+  --max-requests 1 --max-output-tokens 8 --timeout-seconds 10 \
+  --evidence-output ./openrouter-canary.json --retention-days 7
+```
+
+Every live cap and the evidence path/retention choice is mandatory. The command
+uses only the KV-registered `OPENROUTER_API_KEY`, disables retries, makes one
+fixed prompt request, and writes atomic JSON evidence containing neither the
+prompt, response, nor credential. It records the attempt as `pending` before
+transport, then atomically records the validated `OK` outcome. Before transport
+it removes expired evidence at the same output path and proves that a
+mode-`0600` atomic write is possible; unrelated, malformed, or unexpired files
+are never overwritten;
+retention cleanup therefore runs whenever the canary is invoked. The file also
+records `expires_at`; run
+`python -m contextual_orchestrator openrouter-free-canary
+--prune-expired-evidence ./openrouter-canary.json` from the operator's chosen
+retention lifecycle. Cleanup reads only that local file, verifies the canary
+schema/provider/mode identity, removes it at or after its deadline, and never
+resolves a credential, discovers a model, or calls a provider. This repository
+deliberately adds no scheduler.
+
+Seed the OpenRouter credential into the KV once at bootstrap:
+
+```bash
+echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator register-credential --name OPENROUTER_API_KEY --value-stdin
 ```
 
 For a persistent KV-backed server token, seed a credential such as
