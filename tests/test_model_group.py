@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 
@@ -139,6 +140,10 @@ def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> No
 
     assert canonical_group_name("shared-reasoning-model") == "shared_reasoning_model"
     assert orchestrator._requested_agent("shared-reasoning-model") == high
+    # Live serving now samples from each measured member's posterior
+    # (sampled_ranked_member_ids); a fixed seed keeps this assertion
+    # deterministic while still exercising the sampled path.
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(high.id)
     orchestrator._group_router.observe_success(low.id, 0.1)
     assert orchestrator._requested_agent("shared_reasoning_model") == low
@@ -271,6 +276,7 @@ def test_explicit_group_alias_routes_plain_completion_to_measured_member() -> No
     first = ModelAgent("provider_one_model", "vendor-one/model-a", group_name="shared_reasoning_model")
     second = ModelAgent("provider_two_model", "vendor-two/model-b", group_name="shared_reasoning_model")
     orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
 
@@ -340,7 +346,64 @@ def test_group_selects_measured_member_for_every_model_capability(capability: st
     first = ModelAgent("first_member", "provider/first", tags=(tag,), group_name="shared_model")
     second = ModelAgent("second_member", "provider/second", tags=(tag,), group_name="shared_model")
     orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
 
     assert orchestrator.select_capability_agent(capability, "shared-model") == second
+
+
+def test_sampled_ranking_leaves_unobserved_members_at_the_shared_prior_score() -> None:
+    """Neither member has a real observation, so both stay at the identical
+    ``UNOBSERVED_MEMBER_SCORE`` -- unsampled -- and the caller's input order
+    survives untouched, exactly like ``ranked_member_ids``.
+    """
+    router = ModelGroupRouter(rng=random.Random(0))
+    assert router.sampled_ranked_member_ids(["member_b", "member_a"]) == [
+        "member_b",
+        "member_a",
+    ]
+
+
+def test_sampled_ranking_falls_back_to_the_posterior_mean_for_a_degenerate_zero_prior() -> None:
+    """``update_prior`` permits ``prior_alpha``/``prior_beta`` == 0.0. A member
+    whose resulting ``alpha`` (or ``beta``) lands at exactly 0.0 with a real
+    observation recorded must not raise out of ``random.betavariate(0.0, x)``
+    (``ValueError: alpha and beta must be > 0``); it falls back to the same
+    closed-form posterior mean ``_score_locked`` uses.
+    """
+    router = ModelGroupRouter(rng=random.Random(0))
+    router.register_member("degenerate_member")
+    router.update_prior("degenerate_member", 0.0, 0.0)
+    router.observe_failure("degenerate_member")  # alpha stays 0.0, beta becomes 1.0
+
+    report = router.member_report("degenerate_member")
+    assert report["success_count"] == 0 and report["failure_count"] == 1
+    assert report["success_posterior_mean"] == 0.0
+
+    # Posterior mean 0.0 ranks strictly below an unobserved sibling's neutral
+    # UNOBSERVED_MEMBER_SCORE (0.5) -- proof the fallback ran instead of
+    # raising or silently dropping the member.
+    ranked = router.sampled_ranked_member_ids(["degenerate_member", "unobserved_sibling"])
+    assert ranked == ["unobserved_sibling", "degenerate_member"]
+
+
+def test_sampled_ranking_prefers_but_does_not_monopolize_the_better_member() -> None:
+    """Authoritative statistical contract for :meth:`ModelGroupRouter.sampled_ranked_member_ids`.
+
+    With one observation each (Beta(1, 2) for the loser, Beta(2, 1) for the
+    winner, equal latency), the true win probability for the better member is
+    exactly 5/6 ~= 0.833 (Thompson, 1933; the early-stage exploration behavior
+    Agrawal & Goyal 2012 prove drives Thompson Sampling's near-optimal regret).
+    0.65 leaves a wide margin against a false failure while still catching a
+    broken (e.g. uniform-random or reverted-to-argmax) implementation.
+    """
+    router = ModelGroupRouter(rng=random.Random(100))
+    router.observe_failure("loser")  # alpha=1, beta=2
+    router.observe_success("winner", 1.0)  # alpha=2, beta=1; same latency floor as loser's
+    wins = sum(
+        router.sampled_ranked_member_ids(["loser", "winner"])[0] == "winner"
+        for _ in range(200)
+    )
+    assert wins / 200 >= 0.65
+    assert wins < 200  # exploration, not permanent monopolization

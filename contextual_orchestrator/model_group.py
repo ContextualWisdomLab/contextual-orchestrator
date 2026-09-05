@@ -23,11 +23,19 @@ endpoint actually serves each request using only measured evidence:
   degenerates gracefully -- members without any observation share one
   identical neutral score, so ordering falls back to the caller's static
   ranking until real evidence exists.
+- **Live selection** (:meth:`ModelGroupRouter.sampled_ranked_member_ids`) draws
+  one Thompson sample (Thompson, 1933) per member from its own Beta(alpha,
+  beta) posterior instead of comparing the posterior mean, so traffic keeps
+  probabilistically exploring every credible member in proportion to
+  remaining uncertainty rather than concentrating on whichever member
+  currently leads the point estimate (Chapelle & Li, 2011; Agrawal & Goyal,
+  2012). Admin/report reads keep the deterministic mean-based order.
 """
 
 from __future__ import annotations
 
 import math
+import random
 import re
 import threading
 import time
@@ -84,6 +92,7 @@ class ModelGroupRouter:
         min_latency_seconds: float = MIN_ROUTING_LATENCY_SECONDS,
         prior_resolver: Callable[[str], tuple[float, float]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        rng: random.Random | None = None,
     ) -> None:
         if not 0 < ewma_gain <= 1:
             raise ValueError("ewma_gain must be within (0, 1]")
@@ -93,6 +102,11 @@ class ModelGroupRouter:
         self._min_latency_seconds = float(min_latency_seconds)
         self._prior_resolver = prior_resolver
         self._clock = clock
+        # A literal default (`rng: random.Random = random.Random()`) would be
+        # evaluated once at def time -- one shared, unsynchronized instance
+        # reused by every router built without an explicit rng=. The
+        # None-sentinel gives each router its own private generator instead.
+        self._rng = rng if rng is not None else random.Random()
         self._lock = threading.Lock()
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
@@ -274,16 +288,62 @@ class ModelGroupRouter:
     def member_observation_count(self, member_id: str) -> int:
         """Total completed attempts recorded for one member (success + failure)."""
         with self._lock:
-            state = self._members.get(member_id)
-            if state is None:
-                return 0
-            alpha = float(state["alpha"]) - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
-            beta = float(state["beta"]) - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
-            return int(max(alpha, 0.0)) + int(max(beta, 0.0))
+            return self._observation_count_locked(member_id)
 
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
         """Order member ids best-first by measured score, preserving input ties."""
         scored = {member_id: self.member_score(member_id) for member_id in member_ids}
+        return sorted(member_ids, key=lambda member_id: -scored[member_id])
+
+    def sampled_ranked_member_ids(
+        self, member_ids: list[str] | tuple[str, ...]
+    ) -> list[str]:
+        """Order member ids best-first by one live Thompson-sampled draw per member.
+
+        Same physical quantity as :meth:`ranked_member_ids` -- P(success | data)
+        divided by EWMA latency -- except a member with at least one real
+        observation (:meth:`member_observation_count` > 0) contributes one draw
+        from its own Beta(alpha, beta) posterior (Thompson, 1933) instead of the
+        posterior mean, so a group's traffic keeps probabilistically exploring
+        every credible member in proportion to genuine remaining uncertainty
+        rather than letting whichever member currently leads the point estimate
+        absorb all subsequent traffic -- the correct, intended behavior at the
+        thin per-member observation counts this free-tier gateway actually runs
+        at (Chapelle & Li, 2011; Agrawal & Goyal, 2012).
+
+        A member still at the shared prior (no real observation yet) keeps its
+        exact :data:`UNOBSERVED_MEMBER_SCORE`, unsampled -- the "no evidence ->
+        caller's static order survives untouched" contract holds identically to
+        :meth:`ranked_member_ids`.
+
+        Uses this router's own injected ``rng`` -- a plain, non-cryptographic
+        :class:`random.Random` (a routing weight, not a security boundary).
+        """
+        scored: dict[str, float] = {}
+        with self._lock:
+            for member_id in member_ids:
+                state = self._members.get(member_id)
+                if state is None or self._observation_count_locked(member_id) == 0:
+                    scored[member_id] = UNOBSERVED_MEMBER_SCORE
+                    continue
+                alpha = float(state["alpha"])
+                beta = float(state["beta"])
+                stability_sample = (
+                    self._rng.betavariate(alpha, beta)
+                    if alpha > 0.0 and beta > 0.0
+                    # Degenerate Beta shape (an operator/prior_resolver
+                    # pseudo-count of exactly 0.0 -- update_prior already
+                    # permits this): the distribution collapses to a point
+                    # mass, so fall back to the same closed-form mean
+                    # _score_locked uses, instead of raising out of
+                    # betavariate() (`ValueError: alpha and beta must be > 0`).
+                    else alpha / (alpha + beta)
+                )
+                ewma = state["ewma"]
+                latency = (
+                    1.0 if ewma is None else max(float(ewma), self._min_latency_seconds)
+                )
+                scored[member_id] = stability_sample / latency
         return sorted(member_ids, key=lambda member_id: -scored[member_id])
 
     def member_report(self, member_id: str) -> dict[str, float | int | None]:
@@ -300,6 +360,25 @@ class ModelGroupRouter:
 
     def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
         return self._members.setdefault(member_id, self._blank_state(member_id))
+
+    @staticmethod
+    def _outcome_count(total: float, prior: float) -> int:
+        """Recover an integer observed-outcome count from floating prior mass."""
+        return int(round(max(total - prior, 0.0)))
+
+    def _observation_count_locked(self, member_id: str) -> int:
+        state = self._members.get(member_id)
+        if state is None:
+            return 0
+        alpha = self._outcome_count(
+            float(state["alpha"]),
+            float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT)),
+        )
+        beta = self._outcome_count(
+            float(state["beta"]),
+            float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT)),
+        )
+        return alpha + beta
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
@@ -342,7 +421,13 @@ class ModelGroupRouter:
             "max_observed_rpm": self._max_observed_rpm.get(member_id, 0),
             "max_observed_tpm": self._max_observed_tpm.get(member_id, 0),
             "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
-            "success_count": int(alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))),
-            "failure_count": int(beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))),
+            "success_count": self._outcome_count(
+                alpha,
+                float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT)),
+            ),
+            "failure_count": self._outcome_count(
+                beta,
+                float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT)),
+            ),
             "score": round(self._score_locked(member_id), 9),
         }
