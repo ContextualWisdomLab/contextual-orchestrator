@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- The replication audit now reports Monte Carlo standard errors and the
+  conservative 400-replication requirement for a 0.025 pass-rate MCSE, so ten
+  seeds cannot be misread as a precise operating-characteristic estimate.
 - A ten-seed replication audit now rejects the development-selected
   reject-option threshold because it satisfies the declared error-upper-bound
   criterion in only 20% of independent runs, despite consistent efficiency.

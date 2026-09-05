@@ -2453,6 +2453,12 @@ ceiling. The benchmark therefore marks `z=1.645` as
 `rejected_not_replication_stable`; it is not an accuracy improvement eligible
 for production admission. The next valid experiment needs more independent
 buyer-linked evidence or a preregistered, adequately powered calibration design.
+Source commit `1862893a` measures Monte Carlo uncertainty rather than treating
+ten seeds as exact. The ceiling-pass-rate MCSE is 0.1265; coverage-delta,
+all-candidate query-delta, and selective-risk MCSEs are 0.00619, 0.02257, and
+0.00211. A conservative pass-rate design requires 400 replications for target
+MCSE 0.025. The present ten-run audit is a fail-closed falsification screen,
+not a powered estimate of buyer operating characteristics.
 
 ## 7. Delivery gates
 

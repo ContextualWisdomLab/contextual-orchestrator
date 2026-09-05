@@ -343,6 +343,14 @@ Buyer next action: call `run_equal_budget_ablation` and read
   seeds. Efficiency gains persist, but the 2.5% Wilson error ceiling passes in
   only 20% of runs and the worst upper bound is 4.540%; the candidate threshold
   is therefore rejected rather than promoted from a favorable single holdout.
+- Morris, T. P., White, I. R., & Crowther, M. J. (2019). Using simulation
+  studies to evaluate statistical methods. *Statistics in Medicine, 38*(11),
+  2074–2102. https://doi.org/10.1002/sim.8086
+  Grounds ADEMP planning and reporting Monte Carlo standard errors. Source
+  `1862893a` reports MCSE 0.1265 for the ten-run ceiling-pass rate and 0.00619,
+  0.02257, and 0.00211 for coverage delta, query delta, and selective risk. A
+  worst-case binomial design needs 400 replications for target MCSE 0.025, so
+  the current audit rejects admission but does not claim a precise pass rate.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

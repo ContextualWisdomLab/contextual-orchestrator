@@ -152,6 +152,12 @@ all-candidate query reduction remains 1.27–1.485, but selective risk reaches
 1.802% and its Wilson upper bound reaches 4.540%. Only 20% of replications meet
 the declared 2.5% ceiling, so `z=1.645` is rejected as replication-unstable and
 must not become a routing default.
+Source `1862893a` quantifies the audit's own Monte Carlo error. The ten-run
+pass-rate MCSE is 0.1265; coverage-delta, all-candidate query-delta, and risk
+MCSEs are 0.00619, 0.02257, and 0.00211. A conservative binomial calculation
+requires 400 replications to target pass-rate MCSE 0.025. The ten runs are
+enough to falsify stable admission under the stated rule, not to estimate a
+precise buyer operating characteristic.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges
