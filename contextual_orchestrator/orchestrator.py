@@ -7494,12 +7494,16 @@ class TaskOrchestrator:
         self, capability: str
     ) -> tuple[
         Callable[[str, Any | None, BaseException | None], None],
-        Callable[[str | None], None],
+        Callable[[str | None, tuple[tuple[str, str], ...]], None],
     ]:
         """Return callbacks that ledger completed loser usage after winner selection."""
         state_lock = threading.Lock()
         pending: list[tuple[str, Any]] = []
-        state: dict[str, Any] = {"finalized": False, "winner": None}
+        state: dict[str, Any] = {
+            "finalized": False,
+            "winner": None,
+            "completed_ids": set(),
+        }
 
         def emit(endpoint_id: str, value: Any) -> None:
             sink = self._race_usage_sink
@@ -7515,24 +7519,39 @@ class TaskOrchestrator:
                 endpoint_id, value, error, capability=capability
             )
             if error is not None or value is None:
+                emit("__race_incomplete__", None)
+                with state_lock:
+                    state["completed_ids"].add(endpoint_id)
                 return
             with state_lock:
                 if not state["finalized"]:
                     pending.append((endpoint_id, value))
+                    state["completed_ids"].add(endpoint_id)
                     return
                 winner = state["winner"]
             if winner is None or endpoint_id != winner:
                 emit(endpoint_id, value)
+            with state_lock:
+                state["completed_ids"].add(endpoint_id)
 
-        def finalize(winner_endpoint_id: str | None) -> None:
+        def finalize(
+            winner_endpoint_id: str | None,
+            cancellation_outcomes: tuple[tuple[str, str], ...],
+        ) -> None:
             with state_lock:
                 state["finalized"] = True
                 state["winner"] = winner_endpoint_id
+                completed_ids = set(state["completed_ids"])
                 ready = list(pending)
                 pending.clear()
             for endpoint_id, value in ready:
                 if winner_endpoint_id is None or endpoint_id != winner_endpoint_id:
                     emit(endpoint_id, value)
+            if any(
+                outcome == "safe_drain" and endpoint_id not in completed_ids
+                for endpoint_id, outcome in cancellation_outcomes
+            ):
+                emit("__race_incomplete__", None)
 
         return completed, finalize
 
@@ -7606,7 +7625,8 @@ class TaskOrchestrator:
             except RuntimeError:
                 outcome = None
             finalize_attempts(
-                None if outcome is None else outcome.winner_endpoint_id
+                None if outcome is None else outcome.winner_endpoint_id,
+                () if outcome is None else outcome.cancellation_outcomes,
             )
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability=capability)
@@ -7746,7 +7766,8 @@ class TaskOrchestrator:
             except RuntimeError:
                 outcome = None
             finalize_attempts(
-                None if outcome is None else outcome.winner_endpoint_id
+                None if outcome is None else outcome.winner_endpoint_id,
+                () if outcome is None else outcome.cancellation_outcomes,
             )
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
