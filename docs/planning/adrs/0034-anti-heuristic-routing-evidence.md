@@ -158,6 +158,12 @@ MCSEs are 0.00619, 0.02257, and 0.00211. A conservative binomial calculation
 requires 400 replications to target pass-rate MCSE 0.025. The ten runs are
 enough to falsify stable admission under the stated rule, not to estimate a
 precise buyer operating characteristic.
+Source `0b87905c` removes generator overhead from the shared cosine hot path
+without changing `math.fsum` or multiplication order. Ten separate before and
+after process runs reduce median candidate p50 from 0.01325 to 0.007708 ms
+(41.83%) and median latency-delta CI upper bound from 0.000910 to 0.000635 ms
+(30.14%). Candidate-minus-baseline latency remains positive, so this is a
+useful implementation improvement but does not satisfy the admission gate.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

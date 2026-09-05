@@ -2459,6 +2459,13 @@ all-candidate query-delta, and selective-risk MCSEs are 0.00619, 0.02257, and
 0.00211. A conservative pass-rate design requires 400 replications for target
 MCSE 0.025. The present ten-run audit is a fail-closed falsification screen,
 not a powered estimate of buyer operating characteristics.
+Source commit `0b87905c` profiles and shortens the actual `ranked_evidence`
+wall-time hot path without altering fitted probabilities or cosine arithmetic.
+Across ten before/after process runs, median candidate p50 falls from 0.01325
+to 0.007708 ms (41.83%) and the median candidate-minus-baseline latency-CI
+upper bound falls from 0.000910 to 0.000635 ms (30.14%). The upper bound remains
+positive, so `decision_latency_improved` stays failed; provider end-to-end p95
+and buyer traffic are still unexecuted.
 
 ## 7. Delivery gates
 

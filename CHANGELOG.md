@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Cosine scoring now feeds `math.fsum` with the standard-library multiplication
+  iterator, preserving numerical semantics while reducing psychometric routing
+  decision overhead.
 - The replication audit now reports Monte Carlo standard errors and the
   conservative 400-replication requirement for a 0.025 pass-rate MCSE, so ten
   seeds cannot be misread as a precise operating-characteristic estimate.
