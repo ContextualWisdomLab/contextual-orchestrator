@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual structured requests can recover on another eligible endpoint after
+  all models at the first endpoint are unavailable. Explicit caller selections
+  and spending limits remain enforced, including malformed later responses.
 - Structured requests that exhaust eligible candidates after both temporary
   provider failures and missing-model responses retain the temporary failure
   classification, so clients can recognize that a later retry may succeed.

@@ -5,7 +5,7 @@
 At head `2a6b41562114530315bb44d1aa3dede820a68da1`, both `502 → 404` and
 `404 → 502` on same-endpoint structured-synthesis candidates returned a
 non-retryable missing-model error. The shared exhaustion boundary now preserves
-the recorded retryable upstream error first. Endpoint, model, free/ZDR,
+the recorded retryable upstream error first. Caller-selected endpoint, model, free/ZDR,
 file-replica, and ambiguous-tool-replay restrictions remain unchanged.
 Both ordered regression cases failed before the fix and pass afterward.
 See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
@@ -29,6 +29,15 @@ unassigned response read or reuse of another candidate's usage. Both cases
 failed on `18a29d14`; 178 focused tests pass after the correction. Unknown
 usage stays unavailable. The explicitly interrupted full run on `18a29d14`
 is excluded from passing evidence; see the same doctoring record.
+
+The next current-head review found that `69b79a6bc2a6039396d6fd03edcac5bef80c686e`
+still converted a stale model into an implicit endpoint pin. Existing tests
+had preserved that behavior without proving it was required. New cases failed
+`12/49` before the shared candidate-list correction; the focused unit/HTTP/usage
+suite now passes `52/52`. Virtual AUTO/FREE requests can exhaust each already
+eligible model across endpoints; explicit selections and budget enforcement
+remain bounded. This is proposed local remediation, not protected or live
+acceptance. See the same doctoring record for the corrected contract audit.
 
 ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
 

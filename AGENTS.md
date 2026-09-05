@@ -79,6 +79,14 @@ push or open a PR.
   Distinguish a malformed returned object from a client exception before
   return: reset response state per attempt, never copy prior usage, and keep
   unreported usage unavailable rather than fabricating a zero count.
+- A stale-model response does not create a caller-selected endpoint constraint.
+  Virtual structured recovery must visit the already-eligible distinct models,
+  including later endpoint siblings, while preserving explicit model/endpoint,
+  free/ZDR, file-replica, and effort restrictions. Test all-local-candidates
+  failing, an initial candidate excluded during evidence collection, and billed
+  malformed output on a later endpoint. Do not reject a review solely because
+  an existing guard or successful-sibling test encodes the current behavior;
+  verify the requirement and the exhausted-candidate case first.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.

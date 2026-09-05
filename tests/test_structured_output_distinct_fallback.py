@@ -166,7 +166,7 @@ def test_virtual_structured_mixed_transport_failures_preserve_retryable_error(
 
     def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
         calls.append(agent.id)
-        status = failure_order[len(calls) - 1]
+        status = (*failure_order, 404)[len(calls) - 1]
         raise ProviderUpstreamError(
             agent_id=agent.id,
             model=agent.model,
@@ -190,16 +190,58 @@ def test_virtual_structured_mixed_transport_failures_preserve_retryable_error(
             single_agent=False,
         )
 
-    assert calls == [first.id, second.id]
+    assert calls == [first.id, second.id, other.id]
     assert exc_info.value.error_code == "api_error"
     assert exc_info.value.client_status == 502
     assert exc_info.value.provider_status == 502
     assert exc_info.value.retryable is True
     for agent in (first, second, other):
-        expected_failures = int(agent is not other)
-        assert orchestrator._circuit.get(agent.id, {}).get("failures", 0) == expected_failures
-        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == expected_failures
+        assert orchestrator._circuit[agent.id]["failures"] == 1
+        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == 1
         assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+@pytest.mark.parametrize("failure_order", [(502, 404, 404), (404, 502, 404), (404, 404, 404)])
+def test_virtual_structured_stale_models_do_not_pin_an_unrequested_endpoint(
+    model: str, failure_order: tuple[int, int, int],
+) -> None:
+    """Virtual recovery visits each eligible model, including later-provider siblings."""
+    agents = [
+        ModelAgent("first_agent", "first-model", "mock://catalog", tags=("cost:free",)),
+        ModelAgent("second_agent", "second-model", "mock://catalog", tags=("cost:free",)),
+        ModelAgent("third_agent", "third-model", "mock://other", tags=("cost:free",)),
+        ModelAgent("fourth_agent", "fourth-model", "mock://other", tags=("cost:free",)),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent is agents[-1]:
+            return _completion('{"input_count":10}', 1)
+        status = failure_order[len(calls) - 1]
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="api_error" if status == 502 else "model_not_found",
+            message="synthetic upstream failure",
+            client_status=status,
+            provider_status=status,
+            retryable=status == 502,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=agents[0]),
+        patch.object(orchestrator, "_ranked_agents", return_value=agents),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(_request(model), single_agent=False)
+
+    assert calls == [agent.id for agent in agents]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
 
 
 @pytest.mark.parametrize(
@@ -288,7 +330,8 @@ def test_virtual_structured_exhaustion_is_typed_non_repeating_and_secret_free() 
     assert calls == [first.id, first.id, second.id, second.id]
 
 
-def test_requested_endpoint_scope_never_crosses_to_another_endpoint() -> None:
+@pytest.mark.parametrize("missing_model", [False, True])
+def test_requested_endpoint_scope_never_crosses_to_another_endpoint(missing_model: bool) -> None:
     """A caller-selected endpoint remains an eligibility boundary during recovery."""
     first = ModelAgent(
         "first_agent",
@@ -305,6 +348,12 @@ def test_requested_endpoint_scope_never_crosses_to_another_endpoint() -> None:
 
     def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
         calls.append(agent.id)
+        if missing_model:
+            raise ProviderUpstreamError(
+                agent_id=agent.id, model=agent.model, error_code="model_not_found",
+                message="model missing", client_status=404, provider_status=404,
+                retryable=False, transport="structured_synthesis",
+            )
         return _completion('{"input_count":6}', 1)
 
     with (
@@ -314,15 +363,19 @@ def test_requested_endpoint_scope_never_crosses_to_another_endpoint() -> None:
         ),
         patch.object(orchestrator, "conduct", return_value=_workflow()),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
-        pytest.raises(ProviderResponseError) as exc_info,
+        pytest.raises((ProviderResponseError, ProviderUpstreamError)) as exc_info,
     ):
         orchestrator.proxy_completion(
             _request(TaskOrchestrator.AUTO_MODEL),
             single_agent=False,
         )
 
-    assert type(exc_info.value).__name__ == "StructuredOutputExhaustedError"
-    assert calls == [first.id, first.id]
+    if missing_model:
+        assert exc_info.value.error_code == "model_not_found"
+        assert calls == [first.id]
+    else:
+        assert type(exc_info.value).__name__ == "StructuredOutputExhaustedError"
+        assert calls == [first.id, first.id]
     assert second.id not in calls
 
 
@@ -356,14 +409,17 @@ def test_structured_budget_rejection_persists_incurred_usage_without_completed_r
     assert orchestrator.count_workflow_runs() == 0
 
 
-@pytest.mark.parametrize("prior_transport_failure", [False, True])
+@pytest.mark.parametrize(
+    ("prior_transport_failure", "prior_endpoint"),
+    [(False, "mock://first"), (True, "mock://first"), (True, "mock://prior")],
+)
 def test_malformed_synthesis_response_enforces_budget_before_next_candidate(
-    prior_transport_failure: bool,
+    prior_transport_failure: bool, prior_endpoint: str,
 ) -> None:
     """A billed malformed synthesis that itself exhausts the budget must stop
     there, not silently bill a second provider call before the budget check
     catches up. Otherwise a request can spend past the configured limit."""
-    prior = ModelAgent("prior_agent", "prior-model", "mock://first", group_name="test_group")
+    prior = ModelAgent("prior_agent", "prior-model", prior_endpoint, group_name="test_group")
     first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
     second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
     candidates = ([prior] if prior_transport_failure else []) + [first, second]
@@ -474,12 +530,17 @@ def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
     ]
 
 
-def test_initial_same_endpoint_replacement_keeps_cross_endpoint_recovery_pool() -> None:
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+@pytest.mark.parametrize("same_endpoint_available", [False, True])
+def test_initial_same_endpoint_replacement_keeps_cross_endpoint_recovery_pool(
+    model: str, same_endpoint_available: bool,
+) -> None:
     """A stale initial candidate can still recover to another endpoint after repair failure."""
-    stale = ModelAgent("stale_agent", "stale-model", "mock://catalog")
-    live = ModelAgent("live_agent", "live-model", "mock://catalog")
-    other = ModelAgent("other_agent", "other-model", "mock://other")
-    orchestrator = TaskOrchestrator([stale, live, other])
+    stale = ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("cost:free",))
+    live = ModelAgent("live_agent", "live-model", "mock://catalog", tags=("cost:free",))
+    other = ModelAgent("other_agent", "other-model", "mock://other", tags=("cost:free",))
+    candidates = [stale, *([live] if same_endpoint_available else []), other]
+    orchestrator = TaskOrchestrator(candidates)
     calls: list[str] = []
 
     def conduct(*_args, **kwargs):
@@ -495,15 +556,15 @@ def test_initial_same_endpoint_replacement_keeps_cross_endpoint_recovery_pool() 
     with (
         patch.object(orchestrator, "conduct", side_effect=conduct),
         patch.object(orchestrator, "_select_agent", return_value=stale),
-        patch.object(orchestrator, "_ranked_agents", return_value=[stale, live, other]),
+        patch.object(orchestrator, "_ranked_agents", return_value=candidates),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
     ):
         result = orchestrator.proxy_completion(
-            _request(TaskOrchestrator.AUTO_MODEL),
+            _request(model),
             single_agent=False,
         )
 
-    assert calls == [live.id, live.id, other.id]
+    assert calls == ([live.id, live.id] if same_endpoint_available else []) + [other.id]
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
 
 

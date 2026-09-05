@@ -4692,27 +4692,19 @@ class TaskOrchestrator:
             for candidate in synthesis_candidates
             if candidate.id not in request_exclusions
         ]
-        initial_synthesis_candidates = synthesis_candidates
         if final_agent.id in request_exclusions:
-            same_endpoint_candidates = [
-                candidate
-                for candidate in synthesis_candidates
-                if candidate.base_url.rstrip("/").casefold()
-                == final_agent.base_url.rstrip("/").casefold()
-            ]
-            if not same_endpoint_candidates:
+            if not synthesis_candidates:
                 raise ProviderUpstreamError(
                     agent_id=final_agent.id,
                     model=final_agent.model,
                     error_code="model_not_found",
-                    message="every eligible model on the selected endpoint is unavailable",
+                    message="every eligible model is unavailable",
                     client_status=404,
                     provider_status=404,
                     retryable=False,
                     transport="structured_synthesis",
                 )
-            final_agent = same_endpoint_candidates[0]
-            initial_synthesis_candidates = same_endpoint_candidates
+            final_agent = synthesis_candidates[0]
 
         def provider_output(agent: ModelAgent, response: Mapping[str, Any]) -> str:
             """Extract non-empty structured output from the attempted provider."""
@@ -4744,20 +4736,14 @@ class TaskOrchestrator:
             payload: dict[str, Any],
             *,
             allow_cross_candidate_fallback: bool = True,
-            candidate_pool: list[ModelAgent] | None = None,
             require_output: bool = True,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Handle transport fallback while the outer loop owns JSON recovery."""
             nonlocal final_agent
-            seen_providers: set[str] = set()
             preferred = final_agent
-            preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
             last_retryable_upstream_error: ProviderUpstreamError | None = None
             saw_request_too_large = False
-            eligible_candidates = (
-                candidate_pool if candidate_pool is not None else synthesis_candidates
-            )
             ordered_candidates = (
                 [preferred]
                 if not allow_cross_candidate_fallback
@@ -4765,24 +4751,13 @@ class TaskOrchestrator:
                     *([preferred] if preferred.id not in request_exclusions else []),
                     *(
                         candidate
-                        for candidate in eligible_candidates
+                        for candidate in synthesis_candidates
                         if candidate.id != preferred.id
                         and candidate.id not in request_exclusions
                     ),
                 ]
             )
             for candidate in ordered_candidates:
-                candidate_endpoint = candidate.base_url.rstrip("/").casefold()
-                if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
-                    continue
-                provider_key = (
-                    f"provider:{candidate.provider_name.casefold()}"
-                    if candidate.provider_name.strip()
-                    else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
-                )
-                if provider_key in seen_providers and candidate_endpoint != preferred_endpoint:
-                    continue
-                seen_providers.add(provider_key)
                 # Keep the outer failure accounting attached to the provider
                 # whose attempt actually raised, including the post-413 path.
                 final_agent = candidate
@@ -4835,7 +4810,6 @@ class TaskOrchestrator:
                         if (
                             virtual_model
                             and isinstance(exc, ProviderResponseError)
-                            and candidate_endpoint == preferred_endpoint
                         ):
                             dropped_step = {
                                 "id": len(workflow["trace"])
@@ -4880,7 +4854,6 @@ class TaskOrchestrator:
                         if (
                             virtual_model
                             and classified.error_code == "model_not_found"
-                            and candidate_endpoint == preferred_endpoint
                         ):
                             last_model_not_found = classified
                             request_exclusions.add(candidate.id)
@@ -5002,14 +4975,10 @@ class TaskOrchestrator:
                 )
             return next_agent
 
-        active_synthesis_candidates = initial_synthesis_candidates
         while True:
             synthesis_failure_recorded = False
             try:
-                raw, final_agent = send_synthesis(
-                    upstream,
-                    candidate_pool=active_synthesis_candidates,
-                )
+                raw, final_agent = send_synthesis(upstream)
             except Exception as exc:
                 if (
                     not _is_request_too_large_error(exc)
@@ -5027,7 +4996,6 @@ class TaskOrchestrator:
                         ),
                     )
                 raise
-            active_synthesis_candidates = synthesis_candidates
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
                 "id": len(workflow["trace"]) + len(structured_attempt_steps),

@@ -31,14 +31,16 @@ At head `2a6b41562114530315bb44d1aa3dede820a68da1`, structured synthesis
 remembered retryable provider failures and missing-model errors separately,
 then preferred the latter on exhaustion. A `502 → 404` or `404 → 502` sequence
 therefore returned a non-retryable 404 despite a transient failure being known.
-The correction changes only the shared exhaustion order: return the recorded
-retryable upstream error before the missing-model error. It does not widen
-the candidate set, cross the existing post-404 endpoint boundary, replay an
-ambiguous tool request, or relax free/ZDR/file-replica eligibility.
+The first correction changed only the shared exhaustion order: return the
+recorded retryable upstream error before the missing-model error. It retained
+an existing post-404 endpoint restriction, which the subsequent contract audit
+below found was not justified for an unpinned virtual request.
 
 The two mixed-order cases in `tests/test_structured_output_distinct_fallback.py`
-failed with `404 != 502` before the correction. They require the same two
-endpoint-local calls, no alternate-endpoint call, and a retryable 502 afterward.
+failed with `404 != 502` before the first correction. That version asserted two
+endpoint-local calls and a retryable 502, but incorrectly forbade the still
+eligible alternate endpoint. The current tests require that attempt too before
+reporting exhaustion.
 The paired cases in `tests/test_chat_response_format_http_honesty.py` also
 exercise the real HTTP handler and require HTTP 502 with `api_error` and
 `retryable=true`; both returned HTTP 404 on an isolated pre-fix checkout.
@@ -85,6 +87,32 @@ response-less attempt, and unavailable total usage rather than a false zero.
 All 178 focused budget/provider/group/effort/HTTP tests passed after that fix.
 The full run on `18a29d14` was explicitly interrupted after this finding
 (`exit 2`, `1199 passed in 299.44s`); it is not passing full-suite evidence.
+
+### Stale models must not introduce an implicit endpoint pin
+
+CodeRabbit's [current-head finding](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1004#discussion_r3939972170)
+identified an eligible alternate endpoint skipped after a 404. The initial
+rejection confused existing behavior with a requirement. Issue #998 and ADR
+0035 protect caller-selected endpoints, not an endpoint inferred from a failed
+candidate. The original guard in `99c05a0f58972c7d1b9e19a3e0f9ef7b4cf113af`
+was tested only with a successful same-endpoint sibling; it did not establish
+that other endpoints must remain forbidden after all local candidates fail.
+
+Against `69b79a6bc2a6039396d6fd03edcac5bef80c686e`, the expanded unit/HTTP
+suite produced `12 failed, 37 passed`. Recovery now reuses the complete
+already-filtered candidate list without endpoint narrowing or provider-name
+deduplication. A candidate excluded during evidence collection can advance
+to another eligible endpoint. Malformed responses on later endpoints use the
+same incurred-usage and budget checks as the initial endpoint. Concrete model,
+explicit endpoint, free/ZDR, file-replica, effort, and failure-classifier
+boundaries remain intact; JSON repair remains bound to its original candidate.
+
+The two regression files plus `tests/test_structured_output_malformed_synthesis_usage.py`
+pass all 52 tests after this correction. They exercise both AUTO and FREE,
+mixed and all-stale failures, later-provider model siblings, explicit endpoint
+rejection, pre-excluded initial candidates, and a later-endpoint malformed
+response that must stop before exceeding the budget. Full-suite, hosted, and
+protected-main receipts remain separate evidence.
 
 ## Research-to-code mapping
 

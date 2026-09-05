@@ -165,7 +165,7 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
 
 
 def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> None:
-    """A same-endpoint 502 wins over a 404 in either retry order."""
+    """A 502 remains retryable only after every eligible endpoint is exhausted."""
     for failure_order in ((502, 404), (404, 502)):
         agents = [
             ModelAgent(
@@ -197,7 +197,7 @@ def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> No
 
         def reject(agent, _endpoint, _payload):
             calls.append(agent.id)
-            status = failure_order[len(calls) - 1]
+            status = (*failure_order, 404)[len(calls) - 1]
             raise ProviderUpstreamError(
                 agent_id=agent.id,
                 model=agent.model,
@@ -232,8 +232,7 @@ def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> No
             assert body["error"]["detail"]["provider_status"] == 502
             assert body["error"]["detail"]["retryable"] is True
             assert body["error"]["detail"]["transport"] == "structured_synthesis"
-            assert calls == ["first_agent", "second_agent"]
-            assert "other_agent" not in calls
+            assert calls == ["first_agent", "second_agent", "other_agent"]
         finally:
             server.shutdown()
             thread.join(timeout=5)
