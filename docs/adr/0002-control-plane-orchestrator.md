@@ -1,6 +1,6 @@
 # ADR 0002: Control-plane orchestrator, not a trained coordinator
 
-- Status: Accepted
+- Status: Accepted; amended 2026-09-02
 - Date: 2026-08-25
 - Decision owners: ContextualWisdomLab
 - Series: `docs/adr` only. This is not planning ADR 0002
@@ -53,17 +53,21 @@ trained Fugu, TRINITY, or Conductor clone.
    source attachments. Caller system instructions are reasserted in the
    stage-role system message so their authority survives provider translation;
    they are not copied into the added user envelope.
-4. **Deterministic policy.** Worker and role selection uses a deterministic
-   capability-hint heuristic so the lab runs without training data, GPUs, or
-   vendor credentials. The heuristic is never an answer-quality,
-   verification, or accept/reject judgment.
+4. **Evidence-only selection.** Hard capability, privacy, cost-pool, and explicit
+   caller/operator identity constraints define eligibility. A singleton is identified
+   directly. Multiple eligible workers require complete exact-context fast-mlsirm
+   routing evidence or an explicit worker choice; absent/incomplete evidence fails
+   closed. Priority, keyword/capability-hint similarity, provider/model names,
+   discovery order, transport-composite scores, and deterministic identifier ties
+   are not routing authority.
 5. **Judgment stays fail-closed.** Verifier accept/reject uses the structured
    model judge and fails closed. That product decision lives in planning
    ADR 0001 (`docs/planning/adrs/0001-fail-closed-model-judgment.md`) and is
    not restated as a new product rule here.
-6. **Learned routing is future work.** Add a trained coordinator only when an
-   evaluation set and logs show the heuristic is the bottleneck. Until then,
-   do not invent a learned router in this repo.
+6. **Learned routing requires validation.** A trained coordinator may replace the
+   evidence-only boundary only after an independent evaluation identifies its
+   routing estimand, generalization scope, and failure contract. Lack of a trained
+   coordinator never authorizes a deterministic heuristic fallback.
 
 ## Consequences
 
@@ -77,10 +81,12 @@ trained Fugu, TRINITY, or Conductor clone.
 
 ### Negative
 
-- Heuristic routing will underperform a trained coordinator on some tasks.
-- Preprint coordinators may change if a later archival version appears;
-  this ADR must be re-checked against the then-current abs page before
-  treating those papers as final.
+- Ambiguous multi-candidate requests fail closed when complete exact-context
+  routing evidence is unavailable, reducing availability rather than inventing
+  an ordering.
+- TRINITY and Conductor were subsequently presented as ICLR 2026 research and
+  Sakana AI continues to validate learned Fugu conductors; this ADR must still
+  be re-checked when those implementations or evidence contracts change.
 
 ### Neutral
 
@@ -102,3 +108,26 @@ https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
 *Trinity: An evolved LLM coordinator* [Preprint]. arXiv.
 https://doi.org/10.48550/arXiv.2512.04695
+
+## 2026-09-02 research-conformance amendment
+
+The original deterministic capability-hint policy is retired. The production
+boundary now follows explicit eligibility plus identified evidence, with
+fail-closed ambiguity. This does **not** claim equivalence to the trained
+coordinators in the cited work. It removes the contradictory fallback that the
+research basis does not support.
+
+Current source review also changes the publication context. Sakana AI describes
+Fugu as grounded in the TRINITY and Conductor work presented at ICLR 2026 and
+explicitly contrasts learned orchestration with hand-designed workflows. Its
+2026-08-10 Gemma 4 replication retrained the conductor and evaluated it on a
+held-out test set, providing newer evidence that Fugu's routing authority is a
+trained/evaluated model rather than a deterministic local heuristic.
+
+Additional current references:
+
+Fugu Team, Sakana AI. (2026). *Sakana Fugu technical report* (arXiv:2606.21228).
+https://arxiv.org/abs/2606.21228
+
+Sakana AI. (2026, August 10). *Toward base-model-independent orchestration:
+Validating a Gemma 4 version of Sakana Fugu*. https://sakana.ai/fugu-gemma4/

@@ -116,10 +116,9 @@ together at the resource boundary. The current persistence model has one
 `default` pool, so an unknown pool/worker combination returns not-found before
 the worker is read, patched, or removed.
 
-The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
+The control plane does not substitute a deterministic routing heuristic for the learned coordinators described by Fugu, TRINITY, and Conductor. Explicit caller/operator model identity and hard capability/privacy/cost eligibility remain authoritative. When more than one eligible worker remains, automatic ordering requires complete exact-context evidence from the governed fast-mlsirm routing model; absent or incomplete evidence leaves selection unresolved and fails closed instead of falling back to priority, metadata similarity, provider/model name, discovery order, transport-composite scores, or another hand-authored tie-break. Verifier decisions likewise remain structured model judgments and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
 
-Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
-The [NIM cost-quality benchmark](nim_benchmark.md) is that evaluation set's supplier: it discovers the hosted catalog dynamically, probes every modality contract, and compares route/conduct/single-worker policies with paired uncertainty — evidence first, learned policy later.
+A learned coordinator may replace this evidence-only boundary only after an independently evaluated model identifies the routing estimand and generalization contract. The [NIM cost-quality benchmark](nim_benchmark.md) supplies measured provider/cost-quality evidence, but benchmark evidence does not itself authorize an invented deterministic routing rule. The current Sakana Fugu implementation remains a learned conductor architecture: Sakana AI's August 2026 Gemma 4 replication retrained the conductor and evaluated it on a held-out test set, reinforcing that the cited research basis is learned/evaluated orchestration rather than a hand-written heuristic.
 
 ## SDK omit-real persist
 
@@ -153,7 +152,7 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - latency-quality policy for the Fugu versus Fugu-Ultra tradeoff;
 - thinker, worker, verifier, and synthesizer roles for TRINITY-style trace review;
 - natural-language subtasks and access lists for Conductor-style auditability;
-- replayable evaluation runs before any learned coordinator replaces the deterministic policy.
+- replayable evaluation runs before any learned coordinator replaces the evidence-only fail-closed selection boundary.
 
 See [product_planning.md](product_planning.md) for the product reboot.
 

@@ -38,48 +38,31 @@ def test_default_request_routes_sync() -> None:
     policy = RoutingPolicy(InMemoryConfigStore())
     decision = policy.decide(RoutingHints())
     assert decision.channel == "sync"
+    assert "explicit" in decision.reason
 
 
-def test_latency_tolerant_routes_batch() -> None:
-    policy = RoutingPolicy(InMemoryConfigStore())
-    decision = policy.decide(RoutingHints(latency_tolerant=True))
-    assert decision.channel == "batch"
+def test_compatibility_hints_do_not_select_batch() -> None:
+    config = InMemoryConfigStore()
+    config.set("routing", "batch_min_tokens", 1)
+    config.set("routing", "interactive_forces_sync", False)
+    policy = RoutingPolicy(config)
+
+    assert policy.decide(RoutingHints(latency_tolerant=True), prompt_tokens=10_000).channel == "sync"
+    assert policy.decide(RoutingHints(priority="bulk"), prompt_tokens=10_000).channel == "sync"
+    assert policy.decide(RoutingHints(), prompt_tokens=10_000).channel == "sync"
 
 
-def test_explicit_channel_hint_is_honoured() -> None:
+def test_explicit_channel_hint_is_authoritative() -> None:
     policy = RoutingPolicy(InMemoryConfigStore())
     assert policy.decide(RoutingHints(channel="batch")).channel == "batch"
     assert policy.decide(RoutingHints(channel="sync", latency_tolerant=True)).channel == "sync"
 
 
-def test_bulk_priority_routes_batch_but_interactive_forces_sync() -> None:
-    policy = RoutingPolicy(InMemoryConfigStore())
-    assert policy.decide(RoutingHints(priority="bulk")).channel == "batch"
-    # interactive stays sync even when latency_tolerant is set
-    assert policy.decide(RoutingHints(priority="interactive", latency_tolerant=True)).channel == "sync"
-
-
-def test_batch_min_tokens_threshold_from_config() -> None:
-    config = InMemoryConfigStore()
-    config.set("routing", "batch_min_tokens", 500)
-    policy = RoutingPolicy(config)
-    assert policy.decide(RoutingHints(), prompt_tokens=200).channel == "sync"
-    assert policy.decide(RoutingHints(), prompt_tokens=800).channel == "batch"
-
-
-def test_batch_token_threshold_stays_sync_when_prompt_count_unavailable() -> None:
-    config = InMemoryConfigStore()
-    config.set("routing", "batch_min_tokens", 500)
-    decision = RoutingPolicy(config).decide(RoutingHints(), prompt_tokens=None)
-    assert decision.channel == "sync"
-    assert "unavailable" in decision.reason
-
-
-def test_batch_disabled_config_forces_sync() -> None:
+def test_batch_disabled_config_is_an_operator_kill_switch() -> None:
     config = InMemoryConfigStore()
     config.set("routing", "batch_enabled", False)
     policy = RoutingPolicy(config)
-    assert policy.decide(RoutingHints(latency_tolerant=True)).channel == "sync"
+    assert policy.decide(RoutingHints(channel="batch")).channel == "sync"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +70,7 @@ def test_batch_disabled_config_forces_sync() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cheapest_upstream_picks_lowest_priced_candidate() -> None:
+def test_cheapest_upstream_picks_lowest_priced_candidate_for_exact_shape() -> None:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("cheap_co", "small", prompt_price_per_1k=0.1, completion_price_per_1k=0.1))
@@ -96,7 +79,12 @@ def test_cheapest_upstream_picks_lowest_priced_candidate() -> None:
         {"provider": "pricey_co", "model": "large"},
         {"provider": "cheap_co", "model": "small"},
     ]
-    best = cheapest_upstream(candidates, price_book)
+    best = cheapest_upstream(
+        candidates,
+        price_book,
+        prompt_tokens=800,
+        completion_tokens=200,
+    )
     assert best == {"provider": "cheap_co", "model": "small"}
 
 
@@ -214,12 +202,12 @@ def test_pg_llm_batch_backend_submits_and_retrieves() -> None:
     backend = PgLlmBatchBackend(client, endpoint_alias="prod_gateway")
     requests = [BatchRequest(messages=[{"role": "user", "content": "batch me"}], custom_id="a", model="gpt-x")]
 
-    job = backend.submit(requests, metadata={"routing_reason": "latency-tolerant"})
+    job = backend.submit(requests, metadata={"routing_reason": "explicit-batch"})
     assert job.backend == "pg-llm-batch"
     assert job.job_id == "batch-789"
     assert client.calls == ["upload_jsonl", "create_batch_job"]
     assert client.created_endpoint_alias == "prod_gateway"
-    assert client.last_metadata == {"routing_reason": "latency-tolerant"}
+    assert client.last_metadata == {"routing_reason": "explicit-batch"}
 
     status = backend.poll(job)
     assert status["is_complete"] is True

@@ -10,6 +10,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Remove the NIM benchmark character-count token heuristic and weighted cheapest-worker selector. Benchmark token/cost evidence now requires complete provider-reported usage, and ambiguous or incomplete price vectors fail closed.
+
 ### Deprecated
 
 - Internal callers now use
