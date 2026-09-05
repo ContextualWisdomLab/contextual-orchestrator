@@ -10,12 +10,20 @@ file-replica, and ambiguous-tool-replay restrictions remain unchanged.
 Both ordered regression cases failed before the fix and pass afterward.
 See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
 Protected merge and post-change live gateway evidence are still required;
-the previous head's full-suite result does not verify this follow-up.
-Independent local review also reproduced an existing accounting gap: after two
-grouped candidates fail, the group ledger records only the final candidate.
-Per-candidate failure counters do record both. Keep this as a separate open
-follow-up requiring exactly-once attempt accounting; changing which exception
-is returned is not a fix for the missing first group observation.
+head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
+(`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
+correction below and does not verify it.
+
+Independent local review reproduced a separate accounting gap: after two grouped
+candidates fail, the group ledger records only the final candidate. A prior
+failure also hides a later terminal 400 or billed malformed response from the
+circuit counter. The proposed correction records both observations at the
+actual failed synthesis attempt, before fallback or a budget stop, and removes
+the outer duplicate group observation. A later 413 is not a provider failure.
+The accounting regressions changed from `7 failed, 11 passed` to `18 passed`;
+the wider provider/group/effort/HTTP suite passed all 124 tests. Full-suite and
+hosted exact-head evidence for this additional correction must be recorded
+separately in the existing PR.
 
 ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
 

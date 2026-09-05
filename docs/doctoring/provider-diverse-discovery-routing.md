@@ -45,6 +45,33 @@ exercise the real HTTP handler and require HTTP 502 with `api_error` and
 Run with `uv run pytest -q tests/test_structured_output_distinct_fallback.py tests/test_chat_response_format_http_honesty.py`.
 These are local regression results, not protected-main or live-provider proof.
 
+### Per-attempt observations after the classification fix
+
+At `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032`, the full local suite passed
+(`3409 passed, 2 skipped in 657.92s`), but independent review then found that
+the inner synthesis loop recorded circuit failures while the outer exception
+handler recorded only the final model-group failure. Successful fallback lost
+the first group failure entirely. Its request-wide recorded flag also hid a
+later terminal 400 or malformed-output budget stop from the circuit counter.
+
+The local correction updates both existing ledgers in a synthesis-only helper,
+at the actual failed candidate. It does not alter the global circuit helper:
+other callers already own their group updates and would double count. The
+outer handler records only an otherwise unrecorded failure. Do not reset the
+flag for every candidate: after `502 → 413`, exhaustion returns the first
+candidate's retryable error, which must not become a failure of the 413 model.
+Malformed output is recorded before budget enforcement, without allowing
+another call or dropping incurred usage. Repair accounting is unchanged.
+
+Run `uv run pytest -q tests/test_structured_output_distinct_fallback.py tests/test_structured_output_malformed_synthesis_usage.py`.
+The real circuit/group assertions produced `7 failed, 11 passed` before the
+fix and `18 passed` afterward. They cover `502 → success`, both 502/404 orders,
+an immediate 400, `502 → 400`, `502 → 413`, and billed malformed output with
+and without a prior same-endpoint 502. The budget-stop cases preserve usage
+and prohibit the next provider call. Broader provider taxonomy, group, effort,
+and actual HTTP-handler regressions passed 124 tests; this is not hosted or
+live-provider acceptance evidence.
+
 ## Research-to-code mapping
 
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |

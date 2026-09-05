@@ -4732,6 +4732,14 @@ class TaskOrchestrator:
                 f"provider {agent.id} returned no structured response content"
             )
 
+        def record_synthesis_failure(candidate: ModelAgent) -> None:
+            """Record the failed attempt in both ledgers before advancing or raising."""
+            nonlocal synthesis_failure_recorded
+            self._record_failure(candidate.id)
+            if candidate.group_name:
+                self._group_router.observe_failure(candidate.id)
+            synthesis_failure_recorded = True
+
         def send_synthesis(
             payload: dict[str, Any],
             *,
@@ -4740,7 +4748,7 @@ class TaskOrchestrator:
             require_output: bool = True,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Handle transport fallback while the outer loop owns JSON recovery."""
-            nonlocal final_agent, synthesis_failure_recorded
+            nonlocal final_agent
             seen_providers: set[str] = set()
             preferred = final_agent
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
@@ -4850,6 +4858,7 @@ class TaskOrchestrator:
                                     response["usage"], responses=response_request
                                 )
                             structured_attempt_steps.append(dropped_step)
+                            record_synthesis_failure(candidate)
                             # This malformed/dropped response was billed --
                             # its usage is now recorded above. Check the
                             # budget with that usage included *before*
@@ -4859,8 +4868,6 @@ class TaskOrchestrator:
                             # exceeding the configured spending limit.
                             enforce_structured_budget()
                             request_exclusions.add(candidate.id)
-                            self._record_failure(candidate.id)
-                            synthesis_failure_recorded = True
                             continue
                         classified = classify_provider_failure(
                             exc,
@@ -4868,11 +4875,10 @@ class TaskOrchestrator:
                             model=candidate.model,
                             transport="structured_synthesis",
                         )
+                        record_synthesis_failure(candidate)
                         if virtual_model and classified.retryable:
                             last_retryable_upstream_error = classified
                             request_exclusions.add(candidate.id)
-                            self._record_failure(candidate.id)
-                            synthesis_failure_recorded = True
                             continue
                         if (
                             virtual_model
@@ -4881,8 +4887,6 @@ class TaskOrchestrator:
                         ):
                             last_model_not_found = classified
                             request_exclusions.add(candidate.id)
-                            self._record_failure(candidate.id)
-                            synthesis_failure_recorded = True
                             continue
                         raise classified from None
             if last_retryable_upstream_error is not None:
@@ -5015,13 +5019,7 @@ class TaskOrchestrator:
                     and not isinstance(exc, EffortProfileError)
                     and not synthesis_failure_recorded
                 ):
-                    self._record_failure(final_agent.id)
-                if (
-                    final_agent.group_name
-                    and not _is_request_too_large_error(exc)
-                    and not isinstance(exc, EffortProfileError)
-                ):
-                    self._group_router.observe_failure(final_agent.id)
+                    record_synthesis_failure(final_agent)
                 if structured_attempt_steps:
                     persist_structured_record(
                         "",

@@ -70,6 +70,12 @@ push or open a PR.
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
+- In structured fallback, keep the final error classification separate from
+  per-attempt circuit and model-group observations. Record each actual failed
+  candidate once before advancing or propagating a budget stop; a request-wide
+  flag must not hide a later hard failure or charge an earlier error to a later
+  413 candidate. Test real counters, not only mocked callback counts, including
+  recovery, exhaustion, mixed failure order, and billed malformed output.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.

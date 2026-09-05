@@ -23,6 +23,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Structured requests that exhaust eligible candidates after both temporary
   provider failures and missing-model responses retain the temporary failure
   classification, so clients can recognize that a later retry may succeed.
+- Structured fallback now counts each failed model once in routing health
+  evidence, including failures before successful recovery or a spending stop.
+  Request-size limits remain separate from provider failures.
 - Structured-output review follow-up now charges already-incurred synthesis
   and repair usage before propagating a budget stop, keeps failed workflow
   evidence queryable without counting it as a normal recent/completed KPI,

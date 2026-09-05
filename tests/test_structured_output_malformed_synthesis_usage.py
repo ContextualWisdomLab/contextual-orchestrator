@@ -46,8 +46,8 @@ def _usage(completion_tokens: int) -> dict[str, int]:
 
 def test_malformed_synthesis_usage_survives_virtual_failover() -> None:
     """A billed no-content synthesis remains in trace and spend after recovery."""
-    first = ModelAgent("first_agent", "first-model", "mock://first")
-    second = ModelAgent("second_agent", "second-model", "mock://second")
+    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
+    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
     orchestrator = TaskOrchestrator([first, second])
     calls: list[str] = []
 
@@ -89,3 +89,7 @@ def test_malformed_synthesis_usage_survives_virtual_failover() -> None:
     ]
     assert [step["usage"]["completion_tokens"] for step in attempts] == [7, 3]
     assert orchestrator.budget_status()["spent_output_tokens"] == 10
+    assert orchestrator._circuit[first.id]["failures"] == 1
+    assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
+    assert orchestrator._group_router.member_report(second.id)["failure_count"] == 0
+    assert orchestrator._group_router.member_report(second.id)["success_count"] == 1

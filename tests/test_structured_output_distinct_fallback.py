@@ -107,8 +107,8 @@ def test_virtual_structured_failure_recovers_on_a_distinct_endpoint_and_keeps_us
 
 def test_virtual_structured_transport_failure_advances_to_next_candidate() -> None:
     """A retryable provider 502 cannot strand a virtual request on one candidate."""
-    first = ModelAgent("first_agent", "first-model", "mock://first")
-    second = ModelAgent("second_agent", "second-model", "mock://second")
+    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
+    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
     orchestrator = TaskOrchestrator([first, second])
     calls: list[str] = []
 
@@ -140,6 +140,10 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate() -> No
 
     assert calls == [first.id, second.id]
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    assert orchestrator._circuit[first.id]["failures"] == 1
+    assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
+    assert orchestrator._group_router.member_report(second.id)["failure_count"] == 0
+    assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -154,9 +158,9 @@ def test_virtual_structured_mixed_transport_failures_preserve_retryable_error(
     failure_order: tuple[int, int],
 ) -> None:
     """A mixed stale/transient endpoint failure remains retryable for callers."""
-    first = ModelAgent("first_agent", "first-model", "mock://catalog")
-    second = ModelAgent("second_agent", "second-model", "mock://catalog")
-    other = ModelAgent("other_agent", "other-model", "mock://other")
+    first = ModelAgent("first_agent", "first-model", "mock://catalog", group_name="test_group")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog", group_name="test_group")
+    other = ModelAgent("other_agent", "other-model", "mock://other", group_name="test_group")
     orchestrator = TaskOrchestrator([first, second, other])
     calls: list[str] = []
 
@@ -191,6 +195,65 @@ def test_virtual_structured_mixed_transport_failures_preserve_retryable_error(
     assert exc_info.value.client_status == 502
     assert exc_info.value.provider_status == 502
     assert exc_info.value.retryable is True
+    for agent in (first, second, other):
+        expected_failures = int(agent is not other)
+        assert orchestrator._circuit.get(agent.id, {}).get("failures", 0) == expected_failures
+        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == expected_failures
+        assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_order", "final_status", "failure_counts"),
+    [
+        ((400,), 400, (1, 0)),
+        ((502, 400), 400, (1, 1)),
+        ((502, 413), 502, (1, 0)),
+    ],
+    ids=["first_hard_error", "retryable_then_hard_error", "retryable_then_size_limit"],
+)
+def test_structured_failure_ledgers_attribute_only_failed_candidates(
+    failure_order: tuple[int, ...], final_status: int, failure_counts: tuple[int, int],
+) -> None:
+    """Hard errors count once; a later size limit cannot inherit an earlier failure."""
+    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
+    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
+    orchestrator = TaskOrchestrator([first, second])
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        status = failure_order[len(calls) - 1]
+        if status == 413:
+            raise ProviderRequestTooLargeError("request exceeds provider limit")
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="api_error" if status == 502 else "invalid_request_error",
+            message="upstream request failed",
+            client_status=status,
+            provider_status=status,
+            retryable=status == 502,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.AUTO_MODEL), single_agent=False)
+
+    assert calls == [first.id, second.id][:len(failure_order)]
+    assert exc_info.value.client_status == final_status
+    assert tuple(
+        orchestrator._circuit.get(agent.id, {}).get("failures", 0)
+        for agent in (first, second)
+    ) == failure_counts
+    for agent, expected_failures in zip((first, second), failure_counts, strict=True):
+        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == expected_failures
+        assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
 
 
 def test_virtual_structured_exhaustion_is_typed_non_repeating_and_secret_free() -> None:
@@ -293,17 +356,33 @@ def test_structured_budget_rejection_persists_incurred_usage_without_completed_r
     assert orchestrator.count_workflow_runs() == 0
 
 
-def test_malformed_synthesis_response_enforces_budget_before_next_candidate() -> None:
+@pytest.mark.parametrize("prior_transport_failure", [False, True])
+def test_malformed_synthesis_response_enforces_budget_before_next_candidate(
+    prior_transport_failure: bool,
+) -> None:
     """A billed malformed synthesis that itself exhausts the budget must stop
     there, not silently bill a second provider call before the budget check
     catches up. Otherwise a request can spend past the configured limit."""
-    first = ModelAgent("first_agent", "first-model", "mock://first")
-    second = ModelAgent("second_agent", "second-model", "mock://second")
-    orchestrator = TaskOrchestrator([first, second], budget_max_output_tokens=2)
+    prior = ModelAgent("prior_agent", "prior-model", "mock://first", group_name="test_group")
+    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
+    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
+    candidates = ([prior] if prior_transport_failure else []) + [first, second]
+    orchestrator = TaskOrchestrator(candidates, budget_max_output_tokens=2)
     calls: list[str] = []
 
     def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
         calls.append(agent.id)
+        if agent.id == prior.id:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error",
+                message="upstream provider unavailable",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
         if agent.id == first.id:
             return {
                 "choices": [{"message": {}}],
@@ -317,8 +396,8 @@ def test_malformed_synthesis_response_enforces_budget_before_next_candidate() ->
 
     with (
         patch.object(orchestrator, "conduct", return_value=_workflow()),
-        patch.object(orchestrator, "_select_agent", return_value=first),
-        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator, "_select_agent", return_value=candidates[0]),
+        patch.object(orchestrator, "_ranked_agents", return_value=candidates),
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
         pytest.raises(BudgetExceededError),
     ):
@@ -327,10 +406,17 @@ def test_malformed_synthesis_response_enforces_budget_before_next_candidate() ->
             single_agent=False,
         )
 
-    assert calls == [first.id]
+    assert calls == ([prior.id] if prior_transport_failure else []) + [first.id]
     assert orchestrator.budget_status()["spent_output_tokens"] == 3
     failed = next(iter(orchestrator._workflow_runs.values()))
     assert failed["failure"]["code"] == "structured_budget_exceeded"
+    assert [
+        orchestrator._circuit.get(agent.id, {}).get("failures", 0)
+        for agent in candidates
+    ] == [int(agent is not second) for agent in candidates]
+    for agent in candidates:
+        expected_failures = int(agent is not second)
+        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == expected_failures
 
 
 def test_repair_413_retires_candidate_and_restarts_fresh_synthesis() -> None:
