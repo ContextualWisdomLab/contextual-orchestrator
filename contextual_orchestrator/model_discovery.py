@@ -904,7 +904,21 @@ def _models_dev_cost_is_free(cost: object) -> bool:
 
 
 def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> Any:
-    """Join an availability catalog with Models.dev cost and modality evidence."""
+    """Join an availability catalog with Models.dev cost and modality evidence.
+
+    Free-model classification is always taken from Models.dev (see
+    ``_models_dev_cost_is_free`` and ADR 0041's cost-safety argument), so a
+    provider cannot certify itself as free. Modality and capacity evidence carries no such safety
+    argument -- it is not used to certify a model as free -- so those fields
+    are a field-level union instead: Models.dev's value wins only when
+    Models.dev actually reports one, and the provider's own catalog value
+    (already present on ``row``) survives untouched whenever Models.dev is
+    silent on that specific field. Without this fallback, a model matched in
+    Models.dev but missing ``modalities``/``limit`` data there would have its
+    own provider-reported architecture/context window/max output tokens
+    silently discarded in favor of nothing, even though nothing about that
+    absence casts any doubt on the provider's own value.
+    """
     rows = payload.get("data") if isinstance(payload, dict) else None
     provider_row = metadata.get(provider) if isinstance(metadata, dict) else None
     models = provider_row.get("models") if isinstance(provider_row, dict) else None
@@ -919,6 +933,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
             continue
         cost = model.get("cost")
         pricing: dict[str, str] = {}
+        original_pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         if isinstance(cost, dict):
             for source_key, target_key in (("input", "prompt"), ("output", "completion")):
                 value = cost.get(source_key)
@@ -926,17 +941,40 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                     pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
         limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
+        model_provider = model.get("provider")
+        models_dev_npm = (
+            model_provider.get("npm")
+            if isinstance(model_provider, dict)
+            else provider_row.get("npm")
+        )
+        original_architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        merged_max_output_tokens = _positive_int_metadata(limits.get("output"))
+        if merged_max_output_tokens is None:
+            merged_max_output_tokens = row.get("max_output_tokens")
+        merged_context_window = _positive_int_metadata(limits.get("context"))
+        if merged_context_window is None:
+            merged_context_window = row.get("context_window", row.get("context_length"))
         enriched.append(
             {
                 **row,
-                "pricing": pricing,
+                "pricing": {**original_pricing, **pricing},
                 "architecture": {
-                    "input_modalities": modalities.get("input"),
-                    "output_modalities": modalities.get("output"),
+                    **original_architecture,
+                    "input_modalities": (
+                        modalities.get("input")
+                        if modalities.get("input") is not None
+                        else original_architecture.get("input_modalities")
+                    ),
+                    "output_modalities": (
+                        modalities.get("output")
+                        if modalities.get("output") is not None
+                        else original_architecture.get("output_modalities")
+                    ),
                 },
-                "max_output_tokens": _positive_int_metadata(limits.get("output")),
-                "context_window": _positive_int_metadata(limits.get("context")),
+                "max_output_tokens": merged_max_output_tokens,
+                "context_window": merged_context_window,
                 "is_free": _models_dev_cost_is_free(cost),
+                "_models_dev_npm": models_dev_npm,
             }
         )
     return {**payload, "data": enriched}
