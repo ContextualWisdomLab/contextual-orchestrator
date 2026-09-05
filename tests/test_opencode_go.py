@@ -9,6 +9,31 @@ from contextual_orchestrator.model_discovery import (
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_catalog_store import provider_account_id
 
+# Go admits only models whose Models.dev entry declares the OpenAI-compatible
+# adapter (``required_models_dev_npm``), and ``_parse_openai_compatible`` reads
+# that decision off the ``_models_dev_npm`` field the Models.dev join writes
+# onto each row. Tests that call the parser directly supply the field
+# themselves, standing in for that join.
+_GO_NPM = "@ai-sdk/openai-compatible"
+
+
+def _go_catalog_fetch(url: str, **_kwargs: object) -> dict[str, object]:
+    """Serve the Go model listing and the Models.dev catalog off one fetch stub.
+
+    ``discover_provider_models`` fetches both through ``_fetch_json``, so a
+    single ``return_value`` would hand the model listing back as the Models.dev
+    catalog, leaving every row without an npm declaration and dropping the
+    provider to zero admitted models.
+    """
+    if url == "https://models.dev/api.json":
+        return {
+            "opencode-go": {
+                "npm": _GO_NPM,
+                "models": {"glm-5.3": {}, "minimax-m3": {}},
+            }
+        }
+    return {"data": [{"id": "glm-5.3"}, {"id": "minimax-m3"}]}
+
 
 def test_go_discovery_reuses_key_without_overwriting_zen_identity() -> None:
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
@@ -18,7 +43,13 @@ def test_go_discovery_reuses_key_without_overwriting_zen_identity() -> None:
     assert provider_account_id(go) != provider_account_id(zen)
 
     chat, responses, messages = _parse_openai_compatible(
-        {"data": [{"id": "glm-5.3"}, {"id": "grok-4.6"}, {"id": "minimax-m3"}]},
+        {
+            "data": [
+                {"id": "glm-5.3", "_models_dev_npm": _GO_NPM},
+                {"id": "grok-4.6", "_models_dev_npm": _GO_NPM},
+                {"id": "minimax-m3", "_models_dev_npm": _GO_NPM},
+            ]
+        },
         go,
     )
     assert chat.evidence_only is False
@@ -31,7 +62,7 @@ def test_go_discovery_reuses_key_without_overwriting_zen_identity() -> None:
         ),
         patch(
             "contextual_orchestrator.model_discovery._fetch_json",
-            return_value={"data": [{"id": "glm-5.3"}, {"id": "minimax-m3"}]},
+            side_effect=_go_catalog_fetch,
         ),
     ):
         discovered = discover_provider_models(go)
@@ -44,7 +75,9 @@ def test_go_chat_model_reuses_existing_responses_conversion() -> None:
         for source in PROVIDER_MODEL_SOURCES
         if source.provider_name == "opencode_go"
     )
-    model = _parse_openai_compatible({"data": [{"id": "glm-5.3"}]}, go)[0]
+    model = _parse_openai_compatible(
+        {"data": [{"id": "glm-5.3", "_models_dev_npm": _GO_NPM}]}, go
+    )[0]
     agent = agent_from_discovered(model)
     client = ModelClient()
     upstream = {
