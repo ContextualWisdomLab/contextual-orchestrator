@@ -478,6 +478,9 @@ psychometric evidence", never a portable ability rank.
   https://doi.org/10.48550/arXiv.2608.06867
   Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
   `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
+  A second publisher download was byte-identical. Poppler reads 34 pages but
+  reports PDF dictionary syntax warnings; the original bytes are preserved,
+  and the versioned HTML below is an alternative reading surface.
   The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
   citation above. The paper introduces xRouteBench for quality/cost routing.
