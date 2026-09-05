@@ -1,5 +1,178 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-02 canonical immutable release + resumable long-running execution
+
+Observation time: 2026-09-02 Asia/Seoul.
+
+### The gap, with direct consumer evidence
+
+This repository has never cut a release: `git tag -l` was empty, no
+`.github/workflows/*release*.yml` existed, and `GET /repos/
+ContextualWisdomLab/contextual-orchestrator/releases/latest` returned 404.
+`pyproject.toml` has carried `version = "0.2.0"` and `CHANGELOG.md` an
+`## [0.2.0] - Unreleased` section through hundreds of merged PRs, and
+`CHANGELOG.md`'s own preamble already stated the intended process — but
+nothing had ever executed it.
+
+Four independent downstream consumers hit this wall on
+[`contextual-orchestrator#971`](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/971)
+(owner seonghobae, all comments dated 2026-09-02 Asia/Seoul):
+
+- **[`ContextualWisdomLab/keyverse#132`](https://github.com/ContextualWisdomLab/keyverse/issues/132)**:
+  vendors this repository at commit `045d17da5e2aea56a97e241ee158ab1628d78660`,
+  175 commits behind protected `main`; a later comment confirms it is still
+  pinning `464da4715b495b5eaaa593eba3796e2d976ee0c9` because "[t]he owner
+  repository currently has no GitHub `latest` release endpoint (`/releases/
+  latest` returns 404)."
+- **`ContextualWisdomLab/bandscope#881`**: told explicitly not to copy the
+  mutable owner branch or invent a direct provider fallback while waiting for
+  "an immutable contextual-orchestrator release with the compatible
+  OpenAI-style gateway/API contract."
+- **Wardnet** (consumer-owner handoff comment on `#971`): "[f]resh release
+  inventory for `ContextualWisdomLab/contextual-orchestrator` is empty, so
+  Wardnet cannot correctly replace these seams with a mutable branch or
+  copied source."
+- **`ContextualWisdomLab/EgressWeave#235`**: a 45-minute Actions job timeout
+  on the same gateway-backed pattern — the resumable-long-running-execution
+  half of this gap, tracked here but explicitly out of scope for the release
+  mechanism landed below (see Non-goals in ADR 0129).
+
+The owner's stated RED/GREEN acceptance for the release piece, verbatim
+(PR #971, comment at 2026-09-02T18:26:04Z): "the resulting released API/
+client/schema is immutable enough for consumers to pin without vendoring
+this repository's source ... No paid/provider-specific fallback should be
+required to consume it."
+
+### Research: does this compose with `release_authorization.py`?
+
+Read in full before designing anything:
+`contextual_orchestrator/release_authorization.py`,
+`docs/planning/adrs/0020-fail-closed-release-authorization.md`,
+`docs/commercial_release_candidate.md`,
+`docs/doctoring/release-authorization.md`,
+`tests/test_release_authorization.py`,
+`tests/test_release_authority_snapshot.py`,
+`tests/test_commercial_release_candidate.py`,
+`scripts/ci/release_authority_snapshot.py`.
+
+Confirmed by reading the code (not assuming): that machinery is a pure
+evaluator (`evaluate_release_authorization`) plus a read-only, **PR-scoped**
+collector, feeding exactly one caller —
+`/api/v1/commercial_release_candidates/latest`, a buyer-facing product
+readiness report behind admin auth inside the running gateway. It is never
+invoked by any GitHub Actions workflow today, requires a KV-registered HMAC
+signing key before a snapshot can even be loaded, and has no code path that
+creates a git tag, a GitHub Release, or any publication artifact —
+`docs/commercial_release_candidate.md` says as much itself ("a local product
+readiness artifact, not a ... production compliance certificate").
+
+**Conclusion**: a new, distinct concern, not a duplicate. The two do not
+compose at the function-call level because `collect_authority()` is
+PR-scoped and protected `main`'s tip after a merge is not "a pull request" —
+re-deriving "which PR produced this commit" indefinitely into the future
+would itself duplicate GitHub's merge bookkeeping inside this repository,
+which ADR 0020 already warns against. They share the same fail-closed
+spirit without sharing code: branch protection already enforced the checks/
+review evidence `evaluate_release_authorization()` would ask for, once, at
+merge time — the release gate's job is to confirm a commit really is that
+untampered protected-`main` tip, not re-litigate a question branch
+protection already answered. Full reasoning:
+[ADR 0129](planning/adrs/0129-canonical-immutable-release.md).
+
+### What was built (this session, landed on a branch — not yet merged, no release cut)
+
+- **ADR**: `docs/planning/adrs/0129-canonical-immutable-release.md` — trigger
+  (`workflow_dispatch` only, explicit `version` input, never push/schedule),
+  gate (exact current-main-tip check, `pyproject.toml` version match, tag-
+  non-existence, a fresh full-suite pytest run), release contents (annotated
+  tag `vX.Y.Z`, GitHub Release with CHANGELOG-derived notes, best-effort
+  CycloneDX SBOM asset), and an explicit non-goals list (no PyPI publish, no
+  release-on-every-merge, no automatic version bump, no dynamic ruleset-name
+  re-derivation).
+- **RED → GREEN, test-first**:
+  - `tests/test_release_notes.py` (10 tests) written first against a
+    not-yet-existing `scripts/ci/release_notes.py`; confirmed failing
+    (`FileNotFoundError`), then `scripts/ci/release_notes.py` implemented
+    (pure `read_declared_version`/`extract_changelog_section`/
+    `render_release_notes` plus a `main()` CLI) to make all 10 pass. 100%
+    interrogate docstring coverage.
+  - `tests/test_release_workflow_contract.py` (15 tests) written against
+    `.github/workflows/release.yml`; confirmed the file was absent on
+    `origin/main` (RED baseline) before implementing the workflow, then all
+    15 passed against the new file (GREEN). Follows this repository's
+    existing text-assertion contract-test convention (`tests/
+    test_nim_benchmark_workflow_contract.py`) rather than adding a new
+    PyYAML dependency nothing else in this repository uses.
+- **`.github/workflows/release.yml`**: implements the ADR 0129 gate exactly
+  as designed above; `permissions: contents: write` is scoped to the release
+  job only, every other default stays `contents: read`.
+- **`docs/RELEASING.md`**: new, maintainer-facing runbook for dispatching a
+  release, its preconditions, and rollback policy (a mistake gets a new
+  patch release, never a moved/deleted tag as routine practice).
+
+### Verification evidence
+
+- `python -m pytest tests/test_release_notes.py tests/
+  test_release_workflow_contract.py tests/test_planning_adr_identifiers.py -q`
+  → 26 passed.
+- `python tests/test_self_check.py` → `ok`.
+- `python -m interrogate -c pyproject.toml .` → `PASSED (minimum: 100.0%,
+  actual: 100.0%)` — this repository's repo-wide docstring gate, unaffected
+  by the new `scripts/ci/release_notes.py`.
+
+### Review-driven hardening (same PR, before merge)
+
+Devin Review and CodeRabbit found nine issues (five and four respectively,
+three overlapping) against the initial cut above, all fixed on the same
+branch before merge:
+
+- **Concurrent-merge staleness**: added a second, authoritative main-tip
+  check immediately before tag creation (after the fresh test run and note
+  rendering), alongside the original fast-fail early check.
+- **least privilege**: split `release.yml` into a read-only,
+  credential-less `verify` job (tests, note rendering, SBOM lookup —
+  `actions: read` lives here, scoped to just this job) and a write-scoped
+  `publish` job (tag + GitHub Release only), so repository-controlled test
+  code never runs alongside a write-scoped token.
+- **Idempotent retry**: an existing `vX.Y.Z` tag is now resolved via the
+  commits API into resume (same commit, unpublished Release — skip
+  re-tagging) vs. reject (different commit, or an already-published
+  Release), replacing the old any-existing-tag hard fail that stranded a
+  half-published release on any post-tag failure.
+- **SBOM lookup genuinely non-fatal**: `gh run list`/`gh run download`
+  failures are now each guarded by an explicit `if !`, instead of a bare
+  `set -e` that aborted the whole job on the `actions: read` permission gap.
+- **TOML table-boundary bug**: `read_declared_version` (and the workflow's
+  version-match step, via the same tested function) now bounds its search
+  to the `[project]` table's own body, so a same-named `version` key under
+  an earlier unrelated table can never be mistaken for the real one.
+- **`/releases/latest` mutability**: `docs/RELEASING.md` and this ADR's
+  Consequences section now correctly describe `/releases/tag/vX.Y.Z` as the
+  immutable pin and `/releases/latest` as a mutable discovery alias only.
+- **Research grounding**: ADR 0129 gained a section citing SemVer 2.0.0,
+  Keep a Changelog 1.1.0, and the GitHub Releases API — the normative
+  standards this process tooling implements, not an academic literature
+  review.
+- Test suite grew to `tests/test_release_notes.py` (13 tests),
+  `tests/test_release_workflow_contract.py` (17 tests), and a new
+  `tests/test_release_workflow_idempotency_contract.py` (12 tests) asserting
+  real step order and job-scoped permissions per job block, not just
+  substring presence. `python -m pytest tests -q` → 3390 passed (plus 3
+  pre-existing, unrelated failures confirmed present on the unmodified
+  branch too); `python -m interrogate -c pyproject.toml .` → 100.0%.
+- Full `python -m pytest tests -q` run for regression-freedom before landing
+  the PR (see the PR body for the exact pass count from this run).
+
+### Explicitly not done in this session
+
+Per the owner's own instruction: no real release was triggered. Cutting the
+first `v0.2.0` tag is a separate, deliberate action left to the repository
+owner after this mechanism is reviewed and merged. The resumable-long-
+running-execution half of the 2026-09-02 owner comment (EgressWeave#235,
+`OPENCODE_RUN_TIMEOUT_SECONDS`, checkpoint/re-dispatch across runner
+termination) is unaddressed here — a real, separate runtime gap, deliberately
+out of scope for this release-mechanism pass (see ADR 0129's Non-goals).
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -2185,7 +2358,7 @@ live work item.
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) records the no-blanket-masking policy and explicitly leaves authorization/encryption as follow-up. The actual design is proposed [ADR 0011 at #762's exact head](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/8f87bcaeddff0866e26900e41deeafe208d8f9e4/docs/planning/adrs/0011-pii-purpose-authorization-and-field-encryption.md); both design [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) and implementation [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) remain open and are not protected-main evidence. | Protected main has purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests proving raw PII is returned only to an authorized purpose. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
-| P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; active PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) now provides the bounded benchmark, but it is not protected-main evidence while OpenCode/Strix and independent approval remain incomplete. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
+| P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; active PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) provides the bounded benchmark, but it is not protected-main evidence while OpenCode/Strix and independent approval remain incomplete. PR [#1063](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1063) source commit `9928e4ab` refreshes the expired prototype-access evidence against NVIDIA's official Run NIM Anywhere terms; its full local tree is `3394 passed, 2 skipped`, while protected exact-head checks and independent review remain required. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |

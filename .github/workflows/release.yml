@@ -1,0 +1,407 @@
+name: Release
+
+# Publishes a canonical, immutable GitHub Release so downstream consumers can
+# pin a versioned tag instead of vendoring this repository's source SHA (see
+# docs/planning/adrs/0129-canonical-immutable-release.md). This is a
+# deliberate, maintainer-dispatched action only -- it never runs on push,
+# schedule, or as a side effect of merging to main. It never re-implements
+# GitHub branch-protection governance: it verifies the released commit really
+# is (or, for a resume, once really was) protected main's tip, then re-runs
+# this repository's own primary regression gate fresh before cutting
+# anything.
+#
+# The very first thing the workflow does (`tag_state`, below) is decide
+# which of two situations this dispatch is, and which exact commit
+# (TARGET_SHA) every later gate must evaluate against:
+#   - a FRESH publish (no `vX.Y.Z` tag exists yet) -- TARGET_SHA is this
+#     dispatch's own commit, GITHUB_SHA, which must equal main's live
+#     current tip; or
+#   - a RESUME of a tag-only interrupted publication (the tag already
+#     exists -- pushed by an earlier run that then failed before creating
+#     the GitHub Release -- and points at a commit that really was main's
+#     tip at some point, i.e. an ancestor of main's current tip). TARGET_SHA
+#     is the tag's own target commit, which main is very likely to have
+#     advanced past by now -- that is expected, not an error, and every
+#     later gate (checks-green, version match, release-notes rendering)
+#     evaluates against TARGET_SHA, never against a possibly-stale
+#     GITHUB_SHA/current-main value. A tag that exists but points at a
+#     commit that is *not* an ancestor of main's current tip is a genuine
+#     conflict and is still rejected outright -- a tag is never moved or
+#     reused for a different release.
+#
+# Two jobs, least-privilege: `verify` runs with no write permission and no
+# persisted git credentials while it executes repository-controlled code
+# (the test suite, release-notes rendering) -- a `contents: write` token is
+# never present alongside that code. `publish` holds the write token, and its
+# very first steps re-check (for a fresh publish only -- see above)
+# protected main's tip and every check reported for TARGET_SHA, immediately
+# before tag creation, right after `verify`'s potentially long-running gate
+# finishes. That tip/checks recheck is still a check-then-act window, not an
+# atomic guarantee -- see docs/planning/adrs/0129-canonical-immutable-release.md's
+# "Known limitations" section and docs/RELEASING.md for the accepted
+# residual risk and the recovery path if it is ever actually hit.
+#
+# The checks-green gate itself is one shared script
+# (scripts/ci/release_checks_gate.sh) that both jobs call, rather than two
+# inline copies that could silently drift from each other.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, matching pyproject.toml exactly (e.g. 0.2.0, no leading v)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# This repository's own known push-triggered job names (ci.yml, fuzz.yml,
+# security.yml) -- shared by both jobs' checks-green gate (see
+# scripts/ci/release_checks_gate.sh) so a `commits/$SHA/check-runs` report
+# that is empty, or missing one of them, is treated as "not ready yet",
+# never as vacuously "nothing to block on". A dispatch fired moments after a
+# merge can race GitHub's own registration of this new tip's push-triggered
+# check-runs: the API can legitimately return an empty or partial list
+# before GitHub has even created the entries, and filtering an empty/partial
+# list for "not complete+green" is vacuously empty too -- which previously
+# let a release publish before Security/Fuzz/CodeQL had even started (Devin
+# finding). Kept in sync with those three workflows' job `name:` values by
+# tests/test_release_workflow_contract.py; update this list in the same PR
+# that adds, removes, or renames a push-triggered job in any of them.
+env:
+  RELEASE_EXPECTED_PUSH_CHECKS: '["Full unit and contract suite","NIM benchmark coverage, docstrings, and package smoke","Hypothesis property tests","Atheris coverage-guided","CodeQL analysis","Python supply chain"]'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release preconditions (read-only)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+    outputs:
+      tag_resume: ${{ steps.tag_state.outputs.tag_resume }}
+      release_resume: ${{ steps.tag_state.outputs.release_resume }}
+      target_sha: ${{ steps.tag_state.outputs.target_sha }}
+    steps:
+      - name: Checkout protected main (no write credentials)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine whether this is a fresh publish or a resume, and the exact commit to operate on
+        id: tag_state
+        run: |
+          set -euo pipefail
+          # Tag existence is checked only in GitHub's refs/tags namespace.
+          # The commits endpoint accepts arbitrary refs, so a branch named
+          # v${RELEASE_VERSION} could otherwise impersonate a release tag.
+          # The exact tag ref points either directly at a commit (lightweight)
+          # or at one annotated-tag object, which is then peeled to a commit.
+          tag_ref_endpoint="repos/${GITHUB_REPOSITORY}/git/ref/tags/v${RELEASE_VERSION}"
+          if ! tag_ref_output="$(gh api "${tag_ref_endpoint}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
+            if printf '%s' "${tag_ref_output}" | grep -q "HTTP 404"; then
+              echo "::notice::Tag v${RELEASE_VERSION} does not exist yet (confirmed 404); this is a fresh publish."
+              {
+                echo "tag_resume=false"
+                echo "release_resume=false"
+                echo "target_sha=${GITHUB_SHA}"
+              } >> "${GITHUB_OUTPUT}"
+              echo "TARGET_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+              exit 0
+            fi
+            echo "::error::Could not determine whether tag v${RELEASE_VERSION} already exists: the exact tag-ref lookup failed with an error other than a confirmed 404, so absence is NOT confirmed. Failing closed; re-dispatch after the transient failure clears. Raw error: ${tag_ref_output}" >&2
+            exit 1
+          fi
+
+          IFS=$'\t' read -r tag_object_type tag_object_sha <<< "${tag_ref_output}"
+          case "${tag_object_type}" in
+            commit)
+              tag_commit="${tag_object_sha}"
+              ;;
+            tag)
+              if ! tag_object_output="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
+                echo "::error::Could not dereference annotated tag v${RELEASE_VERSION}; failing closed. Raw error: ${tag_object_output}" >&2
+                exit 1
+              fi
+              IFS=$'\t' read -r peeled_type peeled_sha <<< "${tag_object_output}"
+              if [ "${peeled_type}" != "commit" ]; then
+                echo "::error::Tag v${RELEASE_VERSION} does not resolve directly to a commit after one annotated-tag dereference (resolved type: ${peeled_type}); refusing an ambiguous release identity." >&2
+                exit 1
+              fi
+              tag_commit="${peeled_sha}"
+              ;;
+            *)
+              echo "::error::Tag v${RELEASE_VERSION} points at unsupported Git object type '${tag_object_type}'; refusing an ambiguous release identity." >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+            # main may simply have advanced past the tag's target commit
+            # since it was pushed -- a tag-only interrupted publication (the
+            # tag was pushed by an earlier run that then failed before ever
+            # creating the GitHub Release, and one or more merges landed on
+            # main before this retry). That is a safe, legitimate resume,
+            # not a conflict: distinguish it from a genuine conflict -- a
+            # tag that points at a commit which was never on main's history
+            # at all (e.g. a stray or wrong tag) -- by checking whether the
+            # tag's target commit is an ancestor of (or equal to) main's own
+            # current live tip via the compare API. Only a commit that
+            # really was main's history at some point is safe to finish
+            # publishing; the tag itself is still never moved or reused for
+            # a different commit. Any failure of this lookup itself (rate
+            # limit, network, 5xx) fails the whole step closed via `set -e`
+            # above, the same fail-closed default every other lookup in
+            # this step handles explicitly.
+            compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...main" --jq .status)"
+            case "${compare_status}" in
+              identical|ahead)
+                echo "::notice::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, an ancestor of main's current tip; main has advanced since the tag was pushed (a tag-only interrupted publication). Resuming publication for the tagged commit -- never moving or reusing the tag for a different one."
+                ;;
+              *)
+                echo "::error::Tag v${RELEASE_VERSION} already exists and points at ${tag_commit}, which is not an ancestor of main's current tip (compare status: ${compare_status}); a release tag is never moved onto a different commit. Publish a new version instead." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          target_sha="${tag_commit}"
+
+          {
+            echo "tag_resume=true"
+            echo "target_sha=${target_sha}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "TARGET_SHA=${target_sha}" >> "${GITHUB_ENV}"
+
+          # A published Release already existing does not mean nothing is
+          # left to resume: creating a Release can publish the Release
+          # object and then fail partway through uploading its assets, in
+          # which case the tag and the Release both already exist but a
+          # release asset can still be missing. A Release already existing
+          # for TARGET_SHA's tag remains a safe resume, but the publish job
+          # must restore and verify every mandatory release asset before it
+          # can report success.
+          #
+          # As with the tag lookup above, a failed `gh release view` is NOT
+          # automatically "Release absent": only a confirmed 404 means that.
+          if ! release_view_error="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" 2>&1 >/dev/null)"; then
+            if printf '%s' "${release_view_error}" | grep -qiE "release not found|HTTP 404"; then
+              echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} with no published GitHub Release yet (confirmed absent); resuming publication instead of re-tagging."
+              echo "release_resume=false" >> "${GITHUB_OUTPUT}"
+            else
+              echo "::error::Could not determine whether a GitHub Release already exists for v${RELEASE_VERSION}: gh release view failed with an error other than a confirmed absence, so absence is NOT confirmed. Failing closed; re-dispatch after the transient failure clears. Raw error: ${release_view_error}" >&2
+              exit 1
+            fi
+          else
+            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming to verify or attach any still-missing mandatory release assets."
+            echo "release_resume=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Check out the exact commit this run will operate on
+        run: |
+          set -euo pipefail
+          # A fresh publish's TARGET_SHA already equals the checked-out
+          # GITHUB_SHA, so this is a no-op switch. A resume's TARGET_SHA is
+          # an older commit than GITHUB_SHA (main has advanced) -- the
+          # tag_state step above confirmed it is an ancestor of main's
+          # current tip, so it is guaranteed to already be present in this
+          # checkout's full history (fetch-depth: 0). Every later step in
+          # this job (the version check, the test suite, release-notes
+          # rendering) must read TARGET_SHA's own tree, never GITHUB_SHA's,
+          # so a resume never renders notes or validates a version against
+          # commits that landed on main after the tag was pushed.
+          git checkout "${TARGET_SHA}"
+
+      - name: Verify this commit is protected main's current, untampered tip (fresh publish only)
+        run: |
+          set -euo pipefail
+          if [ "${TARGET_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::notice::Resuming an already-tagged commit (${TARGET_SHA}); main's current tip is not required to match it for a resume -- skipping the fresh-publish freshness check."
+            exit 0
+          fi
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Dispatched commit ${GITHUB_SHA} is not protected main's current tip (${remote_head}); a merge landed after this run started. Re-dispatch against the fresh tip." >&2
+            exit 1
+          fi
+
+      - name: Verify every check reported for this commit is complete and green
+        run: bash scripts/ci/release_checks_gate.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      - name: Verify the requested version matches pyproject.toml's [project] table
+        run: |
+          set -euo pipefail
+          declared="$(python -c 'from scripts.ci.release_notes import read_declared_version; print(read_declared_version(open("pyproject.toml", encoding="utf-8").read()))')"
+          if [ "${declared}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::pyproject.toml's [project] table at commit ${TARGET_SHA} declares version '${declared}', but the dispatch input was '${RELEASE_VERSION}'. Land a version-bump PR first; a release never redefines a commit's version." >&2
+            exit 1
+          fi
+
+      - name: Run the full required test suite fresh on this exact commit
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+
+      - name: Render release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python -m scripts.ci.release_notes \
+            --pyproject pyproject.toml \
+            --changelog CHANGELOG.md \
+            --version "${RELEASE_VERSION}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --commit-sha "${TARGET_SHA}" \
+            --output release-notes.md
+
+      - name: Fetch the required CycloneDX SBOM for this commit
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "${run_id}" ]; then
+            echo "::error::No successful Security workflow run with CycloneDX evidence is available for exact commit ${TARGET_SHA}; refusing to publish without the required SBOM." >&2
+            exit 1
+          fi
+          if ! gh run download --repo "${GITHUB_REPOSITORY}" "${run_id}" --name cyclonedx-sbom --dir sbom-download; then
+            echo "::error::Security workflow run ${run_id} does not expose the required cyclonedx-sbom artifact; refusing to publish." >&2
+            exit 1
+          fi
+          sbom_file="sbom-download/cyclonedx-sbom.json"
+          if [ ! -s "${sbom_file}" ]; then
+            echo "::error::Downloaded CycloneDX SBOM is missing or empty at ${sbom_file}; refusing to publish." >&2
+            exit 1
+          fi
+
+      - name: Upload rendered notes and SBOM for the publish job
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: release-publish-inputs
+          path: |
+            release-notes.md
+            sbom-download/**
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish canonical immutable release
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      TAG_RESUME: ${{ needs.verify.outputs.tag_resume }}
+      RELEASE_RESUME: ${{ needs.verify.outputs.release_resume }}
+      TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.target_sha }}
+          persist-credentials: true
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Re-verify protected main has not advanced since verification started (fresh publish only)
+        run: |
+          set -euo pipefail
+          if [ "${TARGET_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::notice::Resuming an already-tagged commit (${TARGET_SHA}); no current-main-tip recheck applies to a resume."
+            exit 0
+          fi
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${remote_head}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Protected main advanced to ${remote_head} while the verify job was testing and rendering notes for ${GITHUB_SHA}; refusing to publish a now-superseded commit as the latest release. Re-dispatch against the fresh tip." >&2
+            exit 1
+          fi
+
+      - name: Re-verify every check reported for this commit is complete and green
+        run: bash scripts/ci/release_checks_gate.sh
+
+      - name: Download the release notes and SBOM produced by verify
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # actions/download-artifact@v5
+        with:
+          name: release-publish-inputs
+
+      - name: Verify mandatory release inputs
+        run: |
+          set -euo pipefail
+          test -s release-notes.md
+          test -s sbom-download/cyclonedx-sbom.json
+
+      - name: Create the annotated release tag
+        if: env.TAG_RESUME != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
+          git push origin "refs/tags/v${RELEASE_VERSION}"
+
+      - name: Verify the exact remote release tag exists and targets this commit
+        run: |
+          set -euo pipefail
+          if ! remote_tag_ref="$(git ls-remote --exit-code --refs origin "refs/tags/v${RELEASE_VERSION}")"; then
+            echo "::error::Remote refs/tags/v${RELEASE_VERSION} does not exist; refusing to let GitHub synthesize a release tag implicitly." >&2
+            exit 1
+          fi
+          remote_tag_object_sha="${remote_tag_ref%%$'\t'*}"
+          local_tag_object_sha="$(git rev-parse "refs/tags/v${RELEASE_VERSION}")"
+          local_tag_commit="$(git rev-list -n 1 "refs/tags/v${RELEASE_VERSION}")"
+          if [ "${remote_tag_object_sha}" != "${local_tag_object_sha}" ] || [ "${local_tag_commit}" != "${TARGET_SHA}" ]; then
+            echo "::error::Remote release-tag identity does not match the verified local tag/target commit; refusing publication." >&2
+            exit 1
+          fi
+
+      - name: Create the GitHub Release
+        if: env.RELEASE_RESUME != 'true'
+        run: |
+          set -euo pipefail
+          gh release create "v${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "v${RELEASE_VERSION}" \
+            --notes-file release-notes.md
+
+      - name: Attach required release SBOM
+        run: |
+          set -euo pipefail
+          sbom_file="sbom-download/cyclonedx-sbom.json"
+          if [ ! -s "${sbom_file}" ]; then
+            echo "::error::Required CycloneDX SBOM is missing or empty; release completion is not allowed." >&2
+            exit 1
+          fi
+          attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
+            echo "::notice::cyclonedx-sbom.json is already attached to v${RELEASE_VERSION}; mandatory asset is present."
+            exit 0
+          fi
+          if ! gh release upload "v${RELEASE_VERSION}" "${sbom_file}" --repo "${GITHUB_REPOSITORY}" --clobber; then
+            echo "::error::Could not attach mandatory cyclonedx-sbom.json to v${RELEASE_VERSION}; release workflow is failing closed. Re-dispatch to resume the asset attachment without moving the tag." >&2
+            exit 1
+          fi
+          attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
+            echo "::error::GitHub Release does not report the mandatory cyclonedx-sbom.json after upload; release workflow is failing closed." >&2
+            exit 1
+          fi
