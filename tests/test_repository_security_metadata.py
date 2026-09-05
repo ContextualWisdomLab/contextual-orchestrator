@@ -32,6 +32,7 @@ def test_readme_links_deepwiki_and_security_workflow_badges():
 
 
 def test_security_workflow_covers_core_repository_security_process():
+    """Assert the pinned runner image, required steps, and dedupe list."""
     workflow_text = read_text(".github/workflows/security.yml")
 
     expected_tokens = [
