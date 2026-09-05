@@ -38,6 +38,43 @@ fails closed to conducted orchestration when its reply violates the exact
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
 
+## Accuracy and decision-latency KPI
+
+Run
+`uv run --python 3.12 python scripts/benchmark_psychometric_routing.py`.
+Python 3.12 is explicit because the locked NumPy/fast-mlsirm benchmark
+dependencies are intentionally unavailable on the product's supported Python
+3.10 and 3.11 runtimes. The benchmark
+fixes the native fit and probability output, then measures only gateway matrix
+preparation and ranking for 512 contexts, four models, and two dichotomous
+items per context. Lower median milliseconds is better; the psychometric and
+reasoning-effort tests must remain green.
+
+Protected `main@2e414d15` measured 2.448167 ms. Candidate performance commit
+`0561c9b81f68bd9be9bd413f4a23892717e54701`, carried by PR #1058, measured 1.100583 ms, a
+55.04% reduction. This local same-host result does not prove production
+latency or answer accuracy. The next accuracy experiment must use a held-out
+model-query matrix and report log loss or Brier score alongside routing regret;
+true-parameter simulations must continue to report RMSE.
+
+The successor observation-path experiment uses the same 512-context ledger.
+Replacing one model/context row fell from p50 0.133833 ms and p95 0.152166 ms
+on `b2f90116` to p50 0.000875 ms and p95 0.001000 ms. The benchmark now emits
+both fields. This is local gateway bookkeeping evidence; the fit, held-out
+quality, and provider latency remain separate KPIs.
+
+Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate,
+explicitly enabled semantic warm-start experiment. Production retains the
+validated single-neighbor behavior. On its fixed 24-training/24-held-out smooth
+latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
+Brier 0.1438369123, log loss 0.4525311878, mean top-choice regret 0.0024259478,
+and decision p50 about 0.0212 ms. Two-neighbor positive-cosine interpolation at
+`50d91c9e`, carried by PR #1061, reports Brier 0.1418346845, log loss
+0.4475784303, zero top-choice regret, and p50 about 0.0204 ms. This seeded
+simulation isolates unseen-context interpolation; it is not a substitute for
+preregistered buyer prompts, observed judge outcomes, or end-to-end latency.
+The experimental result cannot alter live routing until those gates pass.
+
 ## APA 7 references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
@@ -55,6 +92,13 @@ Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
 parameters for unidimensional multidimensional logistic item response
 models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
 
+Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
+
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
 Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
 & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
 answering. In *Proceedings of the 2020 Conference on Empirical Methods in
@@ -68,6 +112,11 @@ Laplace, P.-S. (1774). Mémoire sur la probabilité des causes par les
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs
 with preference data*. arXiv. https://arxiv.org/abs/2406.18665
+
+Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
+(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2506.01048
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.

@@ -3879,6 +3879,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -4078,7 +4079,12 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        candidate_ids = {
+            self._psychometric_candidate_id(agent) for agent in self.candidates
+        }
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -4086,6 +4092,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
             # A batch_route row persisted before judging (see batch_route's
@@ -6188,6 +6195,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -6995,18 +7003,37 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = {
+            self._psychometric_candidate_id(candidate): candidate for candidate in candidates
+        }
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
+
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind routing evidence to the declared deployment and decode policy."""
+        effort_catalog = (
+            snapshot_role_effort_catalog(self.role_effort_catalog).snapshot_hash
+            if self.role_effort_catalog is not None
+            else None
+        )
+        configuration = json.dumps(
+            {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+        return f"{agent.id}:{revision}"
 
     def _observe_contextual_quality(
         self,
@@ -7020,29 +7047,34 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        self._psychometric_router.observe(
-            prompt_context,
-            served_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
-        )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+        with self._psychometric_persistence_lock:
+            candidate_id = self._psychometric_candidate_id(self._agent(served_id))
+            self._psychometric_router.observe(
+                prompt_context,
+                candidate_id,
+                accepted,
+                self._embed_cached(prompt_context),
+                irt_row,
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                record = next(
+                    item
+                    for item in self._psychometric_router.records()
+                    if item["context_id"] == context_id
+                    and item["agent_id"] == candidate_id
+                )
+                key = hashlib.sha256(
+                    f"{context_id}\0{candidate_id}".encode()
                 ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -7064,6 +7096,22 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Keep evidence only for the pool's current deployment configurations."""
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_id(agent) for agent in self.candidates
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
