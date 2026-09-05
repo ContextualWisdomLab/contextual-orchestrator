@@ -1778,6 +1778,50 @@ def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> 
     assert evidence["routing_recommendation"] is None
 
 
+def test_paired_comparisons_exclude_exploratory_tasks_and_reject_duplicate_cells() -> None:
+    """Neither exploratory outcomes nor silent overwrites may change pairing."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "locked_task", 1.0),
+        _synthetic_cell("route_once", "locked_task", 1.0),
+        _synthetic_cell("conduct_bounded", "exploratory_task", 0.0),
+        _synthetic_cell("route_once", "exploratory_task", 1.0),
+    ]
+    cells[2]["task_split"] = cells[3]["task_split"] = "exploratory"
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    with pytest.raises(nb.BenchmarkContractError, match="duplicate policy/task"):
+        nb.paired_policy_comparisons([*cells, cells[0]], seed=3)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("end_to_end_latency_ms", float("nan")),
+        ("end_to_end_latency_ms", float("inf")),
+        ("end_to_end_latency_ms", -1.0),
+        ("end_to_end_latency_ms", True),
+        ("task_score", None),
+        ("task_score", float("nan")),
+        ("task_score", -0.1),
+        ("task_score", 1.1),
+        ("task_score", True),
+        ("run_outcome", "unobserved"),
+    ],
+)
+def test_paired_comparisons_reject_invalid_observations(
+    field_name: str, invalid_value: object
+) -> None:
+    """Invalid measurements cannot produce numeric-looking comparison evidence."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0][field_name] = invalid_value
+    with pytest.raises(nb.BenchmarkContractError, match=field_name):
+        nb.paired_policy_comparisons(cells, seed=3)
+
+
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
     summaries = nb.summarize_policies(
         [
@@ -1840,6 +1884,26 @@ def _dry_report(output_dir: str) -> dict:
         output_dir,
         max_total_requests=900,
     )
+
+
+def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Path) -> None:
+    """Published uncertainty must show the new denominator, time, and schema."""
+    report = _dry_report(str(tmp_path / "current_report"))
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(cells, 3)
+    summary = nb.render_markdown_summary(report)
+    assert "-1.0 [-1.0, -1.0]" in summary
+    assert "200.0 [200.0, 200.0] ms" in summary
+    assert "successful outcomes A/B 0/1 and 1/1" in summary
+    assert report["benchmark_schema_version"] == "2.0.0"
+    report["benchmark_schema_version"] = "1.0.0"
+    with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
+        nb.validate_report_schema(report)
 
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
