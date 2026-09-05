@@ -861,6 +861,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- **Ticking-time-bomb dates in `tests/test_nim_benchmark.py`.** Five tests
+  exercising unrelated `run_mode="live"` behavior (missing credential,
+  transport wiring, contract failures on a malformed catalog, CLI exit
+  codes) went through `_require_current_actual_cost_evidence()`, which
+  fails closed once the module-level `ACTUAL_COST_EVIDENCE["valid_until_date"]`
+  literal — a human review date for NVIDIA's published hosted-endpoint
+  terms — is in the past. That literal is intentionally a fixed calendar
+  date in production (a real re-review is required for it to move), but
+  the five tests above were coupled to it by accident: once wall-clock
+  time passed the recorded review window, they started failing for a
+  reason unrelated to what each one actually asserts. Added an autouse
+  fixture that pins the evidence window to real "now" for this file only,
+  leaving `contextual_orchestrator/nim_benchmark.py`'s production evidence
+  and `tests/test_nim_benchmark_release_acceptance.py`'s explicit-`today`
+  coverage of the review-cadence invariant itself untouched.
 
 ### Added
 
