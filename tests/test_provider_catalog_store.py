@@ -16,6 +16,7 @@ from contextual_orchestrator.model_discovery import (
     _parse_openai_compatible,
 )
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
+from contextual_orchestrator.provider_bootstrap import serving_tags_for_discovered
 from contextual_orchestrator.provider_catalog_store import (
     PROVIDER_CATALOG_SCHEMA_SQL,
     InMemoryProviderCatalogStore,
@@ -301,6 +302,118 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
     )
 
     assert store.serving_models(source) == [model]
+
+
+def test_last_known_good_restores_image_generation_endpoint() -> None:
+    """A catalog restart round trip cannot silently drop declared image routing.
+
+    Regression test for a gap Devin Review found on
+    ContextualWisdomLab/contextual-orchestrator#1017: an in-flight discovery
+    correctly threads ``DiscoveredModel.image_generation_endpoint`` into the
+    agent it builds, but the catalog persistence boundary
+    (``normalize_discovered_model``/``_restore_model_semantics``, reached via
+    ``record_success``/``serving_models``) reconstructed ``DiscoveredModel``
+    without that field, so a durable refresh-then-restart round trip through
+    the catalog store silently lost an OpenRouter model's image-generation
+    routing. Fixed by round-tripping the field through the store's existing
+    generic serving-tag mechanism (``serving_tags_for_discovered`` emits
+    ``image_generation_endpoint:<value>``; ``_restore_model_semantics`` parses
+    it back out), the same pattern already used for capabilities/modalities --
+    no schema change needed.
+    """
+    source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
+    model = replace(
+        _model(source, "provider/image-model", 0),
+        capabilities=("image",),
+        currency_code="USD",
+        is_free=True,
+        image_generation_endpoint="images",
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: serving_tags_for_discovered(model)},
+    )
+
+    assert store.serving_models(source) == [model]
+
+
+def test_image_generation_endpoint_survives_tag_charset_restrictions() -> None:
+    """A slash/hyphen/uppercase endpoint round-trips through the tag store intact.
+
+    Regression test for a Devin Review follow-up on
+    ContextualWisdomLab/contextual-orchestrator#1017: the catalog store's
+    generic serving tags only persist ``[a-z][a-z0-9_]*(?::[a-z0-9_]+)?``
+    (``_normalize_tags``), so a naive ``image_generation_endpoint:<value>``
+    tag would have this store's own tag validation silently case-fold or
+    drop any endpoint containing a slash, hyphen, or uppercase letter on
+    restore -- corrupting or losing it rather than raising. Hex-encoding the
+    value (``encode_image_generation_endpoint_tag``/
+    ``decode_image_generation_endpoint_tag``) keeps it byte-for-byte intact.
+    """
+    source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
+    model = replace(
+        _model(source, "provider/image-model", 0),
+        capabilities=("image",),
+        currency_code="USD",
+        is_free=True,
+        image_generation_endpoint="v1/Images-Edits",
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: serving_tags_for_discovered(model)},
+    )
+
+    assert store.serving_models(source) == [model]
+
+
+def test_colliding_capability_cannot_spoof_the_image_generation_endpoint() -> None:
+    """A provider-declared capability cannot masquerade as the reserved endpoint tag.
+
+    Regression test for a CodeRabbit finding on
+    ContextualWisdomLab/contextual-orchestrator#1017: ``model.capabilities``
+    values are stored as raw, unprefixed serving tags alongside the reserved
+    ``image_generation_endpoint:<hex>`` tag this module emits. A provider
+    response is untrusted evidence; if it ever declared a capability string
+    that happened to start with ``"image_generation_endpoint:"`` (whether
+    adversarial or merely coincidental), the restore path would read that
+    raw capability as the real tag and route every image request to
+    whatever endpoint it encoded -- silently, after a restart, with no
+    endpoint ever legitimately configured. ``serving_tags_for_discovered``
+    drops any capability colliding with the reserved prefix before it is
+    persisted, so restoration is untouched by it either way.
+    """
+    source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
+    spoofed_capability = "image_generation_endpoint:" + "foo".encode("utf-8").hex()
+    model = replace(
+        _model(source, "provider/spoofed-model", 0),
+        capabilities=("chat", spoofed_capability),
+        currency_code="USD",
+        is_free=True,
+        image_generation_endpoint=None,
+    )
+
+    tags = serving_tags_for_discovered(model)
+
+    # The reserved bare tag is never emitted for this capability -- it may
+    # still appear namespaced as "capability:<value>" (ordinary, harmless
+    # capability round-tripping), just never as the unprefixed collision
+    # the restore path treats as the real endpoint.
+    assert spoofed_capability not in tags
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: tags},
+    )
+    restored = store.serving_models(source)[0]
+    assert restored.image_generation_endpoint is None
 
 
 def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> None:

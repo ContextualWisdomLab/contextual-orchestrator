@@ -23,6 +23,7 @@ from .model_discovery import (
     DiscoveredModel,
     ModelUnitPrice,
     ProviderModelSource,
+    decode_image_generation_endpoint_tag,
 )
 
 if TYPE_CHECKING:
@@ -372,6 +373,7 @@ def normalize_discovered_model(
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
         spend_admitted=bool(model.spend_admitted),
+        image_generation_endpoint=model.image_generation_endpoint,
     )
 
 
@@ -412,6 +414,15 @@ def _restore_model_semantics(
         ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
+        image_generation_endpoint=next(
+            (
+                decoded
+                for tag in normalized
+                if tag.startswith("image_generation_endpoint:")
+                and (decoded := decode_image_generation_endpoint_tag(tag)) is not None
+            ),
+            None,
+        ),
     )
 
 

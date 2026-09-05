@@ -418,7 +418,39 @@ def test_expired_provider_video_job_stops_polling_with_404() -> None:
         server.shutdown()
 
 
-def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
+def test_declared_image_generation_endpoint_override_is_used() -> None:
+    """The image endpoint is chosen from a declared capability field, not a
+    hardcoded provider-name comparison (provider names are display aliases,
+    never routing conditions)."""
+    agent = ModelAgent(
+        "image_member",
+        "provider/image",
+        tags=("image",),
+        group_name="image_group",
+        provider_name="openrouter",
+        image_generation_endpoint="images",
+    )
+    orchestrator = TaskOrchestrator([agent])
+    observed: list[tuple[str, dict]] = []
+
+    def send(_agent: ModelAgent, endpoint: str, payload: dict) -> dict:
+        observed.append((endpoint, payload))
+        return {"model": payload["model"], "data": []}
+
+    orchestrator.client.proxy_send = send  # type: ignore[method-assign]
+    orchestrator.proxy_capability(
+        {"model": "image-group", "prompt": "diagram", "routing": {"channel": "sync"}},
+        capability="image",
+        endpoint="images/generations",
+    )
+
+    assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+
+
+def test_provider_name_alone_never_rewrites_the_image_endpoint() -> None:
+    """An agent named "openrouter" with no declared image_generation_endpoint
+    must be routed to the caller's requested endpoint unchanged: provider
+    identity alone must never drive endpoint selection."""
     agent = ModelAgent(
         "image_member",
         "provider/image",
@@ -440,7 +472,9 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
         endpoint="images/generations",
     )
 
-    assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+    assert observed == [
+        ("images/generations", {"model": "provider/image", "prompt": "diagram"})
+    ]
 
 
 def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:

@@ -515,6 +515,7 @@ class DiscoveredModel:
     zdr_capable: bool = False
     evidence_only: bool = False
     spend_admitted: bool = True
+    image_generation_endpoint: str | None = None
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -1395,6 +1396,18 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     else None
                 ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
+                # OpenRouter's image-generation REST path ("images") differs
+                # from the generic OpenAI-compatible "images/generations"
+                # convention TaskOrchestrator.proxy_capability defaults to.
+                # This mirrors the removed provider_name == "openrouter"
+                # hardcode 1:1 for every OpenRouter-sourced model (not
+                # gated on this row's own capabilities/modalities) so a
+                # discovered OpenRouter agent keeps working the moment it is
+                # ever proxied an "images/generations" capability request,
+                # exactly like the hardcode it replaces.
+                image_generation_endpoint=(
+                    "images" if source.provider_name == "openrouter" else None
+                ),
                 evidence_only=(
                     source.provider_name == "opencode_go"
                     and model_id not in _OPENCODE_GO_CHAT_MODELS
@@ -1805,6 +1818,39 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
 
 
+def encode_image_generation_endpoint_tag(value: str) -> str:
+    """Return a serving tag carrying ``value`` losslessly through the tag charset.
+
+    The catalog store's generic serving-tag mechanism only persists tags
+    matching ``[a-z][a-z0-9_]*(?::[a-z0-9_]+)?`` (``provider_catalog_store.
+    _normalize_tags``): lowercase, underscore-separated words. An
+    ``image_generation_endpoint`` value is provider-declared free text (a
+    REST path such as OpenRouter's ``"images"`` today, but not guaranteed to
+    stay that simple) -- a slash, hyphen, or uppercase letter would otherwise
+    be silently case-folded or dropped by that filter on restore, corrupting
+    or losing the endpoint rather than raising. Hex-encoding the UTF-8 bytes
+    survives any string content while itself only ever producing lowercase
+    hex digits, so it always matches the tag charset.
+    """
+    return f"image_generation_endpoint:{value.encode('utf-8').hex()}"
+
+
+def decode_image_generation_endpoint_tag(tag: str) -> str | None:
+    """Return the endpoint value :func:`encode_image_generation_endpoint_tag` encoded.
+
+    ``None`` for a tag whose payload is not valid hex/UTF-8 rather than
+    raising: a persisted store's tag rows are trusted evidence today, but
+    treating a malformed value as absent (fail closed) rather than crashing
+    restoration keeps one corrupted row from taking down every other model's
+    restore.
+    """
+    encoded = tag.removeprefix("image_generation_endpoint:")
+    try:
+        return bytes.fromhex(encoded).decode("utf-8")
+    except ValueError:
+        return None
+
+
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
@@ -1877,6 +1923,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         disabled=True,
         max_output_tokens=discovered.max_output_tokens,
         context_window=discovered.context_window,
+        image_generation_endpoint=discovered.image_generation_endpoint,
     )
 
 

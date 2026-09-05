@@ -854,6 +854,267 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- `proxy_capability`'s image-generation endpoint rewrite no longer compares
+  `agent.provider_name` against the literal `"openrouter"`: provider identity
+  is a display/admin alias, never a routing condition. `ModelAgent` gained an
+  explicit, declared `image_generation_endpoint` field (`None` by default,
+  meaning no rewrite); both the immediate-race and sequential-failover call
+  sites in `proxy_capability` now branch on that field instead. No shipped
+  agent config or discovery path set the old hardcoded name today, so this is
+  not a behavior change for any current deployment -- a future OpenRouter (or
+  any other provider's) image-capable agent must declare
+  `image_generation_endpoint` explicitly to get the endpoint rewrite. The
+  identical rewrite condition was duplicated verbatim at both call sites
+  inside `proxy_capability` (the immediate-race `call()` closure and the
+  sequential-failover loop); CodeRabbit's review flagged the duplication and
+  a new module-level `_capability_provider_endpoint(agent, endpoint)` helper
+  now backs both, following this file's own established precedent
+  (`_log_retry_outcome`, extracted for the same reason: two near-identical
+  branches that must not be allowed to silently diverge) rather than the
+  `@staticmethod` shape CodeRabbit's own suggested diff used.
+- `batch_routing.py` and `cost_router.py` shared a single-word KV config
+  category (`"routing"`) for feature flags -- both module constants
+  (`_ROUTING_CATEGORY`, `_EMBEDDING_CONFIG_CATEGORY`) and
+  `batch_job_registry.py`'s direct literal read now use the two-word
+  `"routing_config"` category name, matching the naming convention
+  (`conventions.require_object_name`) that already governs other configurable
+  identifiers. This is one renamed, still-shared category (batch, embedding,
+  and job-retention flags all still read/write the same category, as before)
+  -- not three separate categories.
+  **Migration contract (added after review on #1017):** on the Postgres-backed
+  boundary, `pg_llm_batch.PostgresConfigStore` keys `com_config` by the literal
+  `f"{category}.{key}"` string as its SQL primary key, so the call-site rename
+  alone *does* orphan any row a prior deployment already persisted under
+  `routing.<key>` -- readers now ask for `routing_config.<key>`, get an exact
+  miss, and silently fall back to their hardcoded Python default instead of the
+  operator's configured value. `kv_config.get_config_store()` now runs an
+  idempotent, additive-only backfill (`_migrate_legacy_categories`,
+  `_LEGACY_CATEGORY_MIGRATIONS["routing"] -> "routing_config"`) at every boot,
+  for the seven keys this codebase has ever written under the old category:
+  a value already present under `routing_config` always wins and is never
+  overwritten (so an operator's explicit reconfiguration after an earlier
+  backfill survives a later restart); a legacy `routing.<key>` value with no
+  `routing_config` counterpart yet is copied forward. This uses only the
+  `get`/`set` the minimal `ConfigStore` protocol guarantees, so it applies
+  identically to the in-memory/seeded path and the real Postgres adapter. The
+  legacy `routing.<key>` rows themselves are left in place, not deleted (the
+  protocol exposes no delete operation) -- they become harmless once every
+  reader has moved to `routing_config`, and removing `_LEGACY_CATEGORY_MIGRATIONS["routing"]`
+  is left as a bounded follow-up once every deployment has booted at least
+  once against the new category (tracked as gap G-17's residual item in
+  `ContextualWisdomLab/.github`'s `docs/product-technical-gap-baseline.md`).
+  See `tests/test_kv_config_store.py`'s four new tests (backfill-from-legacy,
+  new-value-precedence, idempotent-across-reconnects, in-memory-seed-path) for
+  the RED-before-GREEN evidence.
+  **Second review round on #1017 found three further defects.** Fixed
+  independently and concurrently by reviewer `seonghobae` (pushed directly
+  to this PR branch; merged here rather than force-pushed over, per this
+  repo's concurrent-agent-commit policy): (1) the migration call originally
+  sat inside the same broad `try/except Exception` that falls back to an
+  ephemeral `InMemoryConfigStore` when `pg_llm_batch` is unavailable or
+  Postgres is unreachable at construction -- a transient failure purely in
+  the migration's own reads on an otherwise successfully connected store
+  fell into that same except and silently discarded visibility into *all*
+  of the caller's real durable config, not just the migrated keys. The
+  migration call (renamed public, `migrate_legacy_categories`) now runs
+  after that except block, and seed-application was moved out there too
+  for the same reason, so either failure propagates instead. (3) the
+  `RoutingPolicy` docstring still advertised the pre-rename `routing`
+  category. (2) only the `get_config_store()` factory ran the migration, so
+  a caller injecting an already-constructed `ConfigStore` directly (e.g. a
+  real Postgres-backed store already carrying legacy `routing.*` rows)
+  never got it migrated. Reconciled with a RED test
+  (`tests/test_routing_config_compatibility.py`) expecting the fix at the
+  precise consumption boundary: `RoutingPolicy.__init__` now calls
+  `migrate_legacy_categories(config_store)` directly, which -- since
+  `CostRoutingCoordinator.__init__` constructs `RoutingPolicy(self.config)`
+  from the same shared object before `build_job_registry(self.config)`
+  runs -- transitively covers that consumer too for the common
+  (default-`routing_policy`) path.
+  **Third review round found the remaining gap in (2):** a caller supplying
+  its own pre-built `routing_policy` (bypassing `RoutingPolicy.__init__`
+  entirely) still left `build_job_registry`'s `batch_job_retention_seconds`
+  read -- and, transitively, any later embedding-category read against that
+  same shared `self.config` -- unmigrated. `build_job_registry()` itself now
+  also calls `migrate_legacy_categories(config_store)` before its own read,
+  since it is unconditionally invoked in `CostRoutingCoordinator.__init__`
+  regardless of whether `routing_policy` was custom-supplied. Eight more
+  tests added across all three rounds: injected-store migration (at both
+  the `RoutingPolicy` and `CostRoutingCoordinator`/custom-`routing_policy`
+  boundaries), migration-failure propagation, and the persistence/
+  validation fixes described next -- every one confirmed genuinely RED
+  before its fix and GREEN after, verified directly by temporarily
+  reverting each fix and re-running, not assumed.
+  **Fourth review round:** the `ConfigStore` protocol has no conditional/
+  compare-and-swap write, so a genuinely concurrent operator update landing
+  between `migrate_legacy_categories`'s read of the replacement key and its
+  own write could, in principle, be clobbered back to the stale legacy
+  value. Added a re-check of the replacement key immediately before the
+  write, narrowing that window from "the whole legacy-value read" to just
+  the gap between the re-check and the write itself -- this does not
+  eliminate the race (a real conditional-write primitive would, but neither
+  this protocol nor `pg_llm_batch.PostgresConfigStore.set()`, an
+  unconditional upsert, currently exposes one; extending that is the owning
+  repository's boundary, not something to work around here). New
+  deterministic test (`_InterleavedWriteConfigBackend`) simulates the exact
+  interleaving without relying on real threading timing, confirmed
+  genuinely RED before the re-check and GREEN after. Documented as a known,
+  narrow residual (realistic exposure: a multi-replica Postgres-backed
+  deployment restarting at the same moment an operator reconfigures the
+  exact same key) tracked alongside gap G-17 in `ContextualWisdomLab/
+  .github`'s `docs/product-technical-gap-baseline.md`.
+  **Fifth review round found two more defects, one of them a real
+  regression from the third round's fix.** (1) `build_job_registry()`'s
+  unconditional `migrate_legacy_categories(config_store)` call (added in
+  the third round) crashed with `AttributeError` on the function's own
+  documented "injectable test path": config-store doubles that expose only
+  `get_secret` (no full `get`/`set` surface), a shape
+  `tests/test_batch_job_registry_boundaries.py` already exercised and
+  passed before that change. Confirmed by direct reproduction -- reverting
+  just the guard failed exactly 4 pre-existing tests in that file with the
+  same `AttributeError` -- before restoring it. Both Devin Review and
+  CodeRabbit flagged this independently in the same round; reviewer
+  `seonghobae` also independently pushed a fix straight to this PR branch
+  while this round's fix was in progress here. Reconciled by merging (not
+  force-pushing) and keeping `seonghobae`'s version, which reuses the
+  existing `get` probe already computed a few lines below instead of a
+  second `getattr` lookup: `build_job_registry()` now runs the migration
+  only when `config_store` exposes callable `get` and `set`, the same
+  "inapplicable, not an error" contract the rest of the function already
+  applies to a duck-typed secret-only store. (2) a caller supplying *both*
+  a pre-built `routing_policy` and a pre-built `job_registry` to
+  `CostRoutingCoordinator` bypassed the migration entirely: neither
+  `RoutingPolicy(self.config)` nor `build_job_registry(self.config)` is
+  constructed when its own keyword argument is already supplied, so
+  `self.config` -- read directly by `CostRoutingCoordinator._embedding_request_limits()`
+  -- never got migrated for that specific combination. This exact edge
+  case had been reasoned through and consciously deferred in the third
+  round (no current production caller supplies both); Devin Review and
+  CodeRabbit both re-flagged it independently in this round, which raised
+  confidence it was worth closing rather than continuing to defer.
+  `CostRoutingCoordinator.__init__` now also calls
+  `migrate_legacy_categories(self.config)` unconditionally, immediately
+  after `self.config` is set and before either optional object is
+  constructed -- independent of, and in addition to, the
+  `RoutingPolicy.__init__`-level call. New test
+  (`test_cost_routing_coordinator_migrates_with_both_custom_policy_and_registry`)
+  confirmed genuinely RED (asserted the migrated `12345` token limit, got
+  the unmigrated default `280000`) before the fix.
+- `ALLOWED_AGENT_PATCH_KEYS`/`ALLOWED_AGENT_CREATE_KEYS` in `server.py` --
+  the HTTP-layer request-validation allowlists, entirely separate from
+  `patch_agent`/`add_agent`'s own field handling in `orchestrator.py` --
+  did not include `image_generation_endpoint`, so despite the persistence
+  fix below, every real HTTP request setting it was rejected with an
+  `unknown_fields` error before `patch_agent`/`add_agent` ever saw the
+  field. Added to both allowlists; new end-to-end HTTP test in
+  `tests/test_agent_pool_db.py` exercises a live PATCH and POST through the
+  actual server, not just the in-process `orchestrator.py` methods.
+- `ModelAgent.image_generation_endpoint` (added above in this same PR) was
+  never wired into `_AgentPoolStore`, the durable `--state-db`/`agents_db`
+  SQLite persistence used across process restarts: the field was absent from
+  `_AGENT_COLUMNS`, the `agent_pool` schema, its `INSERT`/`UPDATE`
+  statements, and the restart-time `SELECT` -- an operator setting it via
+  `patch_agent` would see it silently vanish on the very next restart, and
+  `patch_agent`'s own field allowlist did not accept the key at all, so there
+  was no way to set it through the admin API in the first place. Fixed: the
+  column (nullable `TEXT`, non-empty-or-null `CHECK`) is now created for
+  fresh installs and added via the same guarded `ALTER TABLE` migration
+  pattern already used for `reasoning_effort_supported`/`max_output_tokens`/
+  `context_window`/`stream_usage_supported`; `_insert_agent`/`save`/`load_all`
+  all round-trip it; `patch_agent` accepts and clears it; the admin
+  `_agent_to_admin_payload` view surfaces it; and the `/api/v1/agents/*`
+  OpenAPI patch schema in `api_contract.py` documents it. Separately,
+  `ModelAgent.__post_init__` now rejects a non-string or empty
+  `image_generation_endpoint` at construction time (matching the existing
+  `auth_scheme` validation pattern) instead of letting a malformed value from
+  JSON survive construction and fail only on the first image request that
+  reaches it. New tests in `tests/test_agent_pool_db.py`: a full patch ->
+  restart -> clear -> restart round trip, and a rejected-blank-value/
+  no-mutation test.
+- `tests/test_psychometric_routing.py` no longer fails collection for the
+  entire test suite in an environment without `numpy`/`fast_mlsirm`
+  installed. Only the one test that exercises the real `fast_mlsirm`-backed
+  scoring path now uses `pytest.importorskip` (mirroring
+  `psychometric_routing.py`'s own lazy, fail-closed-on-`ImportError` design);
+  the other four tests in that module never needed either optional package
+  and now run unconditionally.
+- **Sixth review round found a real regression from the first round's own
+  fix.** Removing `proxy_capability`'s `agent.provider_name == "openrouter"`
+  hardcode in favor of the declarative `ModelAgent.image_generation_endpoint`
+  field (first bullet above) never wired the new field into the discovery
+  path: `agent_from_discovered` built every auto-discovered agent with
+  `image_generation_endpoint=None`, so a freshly discovered OpenRouter model
+  silently lost image-generation routing the moment it was ever proxied an
+  `images/generations` capability request -- exactly the deployment the
+  removed hardcode used to cover, contradicting this PR's own earlier claim
+  that no current discovery path relied on it. Devin Review re-flagged this
+  independently on this round. Fixed: `DiscoveredModel` gained an
+  `image_generation_endpoint: str | None = None` field, `_parse_openai_compatible`
+  sets it to `"images"` unconditionally for every OpenRouter-sourced row
+  (mirroring the removed hardcode 1:1, not gated on that row's own
+  capabilities/modalities), and `agent_from_discovered` now threads
+  `discovered.image_generation_endpoint` into the built `ModelAgent`. New
+  regression tests in `tests/test_model_discovery.py` cover the
+  discovery-to-agent thread and confirm non-OpenRouter providers stay
+  unaffected. The companion concurrent-migration-write finding from the same
+  round (`kv_config.migrate_legacy_categories`'s check-then-set race) was
+  already investigated, narrowed, and tracked as gap G-17 in a prior round
+  (see this file's Devin-review concurrency note above); Devin re-flagging it
+  again this round does not change that a real fix needs a conditional-write
+  primitive neither the `ConfigStore` protocol nor
+  `pg_llm_batch.PostgresConfigStore.set()` currently exposes.
+- **Seventh review round found the same regression's other half.** The
+  sixth round's fix threaded `image_generation_endpoint` through direct,
+  in-process discovery, but the durable catalog-persistence boundary
+  (`provider_catalog_store.normalize_discovered_model`/
+  `_restore_model_semantics`, reached via `record_success`/
+  `serving_models`) still reconstructed `DiscoveredModel` without the
+  field, so a refresh-then-restart round trip through either catalog
+  backend silently dropped an OpenRouter model's image-generation routing
+  again. Devin Review caught this immediately after the sixth-round fix
+  landed. Fixed without a schema migration: `provider_bootstrap.
+  serving_tags_for_discovered` now emits an
+  `image_generation_endpoint:<value>` generic serving tag (the same
+  mechanism already round-tripping capabilities/modalities through the
+  existing `model_serving_tag` table on both the in-memory and Postgres
+  backends), `normalize_discovered_model` passes the field straight
+  through for the live in-flight path, and `_restore_model_semantics`
+  parses the tag back out on restore. New regression test in
+  `tests/test_provider_catalog_store.py` runs an OpenRouter model through
+  `record_success`/`serving_models` and confirms the restored model's
+  `image_generation_endpoint` survives the round trip.
+- **Same round, one more edge on the fix above.** The naive
+  `image_generation_endpoint:<value>` serving tag from the previous bullet
+  would itself be silently case-folded or dropped by the catalog store's own
+  tag-validation charset (`[a-z][a-z0-9_]*(?::[a-z0-9_]+)?`) for any endpoint
+  value containing a slash, hyphen, or uppercase letter -- today's only real
+  value (`"images"`) happens to fit that charset, but nothing enforced that a
+  future provider's endpoint would. Devin Review flagged this immediately.
+  Fixed by hex-encoding the UTF-8 bytes (`model_discovery.
+  encode_image_generation_endpoint_tag`/`decode_image_generation_endpoint_tag`,
+  used by both `provider_bootstrap.serving_tags_for_discovered` and
+  `provider_catalog_store._restore_model_semantics`): hex output only ever
+  contains lowercase `0-9a-f`, so it always matches the tag charset
+  regardless of the source string's content, and a malformed persisted
+  payload decodes to `None` (fail closed) rather than raising and taking
+  down every other model's restore. New tests cover a
+  slash/hyphen/uppercase endpoint's full catalog-store round trip, the
+  encode/decode pair directly, and a malformed-payload decode.
+- **Same round, a namespace collision in the fix above.** `model.capabilities`
+  values are stored as raw, unprefixed serving tags alongside the reserved
+  `image_generation_endpoint:<hex>` tag. A provider response is untrusted
+  evidence; if it ever declared a capability string that happened to start
+  with `"image_generation_endpoint:"` (adversarial or merely coincidental),
+  the restore path would read that raw capability as the real tag and
+  silently route every image request to whatever endpoint it encoded after
+  the next restart, with no endpoint ever legitimately configured.
+  CodeRabbit flagged this immediately after the hex-encoding fix landed.
+  Fixed by dropping any capability colliding with the reserved prefix
+  before `serving_tags_for_discovered` persists it (the namespaced
+  `capability:<value>` tag it also emits is unaffected and still
+  round-trips the capability normally). New regression test proves a
+  colliding capability cannot spoof the restored
+  `image_generation_endpoint`.
 
 ### Added
 
