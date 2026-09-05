@@ -98,22 +98,23 @@ Hosted exact-head checks and independent review remain the merge authority.
 
 ## Redistribution boundary and source summaries
 
-FrugalGPT and RouteLLM are already vendored in `docs/papers/` and their
-redistribution basis is documented in `docs/papers/README.md`; this note reuses
-that repository evidence rather than creating duplicate paper copies. The newer
+FrugalGPT and RouteLLM remain cited and linked in `docs/papers/README.md`.
+The 2026-09-05 redistribution audit removed the earlier bundled copies because
+arXiv's distribution grant did not establish repository redistribution permission.
+This does not withdraw their research relevance or change the admission rule. The newer
 MMR-Bench source is cited and summarized here rather than vendored because this
 change does not need a local copy to execute and this PR does not assert a
 redistribution license for that manuscript. NIST publications are linked to
 their authoritative DOI/publication records rather than duplicated so the
 controlling revision and provenance remain explicit.
 
-- **FrugalGPT (Chen et al., 2024):** the vendored
-  `docs/papers/frugalgpt-cost-2305.05176.pdf` formulates cost/quality-aware use of
+- **FrugalGPT (Chen et al., 2023):** the
+  [arXiv preprint](https://arxiv.org/abs/2305.05176v1) formulates cost/quality-aware use of
   LLMs and evaluates cascades that can reduce serving cost while preserving or
   improving task performance. It is relevant only after provider authorization
   and capability admission; it does not authorize a provider credential.
-- **RouteLLM (Ong et al., 2024):** the vendored
-  `docs/papers/routellm-routing-2406.18665.pdf` trains routers from preference
+- **RouteLLM (Ong et al., 2024):** the
+  [arXiv paper](https://arxiv.org/abs/2406.18665) trains routers from preference
   data to choose between candidate LLMs under a quality/cost trade-off. It
   supports learned, evidence-evaluated routing rather than a hand-authored
   provider ordering.
@@ -134,9 +135,9 @@ hand-assigned priority, fixed tie-break, or heuristic fallback.
 
 ## References
 
-Chen, L., Zaharia, M., & Zou, J. (2024). FrugalGPT: How to use large language
-models while reducing cost and improving performance. *Transactions on Machine
-Learning Research*. https://arxiv.org/abs/2305.05176
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language
+models while reducing cost and improving performance* [Preprint]. arXiv.
+https://arxiv.org/abs/2305.05176v1
 
 Joint Task Force. (2020). *Security and privacy controls for information systems
 and organizations* (NIST Special Publication 800-53, Rev. 5). National Institute

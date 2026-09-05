@@ -1,5 +1,27 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 exact-head gate verification and paper distribution audit
+
+The frozen, clean `47ae9d65c2bc013c553f4fb045964867363f4e94` tree completed the
+full suite with **3,460 passed, two skipped, exit 0, in 675.71 seconds**.
+Start and end heads match; JUnit records 3,462 cases, zero failures, zero errors,
+and two skips. Evidence is in `/tmp/co-1067-measurement-gate.8EWUFJ`.
+The same head's 57 profile/paper checks passed in 0.63 seconds, with the profile's
+185 statements and 68 branches at 100%. These are local verification results,
+not hosted acceptance, protected merge, or buyer performance evidence.
+
+The subsequent documentation-only rights audit covers all six bundled PDFs.
+The old blanket claim that an arXiv distribution grant permits repository
+redistribution was incorrect. Four current-tree copies (FrugalGPT, RouteLLM,
+Hybrid LLM, and the fuzzing survey) are replaced by citations, links, and
+summaries. HELM and IRT-Router remain with explicit CC BY 4.0 sources and
+attribution. HELM's local bytes match the source v2 download exactly. The
+[paper register](papers/README.md#redistribution-audit-2026-09-05) records
+versions, hashes, rights boundaries, and the unresolved historical distribution
+scope. Git history, other branches, and past artifacts are not purged.
+The earlier full-suite result does not claim to test these later document edits;
+their citation and link checks are a separate verification step.
+
 ## 2026-09-05 measurement-declaration boundary repair
 
 The IRT-Router review distinguishes prediction from measurement and corrects

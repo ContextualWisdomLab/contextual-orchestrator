@@ -50,6 +50,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Research materials now retain citations and source links when permission to
+  bundle a paper has not been established. Licensed copies include their
+  specific attribution and redistribution terms.
 - Default-change evidence now rejects missing or unknown measurement status,
   impossible error values, and booleans or text used as numbers. A valid zero
   error and the existing improvement threshold are preserved.
