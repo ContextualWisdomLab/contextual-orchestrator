@@ -2532,7 +2532,10 @@ class ModelClient:
                     "max_tokens",
                     self.request_settings_snapshot()["max_output_tokens"],
                 )
-            if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
+            if normalized_endpoint == "responses" and (
+                _is_local_provider_url(agent.base_url)
+                or agent.provider_name == "opencode_go"
+            ):
                 chat_payload = _responses_to_chat_payload(payload)
                 if "response_format" in chat_payload and not (
                     "response_format" in agent.tags
