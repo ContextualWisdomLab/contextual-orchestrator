@@ -127,7 +127,6 @@ class PsychometricRoutingEvidence:
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
                     return []
-                neighbor_limit = 2 if self.semantic_warm_start_enabled else 1
                 neighbors = (
                     sorted(comparable, reverse=True)[:2]
                     if self.semantic_warm_start_enabled
