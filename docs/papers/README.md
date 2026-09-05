@@ -9,12 +9,12 @@ the remaining sources are cited and linked without copying their files.
 
 - **FrugalGPT: How to Use Large Language Models While Reducing Cost and
   Improving Performance** — Lingjiao Chen, Matei Zaharia, James Zou. arXiv:2305.05176, 2023.
-  `frugalgpt-cost-2305.05176.pdf`
   Motivates the **configurable price table + per-request cost accounting** and
   cost-optimising model selection: cost varies by orders of magnitude across
   providers/models, so a gateway should price each request and route to the
-  cheapest capable upstream. Distributed under arXiv's non-exclusive license to
-  distribute (arXiv perpetual, non-exclusive license 1.0).
+  cheapest capable upstream. The earlier bundled arXiv v1 copy is replaced by
+  citation and link because repository redistribution permission was not
+  established: https://arxiv.org/abs/2305.05176v1.
   TMLR record: https://openreview.net/forum?id=cSimKw5p6R
 
 ## Query routing (which upstream / which tier)
@@ -22,19 +22,27 @@ the remaining sources are cited and linked without copying their files.
 - **RouteLLM: Learning to Route LLMs with Preference Data** — Isaac Ong, Amjad
   Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M.
   Waleed Kadous, Ion Stoica. arXiv:2406.18665, 2024.
-  `routellm-routing-2406.18665.pdf`
   Grounds the **routing decision** layer (`RoutingPolicy` + cost-aware upstream
   selection): route strong/weak model choices to hit a cost/quality target.
-  arXiv preprint; distributed under the arXiv non-exclusive distribution license.
+  The earlier bundled arXiv v4 copy is replaced by citation and link because
+  repository redistribution permission was not established:
+  https://arxiv.org/abs/2406.18665v4.
+  ICLR 2025 publication record:
+  https://proceedings.iclr.cc/paper_files/paper/2025/hash/5503a7c69d48a2f86fc00b3dc09de686-Abstract-Conference.html.
+  The landing-page title uses "from Preference Data"; the linked paper uses
+  "with Preference Data". Publication access is not a redistribution license.
 
 - **Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing** — Dujian Ding,
   Ankur Mallick, Chi Wang, Robert Sim, Subhabrata Mukherjee, Victor Rühle,
   Laks V. S. Lakshmanan, Ahmed Hassan Awadallah. arXiv:2404.14618 (ICLR 2024).
-  `hybrid-llm-query-routing-2404.14618.pdf`
-  Grounds **latency-tolerant vs interactive routing** and the sync/batch split:
-  route easy/bulk queries to the cheaper path, keep hard/interactive queries on
-  the responsive path. Distributed under the arXiv non-exclusive license /
-  CC BY as marked on arXiv.
+  Motivates **quality-aware small/large-model selection** using predicted query
+  difficulty and a chosen quality target. It does not establish this gateway's
+  sync/batch split or a latency guarantee. The earlier bundled arXiv v1 copy is replaced by citation
+  and link: https://arxiv.org/abs/2404.14618v1. That record specifies
+  [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), not
+  unrestricted commercial redistribution.
+  ICLR 2024 publication record:
+  https://proceedings.iclr.cc/paper_files/paper/2024/hash/b47d93c99fa22ac0b377578af0a1f63a-Abstract-Conference.html.
 
 ## Role reasoning-effort profiles
 
@@ -80,24 +88,37 @@ Buyer next action: call `run_equal_budget_ablation` and read
   reduces paired held-out logit calibration RMSE from `0.231235` to `0.025803`;
   the 95% candidate-minus-baseline interval is `[-0.208030, -0.202924]`.
 - Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
-  R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
-  item response theory* [Preprint]. arXiv.
-  https://doi.org/10.48550/arXiv.2506.01048
+  R. (2025). IRT-Router: Effective and interpretable multi-LLM routing via
+  item response theory. In *Proceedings of the 63rd Annual Meeting of the
+  Association for Computational Linguistics (Volume 1: Long Papers)*
+  (pp. 15629–15644). Association for Computational Linguistics.
+  https://doi.org/10.18653/v1/2025.acl-long.761
+  Vendored unmodified [ACL publication PDF](irt-router-acl-2025.pdf), 16 pages;
+  SHA-256 `0fb8cecd934693b83966c857a0e0757551c738989247b0156ab30688d3868d4e`.
+  Source: https://aclanthology.org/2025.acl-long.761.pdf.
+  Copyright 2025 Association for Computational Linguistics; distributed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), as specified by the
+  [ACL post-2016 materials policy](https://aclanthology.org/faq/copyright/).
+  No changes were made to the PDF; attribution above identifies the authors.
   Motivates held-out response prediction from candidate-query interactions;
   exact-query and semantic warm-start evidence must be evaluated separately.
   CO classifies this as an IRT-shaped predictive model, not a validated
   psychometric measurement model: monotonicity alone does not identify a scale
   or establish construct validity, and the paper's selected model-pair and
   two-query examples do not supply uncertainty or invariant measurement proof.
-  In its MIRT equation, the query discrimination vector is an unconstrained
-  learned transform of the query embedding. The paper does not establish a
-  positive orientation for each coordinate, so increasing one fitted ability
-  coordinate need not increase the predicted success probability. Its
-  25-dimensional coordinates also lack anchors or another reported
-  identification convention that would make their axes invariant to rotation,
-  reflection, or rescaling. Binary cross-entropy prediction and face-valid
-  examples therefore cannot, by themselves, prove the claimed monotonic or
-  construct interpretation.
+  Distinguish the printed linear discrimination transform in Eq. (4) from
+  public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`:
+  [`MIRT.py`, lines 51–59](https://github.com/Mercidaiha/IRT-Router/blob/e8f258ced4ec3c40d795403603acd8c1cdfb994d/router/MIRT.py#L51-L59)
+  uses softplus by default, or a sigmoid multiplied by the configured range.
+  A positive range preserves positive discrimination; the constructor does
+  not itself validate that range. NIRT likewise uses a positive discrimination
+  transform and nonnegative prediction-layer weights. It is therefore
+  incorrect to claim that the public implementation has no orientation
+  constraint. These constraints still do not validate named constructs or the
+  meaning of the Figure 4 cross-coordinate average. The
+  [doctoring audit](../doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+  separates a scale-reparameterization counterexample for the printed equation
+  from unperformed checkpoint and buyer-validation experiments.
   The gateway does not adopt the paper's stronger interpretation of fitted
   coordinates as stable LLM abilities or query properties. The paper and its
   public implementation report predictive metrics, but do not establish scale
@@ -523,8 +544,26 @@ psychometric evidence", never a portable ability rank.
   latency, cost) instead of a single leaderboard number; report incompleteness
   honestly (skipped/unsupported/rate-limited cells stay machine-readable rather
   than silently dropped); and standardize conditions across compared systems
-  (same tasks, scorers, caps, and budgets). Distributed under the arXiv
-non-exclusive license / CC BY as marked on arXiv.
+  (same tasks, scorers, caps, and budgets).
+  The unmodified bundled file is arXiv v2 (2023-10-01):
+  https://arxiv.org/abs/2211.09110v2, which explicitly specifies
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  Source: https://arxiv.org/pdf/2211.09110v2.
+  SHA-256 `30970bda8958a1a8adf6a0a82feef9728331840288b7d2b49368bac87fd25f18`;
+  compared byte-for-byte with the source on 2026-09-05. Copyright remains with
+  the authors; the APA entry below supplies attribution, and no changes were
+  made to the PDF. This paper license does not license all HELM datasets.
+
+## Fuzzing methodology
+
+- Manès, V. J. M., Han, H., Han, C., Cha, S. K., Egele, M., Schwartz,
+  E. J., & Woo, M. (2019). *The art, science, and engineering of fuzzing:
+  A survey* [Preprint, version 4]. arXiv.
+  https://arxiv.org/abs/1812.00140v4
+  Supplies the taxonomy and design background for coverage-guided fuzzing in
+  `docs/fuzzing.md`; it does not prove this gateway's test coverage or safety.
+  The earlier bundled copy is replaced by citation and link because its arXiv
+  distribution grant does not establish this repository's redistribution right.
 
 ## Repository-wide referenced research
 
@@ -616,9 +655,42 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
-> Citations are provided for scholarly attribution. Redistribution here relies
-> on the arXiv non-exclusive distribution license each author granted; no
-> GPL/AGPL-licensed material is vendored anywhere in this repository.
+## Redistribution audit (2026-09-05)
+
+The earlier blanket redistribution statement was incorrect.
+[arXiv's non-exclusive license](https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html)
+grants distribution rights to arXiv, not automatically to this repository.
+Permission must cover the exact file/version and intended distribution;
+source-code licenses do not license a paper. Citation alone is not permission.
+
+The six PDFs bundled at parent #1067's `47ae9d65` were checked. The separately
+audited child LLMRouter paper retains its own license record below. Among those
+six parent files, IRT-Router and HELM remain with
+the version-specific sources, CC BY 4.0 notices, attribution, and hashes above.
+Four other copies are removed from the current tree, with their citations,
+source summaries, and original version links retained. The table identifies
+their pre-removal bytes at `47ae9d65` for audit, not for redistribution:
+
+| Removed bundled copy | Version | SHA-256 |
+| --- | --- | --- |
+| `frugalgpt-cost-2305.05176.pdf` | arXiv v1 | `035ae8b90333dad8b7817fc8f55e7c4cbca435368c5c1a4dbf7bba9e5db87473` |
+| `routellm-routing-2406.18665.pdf` | arXiv v4 | `c9bc9c8171cab95bb3832cde8767c6b5e0925cd62930e51ddbd60d7cb2616741` |
+| `hybrid-llm-query-routing-2404.14618.pdf` | arXiv v1 | `c0ebc21073112b8f8e51c7ea279eeac4d5b62be88c69a5cd2bccc2d58ec28cbb` |
+| `fuzzing-art-science-engineering-manes-2019.pdf` | arXiv v4 | `b683da872e369882f0b8ebcb7423058e1317aa9571f8187ccd1c6148e3ac3992` |
+
+FrugalGPT, RouteLLM, and the fuzzing survey carry arXiv distribution grants;
+Hybrid LLM carries a noncommercial/no-derivatives condition. We did not establish
+an alternative grant covering these copies for the intended product distribution.
+[TMLR's CC BY 4.0 policy](https://jmlr.org/tmlr/author-guide.html) and the linked
+ICLR publication records do not by themselves establish that these exact older
+files are licensed published artifacts. OpenReview access was unavailable during
+the audit; no permission is inferred from that failure.
+
+This is a current-tree distribution correction, not a history purge: existing
+Git commits, other branches, and previously published artifacts are unchanged.
+Any historical redistribution cleanup needs a separately reviewed plan; no force
+push or release deletion is performed here. Reintroducing a file requires its
+own verified source, version/hash, permission, and attribution.
 
 ## APA 7th edition references
 
@@ -646,9 +718,10 @@ adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
 https://doi.org/10.1111/jedm.12373
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory* [Preprint]. arXiv.
-https://doi.org/10.48550/arXiv.2506.01048
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
 Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020

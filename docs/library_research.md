@@ -80,6 +80,15 @@ Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_abla
 and keep route/conduct defaults unchanged until `production_default_change_allowed`
 returns true.
 
+The default-change helper checks declared prerequisites only. It requires an
+explicit `measurement_status="measured"`, `robustness_passed=true`, a positive
+finite baseline RMSE, and a nonnegative finite candidate RMSE meeting the
+existing 55% improvement threshold. Booleans, numeric strings, missing status,
+and unrepresentable numbers fail closed; zero candidate error remains valid.
+The helper neither authenticates the report nor applies a default change.
+The deterministic ablation above remains estimated; relabeling it cannot
+establish measurement validity, buyer accuracy, or protected release approval.
+
 ## Discovery output ceilings and context windows (2026-08-31)
 
 Issue #927 needs real per-model output-ceiling and context-window metadata from

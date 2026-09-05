@@ -1,5 +1,21 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 measurement-boundary parent synchronization
+
+The next normal integration joins existing child
+`e2f3e2af8e6b723c6870fb6c4dcee2b4f7bc31af` with parent #1067
+`ae704491fc24cd4618c709b036cc9353ea9923e5`, retaining both document additions.
+The child NIM comparison, failure-denominator tests, observed-data audit, and
+licensed LLMRouter paper are unchanged. Parent measurement-declaration guards,
+IRT interpretation corrections, and paper distribution corrections are retained.
+The removed paper files stay removed; the child does not restore them.
+
+The previous child `e2f3e2af` passed 3,447 tests with two skips in 677.14 seconds
+on an unchanged clean tree. The parent source `47ae9d65` and later documentation
+`ae704491` have separate verification records below. Neither previous result is
+an integration-head result. Both PRs remain Draft pending their own terminal
+hosted evidence and independent review, with parent-first protected delivery.
+
 ## 2026-09-05 paired-evidence parent synchronization
 
 The normal two-parent integration joins child
@@ -74,6 +90,58 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+
+## 2026-09-05 exact-head gate verification and paper distribution audit
+
+The frozen, clean `47ae9d65c2bc013c553f4fb045964867363f4e94` tree completed the
+full suite with **3,460 passed, two skipped, exit 0, in 675.71 seconds**.
+Start and end heads match; JUnit records 3,462 cases, zero failures, zero errors,
+and two skips. Evidence is in `/tmp/co-1067-measurement-gate.8EWUFJ`.
+The same head's 57 profile/paper checks passed in 0.63 seconds, with the profile's
+185 statements and 68 branches at 100%. These are local verification results,
+not hosted acceptance, protected merge, or buyer performance evidence.
+
+The subsequent documentation-only rights audit covers all six bundled PDFs.
+The old blanket claim that an arXiv distribution grant permits repository
+redistribution was incorrect. Four current-tree copies (FrugalGPT, RouteLLM,
+Hybrid LLM, and the fuzzing survey) are replaced by citations, links, and
+summaries. HELM and IRT-Router remain with explicit CC BY 4.0 sources and
+attribution. HELM's local bytes match the source v2 download exactly. The
+[paper register](papers/README.md#redistribution-audit-2026-09-05) records
+versions, hashes, rights boundaries, and the unresolved historical distribution
+scope. Git history, other branches, and past artifacts are not purged.
+The earlier full-suite result does not claim to test these later document edits;
+their citation and link checks are a separate verification step.
+
+## 2026-09-05 measurement-declaration boundary repair
+
+The IRT-Router review distinguishes prediction from measurement and corrects
+the earlier equation-only inference about public implementation constraints.
+The pinned implementation uses positive discrimination transforms; that does
+not establish invariant score units, construct validity, or the meaning of an
+unweighted 25-coordinate average. The
+[doctoring audit](doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+records exact paper sections, source revision, a positive-rescaling algebraic
+counterexample, and the remaining validation requirements. The paper is now
+cited as its ACL 2025 publication rather than only its preprint.
+
+The existing reasoning-effort default-change helper had a separate input defect:
+missing or unrecognized measurement status, negative candidate error, and
+boolean/string errors could pass; very large integers raised an uncaught error.
+RED `76908a55` produced 12 failures among 29 gate checks: ten invalid approvals
+and two unhandled overflows. Source `0ad54cdf` passed all 52 profile tests with
+185 statements and 68 branches covered at 100%. The repair reuses the existing
+number validator, preserves the 55% improvement threshold and valid zero
+candidate error, and adds no estimator or dependency. Later formatting-only
+cleanup preserves the surrounding source layout.
+
+The KPI here is invalid input admission: ten accepted invalid reports and two
+uncaught failures become zero in the declared regression matrix. It is not a
+buyer accuracy, latency, or measurement-validity result. The helper validates
+declarations only; provenance authentication, buyer observations, and protected
+approval remain necessary. This report-only helper and the held-out benchmark's
+multi-gate admission result are separate contracts. No production default was
+changed and no synthetic record became measured evidence.
 
 ## 2026-09-05 PR #1067 review correction
 
@@ -2435,12 +2503,12 @@ convergence separately and leaves
 `item_language_domain_effects` `not_executed`. IRT-Router remains an
 IRT-shaped prediction reference, not evidence that its learned coordinates are
 identified, invariant psychometric ability or difficulty measurements.
-Its published MIRT discrimination transform has no reported positive-coordinate
-orientation, and its 25-dimensional latent coordinates have no reported anchor
-or equivalent rotation/scale identification convention. Predictive loss and
-selected examples therefore do not establish monotonic score meaning. CO keeps
-production admission closed until orientation, identification/linking,
-item/model fit, and uncertainty are separately executed on buyer evidence.
+Its printed MIRT equation omits the positive discrimination transforms present
+in public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`. The source
+distinction is recorded in the interpretation audit above. Positive direction
+does not establish common coordinate units or validate their average. CO keeps
+production admission closed until direction, identification/linking,
+item/model fit, and uncertainty are separately checked on buyer evidence.
 Source commit `b0f3703f` reuses the released Oakes observed-information API on
 1,200 synthetic observations and six known item intercepts. The converged fit
 reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean
@@ -2669,9 +2737,10 @@ adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
 https://doi.org/10.1111/jedm.12373
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory* [Preprint]. arXiv.
-https://doi.org/10.48550/arXiv.2506.01048
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 These sources support the current product shape, OpenAI-compatible wire
 honesty, deep-versus-shallow orchestration allocation, cache safety, and
