@@ -22,7 +22,7 @@ success_criteria:
     source: "tests/test_orchestrated_responses_stream.py"
 ---
 
-# Record streamed Responses usage at the workflow boundary
+# ADR 0040: Record streamed Responses usage at the workflow boundary
 
 ## Context
 

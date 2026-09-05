@@ -135,6 +135,20 @@ def test_update_prior_rejects_invalid_components() -> None:
         router.update_prior("member_b", float("nan"), 0.0)
 
 
+def test_update_prior_ignores_retired_member() -> None:
+    """A late telemetry poll cannot kill the collector after pool removal."""
+    collector, group_router, quality_router, _ = _collectors(100.0)
+    agent = _agents()[0]
+    group_router.forget_members({"other_provider_member"})
+    quality_router.forget_members({"other_provider_member"})
+
+    collector._poll_agent(agent)
+
+    assert collector.window_evidence(agent.id) == (1.0, 0.0)
+    assert agent.id not in group_router.snapshot(refresh=False)
+    assert agent.id not in quality_router.snapshot(refresh=False)
+
+
 if __name__ == "__main__":
     test_start_without_openrouter_agents_is_inert()
     test_poll_folds_one_window_of_measured_mass()

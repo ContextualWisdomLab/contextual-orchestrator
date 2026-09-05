@@ -11,7 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    CostRoutingCoordinator,
+    InMemoryConfigStore,
+    ModelAgent,
+    TaskOrchestrator,
+)
+from contextual_orchestrator.model_group import RoutingObservationPersistenceError
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
@@ -268,6 +274,118 @@ def test_http_batch_embeddings_auto_selects_enabled_embedding_agent() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_embedding_attempts_keep_their_original_routing_context() -> None:
+    for path, input_key, value in (
+        ("/v1/embeddings", "input", "alpha"),
+        ("/v1/batch/embeddings", "inputs", ["alpha"]),
+    ):
+        original = ModelAgent(
+            "embedding_agent",
+            "mock-planner",
+            base_url="mock://original",
+            tags=("embedding",),
+        )
+        orchestrator = TaskOrchestrator(
+            [original, ModelAgent("survivor_agent", "mock-survivor", tags=("embedding",))]
+        )
+        expected_context = orchestrator._routing_observation_context_for_agent(original)
+        counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
+        coordinator = CostRoutingCoordinator(
+            orchestrator, InMemoryConfigStore(), embedding_token_counter=counter
+        )
+        complete = coordinator.complete_embeddings_batch
+
+        def complete_after_reassignment(*args, **kwargs):
+            document = complete(*args, **kwargs)
+            orchestrator.remove_agent("default", original.id)
+            orchestrator.add_agent(
+                "default",
+                {
+                    "id": original.id,
+                    "model": original.model,
+                    "base_url": "mock://replacement",
+                    "tags": ["embedding"],
+                },
+            )
+            return document
+
+        coordinator.complete_embeddings_batch = complete_after_reassignment  # type: ignore[method-assign]
+        observed_contexts: list[str | None] = []
+        observe_success = orchestrator._group_router.observe_success
+
+        def capture_success(*args, **kwargs):
+            observed_contexts.append(kwargs.get("observation_context_key"))
+            return observe_success(*args, **kwargs)
+
+        orchestrator._group_router.observe_success = capture_success  # type: ignore[method-assign]
+        server = build_server(
+            orchestrator,
+            port=0,
+            security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+            coordinator=coordinator,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                path,
+                {"model": original.model, input_key: value},
+            )
+            assert status == 200, body
+            assert observed_contexts == [expected_context]
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            orchestrator.close()
+
+
+def test_incomplete_embedding_attempt_survives_observation_store_failure() -> None:
+    first = ModelAgent("embedding_first", "mock-planner", tags=("embedding",))
+    second = ModelAgent("embedding_second", "mock-planner", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+    counter = type(
+        "ExactSyntheticCounter",
+        (),
+        {"count_text": lambda self, text, model="": len(text)},
+    )()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=counter,
+    )
+    complete = coordinator.complete_embeddings_batch
+    attempted: list[str | None] = []
+
+    def incomplete_then_complete(*args, **kwargs):
+        attempted.append(kwargs.get("agent_id"))
+        if kwargs.get("agent_id") == first.id:
+            return {"status": "failed"}
+        return complete(*args, **kwargs)
+
+    def fail_observation(*args, **kwargs):
+        raise RoutingObservationPersistenceError("simulated store outage")
+
+    coordinator.complete_embeddings_batch = incomplete_then_complete  # type: ignore[method-assign]
+    orchestrator._group_router.observe_failure = fail_observation  # type: ignore[method-assign]
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(server.server_address[1], "/v1/embeddings", {"input": "alpha"})
+        assert status == 200, body
+        assert attempted == [first.id, second.id]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        orchestrator.close()
 
 
 if __name__ == "__main__":

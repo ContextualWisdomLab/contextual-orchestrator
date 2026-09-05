@@ -110,6 +110,15 @@ classDiagram
     +agent_id: text
     +group_name: text
   }
+  class RoutingObservation {
+    +observation_id: integer
+    +ledger_name: text
+    +member_id: text
+    +observed_at: real
+    +success: boolean
+    +latency_seconds: real?
+    +output_tokens: integer?
+  }
   class VideoJobRecord {
     +gateway_job_id: text
     +provider_job_id: text
@@ -125,6 +134,7 @@ classDiagram
   }
   ModelGroup "1" --> "0..*" ModelGroupMember
   AgentPool "1" --> "0..1" ModelGroupMember
+  ModelGroupMember "1" --> "0..*" RoutingObservation
   VideoJobRecord "1" --> "0..1" VideoJobUsage
 ```
 
@@ -159,11 +169,18 @@ transactionally into these relations.
 - Touch targets, responsive layout, typography/color tokens, navigation, form
   validation, performance, and accessibility remain governed by the existing
   Admin design system and regression contracts.
-- Multi-replica routing observation calibration, cancellable conducted-answer
-  streaming, and opt-in spend-capped live canaries remain explicitly tracked in
-  `docs/product-technical-gap-baseline.md`. Video job durability still depends
-  on the configured shared job registry; standalone mode makes no durability
-  claim.
+- Operators may opt into multi-process observation sharing with
+  `--routing-observation-window-seconds` alongside `--state-db`. The normalized
+  `routing_observations` table replays only the selected time window and uses
+  retention-only semantics. Physical pruning is bounded by the shared
+  database's largest registered routing-observation window so shorter-window
+  peers cannot erase longer-window evidence; calibrated decay, cross-model
+  quality weights, and production horizontal-scaling claims remain outside this
+  slice.
+- Video job durability still depends on the configured shared job registry;
+  standalone mode makes no durability claim.
+- Cancellable conducted-answer streaming and opt-in spend-capped live
+  canaries remain explicitly tracked in `docs/product-technical-gap-baseline.md`.
 
 ## Evidence and limits
 

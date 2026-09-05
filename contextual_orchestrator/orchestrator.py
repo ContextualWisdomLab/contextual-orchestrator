@@ -44,7 +44,11 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .release_authorization import evaluate_release_authorization
-from .model_group import ModelGroupRouter, canonical_group_name
+from .model_group import (
+    ModelGroupRouter,
+    RoutingObservationPersistenceError,
+    canonical_group_name,
+)
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
@@ -81,6 +85,7 @@ from .tool_fallback import (
 )
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
+from .routing_observation_store import SqliteRoutingObservationStore
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
     apply_request_profile,
@@ -185,6 +190,8 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "URLError",
     "ValueError",
 })
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _safe_provider_probe_error_type(exc: Exception) -> str:
@@ -343,6 +350,23 @@ class FastMLSIRMJudgeComponents:
     judge_cls: type[Any]
     criterion_cls: type[Any]
     format_error: type[Exception]
+
+
+@dataclass(frozen=True)
+class _InvocationResult:
+    """Provider invocation payload plus the durable-observation context used."""
+
+    output: str
+    served_id: str
+    served_model: str
+    usage: dict[str, Any] | None
+    observation_context_key: str
+
+    def __iter__(self):
+        yield self.output
+        yield self.served_id
+        yield self.served_model
+        yield self.usage
 
 
 def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
@@ -3619,7 +3643,9 @@ class _StateStore:
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # Keep the persistent state connection's busy wait aligned with the
+        # short-lived routing-observation connections sharing this file.
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             self._migrate_legacy_table()
@@ -3854,6 +3880,7 @@ class TaskOrchestrator:
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
+        routing_observation_window_seconds: int | None = None,
         allow_empty_agents: bool = False,
         token_counter: Any = None,
     ) -> None:
@@ -3867,21 +3894,49 @@ class TaskOrchestrator:
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents and not allow_empty_agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
+        if routing_observation_window_seconds is not None and (
+            isinstance(routing_observation_window_seconds, bool)
+            or type(routing_observation_window_seconds) is not int
+            or routing_observation_window_seconds < 1
+        ):
+            raise ValueError("routing_observation_window_seconds must be a positive integer")
+        if routing_observation_window_seconds is not None and state_db is None:
+            raise ValueError("routing_observation_window_seconds requires state_db")
+        self._routing_observation_store = (
+            SqliteRoutingObservationStore(
+                state_db,
+                routing_observation_window_seconds,
+                start_heartbeat=False,
+            )
+            if state_db is not None and routing_observation_window_seconds is not None
+            else None
+        )
         # Measured speed/stability routing inside model groups (global: every
-        # selection path below funnels through _ranked_agents). Ledger state is
-        # process-local by design: it reflects this instance's observed traffic
-        # and resets on restart, never carrying stale evidence across pools.
-        self._group_router = ModelGroupRouter()
+        # selection path below funnels through _ranked_agents). The optional
+        # store shares only the explicitly configured time window across processes.
+        self._group_router = ModelGroupRouter(
+            observation_context_resolver=self._routing_observation_context_for_member,
+            observation_store=self._routing_observation_store,
+            ledger_name="transport",
+        )
         # Quality ledger: identical estimator family as the transport ledger but
         # fed by real-time fast-mlsirm judge verdicts on final answers, so
         # measured accuracy -- not transport success -- steers future routing.
-        self._quality_router = ModelGroupRouter(prior_resolver=resolve_quality_prior)
+        self._quality_router = ModelGroupRouter(
+            prior_resolver=resolve_quality_prior,
+            observation_context_resolver=self._routing_observation_context_for_member,
+            observation_store=self._routing_observation_store,
+            ledger_name="quality",
+        )
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
+        if self._routing_observation_store is not None:
+            self._group_router.refresh()
+            self._quality_router.refresh()
 
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
@@ -3971,6 +4026,8 @@ class TaskOrchestrator:
         self._pii_encryptors: dict[str, PiiFieldEncryptor] = {}
         if self._store is not None:
             self._reload_state()
+        if self._routing_observation_store is not None:
+            self._routing_observation_store.start_heartbeat()
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
@@ -3980,6 +4037,8 @@ class TaskOrchestrator:
             self._pool_store.close()
         if self._store is not None:
             self._store.close()
+        if self._routing_observation_store is not None:
+            self._routing_observation_store.close()
 
     @contextmanager
     def request_policy(self, zdr_only: bool = False):
@@ -4287,16 +4346,22 @@ class TaskOrchestrator:
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
-                    self._group_router.observe_failure(agent.id)
+                    self._record_group_failure(
+                        agent.id,
+                        observation_context_key=observation_context_key,
+                    )
                 raise
             if measured:
                 self._group_router.observe_success(
-                    agent.id, time.perf_counter() - started_at
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
             return result
 
@@ -4352,6 +4417,7 @@ class TaskOrchestrator:
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
+            observation_context_key = self._routing_observation_context_for_agent(candidate)
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
             if isinstance(file_replicas, dict):
@@ -4390,12 +4456,17 @@ class TaskOrchestrator:
                 if not (request_too_large or capability_mismatch):
                     self._record_failure(candidate.id)
                 if candidate.group_name and not (request_too_large or capability_mismatch):
-                    self._group_router.observe_failure(candidate.id)
+                    self._record_group_failure(
+                        candidate.id,
+                        observation_context_key=observation_context_key,
+                    )
                 continue
             self._record_success(candidate.id)
             if candidate.group_name:
                 self._group_router.observe_success(
-                    candidate.id, time.perf_counter() - started_at
+                    candidate.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
             return result
         if last_failure is not None and every_failure_was_request_too_large:
@@ -4629,7 +4700,7 @@ class TaskOrchestrator:
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }
@@ -4827,8 +4898,9 @@ class TaskOrchestrator:
                     and not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
                 ):
-                    self._group_router.observe_failure(final_agent.id)
+                    self._record_group_failure_for_agent(final_agent)
                 raise
+            synthesis_context_key = self._routing_observation_context_for_agent(final_agent)
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
                 "id": len(workflow["trace"]),
@@ -4887,8 +4959,9 @@ class TaskOrchestrator:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
-                    self._group_router.observe_failure(final_agent.id)
+                    self._record_group_failure_for_agent(final_agent)
                 raise
+            repair_context_key = self._routing_observation_context_for_agent(final_agent)
             repaired_output = provider_output(final_agent, repaired)
             repair_error = _structured_output_error(repaired_output, response_format)
             if repair_error is None:
@@ -4912,7 +4985,7 @@ class TaskOrchestrator:
             failed_agent = final_agent
             self._record_failure(failed_agent.id)
             if failed_agent.group_name:
-                self._group_router.observe_failure(failed_agent.id)
+                self._record_group_failure_for_agent(failed_agent)
             if not virtual_model:
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
@@ -4936,8 +5009,14 @@ class TaskOrchestrator:
             synthesis_started = time.perf_counter()
         self._record_success(final_agent.id)
         if final_agent.group_name:
-            self._group_router.observe_success(
-                final_agent.id, time.perf_counter() - synthesis_started
+            self._record_group_success_for_agent(
+                final_agent,
+                time.perf_counter() - synthesis_started,
+                observation_context_key=(
+                    repair_context_key
+                    if repair_step is not None
+                    else synthesis_context_key
+                ),
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -5205,6 +5284,7 @@ class TaskOrchestrator:
         agent = self._requested_agent(model_name) or self._select_agent(
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
+        observation_context_key = self._routing_observation_context_for_agent(agent)
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -5220,27 +5300,52 @@ class TaskOrchestrator:
                 yield delta
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
-                self._group_router.observe_failure(agent.id)
+                self._record_group_failure(
+                    agent.id,
+                    observation_context_key=observation_context_key,
+                )
             raise
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
             usage_callback(usage)
         if agent.group_name or model_name == self.FREE_MODEL:
-            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            try:
+                self._group_router.observe_success(
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
+                )
+            except RoutingObservationPersistenceError:
+                # ponytail: preserve an already-emitted stream; surface the
+                # degraded durable-evidence state through the structured log.
+                _LOGGER.error(
+                    "durable routing observation failed after streamed response completion"
+                )
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the
         # quality ledger so measured accuracy steers future member ordering,
         # and it is persisted for audit.
         latency_seconds = time.perf_counter() - started_at
-        verification = self._realtime_route_judge(
-            text=text,
-            answer=answer,
-            served_id=agent.id,
-            latency_seconds=latency_seconds,
-            usage=usage,
-            free_only=model_name == self.FREE_MODEL,
-        )
+        try:
+            verification = self._realtime_route_judge(
+                text=text,
+                answer=answer,
+                served_id=agent.id,
+                latency_seconds=latency_seconds,
+                usage=usage,
+                free_only=model_name == self.FREE_MODEL,
+                observation_context_key=observation_context_key,
+            )
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable routing observation failed after streamed response completion"
+            )
+            verification = {
+                "accepted": False,
+                "reason": "routing observation persistence failed after stream completion",
+                "verifier_output": "",
+            }
         trace_step = {
             "id": 0,
             "role": "worker",
@@ -5522,6 +5627,7 @@ class TaskOrchestrator:
         answers: dict[int, dict[str, Any]] = {}
         prepared_rows: dict[int, dict[str, Any]] = {}
         run_ids: dict[int, str] = {}
+        observation_context_keys: dict[int, str] = {}
         for agent_id, requests in requests_by_agent.items():
             # A prior group's spend is already reflected in the budget meter
             # by its own pending persist below, so a later group must not
@@ -5551,9 +5657,11 @@ class TaskOrchestrator:
                                 result=answers[pending_index],
                                 row=prepared_rows[pending_index],
                                 run_id=run_ids[pending_index],
+                                observation_context_key=observation_context_keys[pending_index],
                             )
                     raise BudgetExceededError("spend budget exceeded", detail=budget)
             agent = agents_by_id[agent_id]
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             effort_profile = self._role_effort_profile("worker")
             batch_started_at = time.perf_counter()
             batch = (
@@ -5612,6 +5720,7 @@ class TaskOrchestrator:
                         )
                         prepared_rows[index] = row
                         run_ids[index] = run_id
+                        observation_context_keys[index] = observation_context_key
                 raise
             for custom_id, result in results.items():
                 # _validate_batch_results already pinned every result key to the
@@ -5638,6 +5747,7 @@ class TaskOrchestrator:
                 )
                 prepared_rows[index] = row
                 run_ids[index] = run_id
+                observation_context_keys[index] = observation_context_key
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
@@ -5666,6 +5776,7 @@ class TaskOrchestrator:
                     result=answers[index],
                     row=prepared_rows[index],
                     run_id=run_ids[index],
+                    observation_context_key=observation_context_keys[index],
                 )
             )
         return records
@@ -5723,6 +5834,7 @@ class TaskOrchestrator:
         result: dict[str, Any],
         row: dict[str, Any],
         run_id: str,
+        observation_context_key: str,
     ) -> dict[str, Any]:
         """Judge one already-persisted pending batch row and record it as complete.
 
@@ -5754,6 +5866,7 @@ class TaskOrchestrator:
             latency_seconds=None,
             usage=result.get("usage"),
             free_only=False,
+            observation_context_key=observation_context_key,
         )
         row["realtime_judge"] = {
             "accepted": verification["accepted"],
@@ -6055,7 +6168,10 @@ class TaskOrchestrator:
                 for capability in sorted(MODEL_CAPABILITIES)
                 if any(capability in agent.tags for agent in members)
             },
-            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
+            "members": [
+                self._agent_to_admin_payload(self._agent(agent_id), refresh=False)
+                for agent_id in ranked_ids
+            ],
         }
 
     def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
@@ -6290,13 +6406,14 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
+            invocation = self._invoke(
                 candidate,
                 messages,
                 text=text,
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
             )
+            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = invocation
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -6322,6 +6439,7 @@ class TaskOrchestrator:
                 latency_seconds=latency_seconds,
                 usage=attempt_usage,
                 free_only=free_only,
+                observation_context_key=getattr(invocation, "observation_context_key", None),
                 prompt_context=prompt_context,
             )
             row["realtime_judge"] = {
@@ -6362,6 +6480,7 @@ class TaskOrchestrator:
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
+        observation_context_key: str | None = None,
         prompt_context: str | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
@@ -6377,13 +6496,24 @@ class TaskOrchestrator:
         """
         output_tokens = self._usage_completion_tokens(usage)
 
-        def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
+        def _record(
+            accepted: bool,
+            irt_row: tuple[int, ...] = (),
+            *,
+            observation_context_key: str | None = None,
+        ) -> None:
             if accepted:
                 self._quality_router.observe_success(
-                    served_id, latency_seconds, output_tokens=output_tokens
+                    served_id,
+                    latency_seconds,
+                    output_tokens=output_tokens,
+                    observation_context_key=observation_context_key,
                 )
             else:
-                self._quality_router.observe_failure(served_id)
+                self._record_quality_failure(
+                    served_id,
+                    observation_context_key=observation_context_key,
+                )
             if prompt_context is not None:
                 self._observe_contextual_quality(
                     prompt_context,
@@ -6413,7 +6543,11 @@ class TaskOrchestrator:
             and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
             else ()
         )
-        _record(accepted, irt_row)
+        _record(
+            accepted,
+            irt_row,
+            observation_context_key=observation_context_key,
+        )
         return base
 
     @staticmethod
@@ -6970,11 +7104,16 @@ class TaskOrchestrator:
         throughput/stability ledger decides; with no evidence at all the
         caller's input order survives untouched. No synthetic scores.
         """
+        self._quality_router.refresh()
         judged_quality = any(
-            self._quality_router.member_observation_count(member_id) > 0
+            self._quality_router.member_observation_count(member_id, refresh=False) > 0
             for member_id in member_ids
         )
-        router = self._quality_router if judged_quality else self._group_router
+        if judged_quality:
+            router = self._quality_router
+        else:
+            self._group_router.refresh()
+            router = self._group_router
         if _LOGGER.isEnabledFor(logging.DEBUG):
             for member_id in member_ids:
                 _LOGGER.debug(
@@ -6983,7 +7122,7 @@ class TaskOrchestrator:
                     judged_quality,
                     router.member_score(member_id),
                 )
-        return router.ranked_member_ids(member_ids)
+        return router.ranked_member_ids(member_ids, refresh=False)
 
     def _psychometric_order(
         self, candidates: list[ModelAgent], prompt_context: str | None
@@ -7483,15 +7622,21 @@ class TaskOrchestrator:
         error: BaseException | None,
         *,
         capability: str,
+        observation_context_key: str | None = None,
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
         if error is not None and not _is_request_too_large_error(error):
-            self._group_router.observe_failure(endpoint_id)
+            self._record_group_failure(
+                endpoint_id,
+                observation_context_key=observation_context_key,
+            )
             self._record_failure(endpoint_id)
 
     def _race_attempt_collector(
-        self, capability: str
+        self,
+        capability: str,
+        observation_contexts: dict[str, str] | None = None,
     ) -> tuple[
         Callable[[str, Any | None, BaseException | None], None],
         Callable[[str | None], None],
@@ -7512,7 +7657,15 @@ class TaskOrchestrator:
             error: BaseException | None,
         ) -> None:
             self._record_race_attempt(
-                endpoint_id, value, error, capability=capability
+                endpoint_id,
+                value,
+                error,
+                capability=capability,
+                observation_context_key=(
+                    None
+                    if observation_contexts is None
+                    else observation_contexts.get(endpoint_id)
+                ),
             )
             if error is not None or value is None:
                 return
@@ -7560,6 +7713,10 @@ class TaskOrchestrator:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"
                 )
+            observation_contexts = {
+                agent.id: self._routing_observation_context_for_agent(agent)
+                for agent in race_members
+            }
             def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
                 payload = {
                     key: value for key, value in body.items()
@@ -7577,7 +7734,10 @@ class TaskOrchestrator:
                 )
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            attempt_completed, finalize_attempts = self._race_attempt_collector(
+                capability,
+                observation_contexts,
+            )
             try:
                 outcome = race_first_valid(
                     [
@@ -7611,11 +7771,16 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability=capability)
                 self._group_router.observe_success(
-                    outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                    outcome.winner_endpoint_id,
+                    outcome.completion_ms / 1000,
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id
+                    ),
                 )
                 return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             payload = {
                 key: value
                 for key, value in body.items()
@@ -7642,15 +7807,24 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large and request_too_large
                 )
                 if not request_too_large:
-                    self._group_router.observe_failure(agent.id)
+                    self._record_group_failure(
+                        agent.id,
+                        observation_context_key=observation_context_key,
+                    )
                 continue
             if selection_sink is not None:
                 selected_result = selection_sink(agent, result)
                 self._group_router.observe_success(
-                    agent.id, time.perf_counter() - started_at
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
                 return selected_result
-            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            self._group_router.observe_success(
+                agent.id,
+                time.perf_counter() - started_at,
+                observation_context_key=observation_context_key,
+            )
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -7670,7 +7844,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
-    ) -> tuple[str, str, str, dict[str, Any] | None]:
+    ) -> _InvocationResult:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
         ``ModelClient`` handles provider transport retries. This layer classifies
@@ -7715,6 +7889,10 @@ class TaskOrchestrator:
                 )
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
+            observation_contexts = {
+                agent.id: self._routing_observation_context_for_agent(agent)
+                for agent in race_members
+            }
 
             def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
@@ -7727,7 +7905,10 @@ class TaskOrchestrator:
                 return output, agent.id, agent.model, usage
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            attempt_completed, finalize_attempts = self._race_attempt_collector(
+                "text",
+                observation_contexts,
+            )
             try:
                 outcome = race_first_valid(
                 [
@@ -7761,8 +7942,19 @@ class TaskOrchestrator:
                     outcome.winner_endpoint_id,
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id
+                    ),
                 )
-                return outcome.value
+                return _InvocationResult(
+                    output=outcome.value[0],
+                    served_id=outcome.value[1],
+                    served_model=outcome.value[2],
+                    usage=outcome.value[3],
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id, outcome.winner_endpoint_id
+                    ),
+                )
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
@@ -7773,6 +7965,7 @@ class TaskOrchestrator:
         last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             while True:
                 try:
                     attempt_start = time.perf_counter()
@@ -7787,7 +7980,10 @@ class TaskOrchestrator:
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
-                        self._group_router.observe_failure(agent.id)
+                        self._record_group_failure(
+                            agent.id,
+                            observation_context_key=observation_context_key,
+                        )
                     if isinstance(exc, ToolFallbackStoppedError):
                         # Deliberately terminal, even inside a free/auto virtual
                         # pool with untried candidates remaining: every path that
@@ -7878,10 +8074,17 @@ class TaskOrchestrator:
                         agent.id,
                         time.perf_counter() - attempt_start,
                         output_tokens=output_tokens,
+                        observation_context_key=observation_context_key,
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
-                return output, agent.id, agent.model, usage
+                return _InvocationResult(
+                    output=output,
+                    served_id=agent.id,
+                    served_model=agent.model,
+                    usage=usage,
+                    observation_context_key=observation_context_key,
+                )
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
@@ -8014,17 +8217,122 @@ class TaskOrchestrator:
                 self.circuit_reset_seconds,
             )
 
+    def _record_group_failure(
+        self,
+        agent_id: str,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record provider failure without replacing an already active error."""
+        try:
+            self._group_router.observe_failure(
+                agent_id,
+                observation_context_key=observation_context_key,
+                observed_at=observed_at,
+            )
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable routing observation failed while recording provider failure"
+            )
+
+    def _record_group_failure_for_agent(
+        self,
+        agent: ModelAgent,
+        *,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record provider failure using the current agent shape as the context key."""
+        self._record_group_failure(
+            agent.id,
+            observation_context_key=self._routing_observation_context_for_agent(agent),
+            observed_at=observed_at,
+        )
+
+    def _record_quality_failure(
+        self,
+        agent_id: str,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record judge failure without aborting a usable-answer failover."""
+        try:
+            self._quality_router.observe_failure(
+                agent_id,
+                observation_context_key=observation_context_key,
+                observed_at=observed_at,
+            )
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable quality observation failed while recording provider failure"
+            )
+
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
             cleared = self._circuit.pop(agent_id, None)
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
+    def _record_group_success_for_agent(
+        self,
+        agent: ModelAgent,
+        latency_seconds: float,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record provider success using the current agent shape as the context key."""
+        self._group_router.observe_success(
+            agent.id,
+            latency_seconds,
+            observation_context_key=(
+                observation_context_key
+                if observation_context_key is not None
+                else self._routing_observation_context_for_agent(agent)
+            ),
+            observed_at=observed_at,
+        )
+
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
             if agent.id == agent_id and _agent_matches_request_endpoint(agent):
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
+
+    def _routing_observation_context_for_agent(self, agent: ModelAgent) -> str:
+        """Stable context key for durable routing evidence tied to one agent shape."""
+        payload = {
+            "auth_scheme": agent.auth_scheme,
+            "base_url": agent.base_url,
+            "credential_name": agent.credential_name,
+            "group_name": canonical_group_name(agent.group_name) if agent.group_name else "",
+            "id": agent.id,
+            "local_credential_key": agent.local_credential_key,
+            "model": agent.model,
+            "provider_name": agent.provider_name,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def _routing_observation_context_for_member(self, agent_id: str) -> str:
+        try:
+            agent = self._agent(agent_id)
+        except KeyError:
+            payload = {
+                "auth_scheme": "",
+                "base_url": "",
+                "group_name": "",
+                "id": agent_id,
+                "model": "",
+                "provider_name": "",
+                "removed_from_pool": True,
+            }
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        return self._routing_observation_context_for_agent(agent)
 
     def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
         """Resolve an agent only through the pool boundary it can belong to.
@@ -8358,7 +8666,9 @@ class TaskOrchestrator:
             return base_url.split("//", 1)[-1].split("/", 1)[0]
         return base_url  # pragma: no cover
 
-    def _agent_to_admin_payload(self, agent: ModelAgent) -> dict[str, Any]:
+    def _agent_to_admin_payload(
+        self, agent: ModelAgent, *, refresh: bool = True
+    ) -> dict[str, Any]:
         return {
             "id": agent.id,
             "model": agent.model,
@@ -8372,16 +8682,25 @@ class TaskOrchestrator:
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
-            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
+            "group_routing": (
+                self._group_router.member_report(agent.id, refresh=refresh)
+                if agent.group_name
+                else None
+            ),
         }
 
-    def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+    def list_agents(
+        self, page_number: int = 1, page_size: int = 10, *, refresh: bool = True
+    ) -> list[dict[str, Any]]:
         """Return a paginated admin-safe view of configured agents."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
+        return [
+            self._agent_to_admin_payload(agent, refresh=refresh)
+            for agent in self.candidates[start:end]
+        ]
 
     def list_openai_models(self) -> dict[str, Any]:
         """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
@@ -15116,15 +15435,26 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
+        self._group_router.refresh()
+        self._quality_router.refresh()
         return {
-            "agents": self.list_agents(page_size=agent_page_size),
+            "agents": self.list_agents(page_size=agent_page_size, refresh=False),
             "policy": {
                 **self.policy.as_dict(),
                 "roles": list(self.ROLE_TAGS),
             },
             "routing_evidence": {
-                "transport": self._group_router.snapshot(),
-                "quality": self._quality_router.snapshot(),
+                "transport": self._group_router.snapshot(refresh=False),
+                "quality": self._quality_router.snapshot(refresh=False),
+            },
+            "routing_observation_policy": {
+                "enabled": self._routing_observation_store is not None,
+                "window_seconds": (
+                    None
+                    if self._routing_observation_store is None
+                    else self._routing_observation_store.window_seconds
+                ),
+                "retention_policy": "time_window_only" if self._routing_observation_store is not None else None,
             },
             "recent_workflow_runs": [
                 self._shorten_run(run)

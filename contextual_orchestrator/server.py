@@ -18,7 +18,6 @@ import struct
 import tempfile
 import threading
 import time
-import traceback
 import urllib.error
 import urllib.parse
 from typing import Any, Callable, Mapping
@@ -1282,6 +1281,11 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
         if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            # Pop rather than leave a raw blank/None value in body: later
+            # provider-only routing checks (_responses_virtual_requires_provider_path)
+            # read body.get("top_logprobs") directly and must see an omitted
+            # field, not a truthy empty string.
+            body.pop("top_logprobs", None)
             return
         if body.get("logprobs") is not True:
             raise RequestError(
@@ -1346,6 +1350,11 @@ def _validate_responses_seed(body: dict[str, Any]) -> int | None:
         message="seed must be an integer",
     )
     if seed is None:
+        # Pop rather than leave a raw blank/None value in body: later
+        # provider-only routing checks (_responses_virtual_requires_provider_path)
+        # read body.get("seed") directly and must see an omitted field, not a
+        # truthy empty string.
+        body.pop("seed", None)
         return None
     body["seed"] = seed
     if seed < -(2**63) or seed > (2**63 - 1):
@@ -6285,9 +6294,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_PATCH(self) -> None:  # noqa: N802
             """Apply an authenticated agent-pool worker update."""
@@ -6329,9 +6337,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_DELETE(self) -> None:  # noqa: N802
             """Delete an authenticated agent-pool worker resource."""
@@ -6422,9 +6429,8 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
@@ -7296,6 +7302,9 @@ def build_server(
                         if remaining_timeout <= 0:
                             break
                         attempt_started_at = time.perf_counter()
+                        observation_context_key = (
+                            orchestrator._routing_observation_context_for_agent(embedding_agent)
+                        )
                         try:
                             document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
                                 inputs,
@@ -7309,18 +7318,25 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(
+                                embedding_agent.id,
+                                observation_context_key=observation_context_key,
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
+                                observation_context_key=observation_context_key,
                             )
                             break
                         last_embedding_error = RuntimeError(
                             f"embedding member ended with {document.get('status', 'unknown')}"
                         )
-                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        orchestrator._record_group_failure(
+                            embedding_agent.id,
+                            observation_context_key=observation_context_key,
+                        )
                         document = None
                     if document is None:
                         raise RequestError(
@@ -7400,6 +7416,9 @@ def build_server(
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
+                        observation_context_key = (
+                            orchestrator._routing_observation_context_for_agent(embedding_agent)
+                        )
                         try:
                             document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
                                 inputs,
@@ -7412,12 +7431,16 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(
+                                embedding_agent.id,
+                                observation_context_key=observation_context_key,
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
+                                observation_context_key=observation_context_key,
                             )
                         break
                     if document is None:
@@ -7998,9 +8021,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
             finally:
                 if endpoint_policy is not None:
                     endpoint_policy.__exit__(None, None, None)
@@ -8195,6 +8217,23 @@ def build_server(
         ) -> None:
             _LOGGER.warning("request_failed status=%s code=%s", status, code)
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+
+        def _send_internal_error(self, exc: Exception) -> None:
+            """Log one internal failure with a request ID and return a generic 500."""
+            request_id = uuid.uuid4().hex
+            _LOGGER.error(
+                "internal_request_error request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            self._send(
+                _error_payload(
+                    "internal_error",
+                    "internal server error",
+                    {"request_id": request_id},
+                ),
+                500,
+            )
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.

@@ -925,6 +925,113 @@ A short status comment was left on each of `#868`, `#857`, `#906`, `#911`, and
 `#912` recording the pin-bump-did-not-fix-it finding so the next pass (human
 or agent) does not re-diagnose the same sidecar failure from scratch.
 
+## 2026-08-30 PR #911 review-finding verification pass
+
+Re-verified the CodeRabbit/Devin findings on this branch against current code
+before merging protected `main`. `model_group.py`'s lock ordering
+(`observe_success`/`observe_failure`/`refresh` now consistently take
+`self._lock` outside `self._observation_io_lock`) and the
+`_measured_member_order` double-refresh nitpick were already fixed on this
+head. The exception-masking concern (`observe_failure` swallowing the
+original error) does not reproduce: every call site in `orchestrator.py` and
+`server.py` goes through `_record_group_failure`/`_record_quality_failure`,
+which catch `RoutingObservationPersistenceError` internally, log it, and let
+the caller's bare `raise` preserve the original exception. The
+"`zdr_only` leaking into provider payloads" finding does not reproduce
+either: `_ORCHESTRATION_ONLY_KEYS` (which includes `zdr_only`) is applied
+consistently at every `upstream = {...}` provider-payload construction site
+in `orchestrator.py`, and `batch_routing.py` documents `zdr_only` as a
+selection-policy-only field never forwarded upstream. The ADR 0042
+(renumbered from its original 0039 due to a collision with an
+independently-landed, unrelated ADR of the same number -- see
+`docs/planning/adrs/0042-time-windowed-routing-observations.md`) `status:
+proposed` field is correct as-is for an unmerged PR. The previously flagged
+"Partially closed — multi-instance telemetry" doc edit is no longer present
+in the current diff against protected `main` (superseded by an earlier
+merge). Fixed: `tests/test_measured_routing_evidence.py`'s
+`fail_first_quality_append` fake now checks the `ledger_name` argument
+(`"quality"`) before raising, instead of unconditionally failing whichever
+ledger's `append` happens to be called first. Also re-verified on this exact
+PR head: empty-string `seed`/`top_logprobs` omission is now covered by
+`tests/test_orchestrated_responses_stream.py::test_streamed_orchestrated_responses_allows_blank_seed_and_top_logprobs`,
+and `text.format.type="text"` no longer forces the provider-only Responses
+path because `_responses_virtual_requires_provider_path` restricts that branch
+to actual provider-preserving controls. Newly fixed on this head: manually
+raised `ProviderUpstreamError` instances can no longer echo raw provider/client
+diagnostics into HTTP or SSE customer responses, so oversized text, private
+URLs, and credential-bearing strings are reduced to a bounded redacted
+sentence before `_provider_upstream_message()` adds caller guidance.
+Regression coverage now includes one direct HTTP failure path and both chat and
+Responses SSE failure surfaces. `record_stream_usage` SSE-completion exception
+handling remains independently verified on the branch and was not reopened
+here.
+
+## 2026-08-30 durable routing-observation context and ordering slice
+
+PR #911 exact head `1e14b2fed0e9043ce3fd639c57aede4c40f77bf7` left durable
+routing observations keyed only by `ledger_name` and `member_id`, with write
+time assigned when SQLite acquired the transaction lock and old rows pruned by
+whichever writer had the shortest configured window. That produced four linked
+correctness gaps on the live branch: reused agent IDs could inherit unrelated
+history after restart, in-flight old-group attempts could repopulate a newly
+assigned member after `reset_members`, concurrent writers could replay rows in
+lock-acquisition order instead of completion order, and one short-window
+gateway could delete evidence still inside another gateway's longer window.
+
+The bounded fix keeps the opt-in SQLite slice but changes the durable contract:
+each row now carries a caller-supplied completion timestamp plus an active
+member-context key derived from the serving agent shape, router refresh loads
+only rows whose `(member_id, context_key)` matches the current member set, and
+shared writers prune transactionally by the database's largest registered
+routing-observation window instead of their local window. This preserves
+restart continuity for the same agent shape while failing closed on stale or
+reassigned evidence and prevents a short-window peer from deleting evidence a
+longer-window peer still needs.
+
+Exact branch evidence on August 30, 2026 used `uv run pytest -q` from the clean
+`commercial-loop-20260830-pr911-ordering-refresh` worktree:
+`tests/test_routing_observation_store.py` passed (`24 passed in 1.74s`), then
+`tests/test_routing_observation_store.py tests/test_measured_routing_evidence.py tests/test_model_group.py`
+passed (`86 passed in 2.91s`). Added regressions cover physical pruning of
+rows older than the shared maximum retention window while preserving mixed-window
+coexistence. Hosted protected checks, independent review, conflict resolution,
+and normal merge remain required before this becomes protected-main evidence.
+
+The September 4 review found that the historical maximum-window metadata no
+longer controls physical pruning after active leases were introduced. Current
+authority is the set of unexpired registration leases; the metadata row remains
+schema-compatibility and audit history only. Initialization now registers a
+lease only when the owning orchestrator reaches heartbeat startup, preventing a
+failed constructor from extending retention. Batch success without honest
+per-item latency remains durable, incomplete embedding attempts keep failover
+when observation persistence is unavailable, and batch quality observations
+retain the execution-time member context across reassignment. These repairs are
+open-PR evidence until current-head review, full tests, and protected merge pass.
+
+## 2026-08-29 bounded routing-observation durability slice
+
+The multi-instance routing gap is now partially implemented behind an explicit
+operator choice. `--routing-observation-window-seconds SECONDS` requires
+`--state-db PATH` and enables the normalized `routing_observations` SQLite table.
+Each completed transport or quality attempt is stored in its logical ledger;
+router reads replay only observations inside the selected wall-clock window,
+and writes prune rows outside the database-wide maximum registered
+routing-observation window. Separate gateway processes can therefore share
+current-window success/failure, measured latency, and provider-reported
+completion-token evidence through the existing state database without letting a
+shorter-window peer erase a longer-window peer's active evidence.
+
+This is deliberately a retention-only slice: the default remains process-local;
+there is no calibrated decay, cross-model quality weighting, inferred provider
+equivalence, or claim of production horizontal-scaling readiness. Non-stream
+success-observation persistence errors fail closed; provider-failure recording
+preserves the original failure and logs the durable-evidence outage. After a
+stream has emitted provider bytes, a write failure is logged and cannot change
+the completed response.
+Focused store/router/orchestrator/CLI coverage is maintained in
+`tests/test_routing_observation_store.py`; protected `main` and hosted Checks
+remain the release boundary for this implementation.
+
 ## 2026-08-30 hourly loop: #868 test-mock fix, #857 narrow hardening, #906 stale-base merge
 
 Fresh status check confirmed #868/#911/#912 were still `BLOCKED` purely on the

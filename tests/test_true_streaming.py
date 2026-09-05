@@ -524,6 +524,44 @@ def test_chat_stream_preserves_classified_provider_error_payload() -> None:
     assert errors[0]["error_detail"]["retryable"] is True
 
 
+def test_chat_stream_redacts_sensitive_manual_provider_message() -> None:
+    """Manual upstream failures must be sanitized before reaching chat SSE callers."""
+    server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    frames: list[str] = []
+
+    class Orchestrator:
+        def stream_route(self, *_args, **_kwargs):
+            raise ProviderUpstreamError(
+                agent_id="worker_agent",
+                model="gpt-x",
+                error_code="api_error",
+                message="Authorization: Bearer secret-token at http://10.0.0.9/internal " + ("x" * 400),
+                client_status=502,
+                retryable=True,
+            )
+            yield "unreachable"
+
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda frame: frames.append(frame) is None or True
+    try:
+        handler._stream_route_completion(
+            Orchestrator(), SecurityConfig(auth_token="stream-token"), [], "gpt-x"
+        )
+    finally:
+        server.server_close()
+
+    error = next(
+        json.loads(frame.removeprefix("data: "))
+        for frame in frames
+        if frame.startswith("data: {") and '"error_code"' in frame
+    )
+    message = error["error_message"]
+    assert "secret-token" not in message
+    assert "http://10.0.0.9/internal" not in message
+    assert "provider diagnostic was redacted for safety" in message
+
+
 def test_responses_stream_preserves_classified_provider_error_payload() -> None:
     """A failed Responses SSE event keeps the actionable upstream taxonomy."""
     server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
@@ -559,6 +597,43 @@ def test_responses_stream_preserves_classified_provider_error_payload() -> None:
     assert payload["response"]["error"]["code"] == "rate_limit_exceeded"
     assert payload["response"]["error"]["detail"]["provider_status"] == 429
     assert payload["response"]["error"]["detail"]["retryable"] is True
+
+
+def test_responses_stream_redacts_sensitive_manual_provider_message() -> None:
+    """Manual upstream failures must be sanitized before reaching Responses SSE callers."""
+    server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    frames: list[str] = []
+
+    class Orchestrator:
+        def would_route(self, *_args, **_kwargs):
+            return False
+
+        def conduct(self, *_args, **_kwargs):
+            raise ProviderUpstreamError(
+                agent_id="worker_agent",
+                model="gpt-x",
+                error_code="api_error",
+                message="Authorization: Bearer secret-token at http://10.0.0.9/internal " + ("x" * 400),
+                client_status=502,
+                retryable=True,
+            )
+
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda frame: frames.append(frame) is None or True
+    try:
+        assert handler._stream_orchestrated_response(
+            Orchestrator(), SecurityConfig(auth_token="stream-token"), [], "gpt-x"
+        ) is False
+    finally:
+        server.server_close()
+
+    failed_frame = next(frame for frame in frames if "response.failed" in frame)
+    payload = json.loads(failed_frame.split("data: ", 1)[1])
+    message = payload["response"]["error"]["message"]
+    assert "secret-token" not in message
+    assert "http://10.0.0.9/internal" not in message
+    assert "provider diagnostic was redacted for safety" in message
 
 
 if __name__ == "__main__":

@@ -80,6 +80,22 @@ Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_abla
 and keep route/conduct defaults unchanged until `production_default_change_allowed`
 returns true.
 
+## Time-windowed routing-observation persistence (2026-08-30)
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Shared replay store | Existing stdlib `sqlite3`; repository `state_db`; ADR 0042 routing-observation contract | Keep the opt-in routing-observation store on stdlib SQLite and persist a database-wide maximum retention window in metadata so transactional pruning stays physically bounded without letting a short-window process delete a longer-window peer's evidence. | WAL tuning, a second queue/service, active-lease coordination, or a speculative PostgreSQL migration for this bounded slice. |
+| Replay/prune policy | Existing router `window_seconds` replay boundary; SQLite transaction semantics | Reuse per-router `window_seconds` for logical replay, but prune rows by the shared maximum registered window during writes. This preserves completion-order replay and cross-process safety while keeping storage bounded. | Unbounded history, calibrated decay, row-count heuristics, and inferred provider equivalence. |
+
+### Active-retention correction (2026-09-04)
+
+Physical pruning is governed by unexpired rows in
+`routing_observation_registrations`, not the historical
+`max_retention_window_seconds` metadata row. The metadata key is retained only
+for schema compatibility and audit history; it does not authorize retention or
+prevent pruning after a process lease expires. A store registers only when its
+owner finishes initialization and starts the heartbeat.
+
 ## Discovery output ceilings and context windows (2026-08-31)
 
 Issue #927 needs real per-model output-ceiling and context-window metadata from

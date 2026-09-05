@@ -1,0 +1,462 @@
+"""Time-windowed durable observations for measured model-group routing.
+
+The store keeps one immutable row per completed provider attempt.  A positive
+operator-selected window limits which rows participate in a router's current
+state; no decay, cross-model weighting, or inferred provider equivalence is
+introduced here.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import math
+import os
+import sqlite3
+import threading
+import time
+import uuid
+from collections.abc import Callable, Iterable, Mapping
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class RoutingObservation:
+    """One completed routing attempt restored from durable storage."""
+
+    member_id: str
+    success: bool
+    latency_seconds: float | None
+    output_tokens: int | None
+
+
+class RoutingObservationStore(Protocol):
+    """Minimal store contract consumed by :class:`ModelGroupRouter`."""
+
+    def now(self) -> float:
+        """Return the store clock for default observation timestamps."""
+
+    def append(
+        self,
+        ledger_name: str,
+        member_id: str,
+        *,
+        context_key: str,
+        observed_at: float,
+        success: bool,
+        latency_seconds: float | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Append one completed attempt to the current observation window."""
+
+    def load(
+        self,
+        ledger_name: str,
+        active_contexts: Mapping[str, str] | None = None,
+    ) -> list[RoutingObservation]:
+        """Return current-window observations in completion order."""
+
+    def delete_members(self, ledger_name: str, member_ids: Iterable[str]) -> None:
+        """Delete observations whose group membership is no longer valid."""
+
+    def close(self) -> None:
+        """Release store resources owned by the router."""
+
+
+class SqliteRoutingObservationStore:
+    """Share measured routing observations through a SQLite database.
+
+    The store opens a short-lived connection for each operation so separate
+    gateway processes can use the same database.  Rows older than the explicit
+    ``window_seconds`` are ignored and removed on writes.  A retention window
+    is intentionally used instead of an invented decay coefficient.
+    """
+
+    _TABLE_NAME = "routing_observations"
+    _REGISTRATION_LEASE_WINDOW_MULTIPLIER = 2
+    _HEARTBEAT_INTERVAL_MAX_SECONDS = 30.0
+    _CREATE_TABLE_SQL = (
+        "CREATE TABLE IF NOT EXISTS routing_observations ("
+        "observation_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ledger_name TEXT NOT NULL, member_id TEXT NOT NULL, context_key TEXT NOT NULL, "
+        "observed_at REAL NOT NULL, success INTEGER NOT NULL CHECK(success IN (0, 1)), "
+        "latency_seconds REAL, output_tokens INTEGER)"
+    )
+    _CREATE_INDEX_SQL = (
+        "CREATE INDEX IF NOT EXISTS routing_observations_ledger_time "
+        "ON routing_observations(ledger_name, member_id, context_key, observed_at, observation_id)"
+    )
+    _CREATE_RETENTION_INDEX_SQL = (
+        "CREATE INDEX IF NOT EXISTS routing_observations_observed_at "
+        "ON routing_observations(observed_at)"
+    )
+    _METADATA_TABLE_NAME = "routing_observation_metadata"
+    _CREATE_METADATA_TABLE_SQL = (
+        "CREATE TABLE IF NOT EXISTS routing_observation_metadata ("
+        "metadata_key TEXT PRIMARY KEY, metadata_value INTEGER NOT NULL)"
+    )
+    _MAX_RETENTION_WINDOW_KEY = "max_retention_window_seconds"
+    _CREATE_REGISTRATIONS_TABLE_SQL = (
+        "CREATE TABLE IF NOT EXISTS routing_observation_registrations ("
+        "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL, "
+        "lease_expires_at REAL NOT NULL)"
+    )
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        window_seconds: int,
+        *,
+        clock: Callable[[], float] = time.time,
+        start_heartbeat: bool = True,
+    ) -> None:
+        if not isinstance(path, (str, os.PathLike)) or not str(path):
+            raise TypeError("path must be a non-empty filesystem path")
+        path_text = os.fspath(path)
+        if path_text == ":memory:" or (
+            path_text.startswith("file:")
+            and (path_text.startswith("file::memory:") or "mode=memory" in path_text)
+        ):
+            raise ValueError("path must be a durable SQLite filesystem path, not an in-memory database")
+        if isinstance(window_seconds, bool) or type(window_seconds) is not int or window_seconds < 1:
+            raise ValueError("window_seconds must be a positive integer")
+        if not callable(clock):
+            raise TypeError("clock must be callable")
+        self._path = path_text
+        self._window_seconds = window_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._registration_id = uuid.uuid4().hex
+        self._closed = False
+        self._heartbeat_stop = threading.Event()
+        with self._lock:
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(self._CREATE_TABLE_SQL)
+                connection.execute(self._CREATE_METADATA_TABLE_SQL)
+                connection.execute(self._CREATE_REGISTRATIONS_TABLE_SQL)
+                self._ensure_schema(connection)
+                connection.execute(self._CREATE_INDEX_SQL)
+                connection.execute(self._CREATE_RETENTION_INDEX_SQL)
+                self._register_retention_window(connection)
+                if start_heartbeat:
+                    self._refresh_registration(connection)
+                connection.commit()
+            finally:
+                connection.close()
+        self._heartbeat_thread: threading.Thread | None = None
+        if start_heartbeat:
+            self.start_heartbeat()
+
+    def start_heartbeat(self) -> None:
+        """Start lease renewal after the owning service finishes initialization."""
+        if self._heartbeat_thread is not None:
+            return
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_registration,
+            name=f"routing-observation-heartbeat-{self._registration_id[:8]}",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    @property
+    def window_seconds(self) -> int:
+        """Return the operator-selected observation retention window."""
+        return self._window_seconds
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open one cross-process-safe SQLite connection."""
+        return sqlite3.connect(self._path, timeout=30.0)
+
+    def _now(self) -> float:
+        """Return a finite wall-clock value used for the retention boundary."""
+        value = float(self._clock())
+        if not math.isfinite(value):
+            raise ValueError("clock must return a finite number")
+        return value
+
+    def now(self) -> float:
+        """Return the caller-visible clock used for default observations."""
+        return self._now()
+
+    @staticmethod
+    def _ensure_schema(connection: sqlite3.Connection) -> None:
+        """Backfill additive columns required by the durable observation contract."""
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(routing_observations)").fetchall()
+        }
+        if "context_key" not in columns:
+            connection.execute(
+                "ALTER TABLE routing_observations "
+                "ADD COLUMN context_key TEXT NOT NULL DEFAULT ''"
+            )
+        registration_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(routing_observation_registrations)"
+            ).fetchall()
+        }
+        if "lease_expires_at" not in registration_columns:
+            connection.execute(
+                "ALTER TABLE routing_observation_registrations "
+                "ADD COLUMN lease_expires_at REAL NOT NULL DEFAULT 0"
+            )
+
+    def _register_retention_window(self, connection: sqlite3.Connection) -> None:
+        """Retain the historical maximum-window value for schema audit only."""
+        connection.execute(
+            "INSERT INTO routing_observation_metadata(metadata_key, metadata_value) "
+            "VALUES(?, ?) "
+            "ON CONFLICT(metadata_key) DO UPDATE SET "
+            "metadata_value = MAX(routing_observation_metadata.metadata_value, excluded.metadata_value)",
+            (self._MAX_RETENTION_WINDOW_KEY, self._window_seconds),
+        )
+
+    def _refresh_registration(
+        self, connection: sqlite3.Connection, *, now: float | None = None
+    ) -> float:
+        """Renew this active store's bounded lease and discard crashed peers."""
+        current = self._now() if now is None else now
+        connection.execute(
+            "DELETE FROM routing_observation_registrations WHERE lease_expires_at <= ?",
+            (current,),
+        )
+        connection.execute(
+            "INSERT INTO routing_observation_registrations "
+            "(registration_id, window_seconds, lease_expires_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(registration_id) DO UPDATE SET "
+            "window_seconds = excluded.window_seconds, "
+            "lease_expires_at = excluded.lease_expires_at",
+            (
+                self._registration_id,
+                self._window_seconds,
+                current
+                + float(
+                    self._window_seconds
+                    * self._REGISTRATION_LEASE_WINDOW_MULTIPLIER
+                ),
+            ),
+        )
+        return current
+
+    def _heartbeat_registration(self) -> None:
+        """Renew this live store's lease independently of routing traffic."""
+        interval = min(
+            float(self._window_seconds), self._HEARTBEAT_INTERVAL_MAX_SECONDS
+        )
+        while not self._heartbeat_stop.is_set():
+            with self._lock:
+                if self._closed:
+                    return
+                connection = None
+                try:
+                    connection = self._connect()
+                    connection.execute("BEGIN IMMEDIATE")
+                    self._refresh_registration(connection)
+                    connection.commit()
+                except Exception:
+                    if connection is not None:
+                        connection.rollback()
+                finally:
+                    if connection is not None:
+                        connection.close()
+            if self._heartbeat_stop.wait(interval):
+                return
+
+    def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
+        """Return the physical prune boundary from the shared database-wide window."""
+        current = self._refresh_registration(connection)
+        row = connection.execute(
+            "SELECT MAX(window_seconds) FROM routing_observation_registrations",
+        ).fetchone()
+        max_window_seconds = (
+            self._window_seconds
+            if row is None or row[0] is None
+            else max(int(row[0]), 1)
+        )
+        return current - float(max_window_seconds)
+
+    @staticmethod
+    def _validate_ledger_name(ledger_name: str) -> None:
+        """Validate the fixed logical ledger identifier."""
+        if type(ledger_name) is not str or not ledger_name.strip():
+            raise ValueError("ledger_name must be a non-empty string")
+
+    @staticmethod
+    def _validate_member_id(member_id: str) -> None:
+        """Validate an opaque member identifier before persistence."""
+        if type(member_id) is not str or not member_id:
+            raise ValueError("member_id must be a non-empty string")
+
+    @staticmethod
+    def _validate_context_key(context_key: str) -> None:
+        """Validate the member-context key used to reject stale rows."""
+        if type(context_key) is not str or not context_key:
+            raise ValueError("context_key must be a non-empty string")
+
+    def append(
+        self,
+        ledger_name: str,
+        member_id: str,
+        *,
+        context_key: str,
+        observed_at: float,
+        success: bool,
+        latency_seconds: float | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Append one validated attempt and prune rows outside the shared retention window."""
+        self._validate_ledger_name(ledger_name)
+        self._validate_member_id(member_id)
+        self._validate_context_key(context_key)
+        if type(success) is not bool:
+            raise TypeError("success must be a boolean")
+        latency: float | None = None
+        if success:
+            if latency_seconds is not None:
+                if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
+                    raise TypeError("latency_seconds must be numeric when provided")
+                latency = float(latency_seconds)
+                if not math.isfinite(latency) or latency < 0:
+                    raise ValueError("latency_seconds must be finite and nonnegative")
+            if output_tokens is not None and (
+                isinstance(output_tokens, bool)
+                or type(output_tokens) is not int
+                or output_tokens <= 0
+            ):
+                raise ValueError("output_tokens must be a positive integer when provided")
+        elif latency_seconds is not None or output_tokens is not None:
+            raise ValueError("failed observations cannot contain success-only measurements")
+        when = float(observed_at)
+        if not math.isfinite(when):
+            raise ValueError("observed_at must be finite")
+        connection = self._connect()
+        with self._lock:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "INSERT INTO routing_observations "
+                    "(ledger_name, member_id, context_key, observed_at, success, latency_seconds, output_tokens) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ledger_name.strip(),
+                        member_id,
+                        context_key,
+                        when,
+                        int(success),
+                        latency,
+                        None if not success else output_tokens,
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM routing_observations WHERE observed_at < ?",
+                    (self._retention_cutoff(connection),),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+    def load(
+        self,
+        ledger_name: str,
+        active_contexts: Mapping[str, str] | None = None,
+    ) -> list[RoutingObservation]:
+        """Return only observations still inside this router's configured replay window."""
+        self._validate_ledger_name(ledger_name)
+        cutoff = self._now() - self._window_seconds
+        active = dict(active_contexts or {})
+        for member_id, context_key in active.items():
+            self._validate_member_id(member_id)
+            self._validate_context_key(context_key)
+        connection = self._connect()
+        with self._lock:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                if active:
+                    placeholders = ", ".join(["(?, ?)"] * len(active))
+                    params: list[object] = [ledger_name.strip(), cutoff]
+                    for member_id, context_key in active.items():
+                        params.extend((member_id, context_key))
+                    rows = connection.execute(
+                        "SELECT member_id, success, latency_seconds, output_tokens "
+                        "FROM routing_observations "
+                        "WHERE ledger_name = ? AND observed_at >= ? "
+                        f"AND (member_id, context_key) IN ({placeholders}) "
+                        "ORDER BY observed_at, observation_id",
+                        tuple(params),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT member_id, success, latency_seconds, output_tokens "
+                        "FROM routing_observations "
+                        "WHERE ledger_name = ? AND observed_at >= ? "
+                        "ORDER BY observed_at, observation_id",
+                        (ledger_name.strip(), cutoff),
+                    ).fetchall()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        return [
+            RoutingObservation(
+                member_id=row[0],
+                success=bool(row[1]),
+                latency_seconds=row[2],
+                output_tokens=row[3],
+            )
+            for row in rows
+        ]
+
+    def delete_members(self, ledger_name: str, member_ids: Iterable[str]) -> None:
+        """Remove stale group-context observations without touching other ledgers."""
+        self._validate_ledger_name(ledger_name)
+        members = tuple(dict.fromkeys(member_ids))
+        for member_id in members:
+            self._validate_member_id(member_id)
+        if not members:
+            return
+        connection = self._connect()
+        with self._lock:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._refresh_registration(connection)
+                for member_id in members:
+                    connection.execute(
+                        "DELETE FROM routing_observations WHERE ledger_name = ? AND member_id = ?",
+                        (ledger_name.strip(), member_id),
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+    def close(self) -> None:
+        """Release this store's retention-window registration."""
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join()
+        with self._lock:
+            if self._closed:
+                return
+            connection = self._connect()
+            try:
+                connection.execute(
+                    "DELETE FROM routing_observation_registrations "
+                    "WHERE registration_id = ?",
+                    (self._registration_id,),
+                )
+                connection.commit()
+                self._closed = True
+            finally:
+                connection.close()
+
+
+__all__ = ["RoutingObservation", "RoutingObservationStore", "SqliteRoutingObservationStore"]

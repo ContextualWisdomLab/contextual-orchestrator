@@ -861,6 +861,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- An opt-in, time-window-only SQLite observation store for measured model-group
+  routing, configured with `--routing-observation-window-seconds` alongside
+  `--state-db`; it shares completed attempt evidence across gateway processes
+  without inventing decay or cross-model equivalence (ADR 0042).
 - Verbose/debug logging (ADR 0005): a new stdlib-only `debug_logging.py`
   module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
   `--verbose`/`--debug` shorthand (default unchanged: `WARNING`), and new
@@ -986,6 +990,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A blank-string `seed` or `top_logprobs` on `/v1/responses` no longer forces
+  the provider-only (non-streamed) execution path for `orchestrator/auto` /
+  `orchestrator/free`. Both omit-equivalence checks now pop the field instead
+  of leaving the raw blank string behind, matching the existing Chat
+  Completions convention and keeping the streamed-orchestration decision
+  (`_responses_virtual_requires_provider_path`) honest about what was
+  actually supplied.
+- The opt-in durable routing-observation store now prunes rows by the shared
+  database's largest registered routing-observation window, not by whichever
+  writer happens to have the shortest local window. Mixed-window gateway
+  processes therefore keep physically bounded storage without erasing active
+  evidence required by a longer-window peer.
 - `TaskOrchestrator._invoke`'s route/Conduct primary chat call now classifies
   a `ProviderUpstreamError` (5xx, 429, network) directly from its own
   already-computed `retryable` flag (`tool_fallback.classify_provider_transport_failure`)
