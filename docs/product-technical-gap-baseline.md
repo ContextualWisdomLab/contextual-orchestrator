@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 PR #1004 mixed provider failure follow-up
+
+At head `2a6b41562114530315bb44d1aa3dede820a68da1`, both `502 → 404` and
+`404 → 502` on same-endpoint structured-synthesis candidates returned a
+non-retryable missing-model error. The shared exhaustion boundary now preserves
+the recorded retryable upstream error first. Endpoint, model, free/ZDR,
+file-replica, and ambiguous-tool-replay restrictions remain unchanged.
+Both ordered regression cases failed before the fix and pass afterward.
+See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
+Protected merge and post-change live gateway evidence are still required;
+the previous head's full-suite result does not verify this follow-up.
+Independent local review also reproduced an existing accounting gap: after two
+grouped candidates fail, the group ledger records only the final candidate.
+Per-candidate failure counters do record both. Keep this as a separate open
+follow-up requiring exactly-once attempt accounting; changing which exception
+is returned is not a fix for the missing first group observation.
+
 ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
 
 - **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.

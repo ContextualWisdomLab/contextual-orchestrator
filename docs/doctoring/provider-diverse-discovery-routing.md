@@ -24,6 +24,27 @@ non-idempotent request, so ambiguous timeout and connection outcomes fail
 closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
 DNS failure can advance without changing an explicitly requested concrete model.
 
+## PR #1004 mixed-failure classification follow-up
+
+Proposed on 2026-09-05, separate from the implemented #770 baseline above.
+At head `2a6b41562114530315bb44d1aa3dede820a68da1`, structured synthesis
+remembered retryable provider failures and missing-model errors separately,
+then preferred the latter on exhaustion. A `502 → 404` or `404 → 502` sequence
+therefore returned a non-retryable 404 despite a transient failure being known.
+The correction changes only the shared exhaustion order: return the recorded
+retryable upstream error before the missing-model error. It does not widen
+the candidate set, cross the existing post-404 endpoint boundary, replay an
+ambiguous tool request, or relax free/ZDR/file-replica eligibility.
+
+The two mixed-order cases in `tests/test_structured_output_distinct_fallback.py`
+failed with `404 != 502` before the correction. They require the same two
+endpoint-local calls, no alternate-endpoint call, and a retryable 502 afterward.
+The paired cases in `tests/test_chat_response_format_http_honesty.py` also
+exercise the real HTTP handler and require HTTP 502 with `api_error` and
+`retryable=true`; both returned HTTP 404 on an isolated pre-fix checkout.
+Run with `uv run pytest -q tests/test_structured_output_distinct_fallback.py tests/test_chat_response_format_http_honesty.py`.
+These are local regression results, not protected-main or live-provider proof.
+
 ## Research-to-code mapping
 
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |

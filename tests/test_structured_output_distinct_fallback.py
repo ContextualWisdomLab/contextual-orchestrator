@@ -142,6 +142,57 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate() -> No
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
 
 
+@pytest.mark.parametrize(
+    "failure_order",
+    [
+        (502, 404),
+        (404, 502),
+    ],
+    ids=["retryable_then_missing", "missing_then_retryable"],
+)
+def test_virtual_structured_mixed_transport_failures_preserve_retryable_error(
+    failure_order: tuple[int, int],
+) -> None:
+    """A mixed stale/transient endpoint failure remains retryable for callers."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog")
+    other = ModelAgent("other_agent", "other-model", "mock://other")
+    orchestrator = TaskOrchestrator([first, second, other])
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        status = failure_order[len(calls) - 1]
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code=("api_error" if status == 502 else "model_not_found"),
+            message=("upstream provider unavailable" if status == 502 else "model missing"),
+            client_status=status,
+            provider_status=status,
+            retryable=status == 502,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second, other]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert calls == [first.id, second.id]
+    assert exc_info.value.error_code == "api_error"
+    assert exc_info.value.client_status == 502
+    assert exc_info.value.provider_status == 502
+    assert exc_info.value.retryable is True
+
+
 def test_virtual_structured_exhaustion_is_typed_non_repeating_and_secret_free() -> None:
     """Every candidate receives at most synthesis plus repair before typed exhaustion."""
     first = ModelAgent("first_agent", "first-model", "mock://first")

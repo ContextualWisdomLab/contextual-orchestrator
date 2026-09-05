@@ -4885,10 +4885,10 @@ class TaskOrchestrator:
                             synthesis_failure_recorded = True
                             continue
                         raise classified from None
-            if last_model_not_found is not None and not saw_request_too_large:
-                raise last_model_not_found
             if last_retryable_upstream_error is not None:
                 raise last_retryable_upstream_error
+            if last_model_not_found is not None and not saw_request_too_large:
+                raise last_model_not_found
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
