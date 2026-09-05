@@ -193,6 +193,13 @@ def test_model_agent_rejects_bad_local_credential_key_and_effort_flag() -> None:
         ModelAgent(id="agent_two", model="m", local_credential_key=123)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="reasoning_effort_supported must be"):
         ModelAgent(id="agent_two", model="m", reasoning_effort_supported="yes")  # type: ignore[arg-type]
+    for invalid_batch_flag in (0, 1, "true"):
+        with pytest.raises(TypeError, match="batch_endpoint_supported must be"):
+            ModelAgent(
+                id="agent_two",
+                model="m",
+                batch_endpoint_supported=invalid_batch_flag,  # type: ignore[arg-type]
+            )
     with pytest.raises(TypeError, match="max_output_tokens must be"):
         ModelAgent(id="agent_two", model="m", max_output_tokens=0)
     with pytest.raises(TypeError, match="max_output_tokens must be"):
@@ -556,6 +563,7 @@ def test_batch_chat_success_on_https_provider_returns_validated_results() -> Non
         model="remote-chat-model",
         base_url="https://remote.example/v1",
         credential_key="REMOTE_API_KEY",
+        batch_endpoint_supported=True,
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}
@@ -575,6 +583,7 @@ def test_batch_chat_wraps_provider_failures_without_provider_text() -> None:
         model="remote-chat-model",
         base_url="https://remote.example/v1",
         credential_key="REMOTE_API_KEY",
+        batch_endpoint_supported=True,
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}

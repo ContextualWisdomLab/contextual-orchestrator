@@ -612,7 +612,12 @@ def test_batch_boundary_hides_raw_upload_error_text_and_cause() -> None:
             raise RuntimeError("provider-secret-batch-body")
 
     client = RawBatchFailureClient()
-    agent = ModelAgent("batch_worker", "gpt", base_url="https://provider.example/v1")
+    agent = ModelAgent(
+        "batch_worker",
+        "gpt",
+        base_url="https://provider.example/v1",
+        batch_endpoint_supported=True,
+    )
     try:
         client.batch_chat(agent, {"task_0": [{"role": "user", "content": "ping"}]})
     except RuntimeError as error:

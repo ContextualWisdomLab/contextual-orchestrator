@@ -523,6 +523,12 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "stream_usage_supported": {"type": "boolean"},
+                                    "batch_endpoint_supported": {
+                                        "anyOf": [
+                                            {"type": "boolean"},
+                                            {"type": "null"},
+                                        ]
+                                    },
                                 },
                             },
                         },

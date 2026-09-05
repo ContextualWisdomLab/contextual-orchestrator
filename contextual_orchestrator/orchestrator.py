@@ -593,6 +593,11 @@ class ModelAgent:
     # ``None`` means provider support is unproven. Opt-in effort profiles then
     # fail closed unless the profile explicitly requests the safe ``omit`` fallback.
     reasoning_effort_supported: bool | None = None
+    # ``None``/``False`` mean the provider's real async Batch API (/files,
+    # /batches, /files/{id}/content) is not proven to exist for this agent.
+    # batch_chat() then falls closed to per-item emulation through the normal
+    # chat endpoint rather than guessing a remote provider supports it.
+    batch_endpoint_supported: bool | None = None
     # Explicit reviewed replica contract. A group never races when this is absent.
     endpoint_equivalence: dict[str, Any] | None = None
     # Provider-declared support for the Chat Completions terminal usage frame.
@@ -620,6 +625,8 @@ class ModelAgent:
                 )
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if self.batch_endpoint_supported is not None and type(self.batch_endpoint_supported) is not bool:
+            raise TypeError("batch_endpoint_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
         if self.endpoint_equivalence is not None:
@@ -645,6 +652,7 @@ class ModelAgent:
             "context_window": self.context_window,
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
+            "batch_endpoint_supported": self.batch_endpoint_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
             "stream_usage_supported": self.stream_usage_supported,
         }
@@ -680,6 +688,7 @@ class ModelAgent:
             context_window=value.get("context_window"),
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
+            batch_endpoint_supported=value.get("batch_endpoint_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
             stream_usage_supported=value.get("stream_usage_supported", False),
         )
@@ -2846,6 +2855,19 @@ class ModelClient:
         ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
+
+        The real async Batch API (``/files``, ``/batches``, ``/files/{id}/content``)
+        is only ever addressed when ``agent.batch_endpoint_supported is True`` --
+        an explicit, operator-declared capability, mirroring how
+        ``reasoning_effort_supported`` gates ``reasoning_effort``. A worker agent
+        can be selected for any configured chat-capable provider (Anthropic-shaped,
+        OpenRouter, a self-hosted OpenAI-compatible gateway, ...) many of which do
+        not implement ``/v1/batches`` at all; guessing support from the model id or
+        transport shape alone previously sent those requests straight into a real
+        HTTP call that 404s and fails the whole batch. An unproven agent
+        (``None``/``False``) instead falls back to the same per-item emulation
+        ``_local_batch_chat`` already performs for local providers -- looping each
+        request through ``chat()`` and aggregating into the identical result shape.
         """
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
@@ -2858,7 +2880,7 @@ class ModelClient:
             }
         elif _is_local_provider_url(agent.base_url):
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
-        else:
+        elif agent.batch_endpoint_supported is True:
             destination = self._validate_provider(agent)  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
@@ -2875,6 +2897,11 @@ class ModelClient:
                 )
             if batch_error is not None:
                 raise batch_error
+        else:
+            # Not proven to support the real Batch API: emulate rather than
+            # either misroute to an endpoint that likely 404s, or hard-fail the
+            # whole group for a provider that was never asked to prove itself.
+            results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         return _validate_batch_results(requests, results)
 
     def _local_batch_chat(
@@ -2884,7 +2911,11 @@ class ModelClient:
         temperature: float | None,
         effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        """Emulate a batch by running each request concurrently through ``chat()``.
+
+        Used for local (mlx-lm) providers, and reused by ``batch_chat`` as the
+        fallback for any remote provider not proven to support the real Batch API.
+        """
         request_settings = self.request_settings_snapshot()
 
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
@@ -3113,6 +3144,7 @@ class _AgentPoolStore:
             "max_output_tokens",
             "context_window",
             "reasoning_effort_supported",
+            "batch_endpoint_supported",
             "stream_usage_supported",
         }
     )
@@ -3152,6 +3184,7 @@ class _AgentPoolStore:
                 max_output_tokens INTEGER,
                 context_window INTEGER,
                 reasoning_effort_supported INTEGER,
+                batch_endpoint_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_max_output_tokens_check
@@ -3172,6 +3205,8 @@ class _AgentPoolStore:
                     ),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
                     CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
+                CONSTRAINT agent_pool_batch_endpoint_flag_check
+                    CHECK (batch_endpoint_supported IS NULL OR batch_endpoint_supported IN (0, 1)),
                 CONSTRAINT agent_pool_stream_usage_flag_check
                     CHECK (stream_usage_supported IN (0, 1))
             )
@@ -3212,8 +3247,9 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_output_tokens, context_window, reasoning_effort_supported,
+                batch_endpoint_supported, stream_usage_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -3229,6 +3265,7 @@ class _AgentPoolStore:
                 config["max_output_tokens"],
                 config["context_window"],
                 config["reasoning_effort_supported"],
+                config["batch_endpoint_supported"],
                 int(config["stream_usage_supported"]),
             ),
         )
@@ -3281,6 +3318,12 @@ class _AgentPoolStore:
                 "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
             )
             columns.add("reasoning_effort_supported")
+        if "batch_endpoint_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN batch_endpoint_supported INTEGER "
+                "CHECK (batch_endpoint_supported IS NULL OR batch_endpoint_supported IN (0, 1))"
+            )
+            columns.add("batch_endpoint_supported")
         if "max_output_tokens" not in columns:
             conn.execute(
                 "ALTER TABLE agent_pool ADD COLUMN max_output_tokens INTEGER "
@@ -3396,7 +3439,8 @@ class _AgentPoolStore:
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
                         max_output_tokens = ?, context_window = ?,
-                        reasoning_effort_supported = ?, stream_usage_supported = ?
+                        reasoning_effort_supported = ?, batch_endpoint_supported = ?,
+                        stream_usage_supported = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -3412,6 +3456,7 @@ class _AgentPoolStore:
                         config["max_output_tokens"],
                         config["context_window"],
                         config["reasoning_effort_supported"],
+                        config["batch_endpoint_supported"],
                         int(config["stream_usage_supported"]),
                         agent.id,
                     ),
@@ -3509,7 +3554,7 @@ class _AgentPoolStore:
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
                            max_output_tokens, context_window,
-                           reasoning_effort_supported, stream_usage_supported
+                           reasoning_effort_supported, batch_endpoint_supported, stream_usage_supported
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -3574,7 +3619,8 @@ class _AgentPoolStore:
                 max_output_tokens=row[10],
                 context_window=row[11],
                 reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
-                stream_usage_supported=bool(row[13]),
+                batch_endpoint_supported=(None if row[13] is None else bool(row[13])),
+                stream_usage_supported=bool(row[14]),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -5989,6 +6035,10 @@ class TaskOrchestrator:
             patched = replace(
                 patched, stream_usage_supported=patch["stream_usage_supported"]
             )
+        if "batch_endpoint_supported" in patch:
+            patched = replace(
+                patched, batch_endpoint_supported=patch["batch_endpoint_supported"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -8371,6 +8421,7 @@ class TaskOrchestrator:
             "max_output_tokens": agent.max_output_tokens,
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
+            "batch_endpoint_supported": agent.batch_endpoint_supported,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
