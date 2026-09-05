@@ -22,6 +22,79 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "CandidateRoutingControls": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "enum": ["sync", "batch"]},
+                    "latency_tolerant": {"type": "boolean"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["interactive", "normal", "bulk"],
+                    },
+                    "candidate_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
+                        "description": "Exact private agent ID to use for this request.",
+                    },
+                    "exclude_candidate_ids": {
+                        "type": "array",
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
+                        },
+                    },
+                    "endpoint": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
+                        "description": (
+                            "Pin the request to one configured endpoint selector. "
+                            "Forces synchronous routing (channel=sync); cannot be "
+                            "combined with channel=batch or latency_tolerant=true."
+                        ),
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "CandidateRoutingEvidence": {
+                "type": "object",
+                "description": (
+                    "Per-response disclosure of how active candidate controls "
+                    "were applied. Present only when the request supplied "
+                    "routing.candidate_id and/or routing.exclude_candidate_ids."
+                ),
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Echoes the request's routing.candidate_id, when pinned.",
+                    },
+                    "exclude_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The request's routing.exclude_candidate_ids, sorted.",
+                    },
+                    "attempted_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Every private agent ID a provider call was attempted "
+                            "against while serving this request, in first-attempt order."
+                        ),
+                    },
+                    "served_candidate_id": {
+                        "type": "string",
+                        "description": (
+                            "The private agent ID whose output was actually returned "
+                            "to the caller, when determinable."
+                        ),
+                    },
+                },
+                "required": ["exclude_candidate_ids", "attempted_candidate_ids"],
+                "additionalProperties": False,
+            },
             "AuthoritativeUsage": {
                 "type": ["object", "null"],
                 "required": ["prompt_tokens", "completion_tokens"],
@@ -74,7 +147,12 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
-                    "orchestration": {"type": "object"},
+                    "orchestration": {
+                        "type": "object",
+                        "properties": {
+                            "routing": {"$ref": "#/components/schemas/CandidateRoutingEvidence"},
+                        },
+                    },
                 },
             },
             "ModelGroupWrite": {
@@ -214,6 +292,9 @@ OPENAPI_SPEC = {
                                         "description": "When true, select only model-group members with ZDR evidence.",
                                     },
                                     "response_format": {"type": "object"},
+                                    "routing": {
+                                        "$ref": "#/components/schemas/CandidateRoutingControls"
+                                    },
                                     "include_orchestration_trace": {
                                         "type": "boolean",
                                         "description": "Requires the same caller to have the trace purpose",
@@ -448,6 +529,9 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "routing": {
+                                        "$ref": "#/components/schemas/CandidateRoutingControls"
+                                    },
                                     "zdr_only": {
                                         "type": "boolean",
                                         "description": "When true, select only model-group members with ZDR evidence.",

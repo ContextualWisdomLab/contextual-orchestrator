@@ -10,6 +10,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Added
+
+- Add request-local `routing.candidate_id` and `exclude_candidate_ids` controls
+  for trusted virtual-model chat and Responses calls. Pins and exclusions are
+  strictly validated, never persisted, honored by route, structured, and
+  streaming paths, and disclosed only as per-response routing evidence; the
+  public model catalog remains unchanged.
+
 ### Deprecated
 
 - Internal callers now use
@@ -20,6 +28,51 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Auto-mode triage now runs a live decision call even when `zdr_only` is
+  active and `routing.candidate_id` pins a paid ZDR-eligible candidate.
+  `_compute_triage_verdict`'s free-only ranking is always empty in that
+  shape (the pin restricts every candidate list to that one agent, and a
+  paid agent never satisfies `free_only`), and the empty-pool fallback was
+  gated behind `not zdr_only` even though the fallback's own per-agent
+  filter (`_zdr_agent_allowed` plus the active pin/exclusion) already makes
+  it safe to consult under an active ZDR policy. The gate discarded the one
+  legitimate evidence source instead of protecting against contacting a
+  non-ZDR provider, so the request silently took the direct route with zero
+  triage call and zero routing evidence regardless of task complexity
+  (Devin Review, PR #983: "ZDR pins skip workflow triage").
+- The published OpenAPI schema for `CandidateRoutingControls.exclude_candidate_ids`
+  no longer declares `maxItems: 32`. The runtime validator's own repository-authored
+  32-ID cardinality cutoff was already removed as unsupported; the schema still
+  publishing that limit meant generated/OpenAPI clients rejected exclusion lists the
+  runtime intentionally accepts, making the schema false at source. `uniqueItems`,
+  lexical ID constraints, and normal authenticated request-size bounds are
+  unchanged; no replacement cardinality heuristic was introduced.
+- The real-time model judge no longer selects a verifier-excluded agent as
+  the judge when it is the sole candidate. `_ranked_agents` deliberately
+  still returns role-ineligible members (appended after every eligible one),
+  so a caller that wants only role-eligible candidates must re-apply
+  `role not in agent.provider_exclusions` itself — `_plan_generated` and
+  `_parse_workflow_plan` already do; `_model_judge_verification`'s judge
+  selection did not. With a single-candidate pool excluded from `verifier`
+  (e.g. a worker-only pinned agent under PR #983's `orchestrator/free`
+  provable-route carve-out), that judge selection picked the ineligible
+  agent anyway, producing an extra, unrequested live call once fast-mlsirm
+  is actually importable (observed as a duplicate served-candidate call in
+  hosted CI, which every earlier sandboxed verification round of this PR
+  could not reproduce locally because the sandbox's blocked fast-mlsirm
+  archive download always short-circuits the judge to its fail-closed path
+  first). `_invoke`'s own failover already enforced this exclusion for a
+  *backup* judge; this closes the same gap for the *primary* selection.
+- `route_once` and `stream_route` no longer stamp `served_agent_id` on every
+  trace row unconditionally. An earlier no-heuristics repair for candidate-
+  routing evidence made that stamp unconditional to give
+  `_candidate_routing_evidence` an explicit serving fact even when unchanged,
+  but this broke the pre-existing contract (regression-guarded by
+  `test_provider_reliability.py` and `test_tool_execution_fallback.py`) that
+  the ordinary, no-candidate-policy path never carries failover metadata for
+  an unchanged serving agent. The stamp is now unconditional only while
+  request-local candidate-attempt tracking is actually active (i.e. inside a
+  `candidate_routing_policy` scope); the ordinary path is unaffected.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
@@ -1256,3 +1309,4 @@ This is the current development baseline, not a published release. It
 provides the OpenAI-compatible gateway, route/conduct orchestration, workflow
 and access evidence, provider credential boundaries, cost and readiness
 reporting, and security-focused contract tests.
+- Candidate routing controls no longer impose an unsupported 32-ID exclusion cutoff or infer serving identity from output text/trace order; serving identity now requires explicit provenance and otherwise fails closed.

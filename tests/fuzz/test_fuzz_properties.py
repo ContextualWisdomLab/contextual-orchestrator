@@ -89,6 +89,18 @@ def test_request_body_rejects_unhashable_message_role() -> None:
     exercise_request_body(b'{"messages":[{"role":[],"":[],"modnt":""}]}')
 
 
+def test_request_body_accepts_more_than_32_valid_exclude_candidate_ids() -> None:
+    """The fixed 32-ID exclusion ceiling was removed from the runtime
+    validator and OpenAPI schema (PR #983's no-heuristics correction); the
+    normal authenticated request-size boundary is the only remaining limit.
+    This fuzz invariant must not reassert a cardinality cap the validator no
+    longer enforces, or it reports a false positive on legitimately valid
+    input."""
+    excluded = [f"agent_{i}" for i in range(40)]
+    body = json.dumps({"routing": {"exclude_candidate_ids": excluded}}).encode("utf-8")
+    exercise_request_body(body)
+
+
 @_SETTINGS
 @given(_json_values)
 def test_agent_config_parser(value: object) -> None:

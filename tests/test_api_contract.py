@@ -58,6 +58,34 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "content"
     ]["application/json"]["schema"]
     assert chat_schema["properties"]["include_orchestration_trace"]["type"] == "boolean"
+    routing_schema = OPENAPI_SPEC["components"]["schemas"]["CandidateRoutingControls"]
+    assert routing_schema["properties"]["candidate_id"]["minLength"] == 1
+    exact_id_pattern = r"^\S(?:[^\r\n]*\S)?(?![\s\S])"
+    assert routing_schema["properties"]["candidate_id"]["pattern"] == exact_id_pattern
+    assert routing_schema["properties"]["exclude_candidate_ids"] == {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": exact_id_pattern,
+        },
+    }
+    for invalid in (
+        {"candidate_id": "candidate_a\n"},
+        {"exclude_candidate_ids": ["candidate_a\n"]},
+    ):
+        with pytest.raises(ValidationError):
+            validate(instance=invalid, schema=routing_schema)
+    # exclude_candidate_ids has no repository-authored cardinality cutoff: the
+    # runtime accepts any number of unique exclusions bounded only by the
+    # normal authenticated request-body size limit, so the published schema
+    # must not reject a longer, otherwise-valid list either (#983).
+    long_exclusion_list = [f"candidate_{index}" for index in range(64)]
+    validate(
+        instance={"exclude_candidate_ids": long_exclusion_list},
+        schema=routing_schema,
+    )
     chat_response = OPENAPI_SPEC["components"]["schemas"]["ChatCompletionResponse"]
     assert chat_response["properties"]["usage"]["$ref"].endswith("AuthoritativeUsage")
     assert chat_response["properties"]["usage_measurement_status"]["enum"] == [

@@ -325,6 +325,27 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     default=None,
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
+_REQUEST_CANDIDATE_ID: ContextVar[str | None] = ContextVar(
+    "request_candidate_id", default=None
+)
+_REQUEST_EXCLUDED_CANDIDATE_IDS: ContextVar[frozenset[str]] = ContextVar(
+    "request_excluded_candidate_ids", default=frozenset()
+)
+_REQUEST_ATTEMPTED_CANDIDATE_IDS: ContextVar[list[str] | None] = ContextVar(
+    "request_attempted_candidate_ids", default=None
+)
+# Invariant: once ``candidate_routing_policy`` binds this ContextVar to a list
+# (``.set([])``), every later write into it for that request MUST mutate that
+# same list object in place (see ``_record_candidate_attempt``) -- never
+# ``.set()`` a new list and never a compound read-then-reassign. A raced
+# ``race_first_valid`` attempt runs inside a ``copy_context().run(...)``
+# worker thread; ``copy_context()`` only isolates ``ContextVar.set()``/
+# ``reset()`` calls made inside the copy, so an in-place mutation of the
+# already-bound list is visible back in the parent request context, but a
+# rebind inside the worker thread would be invisible outside it and would
+# silently drop that candidate from ``orchestration.routing`` evidence. See
+# PR #983 and tests/test_endpoint_race.py::
+# test_race_attempts_all_reach_candidate_routing_evidence.
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -424,6 +445,12 @@ class _FastMLSIJudgeAdapter:
                 agent, request, effort_profile
             )
         request["stream"] = False
+        # complete() reaches _invoke(), which records the attempt itself;
+        # this structured path calls proxy_send directly, so the attempt
+        # must be recorded here or it never appears in
+        # attempted_candidate_ids evidence (#983 Devin finding: "Attempt
+        # evidence omits provider calls").
+        self.orchestrator._record_candidate_attempt(agent.id)
         response = self.orchestrator.client.proxy_send(
             agent, "chat/completions", request
         )
@@ -3992,6 +4019,229 @@ class TaskOrchestrator:
         finally:
             _REQUEST_ZDR_ONLY.reset(token)
 
+    @contextmanager
+    def candidate_routing_policy(
+        self,
+        routing: Mapping[str, Any] | None,
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+        required_roles: tuple[str, ...] = ("worker",),
+        required_tags: tuple[str, ...] = (),
+    ):
+        """Apply trusted request-local candidate pin and exclusion controls."""
+        routing = routing or {}
+        candidate_id = routing.get("candidate_id")
+        excluded = routing.get("exclude_candidate_ids", ())
+        # A present-but-malformed control must fail validation even when its
+        # value is falsy (empty string, False, None, an empty mapping, ...)
+        # -- only a field that is entirely *absent*, or an explicit empty
+        # list/tuple, is a no-op. The HTTP layer's own _validate_routing
+        # already rejects these shapes with a 400 before they reach here;
+        # this closes the same gap for direct Python-API callers, who would
+        # otherwise have a malformed control silently treated as "no
+        # control" instead of surfacing the caller bug (#983 finding 2).
+        if "candidate_id" in routing and not isinstance(candidate_id, str):
+            raise ValueError("candidate_id must be a non-empty agent ID")
+        if "exclude_candidate_ids" in routing and not isinstance(excluded, (list, tuple)):
+            raise ValueError("exclude_candidate_ids must contain agent IDs")
+        if candidate_id is None and not excluded:
+            yield
+            return
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}:
+            raise ValueError("candidate controls require a virtual gateway model")
+        if candidate_id is not None and (
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or candidate_id != candidate_id.strip()
+        ):
+            raise ValueError("candidate_id must be a non-empty agent ID")
+        if not isinstance(excluded, (list, tuple)):
+            raise ValueError("exclude_candidate_ids must contain agent IDs")
+        normalized = tuple(value.strip() for value in excluded if isinstance(value, str))
+        if len(normalized) != len(excluded) or any(not value for value in normalized):
+            raise ValueError("exclude_candidate_ids must contain non-empty agent IDs")
+        if any(value != value.strip() for value in excluded):
+            raise ValueError("exclude_candidate_ids must contain exact agent IDs")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("exclude_candidate_ids must contain unique agent IDs")
+        candidate_id = candidate_id.strip() if isinstance(candidate_id, str) else None
+        if candidate_id in normalized:
+            raise ValueError("candidate_id cannot also be excluded")
+        # Endpoint-filtered: a pin or exclusion is validated against exactly
+        # the candidates the active routing.endpoint scope (if any) would
+        # actually let selection reach, so an endpoint/candidate conflict
+        # fails this preflight instead of surfacing as a later selection
+        # RuntimeError.
+        configured = {
+            agent.id: agent
+            for agent in self.candidates
+            if _agent_matches_request_endpoint(agent)
+        }
+        unknown = sorted(set(normalized) - configured.keys())
+        if unknown:
+            raise ValueError("exclude_candidate_ids contains an unknown agent ID")
+        if candidate_id is not None:
+            candidate = configured.get(candidate_id)
+            if (
+                candidate is None
+                or candidate.disabled
+                or not self._zdr_agent_allowed(candidate)
+                or not _is_general_chat_agent(candidate)
+                or any(role in candidate.provider_exclusions for role in required_roles)
+                or any(tag not in candidate.tags for tag in required_tags)
+            ):
+                raise ValueError("candidate_id is not an eligible agent")
+            if model_name == self.FREE_MODEL and not self._is_general_free_agent(candidate):
+                raise ValueError("candidate_id is not eligible for orchestrator/free")
+        elif any(
+            not any(
+                agent.id not in normalized
+                and not agent.disabled
+                and self._zdr_agent_allowed(agent)
+                and _is_general_chat_agent(agent)
+                and role not in agent.provider_exclusions
+                and all(tag in agent.tags for tag in required_tags)
+                and (
+                    model_name != self.FREE_MODEL
+                    or self._is_general_free_agent(agent)
+                )
+                for agent in configured.values()
+            )
+            for role in required_roles
+        ):
+            raise ValueError("exclude_candidate_ids leaves no eligible agent")
+        candidate_token = _REQUEST_CANDIDATE_ID.set(candidate_id)
+        excluded_token = _REQUEST_EXCLUDED_CANDIDATE_IDS.set(frozenset(normalized))
+        attempted_token = _REQUEST_ATTEMPTED_CANDIDATE_IDS.set([])
+        try:
+            yield
+        finally:
+            _REQUEST_ATTEMPTED_CANDIDATE_IDS.reset(attempted_token)
+            _REQUEST_EXCLUDED_CANDIDATE_IDS.reset(excluded_token)
+            _REQUEST_CANDIDATE_ID.reset(candidate_token)
+
+    @staticmethod
+    def _request_candidate_allowed(agent: ModelAgent) -> bool:
+        pinned = _REQUEST_CANDIDATE_ID.get()
+        return (
+            agent.id not in _REQUEST_EXCLUDED_CANDIDATE_IDS.get()
+            and (pinned is None or agent.id == pinned)
+        )
+
+    @staticmethod
+    def _record_candidate_attempt(agent_id: str) -> None:
+        # Must always mutate the bound list in place (``.append``) and never
+        # rebind the ContextVar with ``.set(...)`` here: a raced attempt runs
+        # inside a copy_context().run(...) worker thread, and a ``.set()``
+        # there would be invisible outside that thread once the race
+        # finishes, silently dropping this attempt from the parent request's
+        # ``orchestration.routing`` evidence. See the invariant comment on
+        # _REQUEST_ATTEMPTED_CANDIDATE_IDS above and PR #983.
+        attempted = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get()
+        if attempted is not None and agent_id not in attempted:
+            attempted.append(agent_id)
+
+    @staticmethod
+    def _has_active_candidate_controls(routing: Any) -> bool:
+        """Return whether a raw routing mapping requests an active candidate control.
+
+        Uses key *presence* for ``candidate_id`` (so an explicitly malformed
+        ``candidate_id: None`` is not indistinguishable from an absent key)
+        and *presence plus non-empty* for ``exclude_candidate_ids`` (an
+        explicit empty list/tuple is the one genuine no-op; any other
+        present value -- including a malformed non-list/tuple -- counts as
+        active so a caller earlier in the same request, still validating,
+        does not silently drop it). This mirrors
+        ``candidate_routing_policy``'s own no-op condition and the
+        equivalent check in ``CostRoutingCoordinator.complete`` (#983
+        CodeRabbit finding: direct Python API callers can lose or bypass
+        routing validation) -- a malformed shape only ever reaches a caller
+        of *this* method after ``candidate_routing_policy`` has already
+        validated it without raising, so the "malformed still counts"
+        branch is unreachable there in practice, but sharing one predicate
+        keeps every caller's notion of "active" identical by construction
+        instead of by convention.
+
+        This is the single source of truth every caller must use to decide,
+        from a request's raw routing mapping alone and without opening a
+        ``candidate_routing_policy`` scope, whether gateway-computed
+        candidate routing evidence may legitimately be present on this
+        response. A caller must never trust a ``_candidate_routing`` or
+        ``orchestration`` field that arrived already present on a raw
+        provider response when this predicate is ``False`` -- the gateway
+        only ever populates those fields itself when it is ``True`` (#983
+        Devin finding: "Provider fields forge routing evidence").
+        """
+        if not isinstance(routing, Mapping):
+            return False
+        if "candidate_id" in routing:
+            return True
+        if "exclude_candidate_ids" not in routing:
+            return False
+        excluded = routing.get("exclude_candidate_ids")
+        return not (isinstance(excluded, (list, tuple)) and not excluded)
+
+    @staticmethod
+    def _candidate_routing_evidence(result: Mapping[str, Any]) -> dict[str, Any] | None:
+        pinned = _REQUEST_CANDIDATE_ID.get()
+        excluded = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())
+        if pinned is None and not excluded:
+            return None
+        trace = result.get("trace")
+        rows = trace if isinstance(trace, list) else []
+        tracked_attempts = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get()
+        attempted = list(tracked_attempts or ())
+        if tracked_attempts is None:
+            attempted = [
+                value
+                for row in rows
+                if isinstance(row, Mapping)
+                for value in [row.get("agent_id")]
+                if isinstance(value, str) and value
+            ]
+        # Serving identity is evidence, not an inference target. Multi-step
+        # workflows record the exact answering_step_id; provider-shaped paths
+        # may record served_agent_id explicitly. Historical records lacking
+        # either identity remain auditable for attempts but fail closed for
+        # served_candidate_id. Output equality and trace position are not
+        # admissible serving-identity evidence.
+        answering_step_id = result.get("answering_step_id")
+        answering_rows = (
+            [
+                row
+                for row in rows
+                if isinstance(row, Mapping) and row.get("id") == answering_step_id
+            ]
+            if isinstance(answering_step_id, int)
+            else []
+        )
+        served: str | None = None
+        if len(answering_rows) == 1:
+            row = answering_rows[0]
+            value = row.get("served_agent_id") or row.get("agent_id")
+            if isinstance(value, str) and value:
+                served = value
+        elif tracked_attempts != []:
+            explicit_served = [
+                value
+                for row in rows
+                if isinstance(row, Mapping)
+                for value in [row.get("served_agent_id")]
+                if isinstance(value, str) and value
+            ]
+            distinct_served = tuple(dict.fromkeys(explicit_served))
+            if len(distinct_served) == 1:
+                served = distinct_served[0]
+        evidence: dict[str, Any] = {
+            "exclude_candidate_ids": excluded,
+            "attempted_candidate_ids": list(dict.fromkeys(attempted)),
+        }
+        if pinned is not None:
+            evidence["candidate_id"] = pinned
+        if served is not None:
+            evidence["served_candidate_id"] = served
+        return evidence
+
     @staticmethod
     def _zdr_agent_allowed(agent: ModelAgent) -> bool:
         """Return whether one agent is eligible under the active privacy policy."""
@@ -4134,6 +4384,24 @@ class TaskOrchestrator:
         }
     )
 
+    @staticmethod
+    def proxy_completion_requires_conduct(
+        body: Mapping[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        single_agent: bool = True,
+    ) -> bool:
+        """Return whether a provider-shaped request takes the conduct path."""
+        normalized_endpoint = endpoint.strip("/")
+        return not single_agent and (
+            normalized_endpoint == "responses"
+            or any(
+                key in body
+                and not _is_omit_equivalent_control(key, body.get(key))
+                for key in _PASSTHROUGH_TRIGGER_KEYS
+            )
+        )
+
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -4166,19 +4434,22 @@ class TaskOrchestrator:
         """
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
-        if not single_agent and (
-            normalized_endpoint == "responses"
-            or any(
-                key in body
-                and not _is_omit_equivalent_control(key, body.get(key))
-                for key in _PASSTHROUGH_TRIGGER_KEYS
-            )
+        if self.proxy_completion_requires_conduct(
+            body,
+            endpoint=normalized_endpoint,
+            single_agent=single_agent,
         ):
-            return self._orchestrated_provider_completion(
+            result = self._orchestrated_provider_completion(
                 body,
                 endpoint=normalized_endpoint,
                 effort_profile=effort_profile,
             )
+            workflow_id = (result.get("orchestration") or {}).get("workflow_run_id")
+            workflow = self.get_workflow_run(workflow_id) if isinstance(workflow_id, str) else {}
+            evidence = self._candidate_routing_evidence(workflow)
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
+            return result
         # Every path below this point resolves one "worker"-role agent (see
         # _select_agent(..., "worker", ...) and _failover_candidates(...,
         # "worker", ...) further down), so an unset caller profile defaults
@@ -4222,7 +4493,11 @@ class TaskOrchestrator:
         )
         if (
             isinstance(required_agent_id, str)
-            and (agent is None or not self._zdr_agent_allowed(agent))
+            and (
+                agent is None
+                or not self._zdr_agent_allowed(agent)
+                or not self._request_candidate_allowed(agent)
+            )
         ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
@@ -4287,6 +4562,7 @@ class TaskOrchestrator:
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
+            self._record_candidate_attempt(agent.id)
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
@@ -4298,6 +4574,11 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
+            evidence = self._candidate_routing_evidence(
+                {"trace": [{"agent_id": agent.id, "served_agent_id": agent.id}]}
+            )
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
@@ -4352,6 +4633,7 @@ class TaskOrchestrator:
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
+            self._record_candidate_attempt(candidate.id)
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
             if isinstance(file_replicas, dict):
@@ -4397,6 +4679,18 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     candidate.id, time.perf_counter() - started_at
                 )
+            evidence = self._candidate_routing_evidence(
+                {
+                    "trace": [
+                        {
+                            "agent_id": candidate.id,
+                            "served_agent_id": candidate.id,
+                        }
+                    ]
+                }
+            )
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
             return result
         if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -4478,7 +4772,11 @@ class TaskOrchestrator:
         )
         if (
             isinstance(required_agent_id, str)
-            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
+            and (
+                final_agent is None
+                or not self._zdr_agent_allowed(final_agent)
+                or not self._request_candidate_allowed(final_agent)
+            )
         ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
@@ -4733,6 +5031,11 @@ class TaskOrchestrator:
                     and candidate.id not in request_exclusions
                 ),
             ]
+            ordered_candidates = [
+                candidate
+                for candidate in ordered_candidates
+                if self._request_candidate_allowed(candidate)
+            ]
             for candidate in ordered_candidates:
                 candidate_endpoint = candidate.base_url.rstrip("/").casefold()
                 if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
@@ -4760,6 +5063,7 @@ class TaskOrchestrator:
                         active_profile,
                         api_surface=api_surface,
                     )
+                self._record_candidate_attempt(candidate.id)
                 try:
                     send = self.client.proxy_send
                     if virtual_model:
@@ -4965,6 +5269,19 @@ class TaskOrchestrator:
                 "policy_mode": "conduct",
                 "prompt_text": task,
                 "answer": synthesis_output,
+                # Identify the exact trace row (the repair row when a repair
+                # ran and succeeded, else the initial synthesis row) whose
+                # output actually became ``answer`` -- mirrors conduct()'s own
+                # ``answering_step_id`` (#983 finding 6) so
+                # _candidate_routing_evidence resolves the serving candidate
+                # by identity instead of falling back to a text match that
+                # cannot tell this row apart from an earlier internal
+                # workflow step whose output it coincidentally duplicates
+                # (#983 Devin finding: "Repeated output misidentifies served
+                # candidate").
+                "answering_step_id": (
+                    repair_step["id"] if repair_step is not None else synthesis_step["id"]
+                ),
                 "cache_status": "bypass",
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
@@ -5186,6 +5503,37 @@ class TaskOrchestrator:
             )
         )
 
+    def candidate_pin_required_roles(
+        self, mode: str, model_name: str = GATEWAY_DEFAULT_MODEL
+    ) -> tuple[str, ...]:
+        """Roles a candidate pin/exclusion must satisfy for ``mode``, provider-free.
+
+        ``mode="route"`` only ever serves the worker role. ``mode="auto"``
+        resolves to that same direct route whenever :meth:`would_route`'s own
+        ``model_name`` branch already decides it -- i.e. whenever
+        ``model_name`` is not one of the two virtual models real
+        route-vs-conduct triage chooses between. The only such value
+        reachable here is ``FREE_MODEL``: :meth:`candidate_routing_policy`
+        itself rejects a pin/exclusion against any other non-virtual
+        ``model_name`` before roles are ever checked. That FREE_MODEL case
+        is therefore decided with zero provider calls, so a pin only needs
+        the worker role there too.
+
+        For ``mode="auto"`` against ``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``
+        -- and for ``mode="conduct"`` -- the real decision needs a live
+        triage call that, with a pin active, would run against the pinned
+        candidate itself (triage agent selection is pin-scoped) before this
+        preflight has cleared it as eligible. Validation stays conservative
+        there and requires the full conduct role set instead of risking
+        that call; this is a known architectural limit of provider-free
+        preflight, not an oversight (see PR #983 discussion).
+        """
+        if mode == "route":
+            return ("worker",)
+        if mode == "auto" and model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+            return ("worker",)
+        return ("thinker", "worker", "verifier", "synthesizer")
+
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -5213,6 +5561,7 @@ class TaskOrchestrator:
         if include_usage:
             stream_kwargs["include_usage"] = True
         stream = self.client.stream_chat(agent, messages, **stream_kwargs)
+        self._record_candidate_attempt(agent.id)
         started_at = time.perf_counter()
         try:
             for delta in stream:
@@ -5252,6 +5601,11 @@ class TaskOrchestrator:
             "latency_ms": round(latency_seconds * 1000, 2),
             "output": answer,
         }
+        if _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None:
+            # Streaming never fails over to a different agent, so this is
+            # always an explicit "served == agent" fact for candidate-routing
+            # evidence, never a failover signal.
+            trace_step["served_agent_id"] = agent.id
         if isinstance(usage, dict):
             trace_step["usage"] = usage
         record = self._with_effort_snapshot(
@@ -5299,6 +5653,11 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        pinned_candidate = _REQUEST_CANDIDATE_ID.get()
+        excluded_candidates = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())
+        if pinned_candidate is not None or excluded_candidates:
+            parameters["candidate_id"] = pinned_candidate
+            parameters["exclude_candidate_ids"] = excluded_candidates
         endpoint_partition = _request_endpoint_partition()
         cache_partition = (
             endpoint_partition
@@ -5347,6 +5706,20 @@ class TaskOrchestrator:
                 "policy_mode": mode,
                 "prompt_text": prompt,
                 "answer": result["answer"],
+                # conduct() (round 6, #983) records which trace row's output
+                # actually became "answer" as answering_step_id, so
+                # _candidate_routing_evidence can resolve the served
+                # candidate by identity instead of a fragile text match.
+                # run() must carry it through here or every conduct() caller
+                # that reaches routing evidence via a persisted workflow
+                # run (CostRoutingCoordinator.complete() in cost_router.py)
+                # loses that identity and can misattribute a duplicate-text
+                # answer to an earlier step (#983 Devin finding: "Duplicate
+                # outputs misidentify serving candidate"). route_once()
+                # results have no answering_step_id; None here is the
+                # correct no-signal case _candidate_routing_evidence already
+                # falls back on.
+                "answering_step_id": result.get("answering_step_id"),
                 "cache_status": result.get("cache_status", "disabled"),
                 "trace": result["trace"],
                 "policy_snapshot": self.policy.as_dict(),
@@ -6314,6 +6687,12 @@ class TaskOrchestrator:
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
+            elif _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None:
+                # Candidate-routing evidence needs an explicit serving fact on
+                # every attempt, even an unchanged one -- the ordinary no-policy
+                # path below must keep omitting the key entirely (regression
+                # guard: default mock path stays "no failover metadata").
+                row["served_agent_id"] = attempt_served_id
             answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
@@ -6504,7 +6883,12 @@ class TaskOrchestrator:
                     additional_cost_usd=in_flight_cost,
                 )
             agent = self._agent(step.agent_id)
-            if any(tag not in agent.tags for tag in required_tags):
+            candidate_controls_active = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None
+            if not self._request_candidate_allowed(agent) or any(
+                tag not in agent.tags for tag in required_tags
+            ) or (
+                candidate_controls_active and step.role in agent.provider_exclusions
+            ):
                 try:
                     capable = self._ranked_agents(
                         step.subtask,
@@ -6516,6 +6900,14 @@ class TaskOrchestrator:
                     capable = []
                 if capable:
                     agent = capable[0]
+                if candidate_controls_active and (
+                    not self._request_candidate_allowed(agent)
+                    or any(tag not in agent.tags for tag in required_tags)
+                    or step.role in agent.provider_exclusions
+                ):
+                    raise ValueError(
+                        "no eligible candidate satisfies the active routing controls"
+                    )
             if progress is not None:
                 progress(step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
@@ -6570,6 +6962,10 @@ class TaskOrchestrator:
                 ids = [step.id for step in steps if step.role == role]
                 return outputs.get(ids[-1], "") if ids else ""
 
+            def last_step_id(role: str) -> int | None:
+                ids = [step.id for step in steps if step.role == role]
+                return ids[-1] if ids else None
+
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
@@ -6582,8 +6978,10 @@ class TaskOrchestrator:
                     excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[-1].id]
+            answering_step_id = steps[-1].id
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
+                answering_step_id = last_step_id("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
@@ -6595,12 +6993,15 @@ class TaskOrchestrator:
                     excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            answering_step_id = steps[2].id if not self.policy.verifier_required else steps[-1].id
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
+                answering_step_id = steps[1].id
 
         result = {
             "mode": "conduct",
             "answer": answer,
+            "answering_step_id": answering_step_id,
             "trace": trace,
             "verification": verification,
             "plan_source": plan_source,
@@ -6719,6 +7120,7 @@ class TaskOrchestrator:
             for agent in self.agents
             if _is_general_chat_agent(agent)
             and self._zdr_agent_allowed(agent)
+            and self._request_candidate_allowed(agent)
             and _agent_matches_request_endpoint(agent)
             and any(agent.id in eligible_by_role[role] for role in roles)
         )
@@ -6737,6 +7139,11 @@ class TaskOrchestrator:
             {"role": "user", "content": task},
         ]
         effort_profile = self._role_effort_profile("planner")
+        # Recorded immediately before the provider call, as the triage and
+        # invocation paths do -- otherwise routing evidence can omit a
+        # candidate that actually received the request (the planner is not
+        # guaranteed to appear again among the generated plan's own steps).
+        self._record_candidate_attempt(planner.id)
         raw = (
             self.client.chat(planner, planner_messages, effort_profile=effort_profile)
             if effort_profile is not None
@@ -6782,6 +7189,7 @@ class TaskOrchestrator:
                 assigned is None
                 or not _is_general_chat_agent(assigned)
                 or not self._zdr_agent_allowed(assigned)
+                or not self._request_candidate_allowed(assigned)
                 or assigned.id not in eligible_ids
             ):
                 # Unknown or stale ineligible assignments are reselected honestly.
@@ -6900,6 +7308,7 @@ class TaskOrchestrator:
             agent
             for agent in source
             if not agent.disabled
+            and self._request_candidate_allowed(agent)
             and _agent_matches_request_endpoint(agent)
             and self._zdr_agent_allowed(agent)
             if (
@@ -7171,6 +7580,11 @@ class TaskOrchestrator:
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
             return None
+        # Only a cache miss reaches the provider -- record the attempt here,
+        # not above the cache lookup, so a cache hit (never calls embed())
+        # does not falsely appear in attempted_candidate_ids evidence (#983
+        # Devin finding: "Attempt evidence omits provider calls").
+        self._record_candidate_attempt(embedding_member)
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
@@ -7198,6 +7612,11 @@ class TaskOrchestrator:
         embedding_member = self._embedding_agent_id()
         if embedding_member is None:
             return None
+        # Only a cache miss reaches the provider -- record the attempt here,
+        # not above the cache lookup, so a cache hit (never calls embed())
+        # does not falsely appear in attempted_candidate_ids evidence (#983
+        # Devin finding: "Attempt evidence omits provider calls").
+        self._record_candidate_attempt(embedding_member)
         try:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
@@ -7253,14 +7672,16 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        digest = hashlib.sha256(
-            (
-                _request_endpoint_partition()
-                + "\x1f"
-                + text
-                + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
-            ).encode("utf-8")
-        ).hexdigest()
+        control_key = json.dumps(
+            {
+                "endpoint_partition": _request_endpoint_partition(),
+                "candidate_id": _REQUEST_CANDIDATE_ID.get(),
+                "exclude_candidate_ids": sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get()),
+                "zdr_only": _REQUEST_ZDR_ONLY.get(),
+            },
+            sort_keys=True,
+        )
+        digest = hashlib.sha256((text + "\x00" + control_key).encode("utf-8")).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
         if cached is not None:
@@ -7275,9 +7696,32 @@ class TaskOrchestrator:
             candidates = self._ranked_agents(text, "worker", free_only=True)
         except RuntimeError:
             candidates = []
-        if not candidates and not _REQUEST_ZDR_ONLY.get():
+        if not candidates:
+            # The free-only ranking is empty for two different reasons that
+            # must not be conflated: genuinely no evidence source exists at
+            # all, or (#983 Devin finding "ZDR pins skip workflow triage") a
+            # zdr_only request pinned/is scoped to a paid candidate, which
+            # can never appear in a free_only ranking regardless of ZDR
+            # eligibility. This fallback pool already re-derives every
+            # safety predicate itself per agent -- disabled, ZDR eligibility
+            # (_zdr_agent_allowed), the active pin/exclusion
+            # (_request_candidate_allowed), chat capability, and endpoint
+            # scope -- so it is correct and safe to build regardless of
+            # whether zdr_only is active: an active ZDR policy already
+            # narrows it to ZDR-eligible agents (or the ZDR-eligible pinned
+            # one) on its own, with zero risk of contacting a non-ZDR
+            # provider. Gating the whole fallback build behind "not
+            # zdr_only" therefore only ever discarded a genuine evidence
+            # source (the pinned candidate itself), silently defaulting the
+            # route-vs-conduct decision to "route" with no live triage call.
             candidates = [
-                agent for agent in self.agents if _agent_matches_request_endpoint(agent)
+                agent
+                for agent in self.agents
+                if not agent.disabled
+                and self._zdr_agent_allowed(agent)
+                and self._request_candidate_allowed(agent)
+                and _is_general_chat_agent(agent)
+                and _agent_matches_request_endpoint(agent)
             ]
         if not candidates:
             return False
@@ -7287,6 +7731,7 @@ class TaskOrchestrator:
             {"role": "user", "content": text},
         ]
         try:
+            self._record_candidate_attempt(triage_agent.id)
             reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
@@ -7717,6 +8162,7 @@ class TaskOrchestrator:
             request_settings = self.client.request_settings_snapshot()
 
             def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
+                self._record_candidate_attempt(agent.id)
                 with self.client.request_settings(**request_settings):
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
@@ -7775,6 +8221,7 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
+                    self._record_candidate_attempt(agent.id)
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
                     output = (
@@ -7963,6 +8410,7 @@ class TaskOrchestrator:
             agent
             for agent in ordered
             if not agent.disabled
+            and self._request_candidate_allowed(agent)
             and self._zdr_agent_allowed(agent)
             and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
@@ -8123,9 +8571,26 @@ class TaskOrchestrator:
             }
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
+            # _ranked_agents deliberately still returns role-ineligible
+            # members (it appends them after every eligible one -- see its
+            # own docstring), so every other caller in this module that
+            # wants only role-eligible candidates re-applies
+            # `role not in agent.provider_exclusions` itself
+            # (_plan_generated, _parse_workflow_plan). This selection was
+            # missing that filter: with a single-candidate pool excluded
+            # from "verifier" (e.g. a worker-only pinned agent), `next(...)`
+            # picked that ineligible agent as judge anyway, so a live judge
+            # call could still land on an agent the pool operator explicitly
+            # declared unfit to verify -- an extra, unrequested provider
+            # call the no-heuristics candidate-controls contract on #983
+            # does not allow. `_invoke`'s own failover path already enforces
+            # this exclusion for a *backup* judge (see
+            # test_fast_mlsirm_judge_failover_honors_verifier_exclusions);
+            # this closes the same gap for the *primary* selection here.
             judge = next(
                 agent
                 for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                if "verifier" not in agent.provider_exclusions
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )
@@ -15701,6 +16166,7 @@ def chat_completion_response(
         "routing_reason": result.get("routing_reason"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
+        "routing": result.get("candidate_routing"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -15795,6 +16261,7 @@ def chat_completion_chunks(
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result.get("mode"),
         "verification": result.get("verification"),
+        "routing": result.get("candidate_routing"),
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])

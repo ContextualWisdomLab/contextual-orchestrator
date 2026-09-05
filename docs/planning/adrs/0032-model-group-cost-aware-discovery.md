@@ -153,6 +153,36 @@ OpenRouter. (2026). *Provider logging and data policies*. https://openrouter.ai/
 
 OpenRouter. (2026). *Zero data retention enforcement*. https://openrouter.ai/docs/features/provider-routing#zero-data-retention-enforcement
 
+## Request-local candidate control amendment (2026-09-01)
+
+Trusted sidecars sometimes possess stronger current failure evidence than the
+gateway's process-local measurements. For one virtual-model request they may
+pin an exact private agent ID with `routing.candidate_id` and exclude unique exact
+IDs with `routing.exclude_candidate_ids`. Candidate membership has no repository-authored
+cardinality cutoff; normal authenticated request-size controls remain the resource boundary. The controls are validated
+before execution, never persisted, never expand `/v1/models`, and apply to the
+same selection boundary for plain, structured, and streamed requests. A pin
+that is unknown, disabled, non-chat, excluded, or incompatible with active ZDR
+policy fails closed. Concrete model names cannot be combined with candidate
+controls because two simultaneous routing authorities would be ambiguous.
+
+The response records requested, excluded, attempted, and served candidate IDs
+under `orchestration.routing` only when a caller supplied the controls. This is
+an operational override, not a learned-routing claim: RouteLLM and FrugalGPT
+motivate evidence-based model routing, while this amendment only makes one
+caller-held observation explicit and auditable. Ordinary omitted-control
+behavior and response shape remain unchanged.
+
+A response-cache hit records an empty attempted-candidate list and omits the
+served-candidate field because no provider served that request. Historical
+trace rows remain available as cache provenance but are never reported as a
+current request attempt.
+
+Redistributable research artifacts are already committed at
+`docs/papers/routellm-routing-2406.18665.pdf` and
+`docs/papers/frugalgpt-cost-2305.05176.pdf`; `docs/papers/README.md` records
+their citations and provenance.
+
 OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
 
 OpenRouter. (2026). *Image generation*. https://openrouter.ai/docs/guides/overview/multimodal/image-generation
@@ -164,3 +194,14 @@ OpenRouter. (2026). *Submit a rerank request*. https://openrouter.ai/docs/api/ap
 OpenRouter. (2026). *Submit a video generation request*. https://openrouter.ai/docs/api/api-reference/video-generation/create-videos
 
 Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark for multimodal LLM routing* [Preprint]. arXiv. https://arxiv.org/abs/2601.17814
+
+### No-heuristics amendment — 2026-09-02
+
+The original request-local control used a fixed 32-ID exclusion ceiling and legacy
+serving-identity recovery from output equality/trace position. Neither decision rule
+was identified by RouteLLM, FrugalGPT, an API standard, or measured deployment
+evidence. The cardinality ceiling is removed; authenticated request-size enforcement
+is the resource boundary. Serving identity is now reported only from exact
+`answering_step_id` or an explicit `served_agent_id`; historical rows without either
+remain attempt provenance and omit `served_candidate_id`. This is a fail-closed
+identity rule rather than an inferred ranking/tie-break.

@@ -37,7 +37,10 @@ consume untrusted bytes/JSON:
     ``opencode_zen``/``nvidia_nim``/``nvidia_nim_sub``/``openai`` rows
     (ADR 0041). Must never raise and must never return ``True`` unless every
     present monetary value is a valid non-negative finite zero.
-11. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
+11. ``server._validate_routing`` -- request-local channel and candidate
+    controls. Successful candidate arrays are unique and non-empty, with no
+    repository-authored cardinality cutoff.
+12. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
     observation boundary. Arbitrary JSON must fail closed or round-trip to the
     same bounded published-language payload.
 12. ``web_search._parse_results`` -- an untrusted SearXNG (or SearXNG-API-
@@ -205,6 +208,23 @@ def exercise_request_body(raw: bytes) -> None:
             else:
                 assert body.get("metadata") == metadata
                 assert all(isinstance(value, str) for value in metadata.values())
+    if "routing" in body:
+        try:
+            routing = server._validate_routing(
+                body["routing"], allow_candidate_controls=True
+            )
+        except RequestError:
+            pass
+        else:
+            excluded = (routing or {}).get("exclude_candidate_ids", [])
+            # No repository-authored cardinality cutoff: the fixed 32-ID
+            # exclusion ceiling was removed from both the OpenAPI schema and
+            # this runtime validator (PR #983's no-heuristics correction).
+            # The normal authenticated request-size boundary is the only
+            # remaining limit, so this fuzz invariant must not reassert a
+            # stale cap the validator no longer enforces.
+            assert len(excluded) == len(set(excluded))
+            assert all(isinstance(value, str) and value for value in excluded)
 
     # response_format.json_schema.name must match [a-zA-Z0-9_-]{1,64} ASCII.
     if "response_format" in body:
