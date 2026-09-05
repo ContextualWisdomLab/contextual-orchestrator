@@ -1217,6 +1217,7 @@ class CostRoutingCoordinator:
                         }
                         for currency in sorted(currencies)
                     ]} if len(currencies) > 1 and cost_known else {}),
+                    **({"trace": item.trace} if item.trace else {}),
                 }
             )
         if prompt_token_estimates != job.prompt_token_estimates:

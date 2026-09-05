@@ -556,6 +556,13 @@ class PgLlmBatchBackend:
             body = response.get("body", {}) or {}
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
+            orchestration = body.get("orchestration")
+            trace = body.get("trace")
+            if trace is None and isinstance(orchestration, dict):
+                trace = orchestration.get("trace")
+            if not isinstance(trace, list):
+                trace = []
+            trace = [step for step in trace if isinstance(step, dict)]
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
             usage_valid = (
@@ -576,6 +583,7 @@ class PgLlmBatchBackend:
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
                     messages=list(request.messages) if request else [],
+                    trace=trace,
                     usage_valid=usage_valid,
                 )
             )

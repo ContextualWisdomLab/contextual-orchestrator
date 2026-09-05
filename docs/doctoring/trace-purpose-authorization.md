@@ -1,11 +1,12 @@
 # Trace-purpose authorization
 
 Trace-bearing responses are privileged data-access requests. Chat, admin
-simulation, workflow/evaluation creation, and batch-result retrieval first
-authenticate the caller, then require a separate verified `trace` purpose
-scope before returning a trace. Owner-facing workflow/evaluation reads apply
-the same gate when trace exposure is enabled. A denied purpose returns `401`
-and no trace body.
+simulation, workflow/evaluation creation, and an explicit batch-result trace
+request first authenticate the caller, then require a separate verified
+`trace` purpose scope before returning a trace. Plain inference owners may
+retrieve batch answers and cost evidence with traces stripped. Owner-facing
+workflow/evaluation reads apply the same gate when trace exposure is enabled.
+A denied explicit trace purpose returns `401` and no trace body.
 
 Access reports always require the `trace` purpose because accessed outputs are
 trace evidence. The authorization check runs before resource lookup, so a
