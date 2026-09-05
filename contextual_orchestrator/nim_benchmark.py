@@ -84,7 +84,7 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-BENCHMARK_SCHEMA_VERSION = "1.0.0"
+BENCHMARK_SCHEMA_VERSION = "2.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
@@ -2442,13 +2442,10 @@ def best_single_worker_hindsight(
 def paired_policy_comparisons(
     cells: list[dict[str, Any]], seed: int
 ) -> list[dict[str, Any]]:
-    """Paired task-level bootstrap comparisons between the headline policies."""
-    scores: dict[str, dict[str, float]] = {}
+    """Compare delivered score and terminal-outcome time on all shared tasks."""
+    policy_cells: dict[str, dict[str, dict[str, Any]]] = {}
     for cell in cells:
-        if cell["run_outcome"] == "success":
-            scores.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell[
-                "task_score"
-            ]
+        policy_cells.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell
     summaries = summarize_policies(cells)
     hindsight = best_single_worker_hindsight(summaries)
     comparison_pairs = [
@@ -2460,18 +2457,42 @@ def paired_policy_comparisons(
         comparison_pairs.append(("conduct_bounded", hindsight["policy_name"]))
     comparisons = []
     for policy_a, policy_b in comparison_pairs:
-        tasks_a, tasks_b = scores.get(policy_a), scores.get(policy_b)
+        tasks_a, tasks_b = policy_cells.get(policy_a), policy_cells.get(policy_b)
         if not tasks_a or not tasks_b:
             continue
         shared_tasks = sorted(set(tasks_a) & set(tasks_b))
         if not shared_tasks:
             continue
-        pairs = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        paired_cells = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        score_pairs = [
+            (
+                cell_a["task_score"] if cell_a["run_outcome"] == "success" else 0.0,
+                cell_b["task_score"] if cell_b["run_outcome"] == "success" else 0.0,
+            )
+            for cell_a, cell_b in paired_cells
+        ]
+        latency_pairs = [
+            (cell_a["end_to_end_latency_ms"], cell_b["end_to_end_latency_ms"])
+            for cell_a, cell_b in paired_cells
+        ]
         comparisons.append(
             {
                 "policy_a": policy_a,
                 "policy_b": policy_b,
-                **paired_bootstrap_mean_difference(pairs, seed=seed),
+                "score_basis": "successful_task_score_else_zero",
+                "pairing_basis": "all_shared_locked_tasks",
+                "policy_a_success_count": sum(
+                    cell_a["run_outcome"] == "success" for cell_a, _ in paired_cells
+                ),
+                "policy_b_success_count": sum(
+                    cell_b["run_outcome"] == "success" for _, cell_b in paired_cells
+                ),
+                "policy_a_unpaired_task_count": len(tasks_a) - len(shared_tasks),
+                "policy_b_unpaired_task_count": len(tasks_b) - len(shared_tasks),
+                **paired_bootstrap_mean_difference(score_pairs, seed=seed),
+                "end_to_end_latency_ms": paired_bootstrap_mean_difference(
+                    latency_pairs, seed=seed
+                ),
             }
         )
     return comparisons
