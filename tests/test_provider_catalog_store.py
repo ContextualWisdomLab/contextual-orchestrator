@@ -17,6 +17,7 @@ from contextual_orchestrator.model_discovery import (
 )
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_catalog_store import (
+    ExternalMetadataRefreshEvidence,
     PROVIDER_CATALOG_SCHEMA_SQL,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
@@ -65,6 +66,7 @@ def test_schema_is_normalized_and_contains_no_secret_value_column() -> None:
         "model_policy_source",
         "model_policy_assessment",
         "catalog_refresh_run",
+        "external_metadata_refresh_run",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in PROVIDER_CATALOG_SCHEMA_SQL
     lowered = PROVIDER_CATALOG_SCHEMA_SQL.casefold()
@@ -257,6 +259,32 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
         "failed",
         "succeeded",
     ]
+
+
+def test_external_metadata_refresh_evidence_preserves_freshness_and_last_error() -> None:
+    """Shared metadata refreshes are persisted separately from provider catalogs."""
+    store = InMemoryProviderCatalogStore()
+    first = ExternalMetadataRefreshEvidence(
+        metadata_source_name="models_dev",
+        refresh_status="succeeded",
+        consumer_provider_count=2,
+        error_code=None,
+        started_at=datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 1, 0, 1, tzinfo=timezone.utc),
+    )
+    second = ExternalMetadataRefreshEvidence(
+        metadata_source_name="models_dev",
+        refresh_status="failed",
+        consumer_provider_count=3,
+        error_code="http_status_403",
+        started_at=datetime(2026, 9, 1, 0, 2, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 1, 0, 3, tzinfo=timezone.utc),
+    )
+
+    store.record_external_metadata_refresh(first)
+    store.record_external_metadata_refresh(second)
+
+    assert store.external_metadata_refresh_evidence() == (first, second)
 
 
 def test_last_known_good_restores_free_and_modality_evidence() -> None:

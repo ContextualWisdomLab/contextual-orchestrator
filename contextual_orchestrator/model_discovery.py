@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import json
 import logging
 import math
@@ -300,6 +301,11 @@ _NOT_FETCHED = object()
 _OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 
+def _now_utc() -> datetime:
+    """Return a timezone-aware UTC timestamp for secret-free discovery evidence."""
+    return datetime.now(timezone.utc)
+
+
 def _provider_discovery_error_code(exc: Exception) -> str:
     """Map provider failures to stable codes without retaining provider response text."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -517,6 +523,18 @@ class DiscoveredModel:
     spend_admitted: bool = True
 
 
+@dataclass(frozen=True)
+class ExternalMetadataFetchEvidence:
+    """Secret-free evidence for one shared third-party metadata fetch."""
+
+    metadata_source_name: str
+    refresh_status: str
+    consumer_provider_count: int
+    error_code: str | None
+    started_at: datetime
+    finished_at: datetime
+
+
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
@@ -618,13 +636,49 @@ def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
     bounded attempt has failed; a successful attempt returns immediately
     without spending the rest of the retry budget.
     """
+    metadata, _evidence = fetch_models_dev_metadata_with_evidence(
+        timeout=timeout,
+        consumer_provider_count=0,
+    )
+    return metadata
+
+
+def fetch_models_dev_metadata_with_evidence(
+    *,
+    timeout: float,
+    consumer_provider_count: int,
+) -> tuple[Any | None, ExternalMetadataFetchEvidence]:
+    """Fetch Models.dev once and return both payload and secret-free refresh evidence."""
+    started_at = _now_utc()
+    last_exc: Exception | None = None
     for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
         try:
-            return _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            payload = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+            return payload, ExternalMetadataFetchEvidence(
+                metadata_source_name="models_dev",
+                refresh_status="succeeded",
+                consumer_provider_count=consumer_provider_count,
+                error_code=None,
+                started_at=started_at,
+                finished_at=_now_utc(),
+            )
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            last_exc = exc
             if attempt < _MODELS_DEV_FETCH_ATTEMPTS - 1:
                 time.sleep(_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS)
-    return None
+    error_code = (
+        _provider_discovery_error_code(last_exc)
+        if last_exc is not None
+        else "unknown_error"
+    )
+    return None, ExternalMetadataFetchEvidence(
+        metadata_source_name="models_dev",
+        refresh_status="failed",
+        consumer_provider_count=consumer_provider_count,
+        error_code=error_code,
+        started_at=started_at,
+        finished_at=_now_utc(),
+    )
 
 
 def _fetch_configured_gateway_json(
@@ -1683,6 +1737,25 @@ def discover_all_models(
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
+    """Discover models across every provider with a registered credential."""
+    discovered, errors, _metadata_refreshes = discover_all_models_with_metadata_evidence(
+        sources,
+        timeout=timeout,
+        ca_bundle=ca_bundle,
+    )
+    return discovered, errors
+
+
+def discover_all_models_with_metadata_evidence(
+    sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
+    *,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ca_bundle: str | None = None,
+) -> tuple[
+    list[DiscoveredModel],
+    list[ProviderDiscoveryError],
+    tuple[ExternalMetadataFetchEvidence, ...],
+]:
     """Discover models across every provider with a registered credential.
 
     One provider's failure never blocks the others: errors are collected and
@@ -1697,12 +1770,19 @@ def discover_all_models(
     """
     discovered: list[DiscoveredModel] = []
     errors: list[ProviderDiscoveryError] = []
+    metadata_refreshes: tuple[ExternalMetadataFetchEvidence, ...] = ()
     models_dev_metadata: Any = _NOT_FETCHED
-    if any(
-        source.models_dev_provider_id and get_credential(source.credential_name)
+    metadata_consumers = tuple(
+        source
         for source in sources
-    ):
-        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
+        if source.models_dev_provider_id and get_credential(source.credential_name)
+    )
+    if metadata_consumers:
+        models_dev_metadata, metadata_refresh = fetch_models_dev_metadata_with_evidence(
+            timeout=timeout,
+            consumer_provider_count=len(metadata_consumers),
+        )
+        metadata_refreshes = (metadata_refresh,)
     for source in sources:
         try:
             discovered.extend(
@@ -1738,7 +1818,7 @@ def discover_all_models(
             len(routed),
             len(errors),
         )
-    return routed, errors
+    return routed, errors, metadata_refreshes
 
 
 def openrouter_paid_inference_available(

@@ -127,6 +127,16 @@ create table catalog_refresh_run (
   finished_at timestamptz not null
 );
 
+create table external_metadata_refresh_run (
+  external_metadata_refresh_run_id text primary key,
+  metadata_source_name text not null,
+  refresh_status text not null,
+  consumer_provider_count integer not null default 0,
+  error_code text,
+  started_at timestamptz not null,
+  finished_at timestamptz not null
+);
+
 create index workflow_run_retention_idx
   on workflow_run (retention_expires_at)
   where deleted_at is null;
@@ -144,6 +154,9 @@ create index provider_model_account_idx
 
 create index catalog_refresh_account_idx
   on catalog_refresh_run (provider_account_id, finished_at desc);
+
+create index external_metadata_refresh_name_idx
+  on external_metadata_refresh_run (metadata_source_name, finished_at desc);
 
 create view workflow_run_safe_view as
 select
