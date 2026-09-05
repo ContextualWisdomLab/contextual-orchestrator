@@ -61,6 +61,7 @@ ADAPTIVE_CALIBRATION_MAX_ITEMS = 12
 ADAPTIVE_CALIBRATION_TARGET_SE = 0.5
 SELECTIVE_CLASSIFICATION_Z = (1.0, 1.28, 1.645, 1.96, 2.326, 2.576)
 SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER = 0.025
+SELECTIVE_CLASSIFICATION_REPLICATIONS = 10
 
 
 def _expected_brier(predicted: float, target: float) -> float:
@@ -1433,6 +1434,24 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     )
     heldout, heldout_samples = selective_point(40_000, selected["confidence_z"])
     heldout_baseline, heldout_baseline_samples = selective_point(40_000, 1.96)
+    replication_pairs = [(heldout, heldout_baseline)]
+    for replication in range(1, SELECTIVE_CLASSIFICATION_REPLICATIONS):
+        seed = 40_000 + 1_000 * replication
+        candidate, _ = selective_point(seed, selected["confidence_z"])
+        baseline, _ = selective_point(seed, 1.96)
+        replication_pairs.append((candidate, baseline))
+    replication_rows = [
+        {
+            "coverage_delta": candidate["coverage"] - baseline["coverage"],
+            "all_candidate_query_delta": candidate["all_candidate_mean_queries"]
+            - baseline["all_candidate_mean_queries"],
+            "selective_risk": candidate["selective_risk"],
+            "selective_risk_wilson_upper95": candidate[
+                "selective_risk_wilson_upper95"
+            ],
+        }
+        for candidate, baseline in replication_pairs
+    ]
     classification_stopping["risk_coverage_screen"] = {
         "method": "development_selected_heldout_evaluated_reject_option",
         "development_seed": 30_000,
@@ -1457,6 +1476,42 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             "all_candidate_queries": _paired_bootstrap_mean_ci(
                 heldout_samples["queries"], heldout_baseline_samples["queries"]
             ),
+        },
+        "replication_audit": {
+            "replications": SELECTIVE_CLASSIFICATION_REPLICATIONS,
+            "seed_start": 40_000,
+            "seed_step": 1_000,
+            "error_upper_bound_pass_rate": statistics.fmean(
+                float(
+                    row["selective_risk_wilson_upper95"]
+                    <= SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER
+                )
+                for row in replication_rows
+            ),
+            "coverage_delta_mean": statistics.fmean(
+                row["coverage_delta"] for row in replication_rows
+            ),
+            "coverage_delta_range": [
+                min(row["coverage_delta"] for row in replication_rows),
+                max(row["coverage_delta"] for row in replication_rows),
+            ],
+            "all_candidate_query_delta_mean": statistics.fmean(
+                row["all_candidate_query_delta"] for row in replication_rows
+            ),
+            "all_candidate_query_delta_range": [
+                min(row["all_candidate_query_delta"] for row in replication_rows),
+                max(row["all_candidate_query_delta"] for row in replication_rows),
+            ],
+            "selective_risk_mean": statistics.fmean(
+                row["selective_risk"] for row in replication_rows
+            ),
+            "selective_risk_max": max(
+                row["selective_risk"] for row in replication_rows
+            ),
+            "selective_risk_wilson_upper95_max": max(
+                row["selective_risk_wilson_upper95"] for row in replication_rows
+            ),
+            "candidate_status": "rejected_not_replication_stable",
         },
     }
     return {

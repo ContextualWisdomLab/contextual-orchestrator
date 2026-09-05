@@ -585,6 +585,22 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     ] == pytest.approx(
         [-1.715, -1.2625]
     )
+    replication = risk_coverage["replication_audit"]
+    assert replication["candidate_status"] == "rejected_not_replication_stable"
+    assert replication["replications"] == 10
+    assert replication["error_upper_bound_pass_rate"] == 0.2
+    assert replication["coverage_delta_mean"] == pytest.approx(0.12675)
+    assert replication["coverage_delta_range"] == pytest.approx([0.0975, 0.15])
+    assert replication["all_candidate_query_delta_mean"] == pytest.approx(-1.364)
+    assert replication["all_candidate_query_delta_range"] == pytest.approx(
+        [-1.485, -1.27]
+    )
+    assert replication["selective_risk_max"] == pytest.approx(
+        0.018018018018018018
+    )
+    assert replication["selective_risk_wilson_upper95_max"] == pytest.approx(
+        0.04540471915806321
+    )
     assert stopping["distance_from_cut_strata"] == {
         "near_lt_0_5": {
             "candidates": 100,
