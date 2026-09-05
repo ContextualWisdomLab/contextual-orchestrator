@@ -1145,6 +1145,16 @@ Summarize this research thread and verify claims.</textarea>
       return fetch(url, {credentials: "same-origin", ...options});
     }
 
+    async function refreshAdminState() {
+      const response = await apiFetch("/admin/state");
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error?.message || "Could not load admin state");
+      }
+      state = payload;
+      return state;
+    }
+
     function tags(tags) {
       return tags.map(tag => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
     }
@@ -1197,7 +1207,9 @@ Summarize this research thread and verify claims.</textarea>
           throw new Error("Audit state request failed with HTTP " + response.status);
         }
         const payload = await response.json();
+        state.agents = payload.agents || [];
         state.recent_audit_events = payload.recent_audit_events || [];
+        renderAgents();
         renderAudit();
         return true;
       } catch (error) {
@@ -1663,14 +1675,14 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await apiFetch("/admin/state");
-      if (!res.ok) {
+      try {
+        await refreshAdminState();
+      } catch (error) {
         if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
         if (els.sessionAction) els.sessionAction.hidden = false;
         return;
       }
       if (els.sessionAction) els.sessionAction.hidden = true;
-      state = await res.json();
       await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();

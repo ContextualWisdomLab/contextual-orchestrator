@@ -97,6 +97,13 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "complex_hints" not in ADMIN_HTML
     assert 'method: exists ? "PATCH" : "POST"' in ADMIN_HTML
     assert 'method: "DELETE"' in ADMIN_HTML
+    assert "refreshAdminState()" in ADMIN_HTML
+    assert "function refreshAdminState" in ADMIN_HTML
+    assert 'els.modelGroupFeedback.textContent = t("group_saved");' in ADMIN_HTML
+    assert 'els.modelGroupFeedback.style.color = "var(--green)";' in ADMIN_HTML
+    assert "els.modelGroupFeedback.textContent = error.message;" in ADMIN_HTML
+    assert 'els.modelGroupFeedback.style.color = "var(--red)";' in ADMIN_HTML
+    assert "await refreshModelGroupViews();" in ADMIN_HTML
     for key in (
         "model_groups_title",
         "group_name_label",
