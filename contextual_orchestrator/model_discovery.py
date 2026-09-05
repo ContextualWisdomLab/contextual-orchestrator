@@ -964,11 +964,14 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
         limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
         model_provider = model.get("provider")
-        models_dev_npm = (
-            model_provider.get("npm")
-            if isinstance(model_provider, dict)
-            else provider_row.get("npm")
-        )
+        # A model's ``provider`` block overrides the adapter only when it
+        # actually names one. Models.dev ships blocks carrying other keys and
+        # no ``npm`` (``sakana`` and ``zenifra`` publish ``{"shape": ...}``),
+        # and reading ``npm`` straight off the block turned those into a null
+        # adapter -- which ``_parse_openai_compatible`` then treats as a
+        # mismatch and drops, discarding models the provider default admits.
+        model_npm = model_provider.get("npm") if isinstance(model_provider, dict) else None
+        models_dev_npm = model_npm or provider_row.get("npm")
         original_architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         merged_max_output_tokens = _positive_int_metadata(limits.get("output"))
         if merged_max_output_tokens is None:

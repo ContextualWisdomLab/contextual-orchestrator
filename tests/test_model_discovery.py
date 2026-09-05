@@ -1678,6 +1678,50 @@ def test_opencode_go_joins_models_dev_cost_and_modalities_without_name_inference
     assert [model.model_id for model in discovered] == ["kimi-k3"]
 
 
+def test_opencode_go_keeps_models_whose_provider_block_names_no_npm() -> None:
+    """A ``provider`` block without ``npm`` falls back to the provider default.
+
+    Models.dev publishes per-model ``provider`` blocks that carry other keys
+    and no ``npm`` at all -- ``sakana`` and ``zenifra`` both ship
+    ``{"shape": ...}``. Reading ``npm`` straight off such a block yields
+    ``None``, which the compatibility gate treats as a mismatch, so the model
+    is dropped even though the provider default declares the very adapter the
+    gate requires. Only an override that actually names an adapter may
+    override.
+    """
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
+
+    def urlopen(request, timeout=None, **_kwargs):
+        if request.full_url == "https://models.dev/api.json":
+            return _Response(
+                {
+                    "opencode-go": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "models": {
+                            "kimi-k3": {"provider": {"shape": "responses"}},
+                            "glm-5.3": {},
+                            "minimax-m3": {"provider": {"npm": "@ai-sdk/anthropic"}},
+                        },
+                    }
+                }
+            )
+        return _Response(
+            {"data": [{"id": "kimi-k3"}, {"id": "glm-5.3"}, {"id": "minimax-m3"}]}
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    # kimi-k3's block names no adapter, so the provider default admits it;
+    # glm-5.3 has no block at all; minimax-m3 names a different adapter and is
+    # the only one the gate may drop.
+    assert [model.model_id for model in discovered] == ["kimi-k3", "glm-5.3"]
+
+
 def test_opencode_go_metadata_failure_fails_closed_on_unknown_protocol() -> None:
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_go")
