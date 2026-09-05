@@ -146,6 +146,12 @@ while all-candidate mean queries fall from 9.88 to 8.395 with paired interval
 `[-1.715, -1.2625]`. Observed selective risk is zero, its Wilson upper bound is
 1.686%, and the positive/negative coverage gap is 3 points. This is a synthetic
 risk–coverage KPI, not an adopted buyer threshold.
+Source `609faff8` repeats the selected candidate and 95% baseline over ten
+independent response seeds. Coverage gain remains 9.75–15 percentage points and
+all-candidate query reduction remains 1.27–1.485, but selective risk reaches
+1.802% and its Wilson upper bound reaches 4.540%. Only 20% of replications meet
+the declared 2.5% ceiling, so `z=1.645` is rejected as replication-unstable and
+must not become a routing default.
 
 Source commit `0f875e3f` runs the released single-coefficient item-covariate
 path on 1,200 synthetic candidate observations and 12 items. The fit converges

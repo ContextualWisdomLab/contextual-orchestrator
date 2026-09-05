@@ -339,6 +339,10 @@ Buyer next action: call `run_equal_budget_ablation` and read
   9.88 to 8.395; paired intervals are `[8.75, 14.75]` percentage points and
   `[-1.715, -1.2625]`. Observed selective risk is zero with a 1.686% Wilson
   upper bound; buyer costs and live coverage remain unexecuted.
+  Source `609faff8` repeats the comparison across ten independent response
+  seeds. Efficiency gains persist, but the 2.5% Wilson error ceiling passes in
+  only 20% of runs and the worst upper bound is 4.540%; the candidate threshold
+  is therefore rejected rather than promoted from a favorable single holdout.
 - Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
   using item response theory. *Journal of Educational and Behavioral
   Statistics, 22*(3), 265–289.

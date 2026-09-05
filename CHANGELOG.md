@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- A ten-seed replication audit now rejects the development-selected
+  reject-option threshold because it satisfies the declared error-upper-bound
+  criterion in only 20% of independent runs, despite consistent efficiency.
 - The synthetic classification benchmark now chooses a reject-option threshold
   on a development seed under a 2.5% Wilson error ceiling and evaluates it on
   an independent seed against a paired 95% baseline, reporting coverage,

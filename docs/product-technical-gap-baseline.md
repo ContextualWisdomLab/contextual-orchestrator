@@ -2445,6 +2445,14 @@ Observed selective risk is zero with a 1.686% Wilson upper bound; directional
 coverage differs by 3 points. This remains a synthetic KPI:
 buyer-valued rejection cost, fallback behavior, subgroup coverage, calibrated
 intervals, and live provider latency are still missing.
+Source commit `609faff8` audits that candidate across ten independent response
+seeds. Coverage gain stays positive at 9.75–15 percentage points and query
+reduction stays 1.27–1.485, but selective risk reaches 1.802% and the Wilson
+upper bound reaches 4.540%. Only 20% of replications satisfy the declared 2.5%
+ceiling. The benchmark therefore marks `z=1.645` as
+`rejected_not_replication_stable`; it is not an accuracy improvement eligible
+for production admission. The next valid experiment needs more independent
+buyer-linked evidence or a preregistered, adequately powered calibration design.
 
 ## 7. Delivery gates
 
