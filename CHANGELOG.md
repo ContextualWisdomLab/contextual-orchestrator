@@ -51,6 +51,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Diagnostic coverage uses each generated subgroup's actual size, including
+  odd-sized samples. Unresolved summaries stop with an explicit explanation,
+  and observation p95 follows the recorded sample count. Existing experiment
+  sizes and production admission requirements are unchanged.
+- Research notes distinguish source findings from gateway-specific assumptions
+  and separate experimental warm starts from the production default.
+
 - The held-out psychometric benchmark now measures sequential probability-drift
   detection delay and pre-change false alarms over 500 repetitions. A bounded
   calibration search uses a 95% Wilson false-alarm bound, then evaluates the

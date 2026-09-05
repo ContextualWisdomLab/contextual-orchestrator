@@ -1,6 +1,6 @@
 ---
 title: "Measured routing evidence: latency ledgers, semantic affinity, triage, real-time judging"
-status: "implemented"
+status: "proposed; local implementation evidence, protected delivery unverified"
 date: "2026-08-25"
 scope: "PR (stacked on #834), ADR 0034"
 ---
@@ -32,12 +32,12 @@ fails closed to conducted orchestration when its reply violates the exact
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |
 | --- | --- | --- |
 | EWMA with gain 1/8 for latency and throughput | Jacobson's congestion-avoidance estimator is the canonical low-pass filter for volatile network measurements; it needs no tuning window. | Exact-arithmetic tests reproduce hand-computed EWMA values. |
-| Laplace rule of succession as stability prior | The uniform Beta(1,1) posterior mean is the minimum-assumption estimate of a Bernoulli accept probability (Gelman et al., 2013). | Stability tests assert alpha/(alpha+beta) exactly. |
-| Cosine similarity over declared metadata documents | Dense retrieval established query-document cosine ordering without keyword overlap (Karpukhin et al., 2020). Affinity uses operator-declared descriptors only. | Deterministic mock-embedding tests verify cosine ordering and zero-vector guards. |
-| Strict JSON triage verdict | LLM judges are reliable only under constrained output schemas; Zheng et al. (2023) show judge agreement collapses without structure. Fail-closed preserves verification guarantees. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash. |
+| Laplace rule of succession as stability prior | Beta(1,1) is an explicit uniform-prior assumption, not a uniquely assumption-free estimate (Gelman et al., 2013). | Stability tests assert alpha/(alpha+beta) exactly; arithmetic does not validate that prior for buyer outcomes. |
+| Cosine similarity over declared metadata documents | Karpukhin et al. (2020, Section 3.1) use learned dense representations and dot-product similarity. CO's normalized cosine over operator-declared descriptors is a separate adaptation, not their validated routing method. | Deterministic mock-embedding tests verify cosine ordering and zero-vector guards. |
+| Strict JSON triage verdict | Zheng et al. (2023) study judge agreement and position, verbosity, self-enhancement, and reasoning limitations. The exact JSON contract is CO's fail-closed parsing decision; syntactic validity cannot establish judgment accuracy. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash; buyer judge calibration remains separate. |
 | Probability calibration | Cox (1958) motivates logistic recalibration; Arrieta-Ibarra et al. (2022) distinguish calibration diagnostics from aggregate probabilistic scores. | Source `92b9309b` moves held-out calibration slope from `0.991445` to `1.014030` and reduces logit RMSE from `0.231235` to `0.025803`; the paired improvement interval is `[-0.208030, -0.202924]`. Synthetic truth does not replace buyer outcome calibration. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
-| Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
+| Candidate-specific evidence and interactions | Jeon et al. (2021) model item–respondent interactions in a latent metric space. Separate per-member ledgers do not implement that model or by themselves prevent cross-level inference errors; buyer hierarchy, dependence, and generalization need separate evidence. | Quality-ledger reports expose per-member posteriors; their existence does not establish a multilevel measurement model. |
 | Language/domain validity boundary | IRT-Router treats LLMs as persons and queries as items, so query language cannot be inserted as a person-group DIF label. A released explanatory-IRT covariate supports one item-side difficulty contrast (Debeer & Janssen, 2013); Multilingual-IRT additionally separates language from content discrimination (Lior et al., 2026). | Source `0f875e3f` converges after 941 iterations and estimates `-0.789650` for a known `-0.8` contrast. The synthetic report still keeps `measurement_validity=false`; preregistered covariates, anchors, and linked buyer observations remain required, while language-specific discrimination and residual effects remain unavailable. |
 | Parameter uncertainty boundary | Oakes (1999) derives observed information for EM fits; Pritikin (2017) compares covariance estimators for item-factor models. | Source `b0f3703f` reuses the released Oakes API: six known intercepts have RMSE `0.039160`, 95% interval coverage `1.0`, and mean width `0.295945`. Buyer calibration remains required, and the current API conditions on population parameters and rejects anchors, zero inflation, and item covariates. |
 | Recalibration invariance boundary | Millsap (2010) requires longitudinal invariance before changes in the latent construct are interpreted; Babcock and Albano (2012) show common-item drift can damage linked classifications. | Source `2e129e2a` links through seven stable anchors and flags the one injected drift item with no stable-item false positive. The fixed `0.25` tolerance is an effect-size screen only; buyer recalibrations, sampling uncertainty, and review rules remain required. |
@@ -84,7 +84,7 @@ on `b2f90116` to p50 0.000875 ms and p95 0.001000 ms. The benchmark now emits
 both fields. This is local gateway bookkeeping evidence; the fit, held-out
 quality, and provider latency remain separate KPIs.
 
-Run `uv run python scripts/benchmark_psychometric_heldout.py` for the separate,
+Run `uv run --python 3.12 python scripts/benchmark_psychometric_heldout.py` for the separate,
 explicitly enabled semantic warm-start experiment. Production retains the
 validated single-neighbor behavior. On its fixed 24-training/24-held-out smooth
 latent-response surface, the single-neighbor baseline at `0ae0ed8c` reports
@@ -187,19 +187,94 @@ fit converges in five iterations, preserves severity order, and reports RMSE
 judges and observed buyer ratings remain absent, so `judge_effects` stays
 `not_executed`.
 
+## Review correction evidence (2026-09-05)
+
+The review of source `6d1b30803888e893d7bdbdf4d12605a16c36162d`
+found literal subgroup denominators tied to 400 candidates. RED commit
+`43706aad` reproduces coverage above 100% at 401 and 403 candidates.
+Source `a8109a65` derives all three subgroup sizes from the same generated
+trait grid used by the experiment and subtracts directional rates rather than
+counts. Empty or unresolved summaries fail explicitly; they are never reported
+as zero error. Default candidate counts, response seeds, repetitions, and
+admission gates are unchanged. These are harness corrections, not new
+estimators or evidence of buyer accuracy.
+
+The full suite using executable source `a8109a65` finished with 3,432 passing
+tests, two skips, and exit 0 in 728.31 seconds, including the existing
+full-size experiment assertions. Documentation edits were checked separately
+with 102 passing routing, paper, and boundary tests. Hosted acceptance and
+buyer calibration remain unverified.
+
+The same source keeps nearest-rank observation p95 dependent on the actual
+sample count (101 by default) and shares the Python 3.12 startup guard before
+optional numerical imports. The race-reentry regression confirms that a
+deployment called again after race failure must occur again in the selection
+receipt. The receipt records selection attempts, not a unique deployment set
+or a complete transport/tool-retry ledger; its multiplicity cannot be discarded
+or used alone to certify all provider costs or an exposure probability.
+
+The research table now separates source findings from CO-specific choices:
+Beta(1,1) remains an assumption; DPR's dot product is not this gateway's cosine
+policy; a JSON parser does not validate a judge; and per-member ledgers do not
+prove a multilevel model. The ADR diagram separates the production
+single-neighbor default from opt-in two-neighbor held-out experiments.
+
 ## APA 7 references
+
+American Educational Research Association, American Psychological
+Association, & National Council on Measurement in Education. (2014).
+*Standards for educational and psychological testing*. American Educational
+Research Association. https://www.testingstandards.net/open-access-files.html
+
+Arrieta-Ibarra, I., Gujral, P., Tannen, J., Tygert, M., & Xu, C. (2022).
+Metrics of calibration for probabilistic predictions. *Journal of Machine
+Learning Research, 23*(351), 1–54.
+https://www.jmlr.org/papers/v23/22-0658.html
+
+Babcock, B., & Albano, A. D. (2012). Rasch scale stability in the presence of
+item parameter and trait drift. *Applied Psychological Measurement, 36*(7),
+565–580. https://doi.org/10.1177/0146621612455090
 
 Barrada, J. R., Olea, J., & Ponsoda, V. (2007). Methods for restricting maximum
 exposure rate in computerized adaptive testing. *Methodology, 3*(1), 14–23.
 https://doi.org/10.1027/1614-2241.3.1.14
 
-Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
-using item response theory. *Journal of Educational and Behavioral Statistics,
-22*(3), 265–289. https://doi.org/10.3102/10769986022003265
+Bechger, T. M., Maris, G., Verstralen, H. H. F. M., & Béguin, A. A. (2003).
+Using classical test theory in combination with item response theory.
+*Applied Psychological Measurement, 27*(5), 319–334.
+https://doi.org/10.1177/0146621603257518
+
+Bock, R. D., & Aitkin, M. (1981). Marginal maximum likelihood estimation of
+item parameters: Application of an EM algorithm. *Psychometrika, 46*(4),
+443–459. https://doi.org/10.1007/BF02293801
+
+Bock, R. D., & Mislevy, R. J. (1982). Adaptive EAP estimation of ability in
+a microcomputer environment. *Applied Psychological Measurement, 6*(4),
+431–444. https://doi.org/10.1177/014662168200600405
+
+Brogden, H. E. (1949). When testing pays off. *Personnel Psychology, 2*(2),
+171–183. https://doi.org/10.1111/j.1744-6570.1949.tb01397.x
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176
+
+Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
+using item response theory. *Journal of Educational and Behavioral Statistics,
+22*(3), 265–289. https://doi.org/10.3102/10769986022003265
+
+Chen, Y., Lee, Y.-H., & Li, X. (2022). Item pool quality control in
+educational testing: Change point model, compound risk, and sequential
+detection. *Journal of Educational and Behavioral Statistics, 47*(3),
+322–352. https://doi.org/10.3102/10769986211059085
+
+Chow, C. K. (1970). On optimum recognition error and reject tradeoff. *IEEE
+Transactions on Information Theory, 16*(1), 41–46.
+https://doi.org/10.1109/TIT.1970.1054406
+
+Cox, D. R. (1958). Two further applications of a model for binary regression.
+*Biometrika, 45*(3–4), 562–565.
+https://doi.org/10.1093/biomet/45.3-4.562
 
 Debeer, D., & Janssen, R. (2013). Modeling item-position effects within an IRT
 framework. *Journal of Educational Measurement, 50*(2), 164–185.
@@ -209,38 +284,64 @@ Doebler, A. (2012). The problem of bias in person parameter estimation in
 adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.
 https://doi.org/10.1177/0146621612443304
 
+Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and
+learning. In *Proceedings of the 28th International Conference on Machine
+Learning* (pp. 1097–1104). https://arxiv.org/abs/1103.4601
+
+Eckes, T. (2015). *Introduction to many-facet Rasch measurement* (2nd ed.).
+Peter Lang. https://doi.org/10.3726/978-3-653-04844-5
+
+El-Yaniv, R., & Wiener, Y. (2010). On the foundations of noise-free selective
+classification. *Journal of Machine Learning Research, 11*, 1605–1641.
+https://www.jmlr.org/papers/v11/el-yaniv10a.html
+
 Finkelman, M., Nering, M. L., & Roussos, L. A. (2009). A conditional exposure
 control method for multidimensional adaptive testing. *Journal of Educational
 Measurement, 46*(1), 84–103.
 https://doi.org/10.1111/j.1745-3984.2009.01070.x
 
-Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and
-learning. In *Proceedings of the 28th International Conference on Machine
-Learning* (pp. 1097–1104). https://arxiv.org/abs/1103.4601
+French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
+use with logistic regression for differential item functioning detection.
+*Educational and Psychological Measurement, 67*(3), 373–393.
+https://doi.org/10.1177/0013164406294781
 
 Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., &
 Rubin, D. B. (2013). *Bayesian data analysis* (3rd ed.). CRC Press.
 
-Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
-Computer Communication Review, 18*(4), 314–329.
-https://doi.org/10.1145/52325.52356
+Guo, R., Zheng, Y., & Chang, H.-H. (2015). A stepwise test characteristic
+curve method to detect item parameter drift. *Journal of Educational
+Measurement, 52*(3), 280–300. https://doi.org/10.1111/jedm.12077
+
+Hau, K.-T., & Chang, H.-H. (2001). Item selection in computerized adaptive
+testing: Should more discriminating items be used first? *Journal of
+Educational Measurement, 38*(3), 249–266.
+https://doi.org/10.1111/j.1745-3984.2001.tb01126.x
+
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
+Horn, J. L. (1965). A rationale and test for the number of factors in factor
+analysis. *Psychometrika, 30*(2), 179–185.
+https://doi.org/10.1007/BF02289447
 
 Horvitz, D. G., & Thompson, D. J. (1952). A generalization of sampling without
 replacement from a finite universe. *Journal of the American Statistical
 Association, 47*(260), 663–685.
 https://doi.org/10.1080/01621459.1952.10483446
 
+Huebner, A., & Lucht, M. (2019). Generalizability theory in R. *Practical
+Assessment, Research, and Evaluation, 24*, Article 5.
+https://openpublishing.library.umass.edu/pare/article/id/1593/
+
+Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
+Computer Communication Review, 18*(4), 314–329.
+https://doi.org/10.1145/52325.52356
+
 Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping
 unobserved item–respondent interactions: A latent space item response model
 with interaction map. *Psychometrika, 86*(2), 378–403.
 https://doi.org/10.1007/s11336-021-09762-5
-
-Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
-Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
-
-He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
-adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
-https://doi.org/10.1111/jedm.12373
 
 Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
 & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
@@ -252,46 +353,121 @@ Laplace, P.-S. (1774). Mémoire sur la probabilité des causes par les
 événements. *Mémoires de l'Académie Royale des Sciences de Paris, 6*,
 621–656. (Rule of succession; modern treatment in Gelman et al., 2013.)
 
+Linacre, J. M. (1989). *Many-facet Rasch measurement*. MESA Press.
+
 Lior, G., Frostig, T., Stanovsky, G., & Eyal, M. (2026). *Extending item
 response theory for efficient and meaningful multilingual evaluation*
 [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.15643
 
+Lord, F. M. (1950). *Properties of test scores expressed as functions of the
+item parameters* (Research Bulletin RB-50-56). Educational Testing Service.
+https://doi.org/10.1002/j.2333-8504.1950.tb00919.x
+
+Luo, X., Kim, D., & Dickison, P. (2018). Projection-based stopping rules for
+computerized adaptive testing in licensure testing. *Applied Psychological
+Measurement, 42*(4), 275–290.
+https://doi.org/10.1177/0146621617726790
+
+Magis, D. (2013). A note on the item information function of the
+four-parameter logistic model. *Applied Psychological Measurement, 37*(4),
+304–315. https://doi.org/10.1177/0146621613475471
+
+Maydeu-Olivares, A., & Joe, H. (2005). Limited- and full-information
+estimation and goodness-of-fit testing in 2ⁿ contingency tables: A unified
+framework. *Journal of the American Statistical Association, 100*(471),
+1009–1020. https://doi.org/10.1198/016214504000002069
+
+Meijer, R. R. (1996). Person-fit research: An introduction. *Applied
+Measurement in Education, 9*(1), 3–8.
+https://doi.org/10.1207/s15324818ame0901_2
+
+Millsap, R. E. (2010). Testing measurement invariance using item response
+theory in longitudinal data: An introduction. *Child Development
+Perspectives, 4*(1), 5–9.
+https://doi.org/10.1111/j.1750-8606.2009.00109.x
+
+Morris, T. P., White, I. R., & Crowther, M. J. (2019). Using simulation
+studies to evaluate statistical methods. *Statistics in Medicine, 38*(11),
+2074–2102. https://doi.org/10.1002/sim.8086
+
+Moses, T. P., & Holland, P. W. (2008). *Notes on a general framework for
+observed score equating* (Research Report No. RR-08-59). Educational Testing
+Service. https://doi.org/10.1002/j.2333-8504.2008.tb02145.x
+
+Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
+
+Oakes, D. (1999). Direct calculation of the information matrix via the EM.
+*Journal of the Royal Statistical Society: Series B, 61*(2), 479–482.
+https://doi.org/10.1111/1467-9868.00188
+
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs
 with preference data*. arXiv. https://arxiv.org/abs/2406.18665
+
+Pritikin, J. N. (2017). A comparison of parameter covariance estimation
+methods for item response models in an expectation-maximization framework.
+*Cogent Psychology, 4*(1), 1279435.
+https://doi.org/10.1080/23311908.2017.1279435
+
+Rudner, L. M. (2001). Computing the expected proportions of misclassified
+examinees. *Practical Assessment, Research & Evaluation, 7*(14), 1–5.
+https://doi.org/10.7275/an9m-2035
+
+Rudner, L. M. (2005). Expected classification accuracy. *Practical
+Assessment, Research & Evaluation, 10*(13), 1–4.
+https://doi.org/10.7275/56a5-6b14
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
 (2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
 response theory* [Preprint]. arXiv.
 https://doi.org/10.48550/arXiv.2506.01048
 
-Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
-feedback through counterfactual risk minimization. *Journal of Machine Learning
-Research, 16*(52), 1731–1755.
-https://jmlr.org/papers/v16/swaminathan15a.html
+Stanley, L. M., & Edwards, M. C. (2016). Reliability and model fit.
+*Educational and Psychological Measurement, 76*(6), 976–985.
+https://doi.org/10.1177/0013164416638900
+
+Stenhaug, B. A., & Domingue, B. W. (2022). Predictive fit metrics for item
+response models. *Applied Psychological Measurement, 46*(2), 128–143.
+https://doi.org/10.1177/01466216211066603
 
 Stocking, M. L., & Lord, F. M. (1983). Developing a common metric in item
 response theory. *Applied Psychological Measurement, 7*(2), 201–210.
 https://doi.org/10.1177/014662168300700208
 
-French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
-use with logistic regression for differential item functioning detection.
-*Educational and Psychological Measurement, 67*(3), 373–393.
-https://doi.org/10.1177/0013164406294781
-
-Bock, R. D., & Aitkin, M. (1981). Marginal maximum likelihood estimation of
-item parameters: Application of an EM algorithm. *Psychometrika, 46*(4),
-443–459. https://doi.org/10.1007/BF02293801
-
-Eckes, T. (2015). *Introduction to many-facet Rasch measurement* (2nd ed.).
-Peter Lang. https://doi.org/10.3726/978-3-653-04844-5
-
-Linacre, J. M. (1989). *Many-facet Rasch measurement*. MESA Press.
+Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
+feedback through counterfactual risk minimization. *Journal of Machine Learning
+Research, 16*(52), 1731–1755.
+https://jmlr.org/papers/v16/swaminathan15a.html
 
 Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
 functioning using logistic regression procedures. *Journal of Educational
 Measurement, 27*(4), 361–370.
 https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
+
+Taylor, H. C., & Russell, J. T. (1939). The relationship of validity
+coefficients to the practical effectiveness of tests in selection:
+Discussion and tables. *Journal of Applied Psychology, 23*(5), 565–578.
+https://doi.org/10.1037/h0057079
+
+Tendeiro, J. N., Meijer, R. R., & Niessen, A. S. M. (2016). PerFit: An R
+package for person-fit analysis in IRT. *Journal of Statistical Software,
+74*(5), 1–27. https://doi.org/10.18637/jss.v074.i05
+
+Tinsley, H. E. A., & Dawis, R. V. (1975). An investigation of the Rasch
+simple logistic model: Sample free item and test calibration. *Educational
+and Psychological Measurement, 35*(2), 325–336.
+https://doi.org/10.1177/001316447503500211
+
+Tran, U. S., & Formann, A. K. (2009). Performance of parallel analysis in
+retrieving unidimensionality in the presence of binary data. *Educational
+and Psychological Measurement, 69*(1), 50–61.
+https://doi.org/10.1177/0013164408318761
+
+Xu, J., Paek, I., & Xia, Y. (2017). Investigating the behaviors of M2 and
+RMSEA2 in fitting a unidimensional model to multidimensional data. *Applied
+Psychological Measurement, 41*(8), 632–644.
+https://doi.org/10.1177/0146621617710464
 
 Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
 Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
