@@ -1,5 +1,32 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 paired outcome and latency evidence repair
+
+The NIM policy summary counted failures in the denominator, but its paired
+comparison dropped every task where either policy failed. Source commit
+`42f774d6` repairs that mismatch and adds mean elapsed-time comparisons using
+the existing paired-bootstrap implementation. The report now preserves failed
+and timed-out pairs, shows success and unmatched-task counts, and leaves raw
+unscored answers null. Report version 2 distinguishes this delivery estimand
+from the success-conditioned version 1 results.
+
+The unit regression changes the known delivered-score difference from an
+incorrect tie to `-0.5` on two paired tasks. It also reports the hand-checked
+`950` ms mean elapsed-time difference with interval `[-50, 1950]`. These are
+calculation-contract checks, not buyer accuracy or latency gains. The focused
+NIM, release-acceptance, and workflow-contract suites passed 149 tests on
+`42f774d6`; subsequent commits must carry their own verification record.
+
+This proposed slice depends on the psychometric integration in PR #1067.
+Protected parent delivery, independent review, and hosted validation remain
+required. Existing 30-jointly-successful-pair and completion gates are unchanged.
+The [technical and research record](doctoring/nim-benchmark-evidence-grade.md)
+contains the product requirement, comparison contract, UML sequence, alternatives,
+and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
+migration. Paired p95 inference and representative buyer observations remain
+open. RankWeave's released retrieval comparison API does not provide the
+needed response-time quantile contract.
+
 ## 2026-09-05 psychometric successor reconciliation
 
 PR [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)

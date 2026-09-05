@@ -167,12 +167,73 @@ is met, production routing remains a human decision and
 `routing_recommendation` stays null.
 
 Paired bootstrap intervals preserve task pairing and expose uncertainty in mean
-score differences. Pareto frontiers show quality against latency and reviewed
+delivered-score and terminal-outcome-time differences. Pareto frontiers show quality against latency and reviewed
 hypothetical cost; policies with unknown cost are excluded from that cost
 frontier and named explicitly. HELM motivates standardized multi-metric
 conditions and visible incompleteness. FrugalGPT and RouteLLM motivate measuring
 cost-quality routing trade-offs, but their results are not treated as evidence
 for this repository's models or tasks.
+
+### Failure-inclusive comparison repair (2026-09-05, proposed)
+
+The previous paired comparison selected only jointly successful cells even
+though policy summaries included failure in their denominators. This changed
+the quantity being estimated between the summary and its uncertainty interval.
+The regression fixture gives policy A one successful answer and one failure,
+and policy B two successful answers. The old comparison drops the failed pair
+and reports a tie. Version 2 retains both pairs and reports mean delivered-score
+difference `-0.5`, with percentile interval `[-1, 0]`. Elapsed-time differences
+of `-50` and `1950` ms give a mean of `950` ms and interval `[-50, 1950]`.
+These hand-checked unit-test values validate calculations, not model accuracy
+or a production latency improvement.
+
+The product requirement is to compare successful task delivery per attempted
+task. The technical contract reuses the existing paired mean-bootstrap routine
+with the same sorted task identities and seed for score and elapsed time.
+Successful-outcome and unmatched-task counts expose the denominator; duplicate
+observations, invalid outcomes, non-finite or negative elapsed times, and
+invalid successful scores fail closed. Raw unscored responses remain null.
+No failure reward is written into the psychometric response ledger.
+
+Efron (1979) grounds resampling observed units; choosing task delivery as the
+reward is this product's declared evaluation decision. The rejected alternative
+was conditioning the headline comparison on both policies succeeding, which
+hides reliability differences. The retained limitation is inference conditional
+on the observed shared tasks and selected policies. A one-sided missing task is
+reported but cannot be imputed, and the hindsight baseline's selection
+uncertainty is not included. The 30-successful-pair and completion gates remain
+unchanged, and routing recommendations remain absent. Task-level resampling
+assumes independent task units; shared task families or time dependence require
+a corresponding grouped sampling design before population inference.
+
+```mermaid
+sequenceDiagram
+    participant Runs as Policy runs
+    participant Cells as Observed task cells
+    participant Pairs as Locked-task pairing
+    participant Report as Comparison report
+    Runs->>Cells: Outcome, optional answer score, elapsed time
+    Cells->>Pairs: Match policy observations by task identity
+    Pairs->>Report: Shared and unmatched task counts
+    Pairs->>Report: Delivered-score difference and interval
+    Pairs->>Report: Terminal-outcome-time difference and interval
+    Note over Cells,Report: Failed raw scores remain null; production gates still apply
+```
+
+The [released RankWeave `v0.18.0` comparison API](https://github.com/ContextualWisdomLab/RankWeave/blob/61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6/src/rankweave/comparison.py) is restricted to retrieval
+metrics and paired randomization. It does not accept generic response times or
+provide a paired p95 interval, so this repair does not add that dependency or
+reinterpret retrieval scores as latency. A future p95 comparison needs a
+released statistical-owner contract that resamples shared task pairs and
+subtracts the two policy quantiles within each resample, plus a declared
+sampling/error design. Mean intervals are not p95 evidence.
+
+The coverage audit also exposed two price-validation tests that accepted the
+unrelated, earlier hosted-access-expiry error. Commit `9b4cc199` isolates that
+separate precondition and checks the exact intended price-rejection category.
+The actual hosted-access expiry tests and production validation remain intact.
+All 149 focused tests then pass, with 1,223 statements and 446 branches covered
+at 100% and public docstring coverage at 100% on that source commit.
 
 ## Workflow and credential separation
 
@@ -224,6 +285,10 @@ of Standards and Technology. https://doi.org/10.6028/NIST.AI.600-1
 Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
 models while reducing cost and improving performance. *arXiv*.
 https://doi.org/10.48550/arXiv.2305.05176
+
+Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
+*The Annals of Statistics, 7*(1), 1–26.
+https://doi.org/10.1214/aos/1176344552
 
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110;
 STD 97). RFC Editor. https://doi.org/10.17487/RFC9110

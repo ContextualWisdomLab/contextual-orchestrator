@@ -472,6 +472,16 @@ psychometric evidence", never a portable ability rank.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
+  *The Annals of Statistics, 7*(1), 1–26.
+  https://doi.org/10.1214/aos/1176344552
+  Grounds resampling observed units for uncertainty. NIM report version 2
+  reuses the existing paired mean-bootstrap routine for delivered-task score
+  and terminal-outcome time on all shared locked tasks, including failures.
+  The score definition is a declared product reward; it does not impute an
+  unobserved psychometric response. Mean intervals do not establish p95
+  performance. Citation and summary only; redistribution was not established.
+
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
   `helm-holistic-evaluation-2211.09110.pdf`
