@@ -224,6 +224,7 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
         assert "free-mock-model" in model_ids
         models_blob = json.dumps(models_body)
         assert "mock://" not in models_blob
+        assert discovered.chat_base_url not in models_blob
         assert "OPENROUTER_API_KEY" not in models_blob
         assert "router-secret" not in models_blob
 
