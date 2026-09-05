@@ -194,14 +194,26 @@ class ProviderUpstreamError(RuntimeError):
 
     @property
     def detail(self) -> dict[str, Any]:
-        """Return the structured evidence attached to API error payloads."""
-        return {
+        """Return the structured evidence attached to API error payloads.
+
+        ``attempts``/``stop_reason`` are absent unless a caller (currently
+        only ``TaskOrchestrator._invoke``'s candidate-pool failover loop) sets
+        them dynamically after construction, so every other construction site
+        and this property's original five-key contract are unaffected.
+        """
+        detail: dict[str, Any] = {
             "agent_id": self.agent_id,
             "model": self.model,
             "provider_status": self.provider_status,
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        attempts = getattr(self, "attempts", None)
+        stop_reason = getattr(self, "stop_reason", None)
+        if attempts or stop_reason is not None:
+            detail["attempts"] = attempts or []
+            detail["stop_reason"] = stop_reason or "unknown"
+        return detail
 
 
 def classify_provider_failure(

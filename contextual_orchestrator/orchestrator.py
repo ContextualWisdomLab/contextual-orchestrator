@@ -214,7 +214,52 @@ class BudgetExceededError(RuntimeError):
 
 
 class ProviderResponseError(RuntimeError):
-    """Raised for a provider response that cannot become a safe completion."""
+    """Raised for a provider response that cannot become a safe completion.
+
+    ``attempts``/``stop_reason`` mirror the same optional, caller-set fields
+    :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError`
+    carries: every existing construction site across this module passes only
+    a positional message, so they default to ``None`` and ``.detail`` stays
+    empty for those. Only ``TaskOrchestrator._invoke``'s bounded-pool
+    exhaustion path sets them, once every allowed candidate has raised this
+    error.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        attempts: list[dict[str, Any]] | None = None,
+        stop_reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.stop_reason = stop_reason
+        self._detail: dict[str, Any] = {}
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        """Return the caller-owned detail dict with failover evidence kept current.
+
+        The same mutable dict is returned on every read, so sibling error
+        types and callers may assign or extend it (``error.detail = {...}``,
+        ``error.detail["key"] = ...``) and their writes persist. Whenever
+        ``attempts``/``stop_reason`` are set, they are mirrored into it on
+        read so the evidence never goes stale. Never echoes the raw
+        malformed-response text that produced this error (CWE-209): only the
+        same machine-readable ``_failover_attempt_record`` fields
+        (``reason_code``/``retry_safe`` and friends), exactly like
+        :class:`~contextual_orchestrator.provider_errors.ProviderUpstreamError.detail`.
+        """
+        if self.attempts or self.stop_reason is not None:
+            self._detail["attempts"] = self.attempts or []
+            self._detail["stop_reason"] = self.stop_reason or "unknown"
+        return self._detail
+
+    @detail.setter
+    def detail(self, value: dict[str, Any]) -> None:
+        """Adopt a caller-supplied detail dict; failover evidence is re-mirrored on read."""
+        self._detail = value
 
 
 class ProviderRequestTooLargeError(ProviderUpstreamError):
@@ -1590,13 +1635,21 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
     return False
 
 
-def _is_request_too_large_error(exc: BaseException) -> bool:
-    """Recognize request-size rejection through a bounded exception chain."""
+def _find_request_too_large_error(exc: BaseException) -> BaseException | None:
+    """Return the chain node proving a request-size rejection, if any.
+
+    Shared bounded cause-before-context traversal (cycle guard,
+    ``__suppress_context__``, ``_PROVIDER_ERROR_CHAIN_LIMIT``) for every
+    caller that needs to know *both* whether a request-size rejection
+    occurred *and* which node in the chain proved it -- e.g. attempt
+    telemetry, which must report the node's own HTTP status rather than
+    assume 413 (an oversized-tool-description rejection carries HTTP 400).
+    """
     current: BaseException | None = exc
     seen: set[int] = set()
     for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
         if current is None or id(current) in seen:
-            return False
+            return None
         seen.add(id(current))
         if isinstance(current, ProviderRequestTooLargeError) or (
             isinstance(current, urllib.error.HTTPError)
@@ -1605,14 +1658,19 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
                 or _is_oversized_tool_description_error(current)
             )
         ):
-            return True
+            return current
         if current.__cause__ is not None:
             current = current.__cause__
         elif current.__suppress_context__:
-            return False
+            return None
         else:
             current = current.__context__
-    return False
+    return None
+
+
+def _is_request_too_large_error(exc: BaseException) -> bool:
+    """Recognize request-size rejection through a bounded exception chain."""
+    return _find_request_too_large_error(exc) is not None
 
 
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
@@ -7771,6 +7829,10 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        # Every candidate this call actually tried, in order, so an exhausted
+        # pool's raised exception can say *which routes were tried and why the
+        # loop stopped* -- not just the one most recent failure.
+        attempts: list[dict[str, Any]] = []
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -7784,6 +7846,17 @@ class TaskOrchestrator:
                     )
                 except Exception as exc:
                     if _is_request_too_large_error(exc):
+                        # This candidate rejected the request as oversized: it
+                        # still exhausted a route, so it must not vanish from
+                        # attempt history -- both when every candidate is
+                        # oversized (folded into the aggregate
+                        # ProviderRequestTooLargeError below) and when it is
+                        # mixed with other failure kinds (this record then
+                        # rides along inside `attempts` to whichever
+                        # exception actually gets raised on exhaustion).
+                        attempts.append(
+                            self._failover_attempt_record(agent, exc, None, retry_attempt)
+                        )
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
@@ -7816,6 +7889,9 @@ class TaskOrchestrator:
                         ):
                             excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
+                            attempts.append(
+                                self._failover_attempt_record(agent, exc, None, retry_attempt)
+                            )
                             break
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
@@ -7834,6 +7910,9 @@ class TaskOrchestrator:
                         decision = classify_tool_failure(exc)
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
+                        attempts.append(
+                            self._failover_attempt_record(agent, exc, decision, retry_attempt)
+                        )
                         break
                     else:
                         decision = classify_tool_failure(exc)
@@ -7865,6 +7944,9 @@ class TaskOrchestrator:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
+                    attempts.append(
+                        self._failover_attempt_record(agent, exc, decision, retry_attempt)
+                    )
                     break
                 # Success: one Bernoulli observation plus measured latency, and
                 # provider-reported completion tokens when available feeding the
@@ -7886,14 +7968,73 @@ class TaskOrchestrator:
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
         ):
+            last_provider_response_error.attempts = attempts
+            last_provider_response_error.stop_reason = "all_candidates_exhausted"
             raise last_provider_response_error
         if candidates and every_failure_was_request_too_large:
-            raise ProviderRequestTooLargeError(
+            request_too_large_error = ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+            request_too_large_error.attempts = attempts
+            request_too_large_error.stop_reason = "request_too_large"
+            raise request_too_large_error
         if last_upstream_error is not None:
+            last_upstream_error.attempts = attempts
+            last_upstream_error.stop_reason = "all_candidates_exhausted"
             raise last_upstream_error
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
+        raise RuntimeError(
+            f"all {len(candidates)} candidate agents failed for role={role} (attempts={attempts})"
+        ) from None
+
+    def _failover_attempt_record(
+        self,
+        agent: ModelAgent,
+        exc: Exception,
+        decision: ToolFailureDecision | None,
+        retry_attempt: int,
+    ) -> dict[str, Any]:
+        """Build one caller-safe record of a candidate this call exhausted.
+
+        Only already-classified, already-redacted evidence ever populates a
+        record: a :class:`ProviderUpstreamError`'s own typed attributes for a
+        transport failure, the same bounded exception-chain request-size
+        classifier ``_is_request_too_large_error`` uses for a raw or wrapped
+        provider 413 (or oversized-tool-description 400) that never became a
+        typed :class:`ProviderUpstreamError`, or a tool-fallback decision's
+        stable ``reason_code``/``retry_safe`` for anything else -- never the
+        raw exception text, which can carry secrets, prompts, or upstream
+        diagnostics (CWE-209). This mirrors :meth:`_record_tool_fallback`'s
+        existing secret-free audit-event shape.
+        """
+        request_too_large_node = _find_request_too_large_error(exc)
+        if isinstance(exc, ProviderUpstreamError):
+            error_code = exc.error_code
+            provider_status = exc.provider_status
+            retryable = exc.retryable
+        elif request_too_large_node is not None:
+            error_code = "request_too_large"
+            retryable = False
+            if isinstance(request_too_large_node, ProviderUpstreamError):
+                provider_status = request_too_large_node.provider_status
+            else:
+                provider_status = request_too_large_node.code
+        elif decision is not None:
+            error_code = decision.reason_code
+            provider_status = None
+            retryable = decision.retry_safe
+        else:  # pragma: no cover - defensive; every non-ProviderUpstreamError caller classifies first
+            error_code = "unknown"
+            provider_status = None
+            retryable = False
+        return {
+            "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name,
+            "error_code": error_code,
+            "provider_status": provider_status,
+            "retryable": retryable,
+            "retry_attempt": retry_attempt,
+        }
 
     def _record_tool_fallback(
         self,
