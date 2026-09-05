@@ -276,13 +276,29 @@ def evaluate_provider_credential_inventory(
     if not to_evaluate:
         return ProviderCredentialInventoryVerdict(True, None, None)
 
-    provider_by_credential = {
-        source.credential_name: source.provider_name for source in provider_model_sources
-    }
+    # Several sources can share one credential (OpenCode Zen and the optional
+    # Go subscription both use OPENCODE_ZEN_API_KEY), so this is a one-to-many
+    # map: a one-to-one one silently kept only the last-declared source and
+    # judged every rollback of that credential against the wrong provider's
+    # evidence -- reporting a real, classified Zen failure as an "unexplained
+    # rollback" hard-fail. A credential with no declared source keeps the
+    # previous fallback of standing in as its own provider name.
+    providers_by_credential: dict[str, set[str]] = {}
+    for source in provider_model_sources:
+        providers_by_credential.setdefault(source.credential_name, set()).add(
+            source.provider_name
+        )
     providers_with_errors = {
         name for name in report.get("providers_with_errors", ()) if isinstance(name, str)
     }
     error_classifications = dict(report.get("provider_error_classifications", {}) or {})
+
+    def failing_providers(credential_name: str) -> list[str]:
+        """Return the sorted sources sharing ``credential_name`` that failed."""
+        return sorted(
+            providers_by_credential.get(credential_name, {credential_name})
+            & providers_with_errors
+        )
 
     unconfigured = sorted(
         name for name in to_evaluate if not (environ.get(name) or "").strip()
@@ -294,11 +310,7 @@ def evaluate_provider_credential_inventory(
             None,
         )
 
-    unexplained = sorted(
-        name
-        for name in to_evaluate
-        if provider_by_credential.get(name) not in providers_with_errors
-    )
+    unexplained = sorted(name for name in to_evaluate if not failing_providers(name))
     if unexplained:
         return ProviderCredentialInventoryVerdict(
             False,
@@ -306,16 +318,23 @@ def evaluate_provider_credential_inventory(
             None,
         )
 
+    # Every failed source sharing the credential must be individually
+    # tolerable: one transient sibling never excuses another's auth failure.
     non_transient = sorted(
         name
         for name in to_evaluate
-        if error_classifications.get(provider_by_credential.get(name, ""))
-        != TRANSIENT_FAILURE_CLASSIFICATION
+        if any(
+            error_classifications.get(provider) != TRANSIENT_FAILURE_CLASSIFICATION
+            for provider in failing_providers(name)
+        )
     )
     if non_transient:
         observed = {
-            name: error_classifications.get(
-                provider_by_credential.get(name, ""), UNKNOWN_FAILURE_CLASSIFICATION
+            name: next(
+                error_classifications.get(provider, UNKNOWN_FAILURE_CLASSIFICATION)
+                for provider in failing_providers(name)
+                if error_classifications.get(provider)
+                != TRANSIENT_FAILURE_CLASSIFICATION
             )
             for name in non_transient
         }
@@ -327,9 +346,11 @@ def evaluate_provider_credential_inventory(
         )
 
     # Credential-backed provider accounts remain independent here. Sharing a
-    # vendor or endpoint is not evidence that catalogs or failures are equal.
+    # vendor, endpoint, or credential is not evidence that catalogs or
+    # failures are equal, so this counts the distinct sources that actually
+    # failed -- two sources sharing one key are two degraded accounts.
     affected_providers = sorted(
-        {provider_by_credential.get(name, name) for name in to_evaluate}
+        {provider for name in to_evaluate for provider in failing_providers(name)}
     )
     if len(affected_providers) > max_tolerated_missing_providers:
         return ProviderCredentialInventoryVerdict(
@@ -577,16 +598,29 @@ def bootstrap_provider_catalog_runtime(
             else 0
         )
         failed_provider_names = {error.provider_name for error in errors}
+        live_accounts = {_model_key(model) for model in live_models}
+        # One credential can back more than one provider source: OpenCode Zen
+        # and the optional OpenCode Go subscription both authenticate with
+        # OPENCODE_ZEN_API_KEY. A source failing is evidence about *that
+        # source*, never proof the shared credential itself is bad -- an
+        # account with a working Zen subscription and no Go entitlement gets
+        # an expected 401 (or an empty catalog) from Go every single run.
+        # Roll a credential back only when every source it backs failed, so
+        # that expected optional-source failure cannot delete the key the
+        # live Zen models authenticate with (which would drop them from
+        # ``usable_models`` below and hard-fail bootstrap outright for a
+        # Zen-only account).
+        sources_by_credential: dict[str, list[ProviderModelSource]] = {}
+        for source in source_tuple:
+            if source.credential_name in registered:
+                sources_by_credential.setdefault(source.credential_name, []).append(source)
         failed_credentials = {
-            source.credential_name
-            for source in source_tuple
-            if source.credential_name in registered
-            and (
+            name
+            for name, credential_sources in sources_by_credential.items()
+            if all(
                 source.provider_name in failed_provider_names
-                or not any(
-                    _model_key(model) == _source_key(source)
-                    for model in live_models
-                )
+                or _source_key(source) not in live_accounts
+                for source in credential_sources
             )
         }
         restored_credentials = _restore_provider_credentials_atomically(

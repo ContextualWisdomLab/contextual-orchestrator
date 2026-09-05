@@ -306,7 +306,7 @@ confidential-client secret placement remain deployment-controller operations.
 Once a provider's credential is registered in the KV, `contextual_orchestrator`
 can discover that provider's available models and turn them into agent-pool
 candidates automatically — no hand-written `agents.json` entry required.
-`contextual_orchestrator/model_discovery.py` covers six providers out of the
+`contextual_orchestrator/model_discovery.py` covers seven provider sources out of the
 box, all resolved through `get_credential` (never fabricated, never read from
 `os.getenv`):
 
@@ -314,10 +314,18 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | ------------------ | ------------------------ | ------------------ |
 | OpenAI              | `OPENAI_API_KEY`         | `Bearer <token>`   |
 | OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
+| OpenCode Zen        | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
+| OpenCode Go         | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
-| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Bytez               | `BYTEZ_API_KEY`          | `<token>`          |
 | Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+OpenCode Go uses a distinct catalog and serving endpoint, but the same account
+credential as OpenCode Zen. Register `OPENCODE_ZEN_API_KEY` once in the KV;
+discovery never reads a second Go-specific secret from the environment. Only
+models.dev rows assigned to the OpenAI-compatible protocol enter this chat
+endpoint; Responses- and Anthropic-protocol rows fail closed.
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
@@ -330,7 +338,7 @@ When serving the persisted agents, pass the same host with
 `--allowed-provider-host`; startup discovery reads this injected runtime policy
 and never re-reads or promotes gateway environment values.
 
-Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
+Bytez's raw token scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
 doesn't use the OpenAI-compatible default.
 
