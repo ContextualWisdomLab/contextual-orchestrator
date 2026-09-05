@@ -1,5 +1,24 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 observed-data admission audit
+
+The [response-time research audit](doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+distinguishes xRouteBench's advertised observations from LLMRouterBench's
+estimated latency. Three controlled cases confirm that the inspected xRouteBench
+collector preserves returned API-error elapsed time but replaces an escaped
+exception's duration with zero. This is source-contract evidence, not an audited
+failure count in the published dataset. Data-to-code lineage, outcome coverage,
+sampling validity, and dataset redistribution permission remain unresolved.
+
+No buyer accuracy or p95 result is claimed. The admissible next step is the
+declared observed-matrix audit, followed by any missing statistical-owner release;
+no new estimator or production policy is introduced here. The licensed LLMRouter
+paper, citation inventory, and research record travel with draft PR #1074.
+Its preceding exact executable head `1600b1d547ca121f022cb63d622672851ddf1745`
+passed 3,432 local tests with two skips in 664.58 seconds. These documentation
+and paper additions need their own inventory validation and protected review;
+that earlier full-suite result is not a new-head hosted-check claim.
+
 ## 2026-09-05 paired outcome and latency evidence repair
 
 The NIM policy summary counted failures in the denominator, but its paired

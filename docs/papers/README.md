@@ -472,6 +472,31 @@ psychometric evidence", never a portable ability rank.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+  Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+  for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2608.06867
+  Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
+  `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
+  The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
+  citation above. The paper introduces xRouteBench for quality/cost routing.
+  Its paper license does not establish rights to redistribute the dataset.
+  The [public response-time audit](../doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+  records separate data/code revisions and unresolved failure-time provenance.
+  No reported paper result is a measured gain for this gateway.
+
+- Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
+  Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
+  and unified framework for LLM routing. In *Findings of the Association for
+  Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
+  Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
+  [Publisher record and PDF](https://aclanthology.org/2026.findings-acl.1881/).
+  This is not xRouteBench. Section 4.2.2 and Figure 8 estimate latency from tokens and
+  serving statistics; those estimates cannot establish observed request-level
+  p95 or gateway overhead. Citation and summary only; redistribution permission
+  for this PDF was not established in this audit.
+
 - Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
   *The Annals of Statistics, 7*(1), 1–26.
   https://doi.org/10.1214/aos/1176344552

@@ -235,6 +235,89 @@ The actual hosted-access expiry tests and production validation remain intact.
 All 149 focused tests then pass, with 1,223 statements and 446 branches covered
 at 100% and public docstring coverage at 100% on that source commit.
 
+### Public response-time evidence audit (2026-09-05, proposed)
+
+The next product requirement is a reproducible accuracy/time comparison on
+observed responses. A public benchmark is useful input only after its observation
+and sampling contracts are established; it is not automatically representative
+buyer evidence. This audit changes no production default, estimator, or dependency.
+
+Two similarly named sources must remain distinct:
+
+| Source | Evidence inspected | Admission decision |
+| --- | --- | --- |
+| Feng et al. (2026), LLMRouter / xRouteBench | Paper v1; dataset revision `ea4b6e1b29d9a734f55f0a637baf326bad6aa681`; collection-code revision `da3430baaea672743c3957457b0c76faba19876e` | Candidate for further provenance review, not admitted as failure-inclusive latency evidence. |
+| Li et al. (2026), LLMRouterBench | ACL paper, Section 4.2.2 and Figure 8, PDF p. 9 (proceedings p. 37741) | Its latency analysis uses token counts and serving statistics to estimate response time. It cannot establish observed request-level p95 or this gateway's decision overhead. |
+
+The pinned [xRouteBench card](https://huggingface.co/datasets/ulab-ai/xRouteBench/blob/ea4b6e1b29d9a734f55f0a637baf326bad6aa681/README.md)
+describes response times in seconds and generic train/test matrices of 80,802 and
+67,122 rows. These are publisher metadata, not locally audited row counts.
+Its blanket 18-candidate statement cannot be applied to personalized data:
+the same card lists 2,464 rows for 2,235 training queries. Do not assume complete
+pairing from the dataset name, total size, or a generic scenario's dimensions.
+
+The [outer collector](https://github.com/ulab-uiuc/LLMRouter/blob/da3430baaea672743c3957457b0c76faba19876e/llmrouter/data/api_calling_evaluation.py)
+times normal returns but writes zero duration when an exception escapes the
+call. The [inner API helper](https://github.com/ulab-uiuc/LLMRouter/blob/da3430baaea672743c3957457b0c76faba19876e/llmrouter/utils/api_calling.py)
+instead catches ordinary provider errors and preserves elapsed time. Thus the
+claim that *all API failures have zero latency* would be incorrect. The outer
+row also omits the inner structured error field; a separate success Boolean
+is returned to the collection loop, but the published card does not specify a
+terminal-outcome column.
+
+An isolated execution of the reviewed outer function, extracted with Python's
+standard-library AST without importing the upstream package, passed these three
+controlled checks. No provider call or dataset row was executed:
+
+| Controlled call result | Recorded seconds | Returned success flag |
+| --- | --- | --- |
+| Successful return; controlled clock advances seven seconds | 7 | true |
+| Returned API-error result; same controlled clock | 7 | false |
+| Exception escapes the call | 0 | false |
+
+This is a code-level counterexample, not evidence that published rows contain
+zero-duration failures. The dataset's generating code revision, attempt
+timestamps, retry history, and error counts remain unverified. A read-only
+dataset-viewer filter request timed out; no zero count, completeness finding,
+or tail estimate is inferred from that failure. The collector also uses
+model-dependent timeouts and wall-clock timing; its records are not proof of
+this gateway's current timeout policy or monotonic end-to-end measurement.
+
+The pinned dataset API/card declares no dataset license and contains no license
+file. Public access, the library's MIT code license, and the paper's CC BY 4.0
+license do not establish redistribution rights for constituent task data.
+Only the licensed paper is attached; no response rows, prompts, or dataset copy
+are committed. Missing permission metadata is an unresolved provenance item,
+not a conclusion that every research use is prohibited.
+
+Before using an observed matrix, record and verify:
+
+- the dataset revision, file hashes, permitted use, task/scorer versions, and
+  versioned model/deployment plus prompt/decode/tool settings;
+- unique task-model-attempt identities, train/test disjointness at the task
+  family or conversation level, intended/observed cell counts, and explicit
+  terminal outcomes including failures and timeouts;
+- observed versus estimated duration, the measured start/end events, retries,
+  censoring, and a declared treatment of missing duration that neither inserts
+  zero nor silently drops failed tasks from the headline population;
+- the target population, sampling and dependence units, error/precision goal,
+  quality non-inferiority margin, and locked policy choices before test scoring.
+
+The intended KPIs remain held-out delivered-score difference and separately
+measured decision-time and end-to-end p95 differences. A joint admission decision
+requires the preregistered accuracy margin and latency improvement with their
+uncertainty bounds; the existing 30-task floor is not a tail-precision argument.
+Any new generic quantile implementation belongs in a released Rust RankWeave
+contract before consumer adoption. The smaller current change is this admission
+record, not another unvalidated estimator.
+
+For psychometrics, a mixed collection of exact-match, F1, and judge scores in
+the same numeric range does not by itself define one latent response scale.
+Model/query orientation, scorer effects, local dependence, anchors, and
+invariance still require validation. A delivery reward can support a declared
+routing decision without becoming a portable model-ability estimate. This is
+our measurement-validity requirement, not a claim made by either benchmark.
+
 ## Workflow and credential separation
 
 `.github/workflows/nim-benchmark.yml` has separate dry and live jobs. The dry job
@@ -293,8 +376,19 @@ https://doi.org/10.1214/aos/1176344552
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110;
 STD 97). RFC Editor. https://doi.org/10.17487/RFC9110
 
+Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2608.06867
+
 Hinden, R., & Haberman, B. (2005). *Unique local IPv6 unicast addresses*
 (RFC 4193). RFC Editor. https://doi.org/10.17487/RFC4193
+
+Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
+Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
+and unified framework for LLM routing. In *Findings of the Association for
+Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
+Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
 
 Liang, P., Bommasani, R., Lee, T., Tsipras, D., Soylu, D., Yasunaga, M., Zhang,
 Y., Narayanan, D., Wu, Y., Kumar, A., Newman, B., Yuan, B., Yan, B., Zhang, C.,
