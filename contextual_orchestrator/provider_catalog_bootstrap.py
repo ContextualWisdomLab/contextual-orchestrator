@@ -371,13 +371,13 @@ def _restore_provider_credentials_atomically(
     backend = get_backend()
     ordered = tuple(sorted(previous_credentials))
     if isinstance(backend, InMemoryCredentialBackend):
-        with backend._lock:  # noqa: SLF001 - package-internal rollback transaction
+        with backend._credential_lock:  # noqa: SLF001 - package-internal rollback transaction
             for name in ordered:
                 previous = previous_credentials[name]
                 if previous is None:
-                    backend._store.pop(name, None)  # noqa: SLF001
+                    backend._credential_store.pop(name, None)  # noqa: SLF001
                 else:
-                    backend._store[name] = previous  # noqa: SLF001
+                    backend._credential_store[name] = previous  # noqa: SLF001
         return ordered
     if isinstance(backend, PostgresCredentialBackend):
         with backend._connect() as connection:  # noqa: SLF001 - package transaction
