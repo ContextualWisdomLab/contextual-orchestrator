@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.orchestrator import ProviderResponseError, ProviderUpstreamError
 
 
 def _response_format() -> dict[str, object]:
@@ -93,3 +96,58 @@ def test_malformed_synthesis_usage_survives_virtual_failover() -> None:
     assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
     assert orchestrator._group_router.member_report(second.id)["failure_count"] == 0
     assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
+
+
+@pytest.mark.parametrize("prior_response", [False, True])
+def test_response_rejection_before_return_never_reuses_prior_usage(prior_response: bool) -> None:
+    """A client rejection before return has no response usage to copy or dereference."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog", group_name="test_group")
+    rejected = ModelAgent("rejected_agent", "rejected-model", "mock://catalog", group_name="test_group")
+    final = ModelAgent("final_agent", "final-model", "mock://final", group_name="test_group")
+    candidates = [first, rejected, final]
+    orchestrator = TaskOrchestrator(candidates)
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == first.id:
+            if prior_response:
+                return {"choices": [{"message": {}}], "usage": _usage(7)}
+            raise ProviderUpstreamError(
+                agent_id=agent.id, model=agent.model, error_code="api_error",
+                message="upstream provider unavailable", client_status=502,
+                provider_status=502, retryable=True, transport="structured_synthesis",
+            )
+        if agent.id == rejected.id:
+            raise ProviderResponseError("provider response rejected before return")
+        return {"choices": [{"message": {"content": '{"input_count":10}'}}], "usage": _usage(3)}
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=candidates),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": _response_format(),
+            },
+            single_agent=False,
+        )
+
+    assert calls == [agent.id for agent in candidates]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    rejected_step = next(step for step in run["trace"] if step["agent_id"] == rejected.id)
+    assert rejected_step["validation_outcome"] == "provider_error"
+    assert "usage" not in rejected_step
+    assert sum(
+        step["usage"]["completion_tokens"] for step in run["trace"] if "usage" in step
+    ) == (10 if prior_response else 3)
+    assert orchestrator.budget_status()["spent_output_tokens"] is None
+    for agent in (first, rejected):
+        assert orchestrator._circuit[agent.id]["failures"] == 1
+        assert orchestrator._group_router.member_report(agent.id)["failure_count"] == 1
+    assert orchestrator._group_router.member_report(final.id)["success_count"] == 1

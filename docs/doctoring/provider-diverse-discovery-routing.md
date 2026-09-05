@@ -72,6 +72,20 @@ and prohibit the next provider call. Broader provider taxonomy, group, effort,
 and actual HTTP-handler regressions passed 124 tests; this is not hosted or
 live-provider acceptance evidence.
 
+Independent review then reproduced a client exception before any response
+object was returned. After a prior 502 this raised `UnboundLocalError`; after
+a prior malformed object it copied that object's usage into the next attempt.
+Both cases failed on `18a29d144a4e2c14e607bfe7886fd486ba469190`. This is a
+supported client-boundary reproduction, not a claim that the ordinary HTTP
+transport emitted a particular Content-Length failure. Reset the response
+per candidate and read usage only from a returned mapping. The new tests in
+`tests/test_structured_output_malformed_synthesis_usage.py` require one failure
+per rejected candidate, preservation of reported usage, no usage copied to the
+response-less attempt, and unavailable total usage rather than a false zero.
+All 178 focused budget/provider/group/effort/HTTP tests passed after that fix.
+The full run on `18a29d14` was explicitly interrupted after this finding
+(`exit 2`, `1199 passed in 299.44s`); it is not passing full-suite evidence.
+
 ## Research-to-code mapping
 
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |

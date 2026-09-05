@@ -24,6 +24,11 @@ The accounting regressions changed from `7 failed, 11 passed` to `18 passed`;
 the wider provider/group/effort/HTTP suite passed all 124 tests. Full-suite and
 hosted exact-head evidence for this additional correction must be recorded
 separately in the existing PR.
+The subsequent response-before-return regression additionally prevents an
+unassigned response read or reuse of another candidate's usage. Both cases
+failed on `18a29d14`; 178 focused tests pass after the correction. Unknown
+usage stays unavailable. The explicitly interrupted full run on `18a29d14`
+is excluded from passing evidence; see the same doctoring record.
 
 ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
 

@@ -26,6 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Structured fallback now counts each failed model once in routing health
   evidence, including failures before successful recovery or a spending stop.
   Request-size limits remain separate from provider failures.
+- Recovery from a rejected provider response no longer crashes or attributes
+  an earlier model's token usage to the rejected attempt. Missing usage remains
+  unavailable instead of being reported as zero.
 - Structured-output review follow-up now charges already-incurred synthesis
   and repair usage before propagating a budget stop, keeps failed workflow
   evidence queryable without counting it as a normal recent/completed KPI,

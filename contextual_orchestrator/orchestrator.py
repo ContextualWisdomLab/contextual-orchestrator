@@ -4798,6 +4798,7 @@ class TaskOrchestrator:
                         active_profile,
                         api_surface=api_surface,
                     )
+                response: dict[str, Any] | None = None
                 try:
                     send = self.client.proxy_send
                     if virtual_model:
@@ -4853,19 +4854,15 @@ class TaskOrchestrator:
                                 "output": "",
                                 "validation_outcome": "provider_error",
                             }
-                            if isinstance(response.get("usage"), dict):
+                            if isinstance(response, Mapping) and isinstance(response.get("usage"), dict):
                                 dropped_step["usage"] = _canonical_provider_usage(
                                     response["usage"], responses=response_request
                                 )
                             structured_attempt_steps.append(dropped_step)
                             record_synthesis_failure(candidate)
-                            # This malformed/dropped response was billed --
-                            # its usage is now recorded above. Check the
-                            # budget with that usage included *before*
-                            # advancing to another candidate: otherwise a
-                            # malformed response that itself exhausts the
-                            # budget lets another billed call proceed first,
-                            # exceeding the configured spending limit.
+                            # Check incurred usage before another call. A client
+                            # rejection before return has no reported usage;
+                            # never copy it from an earlier candidate.
                             enforce_structured_budget()
                             request_exclusions.add(candidate.id)
                             continue

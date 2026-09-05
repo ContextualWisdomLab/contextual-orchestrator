@@ -76,6 +76,9 @@ push or open a PR.
   flag must not hide a later hard failure or charge an earlier error to a later
   413 candidate. Test real counters, not only mocked callback counts, including
   recovery, exhaustion, mixed failure order, and billed malformed output.
+  Distinguish a malformed returned object from a client exception before
+  return: reset response state per attempt, never copy prior usage, and keep
+  unreported usage unavailable rather than fabricating a zero count.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
