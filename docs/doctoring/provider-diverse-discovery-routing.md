@@ -114,6 +114,19 @@ rejection, pre-excluded initial candidates, and a later-endpoint malformed
 response that must stop before exceeding the budget. Full-suite, hosted, and
 protected-main receipts remain separate evidence.
 
+Independent source review at `2582176d92662b2797af4ed072aa7e71883d6982`
+then found two sibling-path failures. All malformed responses, including mixed
+malformed/413 orders, exhausted into a size-limit error even when no provider
+reported 413. A repair rejected by the client before return bypassed the
+returned-malformed-response handler, losing the synthesis usage and failed-run
+record. Eight new cases failed (`8 failed, 3 passed`). The shared exhaustion
+path now retains a malformed-response failure before considering size-only
+exhaustion, and both pre-return and returned malformed repairs share one
+handler. Repair response state starts empty, preserving known synthesis usage
+without copying it into the unavailable repair usage. All 60 focused tests
+pass. The full run at `2582176d` was explicitly interrupted after this finding
+(`exit 2`, `568 passed in 153.54s`); it is not full-suite passing evidence.
+
 ## Research-to-code mapping
 
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |

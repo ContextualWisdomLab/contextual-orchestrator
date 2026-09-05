@@ -38,6 +38,11 @@ suite now passes `52/52`. Virtual AUTO/FREE requests can exhaust each already
 eligible model across endpoints; explicit selections and budget enforcement
 remain bounded. This is proposed local remediation, not protected or live
 acceptance. See the same doctoring record for the corrected contract audit.
+An additional eight-case RED on `2582176d` covered malformed-only/mixed-413
+exhaustion and pre-return repair failures for virtual and concrete models.
+The shared correction preserves the response-failure category and failed-run
+usage evidence; all 60 focused cases pass. The interrupted full run on
+`2582176d` is not acceptance evidence for this correction.
 
 ## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
 

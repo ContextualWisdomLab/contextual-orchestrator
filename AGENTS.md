@@ -79,6 +79,9 @@ push or open a PR.
   Distinguish a malformed returned object from a client exception before
   return: reset response state per attempt, never copy prior usage, and keep
   unreported usage unavailable rather than fabricating a zero count.
+  Apply this to repair calls that fail before returning as well. Exhausted
+  malformed responses must not be classified as an all-provider size limit;
+  test all-malformed and mixed malformed/413 orders before accepting that error.
 - A stale-model response does not create a caller-selected endpoint constraint.
   Virtual structured recovery must visit the already-eligible distinct models,
   including later endpoint siblings, while preserving explicit model/endpoint,

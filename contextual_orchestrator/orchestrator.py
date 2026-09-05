@@ -4743,6 +4743,7 @@ class TaskOrchestrator:
             preferred = final_agent
             last_model_not_found: ProviderUpstreamError | None = None
             last_retryable_upstream_error: ProviderUpstreamError | None = None
+            last_response_error: ProviderResponseError | None = None
             saw_request_too_large = False
             ordered_candidates = (
                 [preferred]
@@ -4811,6 +4812,7 @@ class TaskOrchestrator:
                             virtual_model
                             and isinstance(exc, ProviderResponseError)
                         ):
+                            last_response_error = exc
                             dropped_step = {
                                 "id": len(workflow["trace"])
                                 + len(structured_attempt_steps),
@@ -4861,6 +4863,8 @@ class TaskOrchestrator:
                         raise classified from None
             if last_retryable_upstream_error is not None:
                 raise last_retryable_upstream_error
+            if last_response_error is not None:
+                raise last_response_error
             if last_model_not_found is not None and not saw_request_too_large:
                 raise last_model_not_found
             raise ProviderRequestTooLargeError(
@@ -5053,12 +5057,14 @@ class TaskOrchestrator:
                     {"role": "system", "content": repair_instruction},
                 ]
             repair_started = time.perf_counter()
+            repaired: dict[str, Any] | None = None
             try:
                 repaired, final_agent = send_synthesis(
                     repair_upstream,
                     allow_cross_candidate_fallback=False,
                     require_output=False,
                 )
+                repaired_output = provider_output(final_agent, repaired)
             except ProviderUpstreamError as exc:
                 if virtual_model and _is_request_too_large_error(exc):
                     repair_step = {
@@ -5104,8 +5110,6 @@ class TaskOrchestrator:
                     failure_code=exc.error_code,
                 )
                 raise
-            try:
-                repaired_output = provider_output(final_agent, repaired)
             except ProviderResponseError:
                 repair_step = {
                     "id": len(workflow["trace"]) + len(structured_attempt_steps),
@@ -5119,7 +5123,7 @@ class TaskOrchestrator:
                     "output": "",
                     "validation_outcome": "provider_error",
                 }
-                if isinstance(repaired.get("usage"), dict):
+                if isinstance(repaired, Mapping) and isinstance(repaired.get("usage"), dict):
                     repair_step["usage"] = _canonical_provider_usage(
                         repaired["usage"], responses=response_request
                     )
