@@ -11,6 +11,7 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -56,6 +57,33 @@ def _fresh_backend():
         set_backend(None)
         if saved_env is not None:
             os.environ[nb.NIM_CREDENTIAL_NAME] = saved_env
+
+
+@pytest.fixture(autouse=True)
+def _current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the reviewed hosted-cost evidence window valid for every test here.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture:
+    production ``run_mode="live"`` calls are meant to fail closed once that
+    literal calendar date lapses, until someone actually re-reviews the
+    official source (``_require_current_actual_cost_evidence``). None of the
+    tests in this file exercise that review-cadence invariant itself — that
+    lives in ``test_nim_benchmark_release_acceptance.py``, which injects an
+    explicit ``today`` alongside explicit reviewed/valid dates. The tests here
+    exercise unrelated ``live``-path behavior (missing credential, transport
+    wiring, contract failures, ...) and would otherwise start failing on
+    whatever future day the fixed review window happens to lapse, for reasons
+    unrelated to what they assert. Pin the window to real "now" so it is
+    always current, regardless of wall-clock date.
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _ok_json(payload: object) -> tuple[int, bytes]:
