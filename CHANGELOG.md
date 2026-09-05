@@ -20,6 +20,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Pinned all 3 `runs-on: ubuntu-latest` jobs in `.github/workflows/security.yml`
+  (Tests and package quality, Property and coverage-guided fuzzing, CodeQL/supply
+  chain/SBOM) to explicit `ubuntu-24.04`, matching the org's established
+  starved-floating-image defensive pin already applied to `.github`'s required
+  review workflows (see `ContextualWisdomLab/.github#1870` and its own
+  `docs/product-technical-gap-baseline.md` entries). Confirmed via a live queue
+  audit that jobs in this file were still requesting the unpinned floating image.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
