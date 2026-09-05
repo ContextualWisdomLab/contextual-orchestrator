@@ -4745,6 +4745,7 @@ class TaskOrchestrator:
             preferred = final_agent
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
+            last_retryable_upstream_error: ProviderUpstreamError | None = None
             saw_request_too_large = False
             eligible_candidates = (
                 candidate_pool if candidate_pool is not None else synthesis_candidates
@@ -4867,6 +4868,12 @@ class TaskOrchestrator:
                             model=candidate.model,
                             transport="structured_synthesis",
                         )
+                        if virtual_model and classified.retryable:
+                            last_retryable_upstream_error = classified
+                            request_exclusions.add(candidate.id)
+                            self._record_failure(candidate.id)
+                            synthesis_failure_recorded = True
+                            continue
                         if (
                             virtual_model
                             and classified.error_code == "model_not_found"
@@ -4880,6 +4887,8 @@ class TaskOrchestrator:
                         raise classified from None
             if last_model_not_found is not None and not saw_request_too_large:
                 raise last_model_not_found
+            if last_retryable_upstream_error is not None:
+                raise last_retryable_upstream_error
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )

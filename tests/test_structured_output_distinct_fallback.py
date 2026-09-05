@@ -11,6 +11,7 @@ from contextual_orchestrator.orchestrator import (
     BudgetExceededError,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    ProviderUpstreamError,
 )
 
 
@@ -102,6 +103,43 @@ def test_virtual_structured_failure_recovers_on_a_distinct_endpoint_and_keeps_us
         "accepted",
     ]
     assert [step["usage"]["completion_tokens"] for step in attempts] == [1, 2, 3]
+
+
+def test_virtual_structured_transport_failure_advances_to_next_candidate() -> None:
+    """A retryable provider 502 cannot strand a virtual request on one candidate."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == first.id:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="upstream_unavailable",
+                message="upstream provider unavailable",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+        return _completion('{"input_count":10}', 1)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    assert calls == [first.id, second.id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
 
 
 def test_virtual_structured_exhaustion_is_typed_non_repeating_and_secret_free() -> None:
