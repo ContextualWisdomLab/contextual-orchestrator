@@ -1719,13 +1719,63 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_one", 0.0),
         _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
-        # Failed cells carry no score and must stay out of the pairing.
+        # A task observed for only one policy cannot form a pair.
         _synthetic_cell("route_once", "task_three", None, outcome="failure"),
     ]
     comparisons = nb.paired_policy_comparisons(cells, seed=3)
     pairs = {(row["policy_a"], row["policy_b"]) for row in comparisons}
     assert ("conduct_bounded", "route_once") in pairs
     assert ("route_once", "direct_single_worker:vendor/model-a") in pairs
+
+
+@pytest.mark.parametrize("failure_outcome", ["failure", "timeout"])
+def test_paired_comparisons_retain_failed_delivery_and_elapsed_time(
+    failure_outcome: str,
+) -> None:
+    """Dropping a failed task must not turn worse delivery into an apparent tie."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+        _synthetic_cell("conduct_bounded", "task_two", None, failure_outcome),
+        _synthetic_cell("route_once", "task_two", 1.0),
+        _synthetic_cell("route_once", "unpaired_task", 1.0),
+    ]
+    for cell, latency in zip(cells, [100.0, 150.0, 2000.0, 50.0, 5.0]):
+        cell["end_to_end_latency_ms"] = latency
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 2
+    assert comparison["mean_difference"] == -0.5
+    assert (comparison["ci_low"], comparison["ci_high"]) == (-1.0, 0.0)
+    assert comparison["policy_a_success_count"] == 1
+    assert comparison["policy_b_success_count"] == 2
+    assert comparison["policy_a_unpaired_task_count"] == 0
+    assert comparison["policy_b_unpaired_task_count"] == 1
+    latency = comparison["end_to_end_latency_ms"]
+    assert latency["pair_count"] == 2
+    assert latency["mean_difference"] == 950.0
+    assert (latency["ci_low"], latency["ci_high"]) == (-50.0, 1950.0)
+    assert cells[2]["task_score"] is None
+
+
+def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> None:
+    """Absent scored answers stay absent even when delivery reward is zero."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", None, "timeout"),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    assert (comparison["ci_low"], comparison["ci_high"]) == (0.0, 0.0)
+    assert comparison["policy_a_success_count"] == 0
+    assert comparison["policy_b_success_count"] == 0
+    assert comparison["end_to_end_latency_ms"]["mean_difference"] == 200.0
+    assert all(cell["task_score"] is None for cell in cells)
+    evidence = nb._evaluation_evidence_summary(cells, 1)
+    assert evidence["evidence_status"] == "insufficient_evidence"
+    assert evidence["routing_recommendation"] is None
 
 
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
