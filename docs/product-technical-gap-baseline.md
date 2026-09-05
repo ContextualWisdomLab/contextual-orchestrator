@@ -2680,3 +2680,37 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+**Correction (2026-09-03): the "overall deadline on `_invoke`'s
+candidate/retry loop" recommendation directly above is STALE and
+contradicts binding org policy — do not implement it as written.**
+`docs/product-goal-directive.md` section 8 is this org's binding
+no-fixed-inference-cap policy (no common timeout ceiling across the
+application/agent/gateway stack; the default stays null/unbounded, and a
+real communication failure is left to end via the upstream provider's own
+timeout or error, not an artificial cutoff). This policy already produced a
+concrete precedent since this entry was written:
+`docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`
+reverted job-level timeouts added around two other synchronous model calls
+for exactly this reason. An overall wall-clock deadline on the
+candidate/retry loop, as recommended above, is exactly such a fixed
+inference-time cap and must not be added on this entry's authority alone.
+A follow-up investigation (`.github#1804`, root-causing the same `_invoke`
+serial-failover mechanism via four cross-repo stalls measured at
+649.5s/1332.6s/1462.9s/2161.9s) found the correct fix direction requires
+either (a) a separate, not-yet-built durable candidate-exclusion/skip
+mechanism that consumes the still-unmerged `contextual-orchestrator#911`'s
+EWMA-based candidate-ranking observation data once #911 lands — #911
+itself only reorders candidates by an EWMA score and does not add
+exclusion/skip logic, so landing #911 alone would not let a known-failing
+candidate be skipped — or (b) a documented, owner-approved policy
+exception if deliberately racing non-equivalent endpoints is ever
+authorized. Neither is done as of this correction, and (b) is constrained
+by this org's `endpoint_equivalence` racing invariant
+(`docs/doctoring/equivalent-endpoint-racing.md`; this repo's own
+`CLAUDE.md` header: "Equivalent model-group endpoints may race only
+through the normalized, explicit endpoint-equivalence contract") — racing
+genuinely different, non-equivalent models to dodge a slow candidate would
+itself be an undocumented production routing/quality change, not a safe
+default. The measured stall durations and root cause recorded above remain
+accurate; only the "add a deadline" recommendation is superseded.
