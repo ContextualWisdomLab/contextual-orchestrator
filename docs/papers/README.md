@@ -664,7 +664,7 @@ Permission must cover the exact file/version and intended distribution;
 source-code licenses do not license a paper. Citation alone is not permission.
 
 The six PDFs bundled at parent #1067's `47ae9d65` were checked. The separately
-audited child LLMRouter paper retains its own license record below. Among those
+audited child LLMRouter paper retains its own license record above. Among those
 six parent files, IRT-Router and HELM remain with
 the version-specific sources, CC BY 4.0 notices, attribution, and hashes above.
 Four other copies are removed from the current tree, with their citations,
