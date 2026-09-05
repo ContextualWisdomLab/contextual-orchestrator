@@ -74,7 +74,8 @@ def test_security_workflow_covers_core_repository_security_process():
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-latest") == 3
+    assert workflow_text.count("runs-on: ubuntu-24.04") == 3
+    assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
