@@ -8721,7 +8721,8 @@ class TaskOrchestrator:
                     if isinstance(usage, dict)
                     else None
                 )
-                if type(reported_prompt) is int and reported_prompt >= 0:
+                prompt_ok = type(reported_prompt) is int and reported_prompt >= 0
+                if prompt_ok:
                     reported_prompt_tokens += reported_prompt
                 else:
                     prompt_available = False
@@ -8734,10 +8735,13 @@ class TaskOrchestrator:
                         "reported_steps": 0,
                         "tokenizer_steps": 0,
                         "unavailable_steps": 0,
+                        "prompt_reported_steps": 0,
                     },
                 )
                 bucket["step_count"] += 1
                 bucket[f"{source}_steps"] += 1
+                if prompt_ok:
+                    bucket["prompt_reported_steps"] += 1
                 if effective is not None:
                     bucket["output_tokens"] += effective
                     total_output_tokens += effective
@@ -8774,7 +8778,8 @@ class TaskOrchestrator:
                     if isinstance(judge_usage, dict)
                     else None
                 )
-                if type(reported_prompt) is int and reported_prompt >= 0:
+                prompt_ok = type(reported_prompt) is int and reported_prompt >= 0
+                if prompt_ok:
                     reported_prompt_tokens += reported_prompt
                 else:
                     prompt_available = False
@@ -8786,10 +8791,13 @@ class TaskOrchestrator:
                         "reported_steps": 0,
                         "tokenizer_steps": 0,
                         "unavailable_steps": 0,
+                        "prompt_reported_steps": 0,
                     },
                 )
                 bucket["step_count"] += 1
                 bucket[f"{source}_steps"] += 1
+                if prompt_ok:
+                    bucket["prompt_reported_steps"] += 1
                 if effective is not None:
                     bucket["output_tokens"] += effective
                     total_output_tokens += effective
@@ -8801,6 +8809,7 @@ class TaskOrchestrator:
         cost_available = True
         for model, bucket in sorted(by_model.items()):
             model_available = bucket["unavailable_steps"] == 0
+            model_prompt_available = bucket["prompt_reported_steps"] == bucket["step_count"]
             output_available = output_available and model_available
             price = prices.get(model)
             cost_decimal = (
@@ -8818,11 +8827,15 @@ class TaskOrchestrator:
                 total_cost_usd += cost_decimal
             if not model_available:
                 usage_source = "unavailable"
-            elif bucket["reported_steps"] == bucket["step_count"]:
+            elif bucket["reported_steps"] == bucket["step_count"] and model_prompt_available:
                 usage_source = "reported"
-            elif bucket["tokenizer_steps"] == bucket["step_count"]:
+            elif bucket["tokenizer_steps"] == bucket["step_count"] and model_prompt_available:
                 usage_source = "tokenizer"
             else:
+                # Output is fully known (reported or exact-tokenizer) for this
+                # model, but prompt tokens are not (partially or entirely
+                # unmeasured) — an honest composite is "mixed", never an
+                # overstated pure "reported"/"tokenizer" label.
                 usage_source = "mixed"
             rows.append({
                 "model": model,

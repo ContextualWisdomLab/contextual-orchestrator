@@ -20,6 +20,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `spend_analytics()["by_model"][].usage_source` now also accounts for
+  per-model prompt-token availability instead of classifying purely from
+  output-token source. A model whose output tokens are fully provider-reported
+  or fully exact-tokenizer-counted, but whose prompt tokens are partially or
+  entirely unmeasured, is now honestly reported as `"mixed"` rather than
+  overstated as pure `"reported"`/`"tokenizer"` — matching this project's
+  Honest metrics convention (see `tests/test_spend_analytics.py::test_exact_output_without_prompt_usage_is_explicitly_unavailable`).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
