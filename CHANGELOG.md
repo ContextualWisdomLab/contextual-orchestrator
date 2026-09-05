@@ -10,6 +10,37 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Cosine scoring now feeds `math.fsum` with the standard-library multiplication
+  iterator, preserving numerical semantics while reducing psychometric routing
+  decision overhead.
+- The replication audit now reports Monte Carlo standard errors and the
+  conservative 400-replication requirement for a 0.025 pass-rate MCSE, so ten
+  seeds cannot be misread as a precise operating-characteristic estimate.
+- A ten-seed replication audit now rejects the development-selected
+  reject-option threshold because it satisfies the declared error-upper-bound
+  criterion in only 20% of independent runs, despite consistent efficiency.
+- The synthetic classification benchmark now chooses a reject-option threshold
+  on a development seed under a 2.5% Wilson error ceiling and evaluates it on
+  an independent seed against a paired 95% baseline, reporting coverage,
+  selective risk, all-candidate query burden, and directional coverage.
+- The classification screen now reports confidence-resolved coverage and
+  conditional accuracy, preserving unresolved candidates instead of hiding
+  forced decisions inside aggregate accuracy.
+- The adaptive onboarding screen now compares a bounded 95% confidence-interval
+  classification stop with fixed 12-query calibration, reporting paired query
+  and decision-accuracy intervals plus near/mid/far-cut strata instead of
+  treating generic score precision or an aggregate mean as the routing
+  decision objective.
+- The held-out psychometric benchmark now compares released maximum-information
+  EAP calibration with random query ordering for unseen-candidate onboarding,
+  reporting calibration-query burden, score error, and unobserved-probability
+  error with paired bootstrap intervals, without treating synthetic efficiency
+  as buyer or production evidence.
+- Research guidance now classifies IRT-Router's unconstrained discrimination
+  vectors and unidentified multidimensional coordinates as predictive features,
+  not invariant psychometric measurements; production admission requires
+  explicit orientation, scale identification/linking, fit, and uncertainty.
+
 ### Deprecated
 
 - Internal callers now use
@@ -20,6 +51,144 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The held-out psychometric benchmark now measures sequential probability-drift
+  detection delay and pre-change false alarms over 500 repetitions. A bounded
+  calibration search uses a 95% Wilson false-alarm bound, then evaluates the
+  selected threshold on an independent 500-repetition seed.
+- The held-out psychometric benchmark now distinguishes prediction for unseen
+  queries from prediction for unseen candidate deployments. The latter remains
+  separate and reports zero psychometric prediction coverage instead of
+  inheriting accuracy evidence from known candidates.
+- The held-out psychometric benchmark now reports selection success and net
+  utility together, showing that higher predictive validity does not justify a
+  route when its measurement cost exceeds buyer-valued outcome gains.
+- The held-out psychometric benchmark now decomposes candidate, query,
+  occasion, and interaction variance with a two-facet G-study and reports
+  D-study generalizability and dependability across proposed evidence designs.
+- The held-out psychometric benchmark now separately calibrates full and
+  reduced candidate rosters, links them through common items, and reports
+  common-candidate score stability without treating synthetic recovery as
+  buyer invariance.
+- The held-out psychometric benchmark now makes probability calibration a
+  paired accuracy KPI, reporting calibration slope, intercept, and logit RMSE
+  instead of relying on aggregate Brier and log loss alone.
+- The held-out psychometric benchmark now recovers a known alternate-form score
+  transformation and reports bootstrap equating uncertainty, while keeping
+  buyer score comparability unexecuted.
+- The held-out psychometric benchmark now distinguishes linked parameter drift
+  from its aggregate test-characteristic-curve impact and detects the one
+  injected function-changing item without claiming a universal cutoff.
+- The held-out psychometric benchmark now reports the bias from treating
+  adaptively selected winner observations as an ignorable sample, alongside
+  the error reduction from its logged inverse-propensity estimator.
+- The held-out psychometric benchmark now measures expected classification
+  accuracy and consistency at a declared decision cut. Lower score error improves
+  both measures, while buyer cuts, decision costs, and validity remain gated.
+- The held-out psychometric benchmark now reports conditional test information
+  and standard error at the center and tails. A range-matched item bank improves
+  worst-case information without treating average reliability as uniform precision.
+- The held-out psychometric benchmark now verifies that posterior empirical
+  reliability rises when known item information increases. Reliability remains
+  separate from model fit and cannot open the buyer-validity gate by itself.
+- The held-out psychometric benchmark now distinguishes a fitted one-factor
+  design from known two-factor misspecification with the released M2 global-fit
+  diagnostics, while keeping buyer model fit and construct validity closed.
+- The held-out psychometric benchmark now recovers two known latent dimensions
+  with the released Horn parallel-analysis screen. It keeps buyer construct
+  validity closed because Pearson-PCA screening on binary responses is not a
+  confirmatory measurement model.
+- Streaming automatic routing now fails when every worker candidate is excluded
+  from that role, matching non-streaming selection while preserving explicit
+  requested-model behavior. Benchmark propensity weights and workload receipts
+  now remain aligned with the candidate and item structure actually used.
+- The held-out psychometric benchmark now exercises released nonparametric
+  person-fit diagnostics and ranks one injected inverted candidate response
+  pattern first. It reports separation without inventing a universal cutoff or
+  treating an unusual pattern as proof that a candidate is invalid.
+- The held-out psychometric benchmark now links two synthetic recalibrations
+  through seven stable anchors and detects the one injected item-parameter drift
+  with no stable-item false positive. The tolerance is explicitly an effect-size
+  screen, not a significance test or buyer-validity result.
+- The held-out psychometric benchmark now uses the released Oakes-information
+  API to report item-intercept RMSE, 95% Wald-interval coverage, and mean interval
+  width while keeping synthetic uncertainty evidence outside the buyer gate.
+- The held-out psychometric benchmark now estimates one known item-side context
+  contrast through the released multigroup covariate API. It reports coefficient
+  error and convergence separately while keeping synthetic recovery outside the
+  buyer-validity gate.
+- The held-out psychometric benchmark now fits a many-facet Rasch model to a
+  connected synthetic respondent-item-judge design and reports judge-severity
+  RMSE, convergence, connectedness, and severity-order recovery.
+- The held-out psychometric benchmark now verifies purified logistic DIF on a
+  known candidate-cohort item shift, reporting detection recall, false-positive
+  count, anchor count, and purification convergence. Buyer DIF remains unexecuted.
+- The held-out psychometric benchmark now verifies Stocking–Lord scale linking
+  against a known affine transformation of six common-item anchors and reports
+  convergence plus true-parameter RMSE. Buyer anchors remain unexecuted.
+- The held-out psychometric benchmark now validates a preregistered ε-greedy
+  logging design with positive assignment probability for every candidate,
+  inverse-propensity value RMSE, and true-value confidence-interval coverage.
+  It remains synthetic evidence and does not open the buyer-validity gate.
+- Route, conducted-workflow, and streaming trace rows now retain a secret-free
+  deterministic selection-design receipt: the versioned candidate set, actual
+  attempted deployments, selected deployment, and policy hash. Propensity stays
+  explicitly unidentified; the receipt does not fabricate counterfactual evidence.
+- Adaptive-exposure evidence now distinguishes released CAT exposure control
+  from the missing gateway propensity and counterfactual-observation contract.
+  The unexecuted production gate remains closed.
+- Item-side language/domain validity evidence now reports the released but
+  limited multigroup item-covariate contract instead of claiming no owner
+  implementation exists. Unexecuted buyer evidence remains fail-closed.
+- Psychometric routing now normalizes retained context embeddings once when
+  they are observed. Five before/after local runs reduced median candidate
+  decision p50 from `0.016083` to `0.009791` ms without changing quality metrics.
+- Psychometric benchmark evidence now distinguishes released owner contracts,
+  a pending owner contract, and unimplemented validity checks while keeping all
+  unexecuted checks fail-closed.
+- The psychometric benchmark now enumerates scale linking, local independence,
+  candidate-group DIF, item language/domain effects, judge effects, and adaptive
+  exposure as separate measurement-validity evidence components instead of one
+  opaque unavailable flag.
+- Psychometric benchmark gates now distinguish `not_executed` buyer and
+  measurement-validity evidence from a measured `failed` latency result while
+  preserving the existing fail-closed Boolean compatibility fields.
+- Semantic psychometric lookup now validates and normalizes the query embedding
+  once per decision instead of once per retained context. Five paired local
+  runs reduced candidate decision p50 median from `0.023167` to `0.015042` ms
+  without changing Brier score, log loss, or regret.
+- Experimental two-neighbor psychometric interpolation now reads each
+  neighbor's score map once per candidate instead of repeating generator and
+  membership passes; alternating-process measurements reduced candidate
+  decision p50 by 7.39% without changing Brier score, log loss, or regret.
+- Production single-neighbor psychometric selection again uses one-pass
+  `max()` instead of sorting every retained context for an experimental top-2
+  need; the isolated 512-row selection benchmark fell from 27 to 5.5 µs.
+- The held-out psychometric benchmark now compares the production baseline and
+  interpolation candidate on the same contexts and reports deterministic paired
+  bootstrap 95% intervals for Brier, log-loss, and top-choice-regret deltas.
+  Decision timing repeats 200 times per context, alternates baseline/candidate
+  execution order, and reports each point delta beside its paired interval, so
+  an accuracy interval cannot silently authorize a slower production route.
+  The report also fails closed across accuracy, decision latency, buyer-heldout,
+  and measurement-validity gates; synthetic evidence alone always leaves the
+  production-default decision false.
+- The seeded held-out benchmark can now opt into interpolation of the two
+  nearest positive-cosine psychometric score rows and reports Brier score, log
+  loss, top-choice regret, and decision p50/p95. Live routing retains the
+  validated single-neighbor default until buyer-held-out gates pass.
+- Psychometric observations are keyed by the declared deployment configuration
+  and active role effort/sampling catalog, so reused agent IDs cannot carry
+  scores across model, endpoint, or decode-policy changes. Overflow-safe cosine
+  normalization rejects non-finite evidence; the production single-neighbor
+  path retains its pre-experiment behavior while the positive-cosine cutoff
+  remains confined to the opt-in interpolation experiment.
+- Psychometric router mutation and durable persistence now share one lock, so a
+  concurrent agent-pool change cannot prune a freshly saved valid observation.
+  The paper inventory contract now scans only Git-tracked Python and Markdown
+  sources, excluding ignored build artifacts from research coverage decisions.
+- Psychometric observation replacement now removes only the existing row's
+  contiguous trailing items instead of scanning the complete response ledger;
+  the checked-in benchmark reports fit/rank and observation p50/p95 separately.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
