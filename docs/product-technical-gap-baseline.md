@@ -1,5 +1,23 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 paired-evidence parent synchronization
+
+The normal two-parent integration joins child
+`f3b50f3bdc4c2c951463abb6962bebe2949ca04b` with parent #1067
+`cbf1b4c462c46ccd1deb4e239758efbe0657aaa8`. Both independent additions to this
+baseline and the changelog are retained. The child-specific benchmark code,
+failure-denominator tests, observed-data audit, and licensed paper remain
+unchanged from the child source; parent benchmark boundary corrections and
+research qualifications remain unchanged from the parent source.
+
+This is branch integration, not protected release or a new accuracy claim.
+PR #1074 stays Draft and targets the unmerged parent branch; it must not be
+retargeted to `main` or consumed as a released statistical contract. Its
+merged tree needs its own terminal local/hosted evidence and independent
+review. A skipped draft review is not approval. The existing raw-missing
+versus delivered-zero distinction, full failure denominator, and mean-versus-p95
+boundary remain mandatory.
+
 ## 2026-09-05 observed-data admission audit
 
 The follow-up [file-level audit](research/xroute-generic-observation-audit.json)
@@ -56,6 +74,46 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+
+## 2026-09-05 PR #1067 review correction
+
+Source `a8109a65` follows RED `43706aad` on the existing successor #1067.
+At 401 or 403 generated candidates, the former hard-coded denominator reported
+101% near-cut coverage. The corrected harness derives subgroup sizes from
+the actual generated trait grid, including the unequal negative/positive
+strata, and fails explicitly when a requested summary lacks resolved evidence.
+It retains the default 400 candidates, ten replication seeds, and all
+production gates. Observation p95 keeps nearest-rank semantics while deriving
+its position from the actual sample count; the default remains 101.
+
+The targeted suite passed 58 tests before the final formatting-only pass.
+The full suite with executable source `a8109a65` finished with **3,432 passed,
+two skipped, exit 0, in 728.31 seconds**. This includes the unchanged full-size
+experiment and its fixed numerical assertions. Documentation was updated while
+that run executed; a separate 102-test routing, paper, and boundary suite passed
+after those edits. This is not full-suite evidence for a later documentation
+commit or hosted acceptance. Race-failure
+reentry retains repeated deployment IDs because those are actual repeat
+selection attempts. The receipt is not a full transport/tool-retry ledger,
+and deduplication would hide retries without identifying exposure propensities.
+
+The doctoring bibliography restores the missing psychometric references from
+the existing paper register and adds Brogden's verified bibliographic record.
+It also removes unsupported claims that JSON structure establishes judge
+reliability, separate ledgers establish a multilevel model, or DPR validates
+this gateway's cosine policy. ADR 0034 remains Proposed, with production
+single-neighbor and experimental two-neighbor paths shown separately.
+
+GitHub API reads initially hit an account rate limit; both remaining comment
+lists were retrieved after service recovered. The five inline findings are
+accounted for above. The issue comment also reports 42.99% docstring coverage
+over 107 changed functions with six exclusions. That wider review scope is not
+the same as the repository-configured public-API check, which passes 100% for
+the psychometric module and both harnesses. Wider documentation coverage and
+the review's optional caching/test-structure suggestions remain separate work;
+neither this suite nor an automated comment supplies independent approval.
+Hosted checks, review feedback, and normal protected delivery still require a
+fresh exact-head recheck; no conversation has been resolved or dismissed here.
 
 ## 2026-09-05 psychometric successor reconciliation
 

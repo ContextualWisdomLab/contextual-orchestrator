@@ -11,10 +11,14 @@ import sys
 import time
 from types import SimpleNamespace
 
-import fast_mlsirm
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.benchmark_psychometric_routing import _require_runtime  # noqa: E402
+
+_require_runtime(benchmark_script="scripts/benchmark_psychometric_heldout.py")
+
+import fast_mlsirm  # noqa: E402
+import numpy as np  # noqa: E402
 
 from contextual_orchestrator.psychometric_routing import (  # noqa: E402
     PsychometricRoutingEvidence,
@@ -1151,6 +1155,16 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     """Compare information-selected and random onboarding queries on known truth."""
     from fast_mlsirm import cat_next_item
 
+    candidate_thetas = tuple(
+        -2.0 + 4.0 * (index + 0.5) / ADAPTIVE_CALIBRATION_CANDIDATES
+        for index in range(ADAPTIVE_CALIBRATION_CANDIDATES)
+    )
+    near_cut_count = sum(abs(theta) < 0.5 for theta in candidate_thetas)
+    negative_count = sum(theta < 0.0 for theta in candidate_thetas)
+    positive_count = len(candidate_thetas) - negative_count
+    if not all((near_cut_count, negative_count, positive_count)):
+        raise ValueError("calibration requires non-empty near-cut and directional strata")
+
     discrimination = 1.5
     difficulties = [
         -3.0 + 6.0 * index / (ADAPTIVE_CALIBRATION_ITEMS - 1)
@@ -1189,11 +1203,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         candidate_prediction_errors: list[float] = []
         administered_counts: list[int] = []
         target_reached: list[float] = []
-        for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+        for candidate_index, theta in enumerate(candidate_thetas):
             generator = random.Random(10_000 + candidate_index)
-            theta = -2.0 + 4.0 * (
-                candidate_index + 0.5
-            ) / ADAPTIVE_CALIBRATION_CANDIDATES
             responses: dict[str, int] = {}
             random_order = list(range(ADAPTIVE_CALIBRATION_ITEMS))
             random.Random(20_000 + candidate_index).shuffle(random_order)
@@ -1258,11 +1269,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     fixed_correct: list[float] = []
     sequential_queries: list[float] = []
     classification_rows: list[tuple[float, float, float, float, float]] = []
-    for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+    for candidate_index, theta in enumerate(candidate_thetas):
         generator = random.Random(30_000 + candidate_index)
-        theta = -2.0 + 4.0 * (
-            candidate_index + 0.5
-        ) / ADAPTIVE_CALIBRATION_CANDIDATES
         responses: dict[str, int] = {}
         state = cat_next_item(bundle, responses, device="cpu")
         early_decision: tuple[int, bool] | None = None
@@ -1301,6 +1309,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             for row in classification_rows
             if row[0] >= lower and (upper is None or row[0] < upper)
         ]
+        if not any(row[4] for row in rows):
+            raise ValueError("calibration stratum has no confidence-resolved candidates")
         return {
             "candidates": len(rows),
             "sequential_mean_queries": statistics.fmean(row[1] for row in rows),
@@ -1315,6 +1325,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             ),
         }
 
+    if not any(row[4] for row in classification_rows):
+        raise ValueError("calibration has no confidence-resolved candidates")
     classification_stopping = {
         "method": "confidence_interval_classification_stopping",
         "decision_cut": 0.0,
@@ -1358,11 +1370,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         resolved: list[tuple[int, float, float, bool]] = []
         resolution_flags: list[float] = []
         all_candidate_queries: list[float] = []
-        for candidate_index in range(ADAPTIVE_CALIBRATION_CANDIDATES):
+        for candidate_index, theta in enumerate(candidate_thetas):
             generator = random.Random(seed + candidate_index)
-            theta = -2.0 + 4.0 * (
-                candidate_index + 0.5
-            ) / ADAPTIVE_CALIBRATION_CANDIDATES
             responses: dict[str, int] = {}
             state = cat_next_item(bundle, responses, device="cpu")
             resolution_flags.append(0.0)
@@ -1388,6 +1397,8 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
                     break
         errors = sum(row[1] for row in resolved)
         count = len(resolved)
+        if not count:
+            raise ValueError("selective screen has no confidence-resolved candidates")
         risk = errors / count
         z95 = 1.96
         denominator = 1.0 + z95**2 / count
@@ -1398,6 +1409,10 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         ) / denominator
         negative = [row for row in resolved if not row[3]]
         positive = [row for row in resolved if row[3]]
+        if not negative or not positive:
+            raise ValueError("selective stratum has no confidence-resolved candidates")
+        negative_coverage = len(negative) / negative_count
+        positive_coverage = len(positive) / positive_count
         return {
             "confidence_z": confidence,
             "coverage": count / ADAPTIVE_CALIBRATION_CANDIDATES,
@@ -1405,13 +1420,12 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             "selective_risk_wilson_upper95": error_upper,
             "resolved_mean_queries": statistics.fmean(row[0] for row in resolved),
             "all_candidate_mean_queries": statistics.fmean(all_candidate_queries),
-            "near_cut_coverage": sum(row[2] < 0.5 for row in resolved) / 100.0,
-            "negative_coverage": len(negative) / 200.0,
-            "positive_coverage": len(positive) / 200.0,
+            "near_cut_coverage": sum(row[2] < 0.5 for row in resolved) / near_cut_count,
+            "negative_coverage": negative_coverage,
+            "positive_coverage": positive_coverage,
             "absolute_directional_coverage_gap": abs(
-                len(negative) - len(positive)
-            )
-            / 200.0,
+                negative_coverage - positive_coverage
+            ),
             "negative_selective_risk": statistics.fmean(row[1] for row in negative),
             "positive_selective_risk": statistics.fmean(row[1] for row in positive),
         }, {

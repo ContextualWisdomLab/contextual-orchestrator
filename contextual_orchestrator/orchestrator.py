@@ -7078,6 +7078,8 @@ class TaskOrchestrator:
             "candidate_deployment_ids": [
                 self._psychometric_candidate_id(agent) for agent in candidates
             ],
+            # Retain repeated selection attempts, including sequential reentry
+            # after a failed race; this is not a unique-deployment set.
             "attempted_deployment_ids": [
                 self._psychometric_candidate_id(agent) for agent in attempted
             ],

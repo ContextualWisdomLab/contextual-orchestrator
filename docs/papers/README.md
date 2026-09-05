@@ -213,6 +213,11 @@ Buyer next action: call `run_equal_budget_ablation` and read
   `0.500273` to `0.723515`, but an `8,000`-unit cost increase turns net utility
   from `5,626.64` to `-2,373.36`. Personnel selection is only an analogue;
   buyer-valued routing outcomes and costs remain unvalidated.
+- Brogden, H. E. (1949). When testing pays off. *Personnel Psychology, 2*(2),
+  171–183. https://doi.org/10.1111/j.1744-6570.1949.tb01397.x
+  Research antecedent for the personnel-selection utility analogue; publisher
+  metadata was checked on 2026-09-05. This is not evidence that the analogy
+  is valid for buyer routing, and redistribution permission was not established.
 - Stenhaug, B. A., & Domingue, B. W. (2022). Predictive fit metrics for item
   response models. *Applied Psychological Measurement, 46*(2), 128–143.
   https://doi.org/10.1177/01466216211066603

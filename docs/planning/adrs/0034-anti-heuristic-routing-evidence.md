@@ -32,7 +32,7 @@ The replacement ordering ladder is evidence-only:
    Role fit is exact tag membership declared by operators. Cosine affinity
    is computed between the request text embedding and each candidate's
    declared metadata document via the pool's own embedding member
-   (Karpukhin et al., 2020 dense-retrieval formulation), cached per text
+   (a dense-retrieval adaptation; Karpukhin et al., 2020 use dot product), cached per text
    hash with an LRU bound so repeated requests cost no additional calls.
 3. **Measured intra-group order** — inside one logical model group, members
    are ordered by judged answer quality first (real-time judge feeding the
@@ -360,12 +360,14 @@ flowchart LR
   Tri -- false / cache hit --> Rank[evidence ladder]
   Rank --> E1[eligibility partition]
   E1 --> E2[declaration order<br/>+ cosine affinity]
-  E2 --> P[exact psychometric score<br/>or two-neighbor warm start]
+  E2 --> P[production default: exact psychometric score<br/>or single-neighbor warm start]
   P --> E3[measured group order<br/>quality then successful responses/sec]
   E3 --> Serve[serve answer]
   Serve --> Judge{real-time judge}
   Judge -- accepted --> LedgerQ[quality ledger +1 success]
   Judge -- rejected --> Failover[next measured candidate]
+  Experiment[opt-in held-out harness only] -.-> TwoNeighbor[two-neighbor interpolation]
+  TwoNeighbor -.-> Gates[buyer accuracy, latency and validity gates<br/>not admitted to production]
 ```
 
 ## Acceptance evidence
