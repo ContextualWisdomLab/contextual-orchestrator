@@ -589,14 +589,28 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert replication["candidate_status"] == "rejected_not_replication_stable"
     assert replication["replications"] == 10
     assert replication["error_upper_bound_pass_rate"] == 0.2
+    assert replication["error_upper_bound_pass_rate_monte_carlo_se"] == pytest.approx(
+        0.1264911064067352
+    )
+    assert replication["target_pass_rate_monte_carlo_se"] == 0.025
+    assert replication["worst_case_replications_for_target_monte_carlo_se"] == 400
     assert replication["coverage_delta_mean"] == pytest.approx(0.12675)
+    assert replication["coverage_delta_monte_carlo_se"] == pytest.approx(
+        0.006191952662753311
+    )
     assert replication["coverage_delta_range"] == pytest.approx([0.0975, 0.15])
     assert replication["all_candidate_query_delta_mean"] == pytest.approx(-1.364)
+    assert replication["all_candidate_query_delta_monte_carlo_se"] == pytest.approx(
+        0.02256841450641438
+    )
     assert replication["all_candidate_query_delta_range"] == pytest.approx(
         [-1.485, -1.27]
     )
     assert replication["selective_risk_max"] == pytest.approx(
         0.018018018018018018
+    )
+    assert replication["selective_risk_monte_carlo_se"] == pytest.approx(
+        0.002114616304042865
     )
     assert replication["selective_risk_wilson_upper95_max"] == pytest.approx(
         0.04540471915806321

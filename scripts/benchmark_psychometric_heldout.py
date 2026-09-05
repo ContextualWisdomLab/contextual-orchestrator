@@ -1452,6 +1452,19 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         }
         for candidate, baseline in replication_pairs
     ]
+    replication_count = len(replication_rows)
+    pass_rate = statistics.fmean(
+        float(
+            row["selective_risk_wilson_upper95"]
+            <= SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER
+        )
+        for row in replication_rows
+    )
+
+    def monte_carlo_se(metric: str) -> float:
+        return statistics.stdev(row[metric] for row in replication_rows) / math.sqrt(
+            replication_count
+        )
     classification_stopping["risk_coverage_screen"] = {
         "method": "development_selected_heldout_evaluated_reject_option",
         "development_seed": 30_000,
@@ -1481,22 +1494,27 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             "replications": SELECTIVE_CLASSIFICATION_REPLICATIONS,
             "seed_start": 40_000,
             "seed_step": 1_000,
-            "error_upper_bound_pass_rate": statistics.fmean(
-                float(
-                    row["selective_risk_wilson_upper95"]
-                    <= SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER
-                )
-                for row in replication_rows
+            "error_upper_bound_pass_rate": pass_rate,
+            "error_upper_bound_pass_rate_monte_carlo_se": math.sqrt(
+                pass_rate * (1.0 - pass_rate) / replication_count
+            ),
+            "target_pass_rate_monte_carlo_se": 0.025,
+            "worst_case_replications_for_target_monte_carlo_se": math.ceil(
+                0.25 / 0.025**2
             ),
             "coverage_delta_mean": statistics.fmean(
                 row["coverage_delta"] for row in replication_rows
             ),
+            "coverage_delta_monte_carlo_se": monte_carlo_se("coverage_delta"),
             "coverage_delta_range": [
                 min(row["coverage_delta"] for row in replication_rows),
                 max(row["coverage_delta"] for row in replication_rows),
             ],
             "all_candidate_query_delta_mean": statistics.fmean(
                 row["all_candidate_query_delta"] for row in replication_rows
+            ),
+            "all_candidate_query_delta_monte_carlo_se": monte_carlo_se(
+                "all_candidate_query_delta"
             ),
             "all_candidate_query_delta_range": [
                 min(row["all_candidate_query_delta"] for row in replication_rows),
@@ -1505,6 +1523,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             "selective_risk_mean": statistics.fmean(
                 row["selective_risk"] for row in replication_rows
             ),
+            "selective_risk_monte_carlo_se": monte_carlo_se("selective_risk"),
             "selective_risk_max": max(
                 row["selective_risk"] for row in replication_rows
             ),
