@@ -29,6 +29,53 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Research-to-code mapping
 
+### IRT-Router interpretation audit (2026-09-05)
+
+This review separates the ACL 2025 paper from public implementation revision
+`e8f258ced4ec3c40d795403603acd8c1cdfb994d`. AERA, APA, and NCME (2014, p. 11)
+require support for each intended score interpretation; prediction and ability
+measurement are distinct claims. Multidimensional or explanatory IRT is not
+rejected merely for using multiple abilities or covariates.
+
+| Evidence | Supported reading | Unmet interpretation requirement |
+| --- | --- | --- |
+| Paper §3.2 connects monotonicity with interpretability. | A directional response constraint is an interpretable modeling choice. | Validate the named construct, measurement unit, and intended use separately. |
+| Paper Eq. (4) prints a linear discrimination transform; public MIRT code lines 51–59 add softplus or a range-scaled sigmoid. | The default implementation has positive discrimination; a configured range must also be positive. | Do not describe the implementation as unconstrained, or infer invariant scales from a positive direction. |
+| Figure 4 compares the mean of 25 fitted ability coordinates. | The figure describes one fitted representation. | Identify the coordinate units and justify aggregation before calling that mean comparable general ability. |
+| §4.2.2 and Appendix C assign ability labels using five sampled questions per cluster and GPT-4o Mini. | The labels are a proposed content mapping. | Validate that mapping and its coverage before interpreting a named dimension as measured ability. |
+
+An algebraic counterexample clarifies the aggregation issue. In the printed
+Eq. (5), the logit is `aᵀθ - b`. For any positive diagonal matrix `C`, replacing
+`θ` with `Cθ` and `a` with `C⁻¹a` leaves that logit unchanged for every pair.
+For two illustrative ability vectors `(2, 0)` and `(0, 1)`, their averages are
+`1` and `0.5`. Rescaling by `C = diag(0.1, 10)` changes the averages to `0.1`
+and `5`, reversing their order without changing predictions when discrimination
+is transformed inversely. Positive discrimination stays positive.
+This is a hand-checkable mathematical example, not empirical LLM data,
+checkpoint manipulation, or a proof that every neural parameter constraint
+admits the same transformation. The constrained implementation still needs its
+own identification analysis; an arbitrary coordinate average is not justified
+by predictive loss alone.
+
+The gateway consequently treats IRT-Router as a response-prediction reference,
+not a certificate of stable ability. Missing validation is not a demonstrated
+assumption violation. Buyer evidence must separately establish construct and
+item-content coverage, identification and linking, fit and residual dependence,
+appropriate candidate-group or item-side invariance, and estimation uncertainty.
+
+The existing default-change input helper was also audited. RED `76908a55`
+reproduced ten invalid approvals and two unhandled numeric-overflow cases.
+Source `0ad54cdf` reuses the existing finite-number validator, requires explicit
+`measured` status, rejects negative candidate RMSE and nonpositive baseline RMSE,
+and retains the 55% improvement requirement and valid zero candidate error.
+The 52-test profile suite passed with 100% statement and branch coverage.
+This helper checks declarations only: it neither authenticates observation
+provenance nor changes production defaults. Its `True` result cannot replace
+buyer measurement validation, independent review, or protected release approval.
+The separate held-out routing harness continues to require all its own gates.
+
+### Existing implementation evidence
+
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |
 | --- | --- | --- |
 | EWMA with gain 1/8 for latency and throughput | Jacobson's congestion-avoidance estimator is the canonical low-pass filter for volatile network measurements; it needs no tuning window. | Exact-arithmetic tests reproduce hand-computed EWMA values. |
@@ -419,9 +466,10 @@ Assessment, Research & Evaluation, 10*(13), 1–4.
 https://doi.org/10.7275/56a5-6b14
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory* [Preprint]. arXiv.
-https://doi.org/10.48550/arXiv.2506.01048
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 Stanley, L. M., & Edwards, M. C. (2016). Reliability and model fit.
 *Educational and Psychological Measurement, 76*(6), 976–985.

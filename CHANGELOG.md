@@ -36,10 +36,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   reporting calibration-query burden, score error, and unobserved-probability
   error with paired bootstrap intervals, without treating synthetic efficiency
   as buyer or production evidence.
-- Research guidance now classifies IRT-Router's unconstrained discrimination
-  vectors and unidentified multidimensional coordinates as predictive features,
-  not invariant psychometric measurements; production admission requires
-  explicit orientation, scale identification/linking, fit, and uncertainty.
+- Research guidance distinguishes IRT-Router's published equations from its
+  positive-discrimination implementation. Predictive performance and named
+  ability dimensions still require separate measurement-validity evidence.
 
 ### Deprecated
 
@@ -51,6 +50,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Default-change evidence now rejects missing or unknown measurement status,
+  impossible error values, and booleans or text used as numbers. A valid zero
+  error and the existing improvement threshold are preserved.
 - Diagnostic coverage uses each generated subgroup's actual size, including
   odd-sized samples. Unresolved summaries stop with an explicit explanation,
   and observation p95 follows the recorded sample count. Existing experiment

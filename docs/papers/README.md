@@ -80,24 +80,37 @@ Buyer next action: call `run_equal_budget_ablation` and read
   reduces paired held-out logit calibration RMSE from `0.231235` to `0.025803`;
   the 95% candidate-minus-baseline interval is `[-0.208030, -0.202924]`.
 - Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
-  R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
-  item response theory* [Preprint]. arXiv.
-  https://doi.org/10.48550/arXiv.2506.01048
+  R. (2025). IRT-Router: Effective and interpretable multi-LLM routing via
+  item response theory. In *Proceedings of the 63rd Annual Meeting of the
+  Association for Computational Linguistics (Volume 1: Long Papers)*
+  (pp. 15629–15644). Association for Computational Linguistics.
+  https://doi.org/10.18653/v1/2025.acl-long.761
+  Vendored unmodified [ACL publication PDF](irt-router-acl-2025.pdf), 16 pages;
+  SHA-256 `0fb8cecd934693b83966c857a0e0757551c738989247b0156ab30688d3868d4e`.
+  Source: https://aclanthology.org/2025.acl-long.761.pdf.
+  Copyright 2025 Association for Computational Linguistics; distributed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), as specified by the
+  [ACL post-2016 materials policy](https://aclanthology.org/faq/copyright/).
+  No changes were made to the PDF; attribution above identifies the authors.
   Motivates held-out response prediction from candidate-query interactions;
   exact-query and semantic warm-start evidence must be evaluated separately.
   CO classifies this as an IRT-shaped predictive model, not a validated
   psychometric measurement model: monotonicity alone does not identify a scale
   or establish construct validity, and the paper's selected model-pair and
   two-query examples do not supply uncertainty or invariant measurement proof.
-  In its MIRT equation, the query discrimination vector is an unconstrained
-  learned transform of the query embedding. The paper does not establish a
-  positive orientation for each coordinate, so increasing one fitted ability
-  coordinate need not increase the predicted success probability. Its
-  25-dimensional coordinates also lack anchors or another reported
-  identification convention that would make their axes invariant to rotation,
-  reflection, or rescaling. Binary cross-entropy prediction and face-valid
-  examples therefore cannot, by themselves, prove the claimed monotonic or
-  construct interpretation.
+  Distinguish the printed linear discrimination transform in Eq. (4) from
+  public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`:
+  [`MIRT.py`, lines 51–59](https://github.com/Mercidaiha/IRT-Router/blob/e8f258ced4ec3c40d795403603acd8c1cdfb994d/router/MIRT.py#L51-L59)
+  uses softplus by default, or a sigmoid multiplied by the configured range.
+  A positive range preserves positive discrimination; the constructor does
+  not itself validate that range. NIRT likewise uses a positive discrimination
+  transform and nonnegative prediction-layer weights. It is therefore
+  incorrect to claim that the public implementation has no orientation
+  constraint. These constraints still do not validate named constructs or the
+  meaning of the Figure 4 cross-coordinate average. The
+  [doctoring audit](../doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+  separates a scale-reparameterization counterexample for the printed equation
+  from unperformed checkpoint and buyer-validation experiments.
   The gateway does not adopt the paper's stronger interpretation of fitted
   coordinates as stable LLM abilities or query properties. The paper and its
   public implementation report predictive metrics, but do not establish scale
@@ -608,9 +621,10 @@ adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
 https://doi.org/10.1111/jedm.12373
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory* [Preprint]. arXiv.
-https://doi.org/10.48550/arXiv.2506.01048
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
 Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020

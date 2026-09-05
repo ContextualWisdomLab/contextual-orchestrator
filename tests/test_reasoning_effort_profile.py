@@ -179,9 +179,7 @@ def test_true_theta_rmse_improves_with_effort_not_temperature() -> None:
     residuals = [
         hat - value for hat, value in zip(estimate.estimated_theta, true_theta)
     ]
-    expected_rmse = math.sqrt(
-        sum(error * error for error in residuals) / len(residuals)
-    )
+    expected_rmse = math.sqrt(sum(error * error for error in residuals) / len(residuals))
     assert math.isclose(estimate.rmse, expected_rmse, rel_tol=1e-12, abs_tol=1e-12)
 
 
@@ -203,9 +201,7 @@ def test_true_theta_values_change_estimated_rmse() -> None:
 
 def test_empty_true_theta_fails_closed() -> None:
     try:
-        estimate_theta_rmse(
-            (), reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
-        )
+        estimate_theta_rmse((), reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2)
     except EffortProfileError:
         return
     raise AssertionError("empty true_theta must fail closed")
@@ -236,10 +232,7 @@ def test_equal_budget_ablation_keeps_production_default_locked() -> None:
     report = run_equal_budget_ablation(true_theta=(-1.2, -0.4, 0.2, 0.8, 1.4))
     assert report["single_model_baseline"]["mode"] == "route"
     assert report["role_differentiated"]["mode"] == "conduct"
-    assert (
-        report["role_differentiated"]["budget_tokens"]
-        == report["single_model_baseline"]["budget_tokens"]
-    )
+    assert report["role_differentiated"]["budget_tokens"] == report["single_model_baseline"]["budget_tokens"]
     assert set(report["one_factor_ablations"]) >= {
         "reasoning_effort",
         "temperature",
@@ -252,20 +245,17 @@ def test_equal_budget_ablation_keeps_production_default_locked() -> None:
     assert report["measurement_status"] == "estimated"
     assert production_default_change_allowed(report) is False
     assert PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD > 0
-    assert (
-        report["one_factor_ablations"]["access_list_scope"]["role"]
-        != report["one_factor_ablations"]["access_list_scope"]["workflow"]
-    )
+    assert report["one_factor_ablations"]["access_list_scope"]["role"] != report[
+        "one_factor_ablations"
+    ]["access_list_scope"]["workflow"]
     assert "estimated_theta" in report["single_model_baseline"]
     assert len(report["single_model_baseline"]["estimated_theta"]) == 5
-    assert (
-        report["single_model_baseline"]["estimated_tokens_used"]
-        <= report["single_model_baseline"]["budget_tokens"]
-    )
-    assert (
-        report["role_differentiated"]["estimated_tokens_used"]
-        <= report["role_differentiated"]["budget_tokens"]
-    )
+    assert report["single_model_baseline"]["estimated_tokens_used"] <= report[
+        "single_model_baseline"
+    ]["budget_tokens"]
+    assert report["role_differentiated"]["estimated_tokens_used"] <= report[
+        "role_differentiated"
+    ]["budget_tokens"]
 
 
 def test_production_gate_rejects_junk_and_estimated_status() -> None:
@@ -320,9 +310,7 @@ def test_production_gate_requires_explicit_measured_status(status_fields: dict) 
         (1.0, []),
     ),
 )
-def test_production_gate_rejects_invalid_rmse_values(
-    baseline: object, candidate: object
-) -> None:
+def test_production_gate_rejects_invalid_rmse_values(baseline: object, candidate: object) -> None:
     """RMSE inputs must be finite numbers in their mathematical domain."""
     report = {
         "single_model_baseline": {"rmse": baseline},
@@ -491,31 +479,14 @@ def test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct() -> No
     orchestrator = TaskOrchestrator(
         [
             ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
-            ModelAgent(
-                "builder_agent",
-                "mock-builder",
-                tags=("coding", "implementation"),
-                priority=1,
-            ),
-            ModelAgent(
-                "reviewer_agent",
-                "mock-reviewer",
-                tags=("verification", "security", "review"),
-                priority=2,
-            ),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation"), priority=1),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review"), priority=2),
         ],
         role_effort_catalog=catalog,
     )
-    routed = orchestrator.complete(
-        [{"role": "user", "content": "Write one sentence."}], mode="route"
-    )
+    routed = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="route")
     conducted = orchestrator.complete(
-        [
-            {
-                "role": "user",
-                "content": "Analyze the architecture, implement the code, and verify risks.",
-            }
-        ],
+        [{"role": "user", "content": "Analyze the architecture, implement the code, and verify risks."}],
         mode="conduct",
     )
     assert routed["reasoning_effort_snapshot"]["snapshot_hash"] == expected

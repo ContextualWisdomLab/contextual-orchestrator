@@ -1,5 +1,35 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 measurement-declaration boundary repair
+
+The IRT-Router review distinguishes prediction from measurement and corrects
+the earlier equation-only inference about public implementation constraints.
+The pinned implementation uses positive discrimination transforms; that does
+not establish invariant score units, construct validity, or the meaning of an
+unweighted 25-coordinate average. The
+[doctoring audit](doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+records exact paper sections, source revision, a positive-rescaling algebraic
+counterexample, and the remaining validation requirements. The paper is now
+cited as its ACL 2025 publication rather than only its preprint.
+
+The existing reasoning-effort default-change helper had a separate input defect:
+missing or unrecognized measurement status, negative candidate error, and
+boolean/string errors could pass; very large integers raised an uncaught error.
+RED `76908a55` produced 12 failures among 29 gate checks: ten invalid approvals
+and two unhandled overflows. Source `0ad54cdf` passed all 52 profile tests with
+185 statements and 68 branches covered at 100%. The repair reuses the existing
+number validator, preserves the 55% improvement threshold and valid zero
+candidate error, and adds no estimator or dependency. Later formatting-only
+cleanup preserves the surrounding source layout.
+
+The KPI here is invalid input admission: ten accepted invalid reports and two
+uncaught failures become zero in the declared regression matrix. It is not a
+buyer accuracy, latency, or measurement-validity result. The helper validates
+declarations only; provenance authentication, buyer observations, and protected
+approval remain necessary. This report-only helper and the held-out benchmark's
+multi-gate admission result are separate contracts. No production default was
+changed and no synthetic record became measured evidence.
+
 ## 2026-09-05 PR #1067 review correction
 
 Source `a8109a65` follows RED `43706aad` on the existing successor #1067.
@@ -2360,12 +2390,12 @@ convergence separately and leaves
 `item_language_domain_effects` `not_executed`. IRT-Router remains an
 IRT-shaped prediction reference, not evidence that its learned coordinates are
 identified, invariant psychometric ability or difficulty measurements.
-Its published MIRT discrimination transform has no reported positive-coordinate
-orientation, and its 25-dimensional latent coordinates have no reported anchor
-or equivalent rotation/scale identification convention. Predictive loss and
-selected examples therefore do not establish monotonic score meaning. CO keeps
-production admission closed until orientation, identification/linking,
-item/model fit, and uncertainty are separately executed on buyer evidence.
+Its printed MIRT equation omits the positive discrimination transforms present
+in public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`. The source
+distinction is recorded in the interpretation audit above. Positive direction
+does not establish common coordinate units or validate their average. CO keeps
+production admission closed until direction, identification/linking,
+item/model fit, and uncertainty are separately checked on buyer evidence.
 Source commit `b0f3703f` reuses the released Oakes observed-information API on
 1,200 synthetic observations and six known item intercepts. The converged fit
 reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean
@@ -2594,9 +2624,10 @@ adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
 https://doi.org/10.1111/jedm.12373
 
 Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory* [Preprint]. arXiv.
-https://doi.org/10.48550/arXiv.2506.01048
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 These sources support the current product shape, OpenAI-compatible wire
 honesty, deep-versus-shallow orchestration allocation, cache safety, and

@@ -84,15 +84,17 @@ The paper supplies a useful constrained response predictor, but monotonicity and
 selected face-valid examples do not identify its latent scale or establish
 psychometric construct validity. CO therefore does not call its learned
 coordinates stable ability or difficulty measurements.
-More specifically, its MIRT query discrimination vector is learned without a
-reported positive-coordinate orientation, while the 25-dimensional latent
-space has no reported anchor or other rotation, reflection, and scale
-identification convention. A fitted coordinate can therefore change sign or
-meaning across recalibration, and increasing an individual coordinate is not
-shown to increase success probability. Production evidence must reject such a
-model unless the intended score direction is constrained and tested, the scale
-is identified and linked, and item/model fit plus estimate uncertainty are
-reported separately from predictive loss.
+The printed Eq. (4) omits the positive discrimination transforms present in
+public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`; do not infer an
+unconstrained implementation from that equation. Coordinate monotonicity does
+not establish a common unit for averaging 25 coordinates, stable construct
+meaning, or comparability after recalibration. The
+[interpretation audit](../../doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+records the source distinction and a positive-rescaling counterexample for the
+printed response equation. Production evidence requires tested score direction,
+identified and linked scales, and item/model fit plus estimate uncertainty,
+separately from predictive loss. The gateway never treats a self-declared
+measurement label or an arithmetic threshold check as authenticated evidence.
 When enough versioned candidate deployments support a preregistered comparison,
 provider family or decode-policy cohort may be tested as a candidate-group DIF
 screen through the released `fast-mlsirm` API. Language and domain require an
