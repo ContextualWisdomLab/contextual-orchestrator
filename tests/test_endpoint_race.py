@@ -283,5 +283,11 @@ def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> No
     )
     assert result["answer"].startswith("recovered by ")
     assert sum(calls.values()) >= 3
+    recorded = [
+        value.split(":", 1)[0]
+        for value in result["trace"][0]["selection_design"]["attempted_deployment_ids"]
+    ]
+    assert {agent.id: recorded.count(agent.id) for agent in agents} == calls
+    assert len(recorded) == sum(calls.values())
     reports = [orchestrator._group_router.member_report(agent.id) for agent in agents]
     assert sum(item["failure_count"] for item in reports) >= 2
