@@ -1,5 +1,57 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-05 PR #1004 mixed provider failure follow-up
+
+At head `2a6b41562114530315bb44d1aa3dede820a68da1`, both `502 → 404` and
+`404 → 502` on same-endpoint structured-synthesis candidates returned a
+non-retryable missing-model error. The shared exhaustion boundary now preserves
+the recorded retryable upstream error first. Caller-selected endpoint, model, free/ZDR,
+file-replica, and ambiguous-tool-replay restrictions remain unchanged.
+Both ordered regression cases failed before the fix and pass afterward.
+See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
+Protected merge and post-change live gateway evidence are still required;
+head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
+(`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
+correction below and does not verify it.
+
+Independent local review reproduced a separate accounting gap: after two grouped
+candidates fail, the group ledger records only the final candidate. A prior
+failure also hides a later terminal 400 or billed malformed response from the
+circuit counter. The proposed correction records both observations at the
+actual failed synthesis attempt, before fallback or a budget stop, and removes
+the outer duplicate group observation. A later 413 is not a provider failure.
+The accounting regressions changed from `7 failed, 11 passed` to `18 passed`;
+the wider provider/group/effort/HTTP suite passed all 124 tests. Full-suite and
+hosted exact-head evidence for this additional correction must be recorded
+separately in the existing PR.
+The subsequent response-before-return regression additionally prevents an
+unassigned response read or reuse of another candidate's usage. Both cases
+failed on `18a29d14`; 178 focused tests pass after the correction. Unknown
+usage stays unavailable. The explicitly interrupted full run on `18a29d14`
+is excluded from passing evidence; see the same doctoring record.
+
+The next current-head review found that `69b79a6bc2a6039396d6fd03edcac5bef80c686e`
+still converted a stale model into an implicit endpoint pin. Existing tests
+had preserved that behavior without proving it was required. New cases failed
+`12/49` before the shared candidate-list correction; the focused unit/HTTP/usage
+suite now passes `52/52`. Virtual AUTO/FREE requests can exhaust each already
+eligible model across endpoints; explicit selections and budget enforcement
+remain bounded. This is proposed local remediation, not protected or live
+acceptance. See the same doctoring record for the corrected contract audit.
+An additional eight-case RED on `2582176d` covered malformed-only/mixed-413
+exhaustion and pre-return repair failures for virtual and concrete models.
+The shared correction preserves the response-failure category and failed-run
+usage evidence; all 60 focused cases pass. The interrupted full run on
+`2582176d` is not acceptance evidence for this correction.
+
+## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
+
+- **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.
+- **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
+- **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
+- **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
+- **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.

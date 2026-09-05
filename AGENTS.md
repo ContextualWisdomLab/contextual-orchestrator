@@ -70,6 +70,26 @@ push or open a PR.
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
+- In structured fallback, keep the final error classification separate from
+  per-attempt circuit and model-group observations. Record each actual failed
+  candidate once before advancing or propagating a budget stop; a request-wide
+  flag must not hide a later hard failure or charge an earlier error to a later
+  413 candidate. Test real counters, not only mocked callback counts, including
+  recovery, exhaustion, mixed failure order, and billed malformed output.
+  Distinguish a malformed returned object from a client exception before
+  return: reset response state per attempt, never copy prior usage, and keep
+  unreported usage unavailable rather than fabricating a zero count.
+  Apply this to repair calls that fail before returning as well. Exhausted
+  malformed responses must not be classified as an all-provider size limit;
+  test all-malformed and mixed malformed/413 orders before accepting that error.
+- A stale-model response does not create a caller-selected endpoint constraint.
+  Virtual structured recovery must visit the already-eligible distinct models,
+  including later endpoint siblings, while preserving explicit model/endpoint,
+  free/ZDR, file-replica, and effort restrictions. Test all-local-candidates
+  failing, an initial candidate excluded during evidence collection, and billed
+  malformed output on a later endpoint. Do not reject a review solely because
+  an existing guard or successful-sibling test encodes the current behavior;
+  verify the requirement and the exhausted-candidate case first.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.

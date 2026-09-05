@@ -164,18 +164,93 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
         thread.join(timeout=5)
 
 
+def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> None:
+    """A 502 remains retryable only after every eligible endpoint is exhausted."""
+    for failure_order in ((502, 404), (404, 502)):
+        agents = [
+            ModelAgent(
+                "first_agent",
+                "first-model",
+                "mock://catalog",
+                tags=("reasoning", "writing"),
+            ),
+            ModelAgent(
+                "second_agent",
+                "second-model",
+                "mock://catalog",
+                tags=("reasoning", "writing"),
+            ),
+            ModelAgent(
+                "other_agent",
+                "other-model",
+                "mock://other",
+                tags=("reasoning", "writing"),
+            ),
+        ]
+        orchestrator = TaskOrchestrator(agents)
+        calls: list[str] = []
+        orchestrator.conduct = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+            "trace": []
+        }
+        orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+        orchestrator._ranked_agents = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+
+        def reject(agent, _endpoint, _payload):
+            calls.append(agent.id)
+            status = (*failure_order, 404)[len(calls) - 1]
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error" if status == 502 else "model_not_found",
+                message="synthetic upstream failure",
+                client_status=status,
+                provider_status=status,
+                retryable=status == 502,
+                transport="structured_synthesis",
+            )
+
+        orchestrator.client.proxy_send_once = reject
+        server = build_server(
+            orchestrator,
+            port=0,
+            security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": TaskOrchestrator.AUTO_MODEL,
+                    "messages": [{"role": "user", "content": "structured"}],
+                    "response_format": {"type": "json_object"},
+                    "session_id": "synthetic-session",
+                },
+            )
+            assert status == 502, (failure_order, body)
+            assert body["error"]["code"] == "api_error"
+            assert body["error"]["detail"]["provider_status"] == 502
+            assert body["error"]["detail"]["retryable"] is True
+            assert body["error"]["detail"]["transport"] == "structured_synthesis"
+            assert calls == ["first_agent", "second_agent", "other_agent"]
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+
+
 def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
-    """Schema-invalid synthesis and repair exhaust each same-endpoint model once."""
+    """Schema-invalid synthesis and repair exhaust every eligible model once."""
     agents = [
-        ModelAgent("first_agent", "first-model", "mock://catalog"),
-        ModelAgent("second_agent", "second-model", "mock://catalog"),
-        ModelAgent("other_agent", "other-model", "mock://other"),
+        ModelAgent("first_agent", "first-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("second_agent", "second-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("other_agent", "other-model", "mock://other", tags=("reasoning", "writing")),
     ]
     orchestrator = TaskOrchestrator(agents)
     calls: list[str] = []
     orchestrator.conduct = lambda *_args, **_kwargs: {"trace": []}  # type: ignore[method-assign]
     orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
-    orchestrator._failover_candidates = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+    orchestrator._ranked_agents = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
 
     def invalid(agent, _endpoint, _payload):
         calls.append(agent.id)
@@ -219,8 +294,17 @@ def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> No
         )
         assert status == 502, body
         assert body["error"]["code"] == "invalid_structured_output"
-        assert calls == ["first_agent", "first_agent", "second_agent", "second_agent"]
-        assert "other_agent" not in calls
+        assert calls == [
+            "first_agent",
+            "first_agent",
+            "second_agent",
+            "second_agent",
+            "other_agent",
+            "other_agent",
+        ]
+        assert body["error"]["detail"]["failure_kind"] == (
+            "structured_output_exhausted"
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)

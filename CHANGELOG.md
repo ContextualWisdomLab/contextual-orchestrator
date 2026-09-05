@@ -20,6 +20,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual structured requests can recover on another eligible endpoint after
+  all models at the first endpoint are unavailable. Explicit caller selections
+  and spending limits remain enforced, including malformed later responses.
+- Structured requests that exhaust eligible candidates after both temporary
+  provider failures and missing-model responses retain the temporary failure
+  classification, so clients can recognize that a later retry may succeed.
+- Structured fallback now counts each failed model once in routing health
+  evidence, including failures before successful recovery or a spending stop.
+  Request-size limits remain separate from provider failures.
+- Recovery from a rejected provider response no longer crashes or attributes
+  an earlier model's token usage to the rejected attempt. Missing usage remains
+  unavailable instead of being reported as zero.
+- Malformed response exhaustion no longer reports a fictitious request-size
+  limit. Failed repairs preserve earlier usage even when no repair response
+  was received.
+- Structured-output review follow-up now charges already-incurred synthesis
+  and repair usage before propagating a budget stop, keeps failed workflow
+  evidence queryable without counting it as a normal recent/completed KPI,
+  and binds a repair to the candidate whose synthesis failed. A repair-only
+  413 retires that candidate and starts a fresh synthesis on the next
+  already-eligible candidate instead of forwarding the repair prompt across
+  providers. If no eligible candidate remains, the original request-too-large
+  classification is preserved instead of being rewritten as structured-output
+  exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
+  (Devin Review, PR #1004).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
@@ -32,10 +57,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retention and the selected backend's polling cadence, so clients can poll
   within the actual job lifecycle instead of guessing or failing closed on
   missing lifecycle metadata.
-- Virtual structured workflows now exclude a same-endpoint candidate only
-  after both its synthesis and bounded repair violate the caller's schema,
-  then continue with the next eligible model on that endpoint. Explicit model
-  pins remain single-model and exhausted virtual pools return a typed error.
+- Virtual structured workflows now exclude a candidate only after both its
+  synthesis and bounded repair violate the caller's schema, then continue with
+  the next distinct eligible model, including another provider endpoint.
+  Explicit models and caller-selected endpoints remain sticky; failed attempts
+  retain validation and usage evidence, and exhausted pools return a typed,
+  secret-free error without recursive retry multiplication.
 - Configured-gateway runtime discovery now retains chat rows only after a
   bounded structured-output probe, and virtual structured workflows share one
   request-scoped missing-model exclusion set across evidence and synthesis.

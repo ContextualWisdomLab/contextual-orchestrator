@@ -7975,11 +7975,12 @@ def build_server(
                     f"batch result download failed for job {exc.job_id}",
                     {"job_id": exc.job_id, "reason": exc.reason},
                 )
-            except ProviderResponseError:
+            except ProviderResponseError as exc:
                 self._send_error(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                    getattr(exc, "detail", None),
                 )
             except FileContractError:
                 self._send_error(
