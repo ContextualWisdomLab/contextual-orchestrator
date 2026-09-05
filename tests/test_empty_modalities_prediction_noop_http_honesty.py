@@ -131,7 +131,12 @@ def test_http_completions_accepts_empty_modalities_and_prediction() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_audio_modalities() -> None:
+def test_http_chat_still_rejects_audio_modalities_without_audio_object() -> None:
+    """Opting into audio output via modalities still needs audio.voice/format.
+
+    See test_chat_modalities_http_honesty.py for the full audio-output
+    contract.
+    """
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -144,7 +149,7 @@ def test_http_chat_still_rejects_audio_modalities() -> None:
             },
         )
         assert status == 400, body
-        assert "invalid_modalities" in json.dumps(body)
+        assert "invalid_audio" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -176,7 +176,11 @@ class CostRoutingCoordinator:
                 start_embedding_job(recovered_job)
 
     def _run_local_batch(
-        self, messages: List[Dict[str, str]], mode: str, model: str
+        self,
+        messages: List[Dict[str, str]],
+        mode: str,
+        model: str,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run one local item while retaining completed endpoint-race usage."""
         context = {
@@ -186,7 +190,21 @@ class CostRoutingCoordinator:
         }
         token = self._race_usage_context.set(context)
         try:
-            result = self.orchestrator.complete(messages, mode=mode, model_name=model)
+            if parameters:
+                proxied = self.orchestrator.proxy_completion(
+                    {**parameters, "model": model, "messages": messages},
+                    endpoint="chat/completions",
+                    single_agent=True,
+                )
+                choices = proxied.get("choices") or []
+                message = choices[0].get("message", {}) if choices else {}
+                result = {
+                    "answer": message.get("content", ""),
+                    "mode": "route",
+                    "trace": [{"usage": proxied.get("usage", {})}],
+                }
+            else:
+                result = self.orchestrator.complete(messages, mode=mode, model_name=model)
         finally:
             self._race_usage_context.reset(token)
         race_usage = []
@@ -1030,6 +1048,11 @@ class CostRoutingCoordinator:
         job = self._require_job(job_id, owner_id=owner_id)
         return self.batch_backend.poll(job)
 
+    def cancel_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+        """Request cancellation from the backend that owns the batch."""
+        job = self._require_job(job_id, owner_id=owner_id)
+        return self.batch_backend.cancel(job)
+
     def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve results for a batch owned by ``owner_id`` and record usage.
 
@@ -1241,7 +1264,9 @@ class CostRoutingCoordinator:
     def _batch_item_usage_valid(item: BatchResultItem) -> bool:
         """True when a batch result item's provider-reported usage is trustworthy."""
         return (
-            item.prompt_tokens >= 0
+            type(item.prompt_tokens) is int
+            and item.prompt_tokens >= 0
+            and type(item.completion_tokens) is int
             and item.completion_tokens >= 0
             and (
                 item.usage_valid is True
