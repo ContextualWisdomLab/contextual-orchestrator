@@ -2,6 +2,17 @@
 
 ## 2026-09-05 observed-data admission audit
 
+The follow-up [file-level audit](research/xroute-generic-observation-audit.json)
+read all 147,924 generic train/test rows at the pinned dataset revision.
+It found no zero/negative/non-finite durations, 2,068 blank response strings,
+and 18 repeated scored-task/model rows. The repeated rows are not exact copies;
+their attempt identity and dependence need explanation before fitting. Blank
+outputs have positive input/total tokens and time but zero output tokens and
+scores; their terminal cause is unknown. This corrects the suspicion of actual
+zero-time contamination without asserting complete failure observability.
+No data row was changed, dropped, printed, or redistributed. The next gate is
+outcome and repeated-attempt provenance, not a new latency estimator.
+
 The [response-time research audit](doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
 distinguishes xRouteBench's advertised observations from LLMRouterBench's
 estimated latency. Three controlled cases confirm that the inspected xRouteBench

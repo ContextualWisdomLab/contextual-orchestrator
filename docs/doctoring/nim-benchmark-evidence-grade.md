@@ -318,6 +318,61 @@ invariance still require validation. A delivery reward can support a declared
 routing decision without becoming a portable model-ability estimate. This is
 our measurement-validity requirement, not a claim made by either benchmark.
 
+#### Follow-up: actual generic-matrix audit
+
+The later audit read **all 147,924 rows** of the pinned revision's
+`llmrouter_generic` train/test files, not the other scenarios. It supersedes
+the earlier metadata-only status for these two files. The files were fetched
+once for local read-only research, then decoded with the already available
+PyArrow 25.0.1 reader while network access was denied. No package was installed,
+no provider called, and no prompt or response was printed or committed.
+The [aggregate evidence](../research/xroute-generic-observation-audit.json)
+records file hashes, byte counts, identity definitions, and results.
+
+| Observed property | Train | Test |
+| --- | ---: | ---: |
+| Rows read, matching Parquet metadata | 80,802 | 67,122 |
+| Distinct model labels | 18 | 18 |
+| Distinct exact query strings | 4,487 | 3,729 |
+| Distinct scored-task fingerprints | 4,488 | 3,729 |
+| Repeated scored-task/model rows beyond the first | 18 | 0 |
+| Missing pairs in the observed task-by-model rectangle | 0 | 0 |
+| Empty response strings | 948 | 1,120 |
+| Null task identifiers | 54,900 | 46,800 |
+| Fractional scores strictly between zero and one | 6,763 | 806 |
+| Zero, negative, or non-finite durations | 0 | 0 |
+| Literal `ERROR` / `API Error` response prefixes | 0 | 0 |
+
+The scored-task fingerprint uses exact task name, query, choices, metric, and
+reference answer; the stimulus fingerprint omits the metric and reference.
+These content identities are audit definitions, not publisher attempt IDs.
+Query-only counts agree with the card. A different stimulus/scoring count does
+not contradict that card: choices and scoring context also identify a task.
+No exact stimulus fingerprint crosses train/test, but semantic, task-family,
+or training-corpus leakage was not tested.
+
+All 18 repeated pair groups belong to one ARC-Challenge scored-task fingerprint,
+with two rows per model and different embedding identifiers. None is an exact
+duplicate row: six groups differ in response text and seventeen in recorded
+time. All have equal scores within the group. They may be repeat executions;
+without attempt provenance they must not be silently discarded or treated as
+independent new items merely because their embedding identifiers differ.
+
+All 2,068 empty responses have zero output tokens and scores, positive input
+and total tokens, and positive recorded time. They occur in the two `gpt-oss`
+model labels. These are blank-output observations, not confirmed HTTP failures,
+model incapacity, or known censored reasoning. The files have no explicit
+terminal-status, attempt-ID, or collection-time columns. Zero error-prefix
+matches therefore do not establish zero failed attempts.
+
+This evidence **does not confirm zero-duration contamination** in the inspected
+data. It redirects the next action to outcome observability and repeated-item
+dependence. Before fitting a response model, preserve the empty/unknown outcome
+distinction, explain repeated attempts, and choose a scorer-compatible response
+model. Before latency inference, establish timing and sampling provenance.
+Raw rows remain unchanged; no p95, ability rank, accuracy gain, or production
+admission is inferred from this audit.
+
 ## Workflow and credential separation
 
 `.github/workflows/nim-benchmark.yml` has separate dry and live jobs. The dry job
