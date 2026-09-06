@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    _log_provider_attempt_failed,
     is_transient_error,
 )
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -38,6 +39,26 @@ from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
+
+
+@pytest.mark.parametrize("status", [425, 429, 503, None, 0, True, "429", 600])
+def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status) -> None:
+    """Logs distinguish missing status without reading bodies or exposing diagnostics."""
+    body = io.BytesIO(b"private_response_body")
+    failure = urllib.error.HTTPError(
+        "https://provider.example/private", status,
+        "https://provider.example/private private_failure_text", None, body,
+    )
+    agent = ModelAgent("local_worker", "mock-local")
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+        _log_provider_attempt_failed(agent, 0, failure, True)
+    expected = status if type(status) is int and 100 <= status <= 599 else None
+    assert f"provider_status={expected}" in caplog.text
+    assert "error_message=<omitted>" in caplog.text
+    assert "provider.example" not in caplog.text
+    assert "private_failure_text" not in caplog.text
+    assert "private_response_body" not in caplog.text
+    assert body.tell() == 0
 
 
 def _stopped_http_error() -> urllib.error.HTTPError:
