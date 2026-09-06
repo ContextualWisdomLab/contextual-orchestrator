@@ -1360,16 +1360,23 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
 def _log_provider_attempt_failed(
     agent: ModelAgent, attempt: int, exc: Exception, transient: bool
 ) -> None:
-    """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
+    """DEBUG-log typed status evidence without reading or stringifying provider content."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
+        provider_status = (
+            exc.code if isinstance(exc, urllib.error.HTTPError)
+            else exc.provider_status if isinstance(exc, ProviderUpstreamError)
+            else None
+        )
+        if type(provider_status) is not int or not 100 <= provider_status <= 599:
+            provider_status = None
         _LOGGER.debug(
-            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s",
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s provider_status=%s error_message=<omitted>",
             agent.id,
             agent.model,
             attempt + 1,
             type(exc).__name__,
             transient,
-            redact_text(str(exc))[:500],
+            provider_status,
         )
 
 
