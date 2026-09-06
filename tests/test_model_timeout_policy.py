@@ -23,6 +23,27 @@ def test_ordinary_patch_rejects_stale_timeout_snapshot(tmp_path: Path) -> None:
     assert restored._agent(model_agent.id).model_timeout_revision == 1
 
 
+@pytest.mark.parametrize("operation", ["remove", "set_group", "delete_group"])
+def test_rejected_pool_change_preserves_serving_snapshot(tmp_path: Path, operation: str) -> None:
+    """A rejected durable edit must not publish a removal or membership change."""
+    model_agent = ModelAgent("timeout_agent", "example-model", group_name="test_group")
+    other_agent = ModelAgent("other_agent", "other-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    writer = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    stale = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    before_candidates, before_agents = list(stale.candidates), list(stale.agents)
+    writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    with pytest.raises(ValueError, match="reload"):
+        if operation == "remove":
+            stale.remove_agent("default", model_agent.id)
+        elif operation == "set_group":
+            stale.set_model_group("new_group", [model_agent.id])
+        else:
+            stale.delete_model_group("test_group")
+    assert stale.candidates == before_candidates
+    assert stale.agents == before_agents
+
+
 def test_model_timeout_policy_defaults_to_null() -> None:
     """An ordinary model has no administrator-imposed execution limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
