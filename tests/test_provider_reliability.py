@@ -61,6 +61,27 @@ def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status
     assert body.tell() == 0
 
 
+def test_attempt_log_handles_typed_and_non_http_failures_without_stringifying(caplog) -> None:
+    """A typed status survives; a non-HTTP failure remains explicitly unknown."""
+    class UnprintableFailure(RuntimeError):
+        def __str__(self):
+            raise AssertionError("failure text must not be evaluated")
+
+    failures = [
+        (ProviderUpstreamError(
+            agent_id="local_worker", model="mock-local", error_code="service_unavailable",
+            message="private_failure_text", client_status=503, provider_status=503,
+        ), 503),
+        (UnprintableFailure(), None),
+    ]
+    for failure, expected in failures:
+        caplog.clear()
+        with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+            _log_provider_attempt_failed(ModelAgent("local_worker", "mock-local"), 0, failure, True)
+        assert f"provider_status={expected}" in caplog.text
+        assert "private_failure_text" not in caplog.text
+
+
 def _stopped_http_error() -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         "https://provider.example/chat/completions",
