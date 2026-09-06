@@ -203,3 +203,57 @@ def test_preflight_exhaustion_never_reaches_paid_or_non_zdr_routes(gateway_optio
         }
         if gateway_options.get("zdr_available") is False:
             assert client.provider_calls == []
+
+
+def test_evidence_contract_does_not_admit_upstream_model_identity():
+    """Consumers bind the request alias, never retain the provider response model."""
+    contract = load_contract()
+    assert contract["required_model"] == "orchestrator/free"
+    assert "requested_model" in contract["safe_evidence_fields"]
+    assert "model" not in contract["safe_evidence_fields"]
+    assert all(
+        request["model"] == contract["required_model"]
+        for request in contract["probe_requests"].values()
+    )
+    assert (
+        "exactly `orchestrator/free`"
+        in Path("docs/review-inference-preflight.md").read_text()
+    )
+
+
+def test_readme_inference_example_keeps_bearer_out_of_environment_and_arguments(
+    tmp_path,
+):
+    """Execute the documented shell pipeline against a local curl test double."""
+    import os
+    import subprocess
+
+    readme = Path("README.md").read_text()
+    assert "export INFERENCE_TOKEN=" not in readme
+    example = next(
+        block.split("\n```", 1)[0]
+        for block in readme.split("```bash\n")[1:]
+        if "curl -N http://127.0.0.1:8000/v1/responses" in block.split("\n```", 1)[0]
+    )
+    assert "-H @-" in example
+    secret_dir = tmp_path / ".secrets"
+    secret_dir.mkdir(mode=0o700)
+    token_file = secret_dir / "inference-token"
+    token_file.write_text("unit-secret-token")
+    token_file.chmod(0o600)
+    curl_double = tmp_path / "curl"
+    curl_double.write_text(
+        '#!/bin/sh\ncase "$*" in *unit-secret-token*) exit 1;; esac\n[ -z "${INFERENCE_TOKEN+x}" ] || exit 2\nIFS= read -r header\n[ "$header" = \'Authorization: Bearer unit-secret-token\' ] || exit 3\n'
+    )
+    curl_double.chmod(0o700)
+    environment = {
+        key: value for key, value in os.environ.items() if key != "INFERENCE_TOKEN"
+    }
+    environment["PATH"] = str(tmp_path) + os.pathsep + environment.get("PATH", "")
+    subprocess.run(
+        ["sh", "-c", example],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )

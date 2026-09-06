@@ -27,7 +27,10 @@ only `orchestrator/free`, never a provider or a paid alternative.
    function call whose parsed arguments equal that object. Never execute the
    requested function; it has no side effects. A 200 response without the
    expected capability result fails preflight.
-4. Emit only the fixture's safe evidence fields. Bind `gateway_revision` to
+4. Emit only the fixture's safe evidence fields. Set `requested_model` from the
+   request contract to exactly `orchestrator/free`; never copy the response
+   `model` or any upstream-selected identity into evidence. Bind
+   `gateway_revision` to
    deployment evidence obtained from the trusted operator configuration; do
    not fabricate a revision from `/healthz` or `/v1/models`. Record the UTC
    observation time. Discard raw bodies, headers, model identities selected
@@ -72,3 +75,13 @@ its evidence gates. Its Strix and Noema trusted-origin rules must be updated
 before accepting a non-loopback gateway. The deployment must preserve
 `zdr_only` on every private model request. Adoption requires the owner's
 reviewed immutable release and successful live capability evidence.
+
+## Credential example reference
+
+The README streams the private token file into curl's header input, rather than
+exporting the bearer or including it in command arguments. The documented shell
+pipeline is executed by a unit test using a local curl double; it performs no
+provider call. curl documents `--header @-` as reading headers from stdin.
+
+curl project. (n.d.). *curl man page: --header*.
+<https://curl.se/docs/manpage.html#-H>

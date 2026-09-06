@@ -24,7 +24,6 @@ chmod 700 .secrets
 printf '%s' 'replace-with-a-long-random-admin-token' > .secrets/admin-token
 printf '%s' 'replace-with-a-long-random-inference-token' > .secrets/inference-token
 chmod 600 .secrets/admin-token .secrets/inference-token
-export INFERENCE_TOKEN="$(cat .secrets/inference-token)"
 export CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD='replace-with-a-database-password'
 export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE='replace-with-an-encryption-passphrase'
 docker compose up --build --wait
@@ -35,11 +34,15 @@ Register provider keys separately with `register-credential`; do not put them
 in `compose.yaml` or the gateway runtime environment.
 
 For orchestration with OpenAI Responses-native reasoning summaries, select
-`orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`:
+`orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`.
+
+The request reads its bearer from the private token file through stdin, keeping
+it out of exported variables and process arguments.
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/responses \
-  -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
+{ printf 'Authorization: Bearer '; cat .secrets/inference-token; printf '\n'; } |
+  curl -N http://127.0.0.1:8000/v1/responses \
+  -H @- -H 'Content-Type: application/json' \
   -d '{"model":"orchestrator/free","input":"Research and verify this","reasoning":{"summary":"auto"},"stream":true}'
 ```
 

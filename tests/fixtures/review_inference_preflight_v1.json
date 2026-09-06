@@ -37,6 +37,6 @@
       "max_tokens": 256
     }
   },
-  "safe_evidence_fields": ["contract_version", "gateway_revision", "observed_at", "model", "zdr_requested", "probe_name", "http_status", "result", "error_category"],
+  "safe_evidence_fields": ["contract_version", "gateway_revision", "observed_at", "requested_model", "zdr_requested", "probe_name", "http_status", "result", "error_category"],
   "evidence_ceiling": "request capability and configured gateway free/ZDR policy; no provider retention attestation or durable availability guarantee"
 }
