@@ -82,7 +82,6 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
-    EffortProfileError,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
