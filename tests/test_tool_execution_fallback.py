@@ -708,6 +708,47 @@ class _ProviderStoppedStreamingClient(ModelClient):
         raise _provider_tool_stop_http_error()
 
 
+@pytest.mark.parametrize(
+    ("error_code", "expected_calls"),
+    [("tool_execution_stopped", 1), ("conflict", 3)],
+)
+def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, expected_calls) -> None:
+    """The optional exact SDK probe uses real loopback HTTP, never a provider."""
+    import asyncio
+
+    sdk = pytest.importorskip("openai", reason="run this integration probe with openai==2.54.0")
+    assert sdk.__version__ == "2.54.0"
+    server = build_server(TaskOrchestrator([ModelAgent("local_worker", "mock-local")]), port=0)
+    received_calls = []
+
+    def respond(handler):
+        handler._read_json()
+        received_calls.append(error_code)
+        handler._send_error(409, error_code, "request stopped", {"retryable": False})
+
+    monkeypatch.setattr(server.RequestHandlerClass, "do_POST", respond)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def request_completion():
+        async with sdk.AsyncOpenAI(
+            api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+        ) as client:
+            with pytest.raises(sdk.ConflictError) as raised:
+                await client.chat.completions.create(
+                    model="local_test_model", messages=[{"role": "user", "content": "fixture"}],
+                )
+            assert raised.value.body["code"] == error_code
+
+    try:
+        asyncio.run(request_completion())
+        assert len(received_calls) == expected_calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     error = ToolExecutionError(
         "request may have completed token=must-not-leak",
