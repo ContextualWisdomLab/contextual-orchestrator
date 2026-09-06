@@ -227,3 +227,32 @@ def test_model_timeout_policy_records_verified_principal(tmp_path: Path) -> None
         recorded = connection.execute("SELECT actor_id FROM model_timeout_history").fetchone()[0]
     assert recorded == principal_id
     assert "example_admin" not in recorded
+
+
+@pytest.mark.parametrize("invalid_actor", [True, "example_admin", "A" * 64, "a" * 63])
+def test_model_timeout_policy_rejects_raw_actor_values(tmp_path: Path, invalid_actor: object) -> None:
+    """Reject raw or malformed actor values before writing policy or history."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    with pytest.raises(ValueError, match="opaque principal"):
+        orchestrator.patch_agent(
+            "default", model_agent.id, {"model_timeout_seconds": 7200}, actor_id=invalid_actor
+        )
+    assert orchestrator._agent(model_agent.id).model_timeout_seconds is None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (0,)
+
+
+def test_model_timeout_policy_migrates_unknown_actor_history(tmp_path: Path) -> None:
+    """Historical changes without actor evidence remain explicitly unattributed."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE model_timeout_history DROP COLUMN actor_id")
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds == 7200
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT actor_id FROM model_timeout_history").fetchall() == [(None,)]
