@@ -16,9 +16,14 @@ def test_model_timeout_policy_defaults_to_null() -> None:
 
 def test_model_timeout_policy_accepts_large_finite_seconds(tmp_path: Path) -> None:
     """Valid seconds must not accidentally use SQLite's signed integer binding."""
-    model_agent = ModelAgent("timeout_agent", "example-model", model_timeout_seconds=2**63)
+    model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
-    TaskOrchestrator([model_agent], agents_db=database_path)
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 2**63})
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?", (model_agent.id,)
+        ).fetchone() == (float(2**63),)
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).model_timeout_seconds == float(2**63)
 
@@ -27,11 +32,12 @@ def test_model_timeout_policy_migrates_existing_pool(tmp_path: Path) -> None:
     """An older normalized pool gains a null policy without losing its models."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
-    TaskOrchestrator([model_agent], agents_db=database_path)
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    orchestrator.patch_agent("default", model_agent.id, {"priority": 7})
     with sqlite3.connect(database_path) as connection:
         connection.execute("ALTER TABLE agent_pool DROP COLUMN model_timeout_seconds")
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
-    assert restored._agent(model_agent.id) == model_agent
+    assert restored._agent(model_agent.id).priority == 7
     assert restored._agent(model_agent.id).model_timeout_seconds is None
 
 
