@@ -521,6 +521,16 @@ def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) ->
         schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
         assert set(schema["required"]) == set(policy)
         assert schema["properties"]["enforcement_available"] == {"const": False}
+        history_url = base + "/timeout_policy/history"
+        assert _call(history_url, "GET", "inference_token")[0] == 401
+        status, history = _call(history_url + "?page_size=1", "GET", "pool_token")
+        assert status == 200
+        assert history["history_available"] is True
+        assert history["items"][0]["configured_seconds"] == 7200
+        assert history["items"][0]["revision"] == 1
+        assert history["next_before_revision"] is None
+        for query in ("page_size=0", "page_size=101", "before_revision=-1", "before_revision=9223372036854775808"):
+            assert _call(history_url + "?" + query, "GET", "pool_token")[0] == 400
     finally:
         server.shutdown()
         server.server_close()

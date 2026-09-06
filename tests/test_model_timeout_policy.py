@@ -78,6 +78,20 @@ def test_model_timeout_policy_defaults_to_null() -> None:
     assert policy["configured_seconds"] is None
     assert policy["revision"] == 0
     assert policy["enforcement_available"] is False
+    assert TaskOrchestrator([model_agent]).list_model_timeout_history("default", model_agent.id) == {
+        "items": [], "next_before_revision": None, "history_available": False,
+    }
+
+
+@pytest.mark.parametrize("field,value", [
+    ("page_size", True), ("page_size", 0), ("page_size", 101), ("page_size", 1.5),
+    ("before_revision", True), ("before_revision", 0), ("before_revision", 2**63),
+])
+def test_timeout_history_rejects_invalid_bounds(field: str, value: object) -> None:
+    """Untrusted bounds cannot disable the read limit or overflow SQLite bindings."""
+    agent = ModelAgent("timeout_agent", "example-model")
+    with pytest.raises(ValueError):
+        TaskOrchestrator([agent]).list_model_timeout_history("default", agent.id, **{field: value})
 
 
 def test_timeout_history_cursor_preserves_model_scope_and_new_insertions(tmp_path: Path) -> None:
