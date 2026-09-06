@@ -458,6 +458,22 @@ checks, not a measured end-to-end latency gain or protected delivery claim.
 
 ### IRT-Router interpretation audit (2026-09-05)
 
+Visual/source follow-up (2026-09-07): PDF page 8 (printed 15636) was inspected
+directly. Table 3 reports top-k route agreement; its top-1 values are 2.72%
+(ID) and 2.15% (OOD). These are not response correctness or measurement
+reliability. Section 6.2 discusses cost-sensitive routing and similarly scoring
+candidates, so a buyer evaluation must specify the oracle objective and tie
+handling before comparing exact route agreement. It should also report regret
+under that same objective rather than treating every alternative model as an
+equally severe error.
+
+Section 6.3 and Table 4 on PDF page 9 evaluate response-quality prediction for
+an unseen LLM. Their RMSE is **not** recovery error against known latent ability
+parameters. CO's true-parameter RMSE unit contract therefore cannot cite that
+table as empirical validation of its latent scale. Response prediction,
+latent-parameter recovery, routing utility and decision latency remain separate
+metrics. Source: [Song et al. (2025), pp. 15636–15637](https://aclanthology.org/2025.acl-long.761.pdf).
+
 This review separates the ACL 2025 paper from public implementation revision
 `e8f258ced4ec3c40d795403603acd8c1cdfb994d`. AERA, APA, and NCME (2014, p. 11)
 require support for each intended score interpretation; prediction and ability
