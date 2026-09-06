@@ -6827,8 +6827,12 @@ class TaskOrchestrator:
         return snapshot_role_effort_catalog(dict(catalog)) if catalog is not None else None
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
-        """Return the validated role profile from the active request revision."""
-        snapshot = self._effort_snapshot()
+        """Use the active request revision; preserve standalone single-role adapters."""
+        active = _REQUEST_EFFORT_SNAPSHOT.get()
+        if active is None or active[0] is not self:
+            catalog = self.role_effort_catalog
+            return catalog.get(role) if catalog is not None else None
+        snapshot = active[1]
         if snapshot is None:
             return None
         profile = snapshot.role_profiles.get(role)
