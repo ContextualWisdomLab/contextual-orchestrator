@@ -1,0 +1,50 @@
+"""Administrator-owned model timeout policy must survive configuration changes."""
+
+from pathlib import Path
+
+import pytest
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+
+
+def test_model_timeout_policy_defaults_to_null() -> None:
+    """An ordinary model has no administrator-imposed execution limit."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    assert model_agent.to_config()["model_timeout_seconds"] is None
+
+
+def test_model_timeout_policy_survives_restart_and_rediscovery(tmp_path: Path) -> None:
+    """An explicit limit belongs to its model and remains until explicitly cleared."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    other_agent = ModelAgent("other_agent", "other-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    updated = orchestrator.patch_agent(
+        "default", model_agent.id, {"model_timeout_seconds": 7200.5}
+    )
+    assert updated["model_timeout_seconds"] == 7200.5
+    assert orchestrator._agent(other_agent.id).to_config()["model_timeout_seconds"] is None
+
+    restored = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).to_config()["model_timeout_seconds"] == 7200.5
+    restored.sync_discovered_agents([model_agent])
+    updated = restored.patch_agent("default", model_agent.id, {"priority": 2})
+    assert updated["model_timeout_seconds"] == 7200.5
+    cleared = restored.patch_agent(
+        "default", model_agent.id, {"model_timeout_seconds": None}
+    )
+    assert cleared["model_timeout_seconds"] is None
+    restarted = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    assert restarted._agent(model_agent.id).to_config()["model_timeout_seconds"] is None
+
+
+@pytest.mark.parametrize("invalid_limit", [True, False, 0, -1, "90", float("nan"), float("inf")])
+def test_model_timeout_policy_rejects_invalid_patch(invalid_limit: object) -> None:
+    """Invalid administrator limits must be rejected without changing the model."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    orchestrator = TaskOrchestrator([model_agent])
+    with pytest.raises((TypeError, ValueError)):
+        orchestrator.patch_agent(
+            "default", model_agent.id, {"model_timeout_seconds": invalid_limit}
+        )
+    assert orchestrator._agent(model_agent.id) == model_agent
