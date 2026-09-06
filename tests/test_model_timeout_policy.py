@@ -256,3 +256,38 @@ def test_model_timeout_policy_migrates_unknown_actor_history(tmp_path: Path) -> 
     assert restored._agent(model_agent.id).model_timeout_seconds == 7200
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT actor_id FROM model_timeout_history").fetchall() == [(None,)]
+
+
+def test_model_timeout_policy_restore_creates_a_new_revision(tmp_path: Path) -> None:
+    """Restore reuses a model's historical value without rewriting its history."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    first = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    cleared = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": None})
+    restored = orchestrator.restore_model_timeout(
+        "default", model_agent.id, first["model_timeout_revision"],
+        expected_revision=cleared["model_timeout_revision"], actor_id="a" * 64,
+    )
+    assert restored["model_timeout_seconds"] == 7200
+    assert restored["model_timeout_revision"] > cleared["model_timeout_revision"]
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT previous_seconds, timeout_seconds, restored_from_revision, actor_id "
+            "FROM model_timeout_history ORDER BY policy_revision DESC LIMIT 1"
+        ).fetchone() == (None, 7200.0, first["model_timeout_revision"], "a" * 64)
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (3,)
+
+
+def test_model_timeout_policy_restore_rejects_stale_revision(tmp_path: Path) -> None:
+    """A restore based on an obsolete view cannot overwrite a newer policy."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=str(tmp_path / "agent-pool.db"))
+    first = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
+    with pytest.raises(ValueError, match="reload"):
+        orchestrator.restore_model_timeout(
+            "default", model_agent.id, first["model_timeout_revision"],
+            expected_revision=first["model_timeout_revision"], actor_id="a" * 64,
+        )
+    assert orchestrator._agent(model_agent.id).model_timeout_seconds == 3600
