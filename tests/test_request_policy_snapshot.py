@@ -1,6 +1,8 @@
 """Execution-policy regressions for judging, request identity, and saved evidence."""
 
 from dataclasses import replace
+from hashlib import sha256
+import json
 
 import pytest
 
@@ -36,6 +38,9 @@ def test_request_retains_starting_policy(monkeypatch, entry_point, request_optio
     """Execution and saved evidence retain one policy while later requests see updates."""
     gateway = _policy_gateway()
     starting_policy = gateway.policy
+    policy_hash = sha256(json.dumps(
+        starting_policy.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()).hexdigest()
     seen_policies = []
 
     def worker_reply(_agent, _messages, **_request_options):
@@ -53,6 +58,7 @@ def test_request_retains_starting_policy(monkeypatch, entry_point, request_optio
         )
         assert seen_policies and all(policy == starting_policy for policy in seen_policies)
         assert result["policy_snapshot"] == starting_policy.as_dict()
+        assert all(row["selection_design"]["policy_hash"] == policy_hash for row in result["trace"])
         assert gateway.policy.realtime_judge is True
         assert gateway.policy.verifier_required is False
     finally:
@@ -134,7 +140,31 @@ def test_batch_records_retain_submission_policy(monkeypatch):
         records = gateway.batch_route(["first batch unit fixture", "second batch unit fixture"])
         assert saved_policies == [False, False, False, False]
         assert all(record["policy_snapshot"]["realtime_judge"] is False for record in records)
+        records[0]["policy_snapshot"]["workflow_steps"].clear()
+        assert records[1]["policy_snapshot"]["workflow_steps"]
         assert gateway.policy.realtime_judge is True
+    finally:
+        gateway.close()
+
+
+@pytest.mark.parametrize("policy_change", [
+    {"route_p95_seconds": 3.0},
+    {"realtime_judge": True},
+    {"verifier_required": False},
+    {"workflow_planning": "generated"},
+    {"max_workflow_steps": 5},
+])
+def test_cache_identity_tracks_each_changeable_policy_field(policy_change):
+    """Every configurable policy field partitions reuse; equal content preserves identity."""
+    gateway = _policy_gateway()
+    messages = [{"role": "user", "content": "policy cache identity fixture"}]
+    try:
+        first_key = gateway._cache_key(messages, "route")
+        gateway.policy = replace(gateway.policy, **policy_change)
+        changed_key = gateway._cache_key(messages, "route")
+        assert changed_key != first_key
+        gateway.policy = replace(gateway.policy)
+        assert gateway._cache_key(messages, "route") == changed_key
     finally:
         gateway.close()
 
