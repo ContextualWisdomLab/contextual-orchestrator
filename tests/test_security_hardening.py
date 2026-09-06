@@ -21,6 +21,47 @@ def build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
 
 
+def test_concurrent_error_responses_share_only_their_own_log_id(caplog) -> None:
+    """Concurrent HTTP failures correlate without logging credentials or bodies."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def reject_verification(token: str, scope: str) -> bool:
+        raise RuntimeError("verification unavailable")
+
+    server = build_server(build(), port=0, security=SecurityConfig(bearer_verifier=reject_verification))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(
+                lambda _: request_json(
+                    f"{base}/v1/models", "GET",
+                    headers={"authorization": "Bearer private_test_credential"},
+                ),
+                range(2),
+            ))
+        request_ids = []
+        for status, payload, _ in responses:
+            assert status == 500
+            assert payload["error"]["code"] == "internal_error"
+            request_id = payload["error"]["detail"]["request_id"]
+            assert payload["error_detail"]["request_id"] == request_id
+            assert len(request_id) == 32
+            request_ids.append(request_id)
+        assert len(set(request_ids)) == 2
+        records = [record.getMessage() for record in caplog.records if "request_failed" in record.getMessage()]
+        assert sorted(records) == sorted(
+            f"request_failed status=500 code=internal_error request_id={request_id}"
+            for request_id in request_ids
+        )
+        assert "private_test_credential" not in caplog.text
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     seen: list[tuple[str, str]] = []
 
