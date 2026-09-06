@@ -682,7 +682,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         abs(covariate["estimated_delta"] - covariate["true_delta"])
     )
     assert covariate["convergence_status"] == "converged"
-    assert covariate["iterations"] == 941
+    # Iteration count is a solver diagnostic, not a cross-platform golden value.
+    # Keep the converged estimate and true-parameter error checks above intact.
+    assert covariate["max_iterations"] == heldout_benchmark.ITEM_COVARIATE_MAX_ITER
+    assert type(covariate["iterations"]) is int
+    assert 0 < covariate["iterations"] <= covariate["max_iterations"]
     uncertainty = report["parameter_uncertainty_validation"]
     assert uncertainty["method"] == "oakes_information_wald_interval"
     assert uncertainty["sample_size"] == heldout_benchmark.UNCERTAINTY_SAMPLE_SIZE
