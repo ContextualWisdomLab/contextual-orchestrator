@@ -29,6 +29,20 @@ contains the product/technical contract, Y-Statement, alternatives, UML,
 reproduction commands, and evidence paths. The catalog guarantee does not
 extend to mutable deployment metadata, agent pools, or orchestration policy.
 
+The first full suites found a real compatibility regression: parent `f660d71f`
+finished with **one failure/3,492 passed/two skipped in 658.68 seconds** and
+child `44a49529` with **one failure/3,507 passed/two skipped in 668.91 seconds**.
+Both clean start/end heads match and both exit 1. The existing CEFR Responses
+adapter's judge-only catalog was incorrectly forced through full-workflow
+validation. RED `0a5e24b7` preserves that adapter contract rather than padding
+its fixture. Source `e4314c18ecc7a2b1c4894a6439ff4f134abd1596` keeps standalone
+single-role lookup while still rejecting partial catalogs at full-request
+boundaries. **118 compatibility tests pass in 1.52 seconds**; 24 request guards
+cover **47/47 statements and 14/14 branches** in the same seven definitions.
+The changed-definition census is now **174/174** documented. Failed full-run
+artifacts remain in the request-effort directories; the corrected full runs
+must use separate files. No previous full or hosted result verifies this fix.
+
 The preceding frozen parent `79d8d81dc769bc3fcf681f3064bb07cdd0fb8978`
 completed **3,470 passed/two skipped in 665.66 seconds**; child
 `2bf99a82dccd9d551f3c51b73bc80fbab8543fab` completed **3,485 passed/two

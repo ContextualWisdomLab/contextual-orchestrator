@@ -64,9 +64,17 @@ establish the boundary. Same-instance nested routing reuses it; a different
 orchestrator has its own revision and restores the caller's context on return.
 An entire `batch_route` invocation shares one revision. A stream captures it
 at first iteration, before selection, preserving normal generator laziness.
-All malformed catalog roles/values fail before provider execution, including
+At those boundaries, malformed catalog roles/values fail before provider execution, including
 cache-disabled and explicit bypass paths. A request started without a catalog
 retains that absence even if an operator opts in before it finishes.
+
+Standalone single-role adapters remain outside that full-workflow boundary.
+For example, the existing CEFR Responses adapter can configure only a judge
+profile. Its role lookup preserves that established contract, including when
+another orchestrator owns the surrounding request context. Missing roles
+remain absent; starting a full workflow with that partial catalog still fails
+before execution. This distinction does not promise a request-wide snapshot
+for the standalone adapter.
 
 The existing canonical snapshot is held in a module-level `ContextVar` with its
 owning instance. Profile, key, and evidence readers reuse that snapshot. The
@@ -127,6 +135,28 @@ concurrency-interleaving coverage. The changed-definition census against main
 `414f2297` is **173/173**: runtime 37/37, scripts 44/44, tests 92/92, using the
 existing AST-difference scope rather than excluding private/nested definitions.
 
+The first full runs exposed a compatibility regression omitted by that focused
+set: parent `f660d71f` finished with **one failure, 3,492 passed, two skipped in
+658.68 seconds**, and child `44a49529` with **the same failure, 3,507 passed,
+two skipped in 668.91 seconds**. Both frozen clean heads matched at start/end,
+and both exited 1. The existing CEFR judge-only Responses test was rejected by
+full-catalog validation inside the shared standalone profile lookup. These
+runs remain failures, not flaky results or evidence of full acceptance.
+
+RED `0a5e24b78cd2c9ef9593b075d0810309143ddef0` adds the direct single-role and
+foreign-context regression; it and the unchanged CEFR test fail in 0.51 seconds.
+Source `e4314c18ecc7a2b1c4894a6439ff4f134abd1596` restores the old standalone
+lookup while retaining validated snapshots inside owned full-request scopes.
+Changing the CEFR fixture to add unused roles or weakening full-request
+validation was rejected because either would hide the contract mismatch.
+On this clean correction, **118 request/CEFR/judge/client-boundary tests pass
+in 1.52 seconds**, and the 24-case request coverage run passes in 0.45 seconds.
+The same seven definitions cover **47/47 statements and 14/14 branches**;
+the changed-definition census is **174/174** (runtime 37, scripts 44, tests 93),
+and the new test file passes default Ruff. Corrected full-suite and hosted
+acceptance need their own evidence. The historical operation-count comparison
+below retains its original revisions.
+
 For a fixed one-worker unit fixture with real-time judging disabled and cache
 disabled, the number of real catalog validations per completion changes as
 follows. The baseline is `beae9fb4`, the candidate is `1edf574b`; answer,
@@ -158,6 +188,11 @@ Evidence is in `/tmp/co-1067-request-effort.3j8tar`: `red-pytest.log`,
 `validation-count-profile.json`. Full-suite, hosted checks, independent review,
 protected merge, immutable release, and live provider/measurement validity
 remain separate gates. Synthetic unit fixtures cannot authorize production.
+The failed full run is preserved as `full-{pytest.log,junit.xml}` in each
+request-effort evidence directory; the child directory is
+`/tmp/co-1074-request-effort.tMoMjv`. Correction evidence is
+`compatibility-{pytest.log,junit.xml}` and `compatibility-coverage.json` in the
+parent directory. Do not overwrite failed full-run artifacts with later runs.
 
 ## Verification
 
