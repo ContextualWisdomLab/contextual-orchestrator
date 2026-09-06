@@ -628,6 +628,7 @@ class ModelAgent:
             value = self.model_timeout_seconds
             if type(value) not in (int, float) or not 0 < value <= 1.7976931348623157e308:
                 raise ValueError("model_timeout_seconds must be finite positive seconds or null")
+            object.__setattr__(self, "model_timeout_seconds", float(value))
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
