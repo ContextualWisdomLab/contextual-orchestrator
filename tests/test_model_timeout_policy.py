@@ -173,3 +173,37 @@ def test_model_timeout_policy_rejects_aba_writer(tmp_path: Path) -> None:
     assert restored._agent(model_agent.id).model_timeout_seconds is None
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (2,)
+
+
+def test_model_timeout_policy_loads_value_and_revision_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent commit cannot attach a new revision to an older value."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    writer = TaskOrchestrator([model_agent], agents_db=database_path)
+    writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    reader = TaskOrchestrator([model_agent], agents_db=database_path)
+    original_connect = reader._pool_store._connect
+    updates = []
+
+    def connect_with_interleaved_write(database: str) -> sqlite3.Connection:
+        """Commit a second version after value selection but before history selection."""
+        connection = original_connect(database)
+
+        def on_query(statement: str) -> None:
+            """Interleave one independently committed writer without sleeping."""
+            if "SELECT agent_id, MAX(policy_revision)" in statement and not updates:
+                updates.append(writer.patch_agent(
+                    "default", model_agent.id, {"model_timeout_seconds": 7200}
+                ))
+
+        connection.set_trace_callback(on_query)
+        return connection
+
+    monkeypatch.setattr(reader._pool_store, "_connect", connect_with_interleaved_write)
+    loaded = reader._pool_store.load_all()[0]
+    assert len(updates) == 1
+    assert (loaded.model_timeout_seconds, loaded.model_timeout_revision) == (3600, 1)
