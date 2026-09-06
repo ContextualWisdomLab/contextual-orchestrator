@@ -4122,9 +4122,7 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
-        candidate_ids = {
-            self._psychometric_candidate_id(agent) for agent in self.candidates
-        }
+        candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
             if str(observation["agent_id"]) not in candidate_ids:
                 continue
@@ -7071,9 +7069,9 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
-        by_evidence_id = {
-            self._psychometric_candidate_id(candidate): candidate for candidate in candidates
-        }
+        by_evidence_id = dict(zip(
+            self._psychometric_candidate_ids(candidates), candidates, strict=True
+        ))
         evidence = self._psychometric_router.ranked_evidence(
             by_evidence_id,
             prompt_context,
@@ -7089,19 +7087,34 @@ class TaskOrchestrator:
 
     def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
         """Bind routing evidence to the declared deployment and decode policy."""
+        return self._psychometric_candidate_ids((agent,))[0]
+
+    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
+        """Bind an ordered batch to one freshly validated decode-policy snapshot.
+
+        Materialize inputs before taking the snapshot; preserve repeated agents.
+        Nothing is cached across calls, so mutable catalog and deployment
+        configuration changes remain visible to the next operation.
+        """
+        agents = list(agents)
+        if not agents:
+            return []
         effort_catalog = (
             snapshot_role_effort_catalog(self.role_effort_catalog).snapshot_hash
             if self.role_effort_catalog is not None
             else None
         )
-        configuration = json.dumps(
-            {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
-        return f"{agent.id}:{revision}"
+        candidate_ids = []
+        for agent in agents:
+            configuration = json.dumps(
+                {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+            candidate_ids.append(f"{agent.id}:{revision}")
+        return candidate_ids
 
     def _selection_design_receipt(
         self,
@@ -7113,20 +7126,19 @@ class TaskOrchestrator:
         policy = json.dumps(
             self.policy.as_dict(), sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
+        candidates = list(candidates)
+        attempted = list(attempted)
+        deployment_ids = self._psychometric_candidate_ids([*candidates, *attempted, selected])
         return {
             "assignment_mechanism": "deterministic_ranked",
             "propensity_status": "not_identified",
             "selected_probability": None,
             "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
-            "candidate_deployment_ids": [
-                self._psychometric_candidate_id(agent) for agent in candidates
-            ],
+            "candidate_deployment_ids": deployment_ids[:len(candidates)],
             # Retain repeated selection attempts, including sequential reentry
             # after a failed race; this is not a unique-deployment set.
-            "attempted_deployment_ids": [
-                self._psychometric_candidate_id(agent) for agent in attempted
-            ],
-            "selected_deployment_id": self._psychometric_candidate_id(selected),
+            "attempted_deployment_ids": deployment_ids[len(candidates):-1],
+            "selected_deployment_id": deployment_ids[-1],
         }
 
     def _observe_contextual_quality(
@@ -7197,7 +7209,7 @@ class TaskOrchestrator:
         """Keep evidence only for the pool's current deployment configurations."""
         with self._psychometric_persistence_lock:
             self._psychometric_router.retain_agents(
-                self._psychometric_candidate_id(agent) for agent in self.candidates
+                self._psychometric_candidate_ids(self.candidates)
             )
             if self._store is not None:
                 retained = {
