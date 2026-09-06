@@ -9,6 +9,7 @@ the packaging-boundary psycopg import, and the double-checked schema lock.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import sys
 import threading
 import types
@@ -20,6 +21,7 @@ from contextual_orchestrator.model_discovery import (
     ProviderModelSource,
 )
 from contextual_orchestrator.provider_catalog_store import (
+    ExternalMetadataRefreshEvidence,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
     ProviderCatalogError,
@@ -131,6 +133,36 @@ def test_failure_error_code_falls_back_to_unknown_for_non_strings(bad_code) -> N
     evidence = store.refresh_evidence()[-1]
     assert evidence.refresh_status == "failed"
     assert evidence.error_code == "unknown_error"
+
+
+def test_external_metadata_refresh_rejects_invalid_shape() -> None:
+    """Metadata refresh evidence fails closed on invalid status or naive time."""
+    store = InMemoryProviderCatalogStore()
+    with pytest.raises(ProviderCatalogError, match="metadata refresh status is invalid"):
+        store.record_external_metadata_refresh(
+            ExternalMetadataRefreshEvidence(
+                metadata_source_name="models_dev",
+                refresh_status="maybe",
+                consumer_provider_count=1,
+                error_code=None,
+                started_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+    with pytest.raises(
+        ProviderCatalogError,
+        match="metadata refresh timestamps must be timezone-aware",
+    ):
+        store.record_external_metadata_refresh(
+            ExternalMetadataRefreshEvidence(
+                metadata_source_name="models_dev",
+                refresh_status="failed",
+                consumer_provider_count=1,
+                error_code="secret-bearing text",
+                started_at=datetime.now(),
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
 
 
 def test_serving_tag_normalization_drops_non_strings_and_invalid_patterns() -> None:

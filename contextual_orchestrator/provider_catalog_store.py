@@ -124,6 +124,17 @@ CREATE INDEX IF NOT EXISTS provider_model_account_idx
     ON provider_model (provider_account_id, enabled_flag, serving_eligible_flag);
 CREATE INDEX IF NOT EXISTS catalog_refresh_account_idx
     ON catalog_refresh_run (provider_account_id, finished_at DESC);
+CREATE TABLE IF NOT EXISTS external_metadata_refresh_run (
+    external_metadata_refresh_run_id text PRIMARY KEY,
+    metadata_source_name text NOT NULL,
+    refresh_status text NOT NULL,
+    consumer_provider_count integer NOT NULL DEFAULT 0,
+    error_code text,
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS external_metadata_refresh_name_idx
+    ON external_metadata_refresh_run (metadata_source_name, finished_at DESC);
 """
 """Third-normal-form schema for provider accounts, models, tags, and refreshes."""
 
@@ -140,6 +151,18 @@ class CatalogRefreshEvidence:
     refresh_status: str
     observed_model_count: int
     eligible_model_count: int
+    error_code: str | None
+    started_at: datetime
+    finished_at: datetime
+
+
+@dataclass(frozen=True)
+class ExternalMetadataRefreshEvidence:
+    """Secret-free evidence for one shared third-party metadata refresh."""
+
+    metadata_source_name: str
+    refresh_status: str
+    consumer_provider_count: int
     error_code: str | None
     started_at: datetime
     finished_at: datetime
@@ -199,12 +222,29 @@ class ProviderCatalogStore(Protocol):
         """Return refresh evidence in insertion order."""
         ...
 
+    def record_external_metadata_refresh(
+        self,
+        evidence: ExternalMetadataRefreshEvidence,
+    ) -> None:
+        """Persist one shared third-party metadata refresh result."""
+        ...
+
+    def external_metadata_refresh_evidence(
+        self,
+    ) -> tuple[ExternalMetadataRefreshEvidence, ...]:
+        """Return shared third-party metadata refresh evidence in insertion order."""
+        ...
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _ALLOWED_REFRESH_ERROR_CODES = frozenset(
     {"provider_discovery_error", "empty_provider_catalog", "unknown_error"}
 )
+_ALLOWED_EXTERNAL_METADATA_ERROR_CODES = frozenset(
+    {"timeout", "transport_error", "invalid_response", "unknown_error"}
+)
+_ALLOWED_EXTERNAL_METADATA_REFRESH_STATES = frozenset({"succeeded", "failed"})
 
 
 def provider_account_id(source: ProviderModelSource) -> str:
@@ -301,6 +341,45 @@ def _normalize_error_code(value: object) -> str:
         return "unknown_error"
     normalized = value.strip().casefold()
     return normalized if normalized in _ALLOWED_REFRESH_ERROR_CODES else "unknown_error"
+
+
+def _normalize_external_metadata_error_code(value: object) -> str | None:
+    """Return one approved secret-free metadata refresh failure code."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return "unknown_error"
+    normalized = value.strip().casefold()
+    if normalized.startswith("http_status_"):
+        suffix = normalized.removeprefix("http_status_")
+        if len(suffix) == 3 and suffix.isdigit():
+            return normalized
+    return (
+        normalized
+        if normalized in _ALLOWED_EXTERNAL_METADATA_ERROR_CODES
+        else "unknown_error"
+    )
+
+
+def _normalize_external_metadata_refresh(
+    evidence: ExternalMetadataRefreshEvidence,
+) -> ExternalMetadataRefreshEvidence:
+    """Validate and normalize one shared metadata refresh evidence row."""
+    if evidence.refresh_status not in _ALLOWED_EXTERNAL_METADATA_REFRESH_STATES:
+        raise ProviderCatalogError("metadata refresh status is invalid")
+    if evidence.consumer_provider_count < 0:
+        raise ProviderCatalogError(
+            "metadata refresh consumer count must be non-negative"
+        )
+    if evidence.started_at.tzinfo is None or evidence.finished_at.tzinfo is None:
+        raise ProviderCatalogError(
+            "metadata refresh timestamps must be timezone-aware"
+        )
+    return replace(
+        evidence,
+        metadata_source_name=evidence.metadata_source_name.strip().casefold(),
+        error_code=_normalize_external_metadata_error_code(evidence.error_code),
+    )
 
 
 def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
@@ -468,6 +547,7 @@ class InMemoryProviderCatalogStore:
         self._eligible: dict[str, set[str]] = {}
         self._tags: dict[tuple[str, str], tuple[str, ...]] = {}
         self._refreshes: list[CatalogRefreshEvidence] = []
+        self._external_refreshes: list[ExternalMetadataRefreshEvidence] = []
         self._privacy: dict[tuple[str, str, str], "PrivacyPolicyAssessment"] = {}
         self._lock = threading.RLock()
 
@@ -627,6 +707,22 @@ class InMemoryProviderCatalogStore:
         with self._lock:
             return tuple(self._refreshes)
 
+    def record_external_metadata_refresh(
+        self,
+        evidence: ExternalMetadataRefreshEvidence,
+    ) -> None:
+        """Record one shared metadata refresh without mutating provider rows."""
+        normalized = _normalize_external_metadata_refresh(evidence)
+        with self._lock:
+            self._external_refreshes.append(normalized)
+
+    def external_metadata_refresh_evidence(
+        self,
+    ) -> tuple[ExternalMetadataRefreshEvidence, ...]:
+        """Return immutable shared metadata refresh evidence."""
+        with self._lock:
+            return tuple(self._external_refreshes)
+
 
 class PostgresProviderCatalogStore:
     """PostgreSQL provider catalog sharing the credential registry database."""
@@ -644,6 +740,7 @@ class PostgresProviderCatalogStore:
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._evidence: list[CatalogRefreshEvidence] = []
+        self._external_evidence: list[ExternalMetadataRefreshEvidence] = []
         self._evidence_lock = threading.Lock()
 
     @property
@@ -1101,3 +1198,38 @@ class PostgresProviderCatalogStore:
         """Return evidence emitted by this store instance."""
         with self._evidence_lock:
             return tuple(self._evidence)
+
+    def record_external_metadata_refresh(
+        self,
+        evidence: ExternalMetadataRefreshEvidence,
+    ) -> None:
+        """Persist one shared third-party metadata refresh result."""
+        normalized = _normalize_external_metadata_refresh(evidence)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO external_metadata_refresh_run ("
+                    "external_metadata_refresh_run_id, metadata_source_name, refresh_status, "
+                    "consumer_provider_count, error_code, started_at, finished_at"
+                    ") VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        f"external_metadata_refresh_{uuid.uuid4().hex}",
+                        normalized.metadata_source_name,
+                        normalized.refresh_status,
+                        normalized.consumer_provider_count,
+                        normalized.error_code,
+                        normalized.started_at,
+                        normalized.finished_at,
+                    ),
+                )
+            connection.commit()
+        with self._evidence_lock:
+            self._external_evidence.append(normalized)
+
+    def external_metadata_refresh_evidence(
+        self,
+    ) -> tuple[ExternalMetadataRefreshEvidence, ...]:
+        """Return shared metadata refresh evidence emitted by this store instance."""
+        with self._evidence_lock:
+            return tuple(self._external_evidence)

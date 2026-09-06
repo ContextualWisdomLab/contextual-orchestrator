@@ -5,7 +5,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 import threading
+from unittest.mock import patch
 
 import pytest
 
@@ -30,6 +32,7 @@ from contextual_orchestrator.provider_catalog_bootstrap import (
     evaluate_provider_credential_inventory,
 )
 from contextual_orchestrator.provider_catalog_store import (
+    ExternalMetadataRefreshEvidence,
     InMemoryProviderCatalogStore,
 )
 
@@ -60,6 +63,25 @@ def _model(source: ProviderModelSource, model_id: str) -> DiscoveredModel:
         prompt_price_per_1k=1.0,
         completion_price_per_1k=2.0,
     )
+
+
+class _Response:
+    def __init__(self, payload: dict) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, amt: int | None = None) -> bytes:
+        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json,
+        # _fetch_json_same_host_https, and _fetch_configured_gateway_json all
+        # cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1 to enforce the
+        # size bound -- all three are exercised through this same fixture now
+        # that they share _open_trusted_discovery_request.
+        return self._body if amt is None else self._body[:amt]
 
 
 def test_failed_provider_uses_persisted_last_known_good_model() -> None:
@@ -116,6 +138,126 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
             "openrouter_router_new",
         }
         assert "secret-bearing detail" not in str(second.as_dict())
+    finally:
+        set_backend(None)
+
+
+def test_default_discovery_reports_models_dev_refresh_success() -> None:
+    """The durable bootstrap reports the shared metadata fetch that shaped free eligibility."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = replace(
+            _source("nvidia_nim", "NVIDIA_NIM_API_KEY"),
+            models_dev_provider_id="nvidia",
+        )
+        store = InMemoryProviderCatalogStore()
+
+        def urlopen(request, timeout=None):
+            if request.full_url == "https://models.dev/api.json":
+                return _Response(
+                    {
+                        "nvidia": {
+                            "models": {
+                                "meta/llama-3.1-8b-instruct": {
+                                    "cost": {"input": 0, "output": 0},
+                                    "modalities": {"input": ["text"], "output": ["text"]},
+                                }
+                            }
+                        }
+                    }
+                )
+            return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+        def open_trusted_discovery_request(request, **kwargs):
+            return urlopen(request)
+
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                side_effect=urlopen,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=open_trusted_discovery_request,
+            ),
+        ):
+            report = bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=store,
+                sources=(source,),
+                model_limit=1,
+            )
+
+        assert report.external_metadata_refreshes == (
+            ExternalMetadataRefreshEvidence(
+                metadata_source_name="models_dev",
+                refresh_status="succeeded",
+                consumer_provider_count=1,
+                error_code=None,
+                started_at=report.external_metadata_refreshes[0].started_at,
+                finished_at=report.external_metadata_refreshes[0].finished_at,
+            ),
+        )
+        payload = report.as_dict()["external_metadata_refreshes"]
+        assert payload == [
+            {
+                "metadata_source_name": "models_dev",
+                "refresh_status": "succeeded",
+                "consumer_provider_count": 1,
+                "error_code": None,
+                "started_at": payload[0]["started_at"],
+                "finished_at": payload[0]["finished_at"],
+            }
+        ]
+        assert store.external_metadata_refresh_evidence() == report.external_metadata_refreshes
+    finally:
+        set_backend(None)
+
+
+def test_default_discovery_reports_models_dev_refresh_failure_without_fabricating_free() -> None:
+    """A failed shared metadata fetch is durably visible and keeps cost evidence unknown."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = replace(
+            _source("nvidia_nim", "NVIDIA_NIM_API_KEY"),
+            models_dev_provider_id="nvidia",
+        )
+        store = InMemoryProviderCatalogStore()
+
+        def urlopen(request, timeout=None):
+            if request.full_url == "https://models.dev/api.json":
+                raise OSError("metadata fetch failed")
+            return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+        def open_trusted_discovery_request(request, **kwargs):
+            return urlopen(request)
+
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                side_effect=urlopen,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=open_trusted_discovery_request,
+            ),
+            patch("contextual_orchestrator.model_discovery.time.sleep"),
+        ):
+            report = bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=store,
+                sources=(source,),
+                model_limit=1,
+            )
+
+        evidence = report.external_metadata_refreshes
+        assert len(evidence) == 1
+        assert evidence[0].metadata_source_name == "models_dev"
+        assert evidence[0].refresh_status == "failed"
+        assert evidence[0].consumer_provider_count == 1
+        assert evidence[0].error_code == "transport_error"
+        assert report.selected_agent_ids == ("nvidia_nim_meta_llama_3_1_8b_instruct",)
+        assert store.serving_models(source)[0].is_free is False
     finally:
         set_backend(None)
 
