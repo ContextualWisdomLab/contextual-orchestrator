@@ -29,6 +29,23 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Research-to-code mapping
 
+### Evaluation-policy attribution (2026-09-06)
+
+An evaluation outcome must be attributed to the policy that actually produced
+it before comparing routing regimes or attempting psychometric estimation.
+The [policy-attribution repair](reasoning-effort-profile.md#policy-attribution-repair-2026-09-06)
+connects a twelve-case unit failure baseline to source `6d4b5ac7`: cached answers,
+in-flight judging, selection receipts, and saved runs retain the same effective
+policy. The 12 cases pass after repair; `55d5202a` passes 262 focused integration
+tests, and `c922329e` passes 48 final request/cache guards.
+
+This establishes a local software attribution invariant, not measurement
+invariance or construct validity. Deterministic receipts still do not identify
+assignment probabilities or unobserved outcomes. No inverse-propensity weights,
+new estimator, buyer accuracy gain, production default, or causal claim is
+introduced. Exact evidence and the remaining delivery gates are in the linked
+Proposed record; the statistical-core/release owner boundary is unchanged.
+
 ### Complete changed-definition audit (2026-09-06)
 
 At `d740602f`, comparison with protected main `414f2297` found **90/129**

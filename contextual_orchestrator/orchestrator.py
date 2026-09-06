@@ -91,18 +91,20 @@ from .reasoning_effort_profile import (
 from .token_counting import TokenCountUnavailable, build_token_counter
 
 
-_REQUEST_EFFORT_SNAPSHOT: ContextVar[tuple[object, EffortCatalogSnapshot | None] | None] = ContextVar(
-    "contextual_orchestrator_request_effort_snapshot", default=None
+_REQUEST_EXECUTION_SNAPSHOT: ContextVar[
+    tuple[object, EffortCatalogSnapshot | None, OrchestrationPolicy] | None
+] = ContextVar(
+    "contextual_orchestrator_request_execution_snapshot", default=None
 )
 
 
-def _request_effort_scoped(method: Callable) -> Callable:
-    """Share one catalog revision across nested calls without leaking suspended streams."""
+def _request_execution_scoped(method: Callable) -> Callable:
+    """Share policy and effort across nested calls without leaking suspended streams."""
     if isgeneratorfunction(method):
         @wraps(method)
         def scoped_stream(self, *args, **kwargs):
             """Advance and close a stream in its own captured request context."""
-            with self._request_effort_scope():
+            with self._request_execution_scope():
                 context = copy_context()
                 stream = method(self, *args, **kwargs)
             exhausted = object()
@@ -120,7 +122,7 @@ def _request_effort_scoped(method: Callable) -> Callable:
     @wraps(method)
     def scoped_call(self, *args, **kwargs):
         """Restore the caller's context after a synchronous result or exception."""
-        with self._request_effort_scope():
+        with self._request_execution_scope():
             return method(self, *args, **kwargs)
 
     return scoped_call
@@ -4507,6 +4509,7 @@ class TaskOrchestrator:
             ) from None
         raise RuntimeError("passthrough has no eligible provider candidate")
 
+    @_request_execution_scoped
     def _orchestrated_provider_completion(
         self,
         body: dict[str, Any],
@@ -5052,7 +5055,7 @@ class TaskOrchestrator:
             synthesis_step,
             *([repair_step] if repair_step is not None else []),
         ]
-        record = self._with_effort_snapshot(
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
                 "created_at": int(time.time()),
@@ -5205,7 +5208,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    @_request_effort_scoped
+    @_request_execution_scoped
     def complete(
         self,
         messages: list[ChatMessage],
@@ -5285,7 +5288,7 @@ class TaskOrchestrator:
             )
         )
 
-    @_request_effort_scoped
+    @_request_execution_scoped
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -5361,7 +5364,7 @@ class TaskOrchestrator:
         trace_step["selection_design"] = self._selection_design_receipt(
             ranked_pool, [agent], agent
         )
-        record = self._with_effort_snapshot(
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
                 "created_at": int(time.time()),
@@ -5397,7 +5400,7 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
-        """Partition cached answers by request settings and declared role effort."""
+        """Partition cached answers by effective policy, settings, and role effort."""
         snapshot = getattr(self.client, "request_settings_snapshot", None)
         parameters = snapshot() if callable(snapshot) else {
             "temperature": getattr(self.client, "default_temperature", None),
@@ -5406,7 +5409,11 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        parameters = {
+            **parameters,
+            "zdr_only": _REQUEST_ZDR_ONLY.get(),
+            "policy_snapshot": self.policy.as_dict(),
+        }
         effort_snapshot = self._effort_snapshot()
         if effort_snapshot is not None:
             parameters["reasoning_effort_snapshot_hash"] = effort_snapshot.snapshot_hash
@@ -5459,7 +5466,9 @@ class TaskOrchestrator:
             "answer": result["answer"],
             "cache_status": result.get("cache_status", "disabled"),
             "trace": result["trace"],
-            "policy_snapshot": self.policy.as_dict(),
+            "policy_snapshot": copy.deepcopy(
+                result["policy_snapshot"] if "policy_snapshot" in result else self.policy.as_dict()
+            ),
             "verification": result.get("verification"),
         }
         if "reasoning_effort_snapshot" in result:
@@ -5569,7 +5578,7 @@ class TaskOrchestrator:
         )
         return output_tokens, round(output_cost, 6)
 
-    @_request_effort_scoped
+    @_request_execution_scoped
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -5808,7 +5817,7 @@ class TaskOrchestrator:
         if result.get("usage") is not None:
             row["usage"] = result["usage"]
         run_id = f"run_{uuid.uuid4().hex}"
-        pending_record = self._with_effort_snapshot(
+        pending_record = self._with_execution_snapshot(
             {
                 "workflow_run_id": run_id,
                 "created_at": int(time.time()),
@@ -5871,7 +5880,7 @@ class TaskOrchestrator:
             "accepted": verification["accepted"],
             "reason": verification["reason"],
         }
-        record = self._with_effort_snapshot(
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": run_id,
                 "created_at": int(time.time()),
@@ -6356,7 +6365,7 @@ class TaskOrchestrator:
             {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
         )
 
-    @_request_effort_scoped
+    @_request_execution_scoped
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -6467,7 +6476,7 @@ class TaskOrchestrator:
             "latency_ms": None,
             "output": "",
         }
-        return self._with_effort_snapshot(
+        return self._with_execution_snapshot(
             {
                 "mode": "route",
                 "answer": answer,
@@ -6559,7 +6568,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
-    @_request_effort_scoped
+    @_request_execution_scoped
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -6739,8 +6748,8 @@ class TaskOrchestrator:
             "plan_source": plan_source,
         }
         if workflow_run_id is None:
-            return self._with_effort_snapshot(result)
-        record = self._with_effort_snapshot(
+            return self._with_execution_snapshot(result)
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
                 "created_at": int(time.time()),
@@ -6805,22 +6814,34 @@ class TaskOrchestrator:
                 + ", ".join(unsupported_roles)
             )
 
+    @property
+    def policy(self) -> OrchestrationPolicy:
+        """Read the active request's policy, or the configured policy between requests."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        return active[2] if active is not None and active[0] is self else self._configured_policy
+
+    @policy.setter
+    def policy(self, policy: OrchestrationPolicy) -> None:
+        """Publish policy for later requests without changing work already in progress."""
+        self._configured_policy = policy
+
     @contextmanager
-    def _request_effort_scope(self):
-        """Validate once per outer request; preserve nested calls and other instances."""
-        active = _REQUEST_EFFORT_SNAPSHOT.get()
+    def _request_execution_scope(self):
+        """Capture policy and validate effort once; preserve nested calls and other instances."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
         if active is not None and active[0] is self:
             yield
             return
-        token = _REQUEST_EFFORT_SNAPSHOT.set((self, self._effort_snapshot()))
+        policy = self._configured_policy
+        token = _REQUEST_EXECUTION_SNAPSHOT.set((self, self._effort_snapshot(), policy))
         try:
             yield
         finally:
-            _REQUEST_EFFORT_SNAPSHOT.reset(token)
+            _REQUEST_EXECUTION_SNAPSHOT.reset(token)
 
     def _effort_snapshot(self) -> EffortCatalogSnapshot | None:
         """Read this request's catalog, or validate a fresh standalone-operation copy."""
-        active = _REQUEST_EFFORT_SNAPSHOT.get()
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
         if active is not None and active[0] is self:
             return active[1]
         catalog = self.role_effort_catalog
@@ -6828,7 +6849,7 @@ class TaskOrchestrator:
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Use the active request revision; preserve standalone single-role adapters."""
-        active = _REQUEST_EFFORT_SNAPSHOT.get()
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
         if active is None or active[0] is not self:
             catalog = self.role_effort_catalog
             return catalog.get(role) if catalog is not None else None
@@ -6838,13 +6859,14 @@ class TaskOrchestrator:
         profile = snapshot.role_profiles.get(role)
         return ReasoningEffortProfile(**profile) if profile is not None else None
 
-    def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Attach a replayable role-effort snapshot when the operator opted in.
+    def _with_execution_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Attach effective policy and an opt-in replayable role-effort snapshot.
 
         Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
         on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
-        the constructor catalog to keep today's payload.
+        the constructor catalog to omit role-effort metadata.
         """
+        result["policy_snapshot"] = self.policy.as_dict()
         snapshot = self._effort_snapshot()
         if snapshot is None:
             return result

@@ -1,5 +1,14 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 request-policy parent synchronization
+
+This normal integration retains child `a762e433` and parent `7bdc27ea`,
+including both complete baseline and changelog additions. The inherited
+request-policy repair is unchanged; child NIM comparisons, observed-data
+audit, and licensed papers are preserved. The prior child full suite is
+terminal and does not verify this integration. Separate exact-head evidence,
+Draft status, and parent-first protected delivery remain required.
+
 ## 2026-09-06 request-effort parent synchronization
 
 This normal integration preserves child `2bf99a82` and parent `f660d71f`,
@@ -140,6 +149,37 @@ migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
 
+## 2026-09-06 evaluation-policy attribution
+
+The new request-policy RED commit `d70e6848` demonstrates **12 failures**:
+judging changes can reuse unjudged answers and alter in-flight, stream, batch,
+final-synthesis, and persisted policy attribution. Source `6d4b5ac7` extends
+the existing request context with the immutable policy, partitions cache keys
+by policy content, and saves the completed policy rather than later settings.
+It adds no dependency, statistical kernel, provider fallback, or default change.
+
+The 12 regressions and previous 24 effort guards pass after the source change.
+At `55d5202a`, **262 focused tests pass in 14.30 seconds**. Final test head
+`c922329e` passes **48 request/cache guards in 1.10 seconds**, retaining
+concurrency, retry, cleanup, single-role compatibility, invalid-catalog,
+policy-identity, and detached-record checks. The focused nine-definition
+coverage is **52/52 statements and 14/14 branches**, not whole-module coverage.
+Changed-definition docstrings are **196/196** against main `414f2297`, including
+distinct property getter/setter definitions. The
+[Proposed contract](doctoring/reasoning-effort-profile.md#policy-attribution-repair-2026-09-06)
+records the product/technical requirements, alternatives, UML, failures,
+reproduction commands, and limits. The correctness KPI is 12 failures to zero;
+buyer accuracy, decision latency, and psychometric validity remain unmeasured
+by this unit repair.
+
+The preceding corrected frozen full suites are **terminal**: parent `0bf86aca`
+has **3,494 passed/two skipped/exit 0 in 661.00 seconds**; child `a762e433` has
+**3,509 passed/two skipped/exit 0 in 663.74 seconds**. Each clean start/end head
+matches. Their separate `corrected-full-*` artifacts preserve the prior failed
+runs described below. Neither verifies this later policy change, which still
+requires exact-head full/hosted evidence, independent review, protected merge,
+and immutable release. Both stack PRs remain Draft.
+
 ## 2026-09-06 request-local effort revision
 
 RED `beae9fb45f13d9401357444f0d527ba4be64645a` turns the remaining in-flight
@@ -167,7 +207,8 @@ These are exact operation counts, not measured latency or buyer accuracy.
 The [Proposed implementation record](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
 contains the product/technical contract, Y-Statement, alternatives, UML,
 reproduction commands, and evidence paths. The catalog guarantee does not
-extend to mutable deployment metadata, agent pools, or orchestration policy.
+extend to mutable deployment metadata, agent pools, or, at that historical
+revision, orchestration policy. The later policy repair above extends the scope.
 
 The first full suites found a real compatibility regression: parent `f660d71f`
 finished with **one failure/3,492 passed/two skipped in 658.68 seconds** and

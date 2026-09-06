@@ -90,6 +90,37 @@ def test_cache_partition_prevents_cross_principal_reuse() -> None:
 
 
 @pytest.mark.parametrize("cache_kind", ["local", "shared"])
+def test_policy_change_requires_new_judgment_before_answer_reuse(monkeypatch, cache_kind):
+    """Enabling judging must not return a previously unjudged cached answer."""
+    cache_options = {"cache_ttl": 60} if cache_kind == "local" else {"cache_provider": _MemoryCache()}
+    gateway = TaskOrchestrator([ModelAgent("policy_worker", "mock")], **cache_options)
+    gateway.policy = replace(gateway.policy, realtime_judge=False)
+    judge_calls = []
+
+    def judge_reply(task_text, verification, **_request_options):
+        """Count the real judgment boundary without contacting an external provider."""
+        judge_calls.append(task_text)
+        return {**verification, "accepted": True, "reason": "unit judge executed", "judge": "model"}
+
+    monkeypatch.setattr(gateway, "_model_judge_verification", judge_reply)
+    messages = [{"role": "user", "content": "cache policy unit fixture"}]
+    try:
+        first_result = gateway.run(messages, mode="route")
+        gateway.policy = replace(gateway.policy, realtime_judge=True)
+        changed_result = gateway.run(messages, mode="route")
+        gateway.policy = replace(gateway.policy)
+        repeated_result = gateway.run(messages, mode="route")
+        assert judge_calls == ["cache policy unit fixture"]
+        assert [first_result["cache_status"], changed_result["cache_status"], repeated_result["cache_status"]] == [
+            "miss", "miss", "hit"
+        ]
+        assert changed_result["verification"]["reason"] == "unit judge executed"
+        assert repeated_result["policy_snapshot"] == changed_result["policy_snapshot"]
+    finally:
+        gateway.close()
+
+
+@pytest.mark.parametrize("cache_kind", ["local", "shared"])
 def test_effort_catalog_changes_do_not_reuse_prior_answers(monkeypatch, cache_kind):
     """Separate declared decode settings in both cache paths; reuse equal content."""
     catalog = default_role_effort_catalog()

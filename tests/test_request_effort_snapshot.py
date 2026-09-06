@@ -48,7 +48,7 @@ def test_standalone_role_lookup_preserves_partial_catalog():
     try:
         assert inner._role_effort_profile("judge") is judge_profile
         assert inner._role_effort_profile("worker") is None
-        with outer._request_effort_scope():
+        with outer._request_execution_scope():
             assert inner._role_effort_profile("judge") is judge_profile
             with pytest.raises(EffortProfileError, match="catalog must bind exactly"):
                 inner.complete([{"role": "user", "content": "partial catalog unit fixture"}])
@@ -196,6 +196,7 @@ def test_concurrent_requests_keep_independent_catalogs_without_serializing(monke
     """A later request can finish under new settings while the first worker is blocked."""
     orchestrator, catalog = _orchestrator()
     old_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
+    old_policy = orchestrator.policy
     started, release = Event(), Event()
 
     def chat(agent, messages, *, effort_profile):
@@ -212,6 +213,7 @@ def test_concurrent_requests_keep_independent_catalogs_without_serializing(monke
             try:
                 assert started.wait(5)
                 _change_effort(catalog)
+                orchestrator.policy = replace(old_policy, route_p95_seconds=9)
                 second_future = pool.submit(orchestrator.complete, [{"role": "user", "content": "second concurrent fixture"}], "route")
                 second = second_future.result(timeout=5)
             finally:
@@ -219,8 +221,11 @@ def test_concurrent_requests_keep_independent_catalogs_without_serializing(monke
             first = first_future.result(timeout=5)
         assert first["answer"] == "medium"
         assert first["reasoning_effort_snapshot"]["snapshot_hash"] == old_hash
+        assert first["policy_snapshot"] == old_policy.as_dict()
         assert second["answer"] == "high"
         assert second["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(catalog).snapshot_hash
+        assert second["policy_snapshot"] == orchestrator.policy.as_dict()
+        assert second["policy_snapshot"]["route_p95_seconds"] == 9
     finally:
         orchestrator.close()
 
@@ -232,6 +237,7 @@ def test_failed_request_restores_effort_context(monkeypatch):
     def interrupted(*args, **kwargs):
         """Change configuration, then fail inside the scoped dispatch boundary."""
         _change_effort(catalog)
+        orchestrator.policy = replace(orchestrator.policy, route_p95_seconds=9)
         raise RuntimeError("fixture interruption")
 
     try:
@@ -241,6 +247,8 @@ def test_failed_request_restores_effort_context(monkeypatch):
                 orchestrator.complete([{"role": "user", "content": "interrupted fixture"}], mode="route")
         next_result = orchestrator.complete([{"role": "user", "content": "successor fixture"}], mode="route")
         assert next_result["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(catalog).snapshot_hash
+        assert orchestrator.policy.route_p95_seconds == 9
+        assert next_result["policy_snapshot"] == orchestrator.policy.as_dict()
     finally:
         orchestrator.close()
 
@@ -250,6 +258,8 @@ def test_terminated_stream_closes_provider_in_its_own_context(monkeypatch, termi
     """Close and error cleanup retain stream identity and release the caller context."""
     orchestrator, catalog = _orchestrator()
     closed_efforts = []
+    closed_policies = []
+    starting_policy = orchestrator.policy
 
     def stream_chat(agent, messages, *, effort_profile):
         """Expose the context used when the provider iterator is finalized."""
@@ -258,25 +268,29 @@ def test_terminated_stream_closes_provider_in_its_own_context(monkeypatch, termi
             raise RuntimeError("stream fixture interruption")
         finally:
             closed_efforts.append(orchestrator._role_effort_profile("worker").reasoning_effort)
+            closed_policies.append(orchestrator.policy)
 
     monkeypatch.setattr(orchestrator.client, "stream_chat", stream_chat)
     stream = orchestrator.stream_route([{"role": "user", "content": "terminated fixture"}])
     try:
         assert next(stream) == "medium"
         _change_effort(catalog)
+        orchestrator.policy = replace(starting_policy, route_p95_seconds=9)
         if termination == "close":
             stream.close()
         else:
             with pytest.raises(RuntimeError, match="stream fixture interruption"):
                 next(stream)
         assert closed_efforts == ["medium"]
+        assert closed_policies == [starting_policy]
+        assert orchestrator.policy.route_p95_seconds == 9
         assert orchestrator._role_effort_profile("worker").reasoning_effort == "high"
     finally:
         stream.close()
         orchestrator.close()
 
 
-@pytest.mark.parametrize("entry_point", ["complete", "bypass", "route_once", "conduct", "batch_route", "stream_route"])
+@pytest.mark.parametrize("entry_point", ["complete", "bypass", "route_once", "conduct", "batch_route", "stream_route", "provider_workflow"])
 def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entry_point):
     """Every execution boundary validates an operator update before making calls."""
     orchestrator, catalog = _orchestrator()
@@ -288,7 +302,7 @@ def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entr
         provider_calls.append(True)
         raise AssertionError("provider called with an invalid catalog")
 
-    for method in ("chat", "stream_chat", "batch_chat"):
+    for method in ("chat", "stream_chat", "batch_chat", "proxy_send"):
         monkeypatch.setattr(orchestrator.client, method, forbidden_call)
     messages = [{"role": "user", "content": "invalid catalog fixture"}]
     try:
@@ -299,6 +313,11 @@ def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entr
                 list(orchestrator.stream_route(messages))
             elif entry_point == "bypass":
                 orchestrator.complete(messages, mode="route", bypass_cache=True)
+            elif entry_point == "provider_workflow":
+                orchestrator.proxy_completion(
+                    {"model": "mock", "input": "invalid catalog fixture"},
+                    endpoint="responses", single_agent=False,
+                )
             else:
                 getattr(orchestrator, entry_point)(messages)
         assert not provider_calls
@@ -341,12 +360,15 @@ def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
     def counted_snapshot(value):
         """Count real catalog validations without substituting their output."""
         calls.append(True)
+        orchestrator.policy = replace(orchestrator.policy, route_p95_seconds=9)
         return original(value)
 
     monkeypatch.setattr(runtime_module, "snapshot_role_effort_catalog", counted_snapshot)
     try:
-        orchestrator.complete([{"role": "user", "content": "validation count fixture"}], mode=mode)
+        result = orchestrator.complete([{"role": "user", "content": "validation count fixture"}], mode=mode)
         assert len(calls) == 1
+        assert result["policy_snapshot"]["route_p95_seconds"] == 2.5
+        assert orchestrator.policy.route_p95_seconds == 9
     finally:
         orchestrator.close()
 
@@ -356,12 +378,16 @@ def test_provider_retry_keeps_the_original_effort_profile(monkeypatch):
     orchestrator, catalog = _orchestrator(tool_retry_attempts=1, tool_retry_backoff_seconds=0)
     expected_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
     received_efforts = []
+    received_policies = []
+    starting_policy = orchestrator.policy
 
     def chat(agent, messages, *, effort_profile):
         """Change the catalog after the initial attempt, then succeed on retry."""
         received_efforts.append(effort_profile.reasoning_effort)
+        received_policies.append(orchestrator.policy)
         if len(received_efforts) == 1:
             _change_effort(catalog)
+            orchestrator.policy = replace(starting_policy, route_p95_seconds=9)
             raise ProviderUpstreamError(
                 agent_id=agent.id,
                 model=agent.model,
@@ -377,6 +403,9 @@ def test_provider_retry_keeps_the_original_effort_profile(monkeypatch):
     try:
         result = orchestrator.complete([{"role": "user", "content": "retry fixture"}], mode="route")
         assert received_efforts == ["medium", "medium"]
+        assert received_policies == [starting_policy, starting_policy]
+        assert result["policy_snapshot"] == starting_policy.as_dict()
+        assert orchestrator.policy.route_p95_seconds == 9
         assert result["reasoning_effort_snapshot"]["snapshot_hash"] == expected_hash
     finally:
         orchestrator.close()
@@ -387,6 +416,8 @@ def test_nested_orchestrators_do_not_inherit_each_others_effort(monkeypatch):
     orchestrator, catalog = _orchestrator()
     other, other_catalog = _orchestrator()
     _change_effort(other_catalog, "low")
+    starting_policy = orchestrator.policy
+    other.policy = replace(other.policy, route_p95_seconds=7)
     expected_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
     nested_results = []
 
@@ -397,8 +428,10 @@ def test_nested_orchestrators_do_not_inherit_each_others_effort(monkeypatch):
     def chat(agent, messages, *, effort_profile):
         """Execute a second gateway while retaining the outer request's snapshot."""
         _change_effort(catalog)
+        orchestrator.policy = replace(starting_policy, route_p95_seconds=9)
         nested_results.append(other.complete(messages, mode="route"))
         assert orchestrator._role_effort_profile("worker").reasoning_effort == "medium"
+        assert orchestrator.policy == starting_policy
         return effort_profile.reasoning_effort
 
     monkeypatch.setattr(orchestrator.client, "chat", chat)
@@ -406,6 +439,9 @@ def test_nested_orchestrators_do_not_inherit_each_others_effort(monkeypatch):
     try:
         result = orchestrator.complete([{"role": "user", "content": "nested fixture"}], mode="route")
         assert result["answer"] == "medium"
+        assert result["policy_snapshot"] == starting_policy.as_dict()
+        assert nested_results[0]["policy_snapshot"]["route_p95_seconds"] == 7
+        assert orchestrator.policy.route_p95_seconds == 9
         assert result["reasoning_effort_snapshot"]["snapshot_hash"] == expected_hash
         assert nested_results[0]["answer"] == "low"
         assert nested_results[0]["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(other_catalog).snapshot_hash
