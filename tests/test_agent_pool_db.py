@@ -483,6 +483,39 @@ def test_http_stale_policy_rejects_admin_edit_without_overwrite(tmp_path) -> Non
         thread.join()
 
 
+def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) -> None:
+    """Operators can distinguish stored policy from a stale serving snapshot."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    try:
+        assert _call(base + "/timeout_policy", "GET", "wrong_token")[0] == 401
+        status, initial = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert initial["configured_seconds"] is None
+        assert initial["revision"] == 0
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, policy = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert policy == {
+            "configured_seconds": 7200.0, "revision": 1, "unit": "seconds",
+            "serving_snapshot_seconds": None, "serving_snapshot_revision": 0,
+            "enforcement_available": False,
+        }
+        assert serving._agent("general_agent").model_timeout_revision == 0
+        missing = base.replace("general_agent", "missing_agent")
+        assert _call(missing + "/timeout_policy", "GET", "pool_token")[0] == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_http_create_and_delete_worker_agents() -> None:
     token = "pool_token"
     orchestrator = TaskOrchestrator(_seed())
