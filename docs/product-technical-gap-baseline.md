@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 availability and answer-quality boundary
+
+Committed RED `450599f1` reproduces eight failures: uptime polling changes
+answer-quality priors, can hide extra mass behind an unchanged mean, and can
+reverse judged member selection without another answer evaluation. Source
+`b3be48e3` removes the quality dependency from the existing collector and keeps
+transport refresh independent of answer-benchmark priors. No new estimator,
+dependency, production default, or statistical-owner bypass is introduced.
+
+At clean `e5775648223d561bacba93022a06c720f9d5613c`, **132 focused tests pass
+in 234.74 seconds**, terminal exit 0. A controlled collector-swap unit probe
+reduces maximum quality-mean drift from **0.604839 to zero** and preserves the
+8/10-versus-2/10 judged order after 50 opposite-uptime polls per member.
+The collector constructor and polling method cover **19/19 statements and
+4/4 branches**; changed-definition docstrings are **205/205** against main
+`414f2297`. These are scoped counts, not whole-repository coverage.
+
+The [Proposed doctoring contract](doctoring/measured-routing-evidence.md#availability-and-answer-quality-separation-2026-09-06)
+records requirements, alternatives, UML, exact revisions, corrected RED
+fixtures, commands, and artifacts. It makes zero external provider calls and
+does not prove live polling, a production incident, buyer accuracy, latency
+improvement, or a defect in IRT-Router. Overlapping transport windows, maximum
+endpoint uptime versus actual routing, and the existing benchmark prior's
+calibration remain open. Both stack PRs remain Draft; current full/hosted
+verification, independent review, protected merge, and release remain gates.
+
+The preceding policy full suites are terminal: parent `7bdc27ea` has **3,512
+passed/two skipped/exit 0 in 725.04 seconds**, and child `eba36d81` has **3,527
+passed/two skipped/exit 0 in 723.74 seconds**, with matching clean start/end
+heads. Their `full-*` artifacts remain in `/tmp/co-1067-policy-snapshot.hC9q25`
+and `/tmp/co-1074-policy-snapshot.AQGsr5`. They do not verify this later change.
+
 ## 2026-09-06 evaluation-policy attribution
 
 The new request-policy RED commit `d70e6848` demonstrates **12 failures**:
@@ -3163,7 +3195,8 @@ Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeColl
 
 ### Live exact-head continuation — 2026-08-27 12:0x KST (arbitrary-weight remediation)
 
-GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
+Historical claim on PR #892 head `af9d667f…+fixups` (partially corrected by
+the 2026-09-06 availability/quality audit above; not calibration evidence):
 - The shipped `_BASELINE_PRIORS` table carried invented Beta pseudo-counts
   ("alpha=10, beta=1…" style), violating the organization rule that no
   weight may be arbitrary. Replaced with a measurement-typed derivation:
@@ -3180,7 +3213,9 @@ GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
   counts trace to polls; failure denominator = polls performed.
 - `ModelGroupRouter.update_prior()` was added so prior components can be
   refreshed atomically while `success_count`/`failure_count` remain
-  bit-identical — telemetry can no longer masquerade as outcomes.
+  bit-identical. That counter invariant did not prevent telemetry from
+  changing quality posterior means or later judgment influence; see the
+  2026-09-06 repair above.
 - Collector previously called the nonexistent `update_prior`; it now has
   a contract + tests, hardened HTTPS/percent-encoded fetch, full
   docstrings, and injectable startup delay for deterministic tests.

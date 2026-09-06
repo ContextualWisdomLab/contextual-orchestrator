@@ -2,6 +2,14 @@
 
 ## Equivalent endpoint execution
 
+Availability polling feeds only the transport ledger. Answer-quality evidence
+receives judged outcomes, not provider uptime or an availability-derived prior.
+The [Proposed boundary repair](doctoring/measured-routing-evidence.md#availability-and-answer-quality-separation-2026-09-06)
+removes the collector's quality dependency; it does not calibrate overlapping
+availability windows or establish live provider polling. With judgments,
+member refinement uses quality evidence; otherwise transport evidence remains
+the fallback. No new numerical core or persisted schema is introduced.
+
 After model-group selection, endpoints may race only when their normalized
 equivalence contracts match completely and `hedge_eligible` is true. Text and
 every media capability use the same bounded executor. The first completed

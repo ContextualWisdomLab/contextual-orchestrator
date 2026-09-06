@@ -138,4 +138,9 @@ push or open a PR.
   standalone single-role adapter contract; do not pad partial catalogs to hide
   a validation regression. The implementation record remains Proposed until
   protected delivery is verified.
+- Availability summaries may update transport evidence only, never judged
+  answer-quality priors. Preserved observation counts alone do not prove
+  unchanged posterior evidence; test subsequent judgment influence and member
+  order. See the Proposed availability-boundary record in
+  `docs/doctoring/measured-routing-evidence.md`.
 <!-- END cwl-agent-guidance -->

@@ -38,7 +38,7 @@ _OPENROUTER_UPTIME_ORIGIN = "https://openrouter.ai/api/v1"
 
 
 class OpenRouterUptimeCollector:
-    """Periodically fold measured upstream availability into prior ledgers."""
+    """Periodically fold upstream availability into the transport prior."""
 
     def __init__(
         self,
@@ -101,7 +101,7 @@ class OpenRouterUptimeCollector:
                 break
 
     def _poll_agent(self, agent: ModelAgent) -> None:
-        """Fold one endpoint measurement into ledgers as window evidence."""
+        """Fold one endpoint measurement into transport window evidence."""
         if agent.provider_name != "openrouter":
             return
         uptime = self._fetch_uptime(agent.model)
