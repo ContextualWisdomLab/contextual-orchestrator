@@ -599,6 +599,7 @@ class ModelAgent:
     stream_usage_supported: bool = False
     # Administrator-owned execution policy; runtime admission is a separate gate.
     model_timeout_seconds: float | None = None
+    model_timeout_revision: int = 0
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -629,6 +630,8 @@ class ModelAgent:
             if type(value) not in (int, float) or not 0 < value <= 1.7976931348623157e308:
                 raise ValueError("model_timeout_seconds must be finite positive seconds or null")
             object.__setattr__(self, "model_timeout_seconds", float(value))
+        if type(self.model_timeout_revision) is not int or self.model_timeout_revision < 0:
+            raise ValueError("model_timeout_revision must be a non-negative integer")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -655,6 +658,7 @@ class ModelAgent:
             "endpoint_equivalence": self.endpoint_equivalence,
             "stream_usage_supported": self.stream_usage_supported,
             "model_timeout_seconds": self.model_timeout_seconds,
+            "model_timeout_revision": self.model_timeout_revision,
         }
 
     @property
@@ -691,6 +695,7 @@ class ModelAgent:
             endpoint_equivalence=value.get("endpoint_equivalence"),
             stream_usage_supported=value.get("stream_usage_supported", False),
             model_timeout_seconds=value.get("model_timeout_seconds"),
+            model_timeout_revision=value.get("model_timeout_revision", 0),
         )
 
 
@@ -3454,13 +3459,19 @@ class _AgentPoolStore:
             )
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
-    def save(self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None) -> None:
+    def save(self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None) -> int | None:
         """Persist one normalized model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
             try:
                 if timeout_previous is not None:
                     conn.execute("BEGIN IMMEDIATE")
+                    revision = conn.execute(
+                        "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
+                        (agent.id,),
+                    ).fetchone()[0]
+                    if revision != timeout_previous.model_timeout_revision:
+                        raise ValueError("model timeout policy changed; reload before updating")
                     row = conn.execute(
                         "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
                         (agent.id,),
@@ -3472,9 +3483,9 @@ class _AgentPoolStore:
                             "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
                             (agent.model_timeout_seconds, agent.id),
                         )
-                        self._append_timeout_history(conn, timeout_previous, agent)
+                        revision = self._append_timeout_history(conn, timeout_previous, agent)
                         conn.commit()
-                        return
+                        return revision
                 config = agent.to_config()
                 conn.execute(
                     """
@@ -3585,21 +3596,23 @@ class _AgentPoolStore:
                         (agent.id, contract.contract_id),
                     )
                 if timeout_previous is not None:
-                    self._append_timeout_history(conn, timeout_previous, agent)
+                    revision = self._append_timeout_history(conn, timeout_previous, agent)
                 conn.commit()
+                return revision if timeout_previous is not None else None
             finally:
                 conn.close()
 
     @staticmethod
     def _append_timeout_history(
         conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent"
-    ) -> None:
+    ) -> int:
         """Write the policy change using the same uncommitted configuration transaction."""
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO model_timeout_history "
             "(agent_id, previous_seconds, timeout_seconds, created_at) VALUES (?, ?, ?, ?)",
             (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds, time.time()),
         )
+        return int(cursor.lastrowid)
 
     def load_all(self) -> list["ModelAgent"]:
         """Load every persisted model-agent definition."""
@@ -3626,6 +3639,9 @@ class _AgentPoolStore:
                 groups = conn.execute(
                     "SELECT agent_id, group_name FROM model_group_member ORDER BY agent_id"
                 ).fetchall()
+                timeout_revisions = dict(conn.execute(
+                    "SELECT agent_id, MAX(policy_revision) FROM model_timeout_history GROUP BY agent_id"
+                ).fetchall())
                 contracts = conn.execute(
                     "SELECT endpoint_equivalence_member.agent_id, endpoint_equivalence_contract.* "
                     "FROM endpoint_equivalence_member JOIN endpoint_equivalence_contract USING (contract_id)"
@@ -3678,6 +3694,7 @@ class _AgentPoolStore:
                 reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
                 stream_usage_supported=bool(row[13]),
                 model_timeout_seconds=row[14],
+                model_timeout_revision=timeout_revisions.get(row[0], 0),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -6105,7 +6122,10 @@ class TaskOrchestrator:
                 raise ValueError("model timeout policy must be updated separately")
             if self._pool_store is None:
                 raise ValueError("model timeout policy requires a durable agent store")
-            self._pool_store.save(patched, timeout_previous=current)
+            revision = self._pool_store.save(patched, timeout_previous=current)
+            patched = replace(patched, model_timeout_revision=revision)
+            updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+            updated_agents = [agent for agent in updated_candidates if not agent.disabled]
             self.candidates = updated_candidates
             self.agents = updated_agents
             return self._agent_to_admin_payload(patched)
@@ -6292,6 +6312,7 @@ class TaskOrchestrator:
                     agent,
                     group_name=updated_candidates[index].group_name,
                     model_timeout_seconds=updated_candidates[index].model_timeout_seconds,
+                    model_timeout_revision=updated_candidates[index].model_timeout_revision,
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
@@ -8500,6 +8521,7 @@ class TaskOrchestrator:
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
             "model_timeout_seconds": agent.model_timeout_seconds,
+            "model_timeout_revision": agent.model_timeout_revision,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
