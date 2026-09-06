@@ -3476,21 +3476,22 @@ class _AgentPoolStore:
         with self._lock:
             conn = self._connect(self._path)
             try:
+                conn.execute("BEGIN IMMEDIATE")
+                previous = timeout_previous if timeout_previous is not None else agent
+                revision = conn.execute(
+                    "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
+                    (agent.id,),
+                ).fetchone()[0]
+                if revision != previous.model_timeout_revision:
+                    raise ValueError("model timeout policy changed; reload before updating")
+                row = conn.execute(
+                    "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
+                    (agent.id,),
+                ).fetchone()
+                if row is not None and row[0] != previous.model_timeout_seconds:
+                    raise ValueError("model timeout policy changed; reload before updating")
                 if timeout_previous is not None:
-                    conn.execute("BEGIN IMMEDIATE")
-                    revision = conn.execute(
-                        "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
-                        (agent.id,),
-                    ).fetchone()[0]
-                    if revision != timeout_previous.model_timeout_revision:
-                        raise ValueError("model timeout policy changed; reload before updating")
-                    row = conn.execute(
-                        "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
-                        (agent.id,),
-                    ).fetchone()
                     if row is not None:
-                        if row[0] != timeout_previous.model_timeout_seconds:
-                            raise ValueError("model timeout policy changed; reload before updating")
                         conn.execute(
                             "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
                             (agent.model_timeout_seconds, agent.id),
