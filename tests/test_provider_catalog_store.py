@@ -394,6 +394,117 @@ def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
     assert restored[0].supports_zero_data_retention is False
 
 
+def test_last_known_good_restores_verified_tool_call_support() -> None:
+    """A catalog round trip preserves verified tool-calling evidence.
+
+    ``_restore_model_semantics`` rebuilds ``DiscoveredModel`` semantics
+    entirely from persisted serving tags (mirrors
+    ``test_last_known_good_restores_explicit_no_zdr_evidence``'s pattern for
+    ``supports_zero_data_retention``): without also parsing
+    ``tool_call:supported`` back out, a model discovery verified as
+    tool-call-capable would silently lose that evidence -- and its
+    ``general_free_serving_candidates``/``_is_general_free_agent`` exemption
+    -- on every restart or catalog refresh that goes through
+    ``bootstrap_provider_catalog_runtime``'s durable store.
+    """
+    source = _source(provider="nvidia_nim", credential="NVIDIA_NIM_API_KEY")
+    model = replace(
+        _model(source, "verified-tool-call-model", 0),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        currency_code="USD",
+        is_free=True,
+        supports_tool_calls=True,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={
+            model.model_id: (
+                "discovered",
+                "cost:free",
+                "input:text",
+                "input:image",
+                "output:text",
+                "tool_call:supported",
+            )
+        },
+    )
+
+    assert store.serving_models(source) == [model]
+
+
+def test_last_known_good_restores_verified_unsupported_tool_calls() -> None:
+    """A catalog round trip preserves verified *negative* tool-calling evidence.
+
+    A provider row whose ``supported_parameters`` list is present but omits
+    ``"tools"``/``"tool_choice"`` sets ``supports_tool_calls=False`` -- real
+    evidence, distinct from "no evidence at all". Without the paired
+    ``tool_call:unsupported`` tag (mirroring ``privacy:no_zdr``'s negative
+    counterpart), that verified ``False`` would silently restore as ``None``
+    on every restart or catalog refresh through the durable store.
+    """
+    source = _source(provider="nvidia_nim", credential="NVIDIA_NIM_API_KEY")
+    model = replace(
+        _model(source, "verified-no-tool-call-model", 0),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        currency_code="USD",
+        is_free=True,
+        supports_tool_calls=False,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={
+            model.model_id: (
+                "discovered",
+                "cost:free",
+                "input:text",
+                "input:image",
+                "output:text",
+                "tool_call:unsupported",
+            )
+        },
+    )
+
+    assert store.serving_models(source) == [model]
+
+
+def test_last_known_good_leaves_unverified_tool_call_support_unknown() -> None:
+    """No ``tool_call:supported`` tag at all restores to the unknown default."""
+    source = _source(provider="nvidia_nim", credential="NVIDIA_NIM_API_KEY")
+    model = replace(
+        _model(source, "no-tool-call-evidence-model", 0),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={
+            model.model_id: (
+                "discovered",
+                "cost:free",
+                "input:text",
+                "input:image",
+                "output:text",
+            )
+        },
+    )
+
+    restored = store.serving_models(source)
+    assert len(restored) == 1
+    assert restored[0].supports_tool_calls is None
+
+
 def _assessment(
     source: ProviderModelSource,
     *,

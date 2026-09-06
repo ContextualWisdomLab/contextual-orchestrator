@@ -406,6 +406,69 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
     assert discovered[0].zdr_capable is False
 
 
+def test_duplicate_discovery_withholds_conflicting_tool_call_support() -> None:
+    """Conflicting duplicate rows must not preserve verified tool-call evidence.
+
+    ``supports_tool_calls is True`` is what exempts a non-text-input model
+    from ``general_free_serving_candidates``'s exclusion and what writes the
+    ``tool_call:supported`` agent tag. Two rows for one serving identity that
+    disagree are ambiguous, so provider row order must not decide whether the
+    surviving record claims verified tool-call support.
+    """
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_tool_calls=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_tool_calls=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is None
+
+
+def test_duplicate_discovery_preserves_agreed_tool_call_support() -> None:
+    """Unrelated duplicate conflicts must not erase agreed tool-call evidence."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway-a.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                supports_tool_calls=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway-b.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=2.0,
+                supports_tool_calls=True,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is True
+
+
 def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
     """Conflicting duplicate rows must not preserve one limit by row order."""
     discovered = _deduplicate_discovered_models(
@@ -712,6 +775,76 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
     assert by_id["mismatch-model"].context_window_conflicted is True
     assert by_id["missing-model"].max_output_tokens_conflicted is False
     assert by_id["missing-model"].context_window_conflicted is False
+
+
+def test_configured_gateway_preserves_only_consensus_tool_call_support() -> None:
+    """Logical-model tool-call evidence requires explicit deployment consensus."""
+    payload = {
+        "data": [
+            {"id": "agreed-tools", "supported_parameters": ["tools"]},
+            {"id": "conflicted-tools", "supported_parameters": ["tools"]},
+            {"id": "missing-tools", "supported_parameters": ["tools"]},
+            {"id": "agreed-no-tools", "supported_parameters": ["tools"]},
+        ]
+    }
+    metadata = {
+        "data": [
+            {
+                "model_name": "agreed-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "agreed-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "conflicted-tools",
+                "model_info": {"mode": "chat", "supported_parameters": ["tools"]},
+            },
+            {
+                "model_name": "conflicted-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
+            {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
+            {"model_name": "missing-tools", "model_info": {"mode": "chat"}},
+            {
+                "model_name": "agreed-no-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
+            {
+                "model_name": "agreed-no-tools",
+                "model_info": {
+                    "mode": "chat",
+                    "supported_parameters": ["response_format"],
+                },
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+    discovered = _parse_openai_compatible(
+        merged,
+        ProviderModelSource(
+            provider_name="configured_gateway",
+            credential_name="LLM_GATEWAY_API_KEY",
+            list_url="https://gateway.example/v1/models",
+            chat_base_url="https://gateway.example/v1",
+            capabilities=("chat",),
+        ),
+    )
+    by_id = {model.model_id: model for model in discovered}
+
+    assert by_id["agreed-tools"].supports_tool_calls is True
+    assert by_id["conflicted-tools"].supports_tool_calls is None
+    assert by_id["missing-tools"].supports_tool_calls is None
+    assert by_id["agreed-no-tools"].supports_tool_calls is False
+    assert "response_format" not in by_id["agreed-no-tools"].capabilities
 
 
 def test_models_dev_merge_preserves_limit_metadata() -> None:
@@ -1322,6 +1455,49 @@ def test_general_free_serving_candidates_modality_shapes() -> None:
     )} == {"text-only-model", "vision-only-model", "meta/llama-3.2-90b-vision-instruct"}
 
 
+def _tool_call_capable_multimodal_model(*, supports_tool_calls: bool | None) -> DiscoveredModel:
+    """A free, chat-capable, image-input model with a given tool-call evidence state."""
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="verified-tool-vision-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image", "text"),
+        output_modalities=("text",),
+        is_free=True,
+        supports_tool_calls=supports_tool_calls,
+    )
+
+
+def test_general_free_serving_candidates_includes_a_free_multimodal_model_with_verified_tool_support() -> None:
+    """Verified tool-call support exempts a free multimodal model from the exclusion."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=True)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert [candidate.model_id for candidate in serving_candidates] == [model.model_id]
+
+
+def test_general_free_serving_candidates_still_excludes_multimodal_model_with_unknown_tool_support() -> None:
+    """No tool-call evidence at all (the default) leaves the exclusion in force."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=None)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert serving_candidates == []
+
+
+def test_general_free_serving_candidates_still_excludes_multimodal_model_with_verified_no_tool_support() -> None:
+    """Verified *lack* of tool-call support must not be treated as truthy evidence."""
+    model = _tool_call_capable_multimodal_model(supports_tool_calls=False)
+
+    serving_candidates = general_free_serving_candidates([model])
+
+    assert serving_candidates == []
+
+
 def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
     """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree.
 
@@ -1332,8 +1508,9 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
     input" -- both now delegate to ``chat_capability.requires_non_text_input``
     for that classification. This locks the three fixture shapes already
     established by ``test_general_free_serving_candidates_modality_shapes``
-    (text-only, vision-only-input, text+image) so the two call sites cannot
-    silently diverge again.
+    (text-only, vision-only-input, text+image) plus a fourth,
+    verified-tool-call-support shape, so the two call sites cannot silently
+    diverge on either the original exclusion or its additive exemption.
     """
     text_only = DiscoveredModel(
         provider_name="nvidia_nim",
@@ -1358,7 +1535,8 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
         is_free=True,
     )
     text_and_image = _nim_vision_model()
-    discovered = [text_only, vision_only, text_and_image]
+    verified_tool_call_vision = _tool_call_capable_multimodal_model(supports_tool_calls=True)
+    discovered = [text_only, vision_only, text_and_image, verified_tool_call_vision]
     serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
 
     # ModelAgent.id must be two-or-more-word snake_case; provider model ids
@@ -1369,7 +1547,11 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
         model.model_id: ModelAgent(
             model.model_id.casefold().translate(agent_id_translation),
             model.model_id,
-            tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
+            tags=(
+                "cost:free",
+                *(f"input:{value}" for value in model.input_modalities),
+                *(("tool_call:supported",) if model.supports_tool_calls is True else ()),
+            ),
         )
         for model in discovered
     }
@@ -1412,6 +1594,85 @@ def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices(
 
     assert len(discovered) == 1
     assert discovered[0].is_free is False
+
+
+def _multimodal_source() -> ProviderModelSource:
+    """Shared gateway source fixture for tool-call-evidence parsing tests."""
+    return ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+
+def test_openrouter_row_with_tools_parameter_records_verified_tool_call_support() -> None:
+    """A row whose ``supported_parameters`` names ``"tools"`` is verified support."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-with-tools",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                    "supported_parameters": ["tools", "response_format"],
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is True
+
+
+def test_openrouter_row_without_tools_parameter_records_no_verified_tool_call_support() -> None:
+    """A returned ``supported_parameters`` list lacking ``"tools"`` is verified absence."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-no-tools",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                    "supported_parameters": ["response_format"],
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is False
+
+
+def test_openrouter_row_missing_supported_parameters_leaves_tool_call_support_unknown() -> None:
+    """No ``supported_parameters`` field at all (NIM's real shape) stays unknown."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat-no-evidence",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["image", "text"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ]
+        },
+        _multimodal_source(),
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_tool_calls is None
 
 
 def test_discovery_does_not_mark_rows_free_with_unknown_unit_price_dimensions() -> None:

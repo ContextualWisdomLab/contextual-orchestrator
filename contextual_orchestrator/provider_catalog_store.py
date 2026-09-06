@@ -410,6 +410,16 @@ def _restore_model_semantics(
         supports_no_prompt_retention=(
             True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
         ),
+        # ``model_discovery.tool_call_tags_for_discovered`` writes both
+        # directions (``tool_call:supported`` / ``tool_call:unsupported``),
+        # the same positive/negative pairing the privacy fields above use, so
+        # verified-``False`` evidence survives a round trip instead of
+        # collapsing into unknown. No tag at all still means unknown.
+        supports_tool_calls=(
+            True if "tool_call:supported" in normalized
+            else False if "tool_call:unsupported" in normalized
+            else None
+        ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
     )

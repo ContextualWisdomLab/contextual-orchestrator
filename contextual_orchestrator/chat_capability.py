@@ -122,6 +122,32 @@ def requires_non_text_input(input_modalities: Iterable[str]) -> bool:
     )
 
 
+def declares_text_input(input_modalities: Iterable[str]) -> bool:
+    """Return whether declared input-modality evidence includes text input.
+
+    The positive counterpart of :func:`requires_non_text_input`: a model that
+    declares ``image`` but never ``text`` cannot answer a blind text-only
+    request at all, whatever else its catalog row advertises. Absence of
+    modality evidence is likewise not evidence of text support, so an empty
+    ``input_modalities`` iterable never satisfies this.
+
+    Shared by ``model_discovery._declares_text_input`` (reading
+    ``DiscoveredModel.input_modalities`` directly) and
+    ``orchestrator.TaskOrchestrator._agent_declares_text_input`` (reading an
+    agent's persisted ``input:<modality>`` tags, with the ``input:`` prefix
+    already stripped by the caller), for the same reason
+    :func:`requires_non_text_input` is shared by their sibling pair: the
+    "what counts as text" reading lives in exactly one place, so the two
+    representations of the same catalog evidence cannot drift on this
+    question independently of each other.
+    """
+    return any(
+        modality.strip().casefold() == "text"
+        for modality in input_modalities
+        if isinstance(modality, str) and modality.strip()
+    )
+
+
 def is_general_chat_candidate(
     model_id: str,
     *,

@@ -1,5 +1,48 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-04 live continuation: PR #1028 unresolved free-pool tool-support evidence fixes
+
+Observation time: 2026-09-04 Asia/Seoul.
+
+- Re-fetched open pull requests and issues after confirming GitHub
+  authentication with `gh api user`.
+- Inspected existing `commercial-loop-*` worktrees before creating a new one.
+  No prior worktree was removed because this invocation did not record exact
+  diff-coverage proof that every useful local-only change was already present
+  on an open PR head.
+- Processed PR [#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
+  because its unresolved review threads still touched the current
+  `orchestrator/free` product-priority contract: verified multimodal models
+  must remain eligible only when tool-call support evidence is both explicit
+  and preserved honestly through deduplication and configured-gateway
+  aggregation.
+
+### Root-cause fixes completed
+
+- `contextual_orchestrator/model_discovery.py` now preserves
+  `supports_tool_calls` only when duplicate rows for one serving identity agree
+  on the same explicit tri-state value. Conflicting duplicates still collapse
+  to unknown, but unrelated disagreements no longer erase verified tool-call
+  support.
+- `_merge_configured_gateway_metadata` now strips generic
+  `supported_parameters` from the shared model listing and restores that field
+  only when every matched deployment reports the same explicit tool-call
+  evidence. Conflicted or missing deployment evidence therefore remains
+  unknown instead of inheriting a generic row's optimistic value.
+
+### Exact local verification
+
+- `uv run pytest tests/test_model_discovery.py -k 'duplicate_discovery_preserves_agreed_tool_call_support or configured_gateway_preserves_only_consensus_tool_call_support'`
+  -> `2 passed`
+- `uv run pytest tests/test_model_discovery.py tests/test_provider_bootstrap.py tests/test_provider_catalog_store.py tests/test_general_free_pool_text_input_contract.py`
+  -> `193 passed in 3.35s`
+
+### Residual external gate
+
+- PR `#1028` still requires fresh exact-head hosted review/check evidence after
+  this update. This invocation did not claim protected delivery or merge
+  completion.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
