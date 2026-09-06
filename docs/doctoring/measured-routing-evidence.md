@@ -60,6 +60,14 @@ ranking p95 and paired context medians do not measure end-to-end model latency.
 These distinctions document existing calculations without changing an estimator,
 sample size, production policy, or the wider CodeRabbit documentation scope.
 
+Subsequent normal merge `2340bea5` retains #1064 head `4c4e5f13` and its
+protected-main cost-evidence update; 244 integration tests passed in 32.90
+seconds. A later protected-main transport-retry correction (`414f2297`) is
+preserved by merge `c4008bb5`, whose 157 transport, failover, psychometric-routing,
+and streaming tests passed in 23.56 seconds. Logs and JUnit are retained in
+`/tmp/co-1067-documentation-audit.h2ZVMV`. These are distinct exact-head local
+checks, not a measured end-to-end latency gain or protected delivery claim.
+
 ### IRT-Router interpretation audit (2026-09-05)
 
 This review separates the ACL 2025 paper from public implementation revision

@@ -1,5 +1,27 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 predecessor and protected-main integration
+
+Normal merge `2340bea5f3abfb06d8d78afdaf09df2742da68ac` retains the
+documentation/lint corrections below and current predecessor #1064 head
+`4c4e5f135d5745aa6273c0ed4036cac76c7bd03d`. That predecessor incorporates
+protected main `a080297d2546bb61e89520d637cabc202db331ec`, including the
+reviewed NVIDIA cost-evidence dates and their isolated test fixtures.
+At the clean merge head, **244 integration tests passed in 32.90 seconds**.
+
+A fresh branch read then found protected main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, which suppresses stacked transport
+retries when the orchestration loop owns retry-versus-failover decisions.
+Normal merge `c4008bb540ce5f2d59bffe93c3ef9408ea6b9410` preserves both histories
+without conflicts. Its **157 transport, failover, psychometric-routing, and
+streaming tests passed in 23.56 seconds**, terminal exit 0.
+Both runs retain logs and JUnit in `/tmp/co-1067-documentation-audit.h2ZVMV`.
+The 244-test result belongs to `2340bea5`; it does not cover the later transport
+merge. Full-suite verification of the combined tree remains separate.
+
+Predecessor PRs remain open. These integration results do not prove protected
+delivery of #1067, live gateway recovery, or improved buyer accuracy/latency.
+
 ## 2026-09-05 internal measurement documentation audit
 
 Strict `interrogate -c /dev/null --fail-under 100` on
