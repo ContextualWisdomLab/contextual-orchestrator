@@ -3421,6 +3421,11 @@ class _AgentPoolStore:
             history_columns = {row[1] for row in conn.execute("PRAGMA table_info(model_timeout_history)")}
             if "actor_id" not in history_columns:
                 conn.execute("ALTER TABLE model_timeout_history ADD COLUMN actor_id TEXT")
+            if "restored_from_revision" not in history_columns:
+                conn.execute(
+                    "ALTER TABLE model_timeout_history ADD COLUMN restored_from_revision INTEGER "
+                    "REFERENCES model_timeout_history(policy_revision)"
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -3465,6 +3470,7 @@ class _AgentPoolStore:
     def save(
         self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None,
         actor_id: str | None = None,
+        restored_from_revision: int | None = None,
     ) -> int | None:
         """Persist one normalized model-agent definition."""
         with self._lock:
@@ -3489,7 +3495,7 @@ class _AgentPoolStore:
                             "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
                             (agent.model_timeout_seconds, agent.id),
                         )
-                        revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id)
+                        revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
                         conn.commit()
                         return revision
                 config = agent.to_config()
@@ -3602,7 +3608,7 @@ class _AgentPoolStore:
                         (agent.id, contract.contract_id),
                     )
                 if timeout_previous is not None:
-                    revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id)
+                    revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
                 conn.commit()
                 return revision if timeout_previous is not None else None
             finally:
@@ -3612,14 +3618,39 @@ class _AgentPoolStore:
     def _append_timeout_history(
         conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent",
         actor_id: str | None,
+        restored_from_revision: int | None,
     ) -> int:
         """Write the policy change using the same uncommitted configuration transaction."""
+        if restored_from_revision is not None:
+            historical = conn.execute(
+                "SELECT timeout_seconds FROM model_timeout_history WHERE agent_id = ? AND policy_revision = ?",
+                (updated.id, restored_from_revision),
+            ).fetchone()
+            if historical is None or historical[0] != updated.model_timeout_seconds:
+                raise ValueError("restored timeout must match this model's historical revision")
         cursor = conn.execute(
             "INSERT INTO model_timeout_history "
-            "(agent_id, previous_seconds, timeout_seconds, created_at, actor_id) VALUES (?, ?, ?, ?, ?)",
-            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds, time.time(), actor_id),
+            "(agent_id, previous_seconds, timeout_seconds, created_at, actor_id, restored_from_revision) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds,
+             time.time(), actor_id, restored_from_revision),
         )
         return int(cursor.lastrowid)
+
+    def timeout_at_revision(self, agent_id: str, policy_revision: int) -> float | None:
+        """Read a historical value only when its revision belongs to this model."""
+        with self._lock:
+            conn = self._connect(self._path)
+            try:
+                row = conn.execute(
+                    "SELECT timeout_seconds FROM model_timeout_history WHERE agent_id = ? AND policy_revision = ?",
+                    (agent_id, policy_revision),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            raise KeyError("model timeout revision not found")
+        return row[0]
 
     def load_all(self) -> list["ModelAgent"]:
         """Load every persisted model-agent definition."""
@@ -6084,6 +6115,8 @@ class TaskOrchestrator:
     def patch_agent(
         self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any], *,
         actor_id: str | None = None,
+        expected_timeout_revision: int | None = None,
+        restored_from_revision: int | None = None,
     ) -> dict[str, Any]:
         """Apply governance updates without invalidating the active effort catalog."""
         if not patch:  # pragma: no cover
@@ -6131,6 +6164,11 @@ class TaskOrchestrator:
         if "model_timeout_seconds" in patch:
             if set(patch) != {"model_timeout_seconds"}:
                 raise ValueError("model timeout policy must be updated separately")
+            if expected_timeout_revision is not None and (
+                type(expected_timeout_revision) is not int
+                or expected_timeout_revision != current.model_timeout_revision
+            ):
+                raise ValueError("model timeout policy changed; reload before updating")
             if actor_id is not None and (
                 type(actor_id) is not str or len(actor_id) != 64
                 or any(character not in "0123456789abcdef" for character in actor_id)
@@ -6138,7 +6176,10 @@ class TaskOrchestrator:
                 raise ValueError("timeout actor must be an opaque principal digest")
             if self._pool_store is None:
                 raise ValueError("model timeout policy requires a durable agent store")
-            revision = self._pool_store.save(patched, timeout_previous=current, actor_id=actor_id)
+            revision = self._pool_store.save(
+                patched, timeout_previous=current, actor_id=actor_id,
+                restored_from_revision=restored_from_revision,
+            )
             patched = replace(patched, model_timeout_revision=revision)
             updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -6183,6 +6224,26 @@ class TaskOrchestrator:
                 },
             )
         return self._agent_to_admin_payload(patched)
+
+    def restore_model_timeout(
+        self, agent_pool_id: str, worker_agent_id: str, source_revision: int, *,
+        expected_revision: int, actor_id: str,
+    ) -> dict[str, Any]:
+        """Restore a model-owned historical value as a new revision, never rewrite history."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(source_revision) is not int or not 0 < source_revision <= _AGENT_POOL_INTEGER_MAX:
+            raise ValueError("source_revision must be a positive integer")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected_revision must be a non-negative integer")
+        if actor_id is None:
+            raise ValueError("restore requires an opaque principal digest")
+        if self._pool_store is None:
+            raise ValueError("model timeout policy requires a durable agent store")
+        value = self._pool_store.timeout_at_revision(worker_agent_id, source_revision)
+        return self.patch_agent(
+            agent_pool_id, worker_agent_id, {"model_timeout_seconds": value}, actor_id=actor_id,
+            expected_timeout_revision=expected_revision, restored_from_revision=source_revision,
+        )
 
     def list_model_groups(self) -> list[dict[str, Any]]:
         """Return operator-defined logical models and measured member evidence."""
