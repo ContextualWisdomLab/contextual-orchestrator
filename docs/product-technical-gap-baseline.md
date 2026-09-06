@@ -1,5 +1,43 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 operation-local identity snapshot
+
+RED `ad3fbf874608a5da366095f92c746cfbefcc1131` reproduces two defects:
+one three-candidate/four-attempt record validates the same catalog eight times,
+and a lazy attempt input can mix old and new catalog revisions in that record.
+Source `db195d734c0a27adf38f59d7427ef196da5da7d3` uses one fresh validated
+catalog snapshot per ordered candidate batch. Ranking, observation, reload,
+retention, and decision records share the same identity calculation. Repeated
+attempts remain repeated, and later calls still see catalog/deployment changes.
+There is no persistent identity cache or new estimator/dependency.
+
+Guard-test head `2d1592af5c8df90733f6b1d5c66cd33976d02d15` passes **206 focused
+tests in 117.36 seconds**. Seven targeted cases cover all **16 statements and
+four branches** across the single-ID entry point, batch calculation, and record
+builder; all three have docstrings. This is not whole-module coverage.
+Malformed catalog changes fail closed; an empty pool still clears observations.
+
+The [complete unit-fixture profile](research/psychometric-identity-batch-profile.json)
+retains scripts, source heads, and every timing. In three same-process paired
+runs, each condition/version has 189 calls, including first calls. With 50
+candidates and an opt-in catalog, median record-computation time changes from
+**9.121 to 0.677417 ms (92.57% lower)** with identical output hashes. The default
+no-catalog medians are 0.481667 and 0.478208 ms, too small a difference to claim
+an improvement. An earlier cross-process default comparison regressed; those
+samples remain in the artifact, and its cause was not isolated. This profile
+measures only unit-fixture computation, not live routing, buyer accuracy, or
+end-to-end latency. Full-suite and protected validation of this change remain
+separate requirements.
+
+The preceding frozen parent `bfeb73a6c58add7a23df052110593cdf43c0b0db` completed
+**3,461 passed, two skipped, exit 0 in 675.10 seconds**. Frozen child
+`9207412ea8ac529d7d2622ab298989ef7899befb` completed **3,476 passed, two skipped,
+exit 0 in 790.27 seconds**. Both kept matching start/end heads and clean trees;
+their JUnit counts are 3,463 and 3,478 with no failures or errors. Their evidence
+directories are `/tmp/co-1067-current-integration.ZEiSf0` and
+`/tmp/co-1074-current-integration.PBuxSQ`. These results predate the new batch
+change and must not be relabeled as its full-suite verification.
+
 ## 2026-09-06 predecessor and protected-main integration
 
 Normal merge `2340bea5f3abfb06d8d78afdaf09df2742da68ac` retains the

@@ -29,6 +29,34 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Research-to-code mapping
 
+### Operation-local identity snapshot (2026-09-06)
+
+The performance review exposed repeated catalog validation in ranking and
+decision records. RED `ad3fbf87` also demonstrates mixed catalog versions when
+an attempt iterable changes caller-owned settings between record fields.
+Source `db195d73` materializes each input batch, validates one catalog snapshot,
+and preserves every candidate occurrence. Existing canonical JSON and SHA-256
+identity semantics remain unchanged for fixed settings. Subsequent calls take
+fresh snapshots; malformed catalog updates still fail closed. This does not
+claim an atomic transaction across the agent pool, policy, catalog, and an
+entire long-running provider request.
+
+Persistent object-identity caching was rejected because the catalog and nested
+deployment contract are mutable. The existing Python orchestration adapter
+reduces repeated validation; it adds no statistical kernel or Rust replacement.
+The Rust-first numerical-owner boundary and all buyer admission gates remain.
+
+At guard-test head `2d1592af`, 206 integration tests pass, and seven cases cover
+all 16 statements/four branches of the three identity/record methods. The
+[reproducible profile](../research/psychometric-identity-batch-profile.json)
+contains all cross-process and within-process samples, including the earlier
+default-path regression and first calls. Same-process alternation controls
+process differences; it does not identify the cause of the earlier regression.
+The opt-in 50-candidate fixture's pooled median is 9.121 versus 0.677417 ms across
+189 calls per version. Default medians (0.481667 versus 0.478208 ms) do not justify
+a speedup claim. All outputs match within each condition. These are controlled
+unit-fixture costs, not buyer observations or end-to-end performance evidence.
+
 ### Internal benchmark contract audit (2026-09-05)
 
 The documentation audit covers the psychometric routing module and both
