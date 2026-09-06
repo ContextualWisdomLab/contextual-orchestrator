@@ -2743,8 +2743,39 @@ from excluding a stalled candidate:
 So landing `#1082` is necessary but not sufficient for option (a): it
 makes the failures countable, and a durable exclusion still needs a reset
 policy scaled to the observed attempt duration rather than a fixed 30 s.
-`#911` remains unmerged as of this amendment (verified 2026-09-06), so the
-ranking-observation half is also still outstanding. None of this changes
-the conclusion above — a fixed wall-clock deadline on the candidate/retry
-loop is still barred by section 8 — it only records that the "not-yet-built"
-mechanism has two independent missing pieces, not one.
+**Third gap, found the same day and the strongest of the three: a single
+success erases the count.** `_record_success`
+(`contextual_orchestrator/orchestrator.py:8073-8077` at the same pin) does not
+decrement the failure counter — it pops the agent's circuit state outright:
+
+```python
+def _record_success(self, agent_id: str) -> None:
+    with self._circuit_lock:
+        cleared = self._circuit.pop(agent_id, None)
+```
+
+With `circuit_failure_threshold = 3`, any one success therefore zeroes the
+accumulated count. A route that alternates failure and success — which is what
+an overloaded provider does — never reaches three and is never excluded at all,
+regardless of how much wall clock each failure burns. Reproduced three times on
+2026-09-06 across three separate pull requests, each on the single ready route
+the post-`.github#1957` preflight had found:
+
+| PR | failure | `circuit_cleared` | failure again, from zero |
+|---|---|---|---|
+| this PR (`#1043`) | 16:07:49.665 | 16:07:57.361 | 16:08:46.896 |
+| `.github#1938` | 17:59:55.035 | 18:00:36.785 | 18:01:55.884 |
+| `.github#1913` | (same sequence) | | |
+
+Three runs, one mechanism: this is a property of the breaker, not a reading of
+one log.
+
+`#911` remains unmerged as of this amendment (verified 2026-09-06), and it is
+further from merged than "unmerged" suggests: its base is not `main` but
+`codex/nim-evidence-successor`, which is itself `#1068` (open), based in turn on
+`codex/stacked-security-successor`. "Once `#911` lands" therefore requires that
+whole stack to land first.
+
+None of this changes the conclusion above — a fixed wall-clock deadline on the
+candidate/retry loop is still barred by section 8 — it only records that the
+"not-yet-built" mechanism has **three** independent missing pieces, not one.
