@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 exact-head regression and stacked hosted verification
+
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+at `36307389e715632cf5a78602d682acae5dec3483` completed its local full suite:
+**3,583 passed, two skipped, 704.02 seconds**. JUnit records 3,585 tests,
+zero errors/failures and 702.134 seconds. The execution session returned exit
+zero; pre/post HEAD and clean tracked state matched. This supersedes earlier
+full-suite gaps for that exact source revision, not subsequent commits.
+
+Child [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+at `239f894edb2b37f4c28430d1acecb5ab36eef712` has successful actual
+[pull-request CI](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34039966047).
+Its checkout was merge result `cb60f17` of that child into parent `36307389`.
+The full job reports **3,598 passed, two skipped, 802.08 seconds** and the
+benchmark-coverage/public-docstring check reports **149 passed, 15.68 seconds**.
+Property/coverage-guided fuzzing and CodeQL/supply-chain/SBOM jobs succeeded.
+This proves the local workflow admits a non-main stacked PR base; it does not
+prove every organization-required workflow admits that base or grants approval.
+
+Both PRs remain Draft. Parent CodeQL compatibility run `34039956529` had
+three failed dispatch-shard jobs whose actual logs report dispatch success but
+a pending terminal verdict. These are neither confirmed vulnerability findings
+nor ignorable flakes. The canonical scanner must publish its authenticated
+verdict and complete exact-job callback verification before the gate can pass.
+
+Regression duration is not a routing latency KPI, particularly for concurrent
+local suites. Synthetic recovery, mutation and calibration tests remain unit
+evidence. Buyer-held-out accuracy, invariant measurement scales, correctly
+oriented DIF/judge effects, paired decision latency and actual administrator UI
+remain separate acceptance requirements. No production routing default changes,
+protected merge, immutable release or deployed timeout activation are claimed.
+
 ## 2026-09-06 documented endpoint collection path
 
 Whole-identifier encoding produced HTTP 404 for `openai/gpt-4o`; the documented
