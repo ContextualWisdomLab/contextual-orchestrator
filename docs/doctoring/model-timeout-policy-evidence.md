@@ -282,6 +282,36 @@ separate correlation gap; this change addresses the ordinary HTTP error path.
 The underlying raw transport exception/fallback boundary still needs repair
 analysis separately from the default-null/model-lifetime contract.
 
+### Explicit tool-stop SDK replay regression
+
+The installed Strix SDK is OpenAI Python 2.54.0 (job log 1778 and 1905).
+Its [versioned retry implementation](https://github.com/openai/openai-python/blob/v2.54.0/src/openai/_base_client.py)
+retries HTTP 409 and 5xx without consulting JSON `retryable` details. It honors
+the nonstandard `x-should-retry: false` response header. An offline SDK probe
+confirmed three attempts without that header versus one with it for 409,
+500, 502 and 503. This evidence applies to that SDK, not every consumer.
+
+`4b1c108f` then reproduced the problem with the actual CO error-response
+writer over loopback HTTP and the exact asynchronous SDK: the explicit
+`tool_execution_stopped` 409 was requested three times instead of once;
+the ordinary `conflict` 409 correctly retained three attempts. The run
+finished with one failure and one pass in 9.88 seconds. No provider was called.
+
+`fc94faab` adds the no-retry header only for the existing explicit tool-stop
+error code, reusing the response writer's existing extra-header support.
+Status, error payload and other error codes remain unchanged. At `5c82b9c0`,
+161 related tests, including the SDK integration cases, pass in 11.82 seconds:
+`uv run --offline --with openai==2.54.0 pytest -q tests/test_tool_execution_fallback.py tests/test_provider_reliability.py tests/test_security_hardening.py`.
+The existing provider-to-orchestrator-to-HTTP terminal-stop test now also
+checks the header without needing the optional SDK. Normal suites without
+the SDK explicitly skip the two SDK cases; they are not counted as passes.
+
+This repairs the existing tool-stop response's SDK compatibility. It does
+not show that the Strix incident took the tool-stop branch, classify raw
+ambiguous passthrough timeouts, prevent higher-level Strix retries, or alter
+the model-lifetime contract. The previous 443aa5fb full-suite receipt does
+not validate these subsequent commits.
+
 An actual screen-access attempt still returned a locked Mac. Administrator UI
 visual acceptance remains unverified; paper figure inspection is not UI proof.
 
