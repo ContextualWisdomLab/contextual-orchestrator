@@ -2,8 +2,8 @@
 
 These papers ground the design of the LLM **cost review** ledger and the
 **sync-vs-batch / upstream** routing added in `feat/cost-review-and-batch-routing`.
-All three are arXiv preprints distributed under licenses that permit
-redistribution; each is cited below with its arXiv identifier.
+Vendored PDFs are limited to papers whose redistribution terms were checked;
+the remaining sources are cited and linked without copying their files.
 
 ## Cost optimisation
 
@@ -15,6 +15,7 @@ redistribution; each is cited below with its arXiv identifier.
   providers/models, so a gateway should price each request and route to the
   cheapest capable upstream. Distributed under arXiv's non-exclusive license to
   distribute (arXiv perpetual, non-exclusive license 1.0).
+  TMLR record: https://openreview.net/forum?id=cSimKw5p6R
 
 ## Query routing (which upstream / which tier)
 
@@ -65,6 +66,43 @@ redistribution is unclear.
 Buyer next action: call `run_equal_budget_ablation` and read
 `production_default_change_allowed` before changing live defaults.
 
+## Psychometric routing accuracy-time frontier
+
+- Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
+  R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
+  item response theory* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2506.01048
+  Motivates held-out response prediction from candidate-query interactions;
+  exact-query and semantic warm-start evidence must be evaluated separately.
+  The gateway does not adopt the paper's stronger interpretation of fitted
+  coordinates as stable LLM abilities or query properties. The paper and its
+  public implementation report predictive metrics, but do not establish scale
+  linking, parameter invariance, local independence, DIF, parameter uncertainty,
+  rater effects, or adaptive-routing selection-bias control. Until those checks
+  exist, fitted values remain deployment- and sample-conditional routing
+  evidence rather than psychometric measurements that can be compared across
+  model versions, provider policies, domains, or time.
+- He, Y., & Qi, Y. (2023). Using response time in multidimensional
+  computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
+  697–738. https://doi.org/10.1111/jedm.12373
+  Grounds a joint accuracy-time KPI: maximize information per unit time rather
+  than treating latency as a tie-breaker after accuracy.
+- Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+  Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
+  Grounds local similarity-weighted probability interpolation. The gateway
+  uses the smallest bounded form: two positive-cosine neighbors, with no
+  learned bandwidth or claim of reproducing the paper's estimator.
+
+The current gateway does not claim these papers' full estimators. Candidate changes
+must report held-out prediction quality or true-parameter RMSE together with
+route-decision latency; faster Python preparation alone is a latency result,
+not an accuracy improvement. Production evidence must identify the measured
+unit as a versioned endpoint + model + system/decode/tool policy, preserve
+anchor interactions across recalibration, report uncertainty and subgroup/domain
+DIF, and log randomized exposure or propensities when routing controls which
+responses are observed. Without those conditions, the safe result is "no
+psychometric evidence", never a portable ability rank.
+
 ## Evaluation methodology (NIM cost-quality benchmark)
 
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
@@ -77,6 +115,87 @@ Buyer next action: call `run_equal_budget_ablation` and read
   than silently dropped); and standardize conditions across compared systems
   (same tasks, scorers, caps, and budgets). Distributed under the arXiv
 non-exclusive license / CC BY as marked on arXiv.
+
+## Repository-wide referenced research
+
+The following papers ground implementation or architecture elsewhere in this
+repository. This register deliberately excludes RFC, NIST, ISO, OWASP, and
+vendor documentation; those remain standards or product sources rather than
+academic papers. `tests/test_paper_contracts.py` normalizes arXiv URLs and DOI
+forms and fails when a scholarly identifier used by tracked Python or Markdown
+is absent here.
+
+- Bradley, R. A., & Terry, M. E. (1952). Rank analysis of incomplete block
+  designs: I. The method of paired comparisons. *Biometrika, 39*(3/4), 324–345.
+  https://doi.org/10.1093/biomet/39.3-4.324
+- Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
+  Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
+  *Chatbot Arena: An open platform for evaluating LLMs by human preference*
+  [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2403.04132
+- Li, H., Zhang, Q., Wu, Y., Xiao, X., Li, Z., Xia, S.-T., & Liu, H. (2025).
+  *Evaluating scoring bias in LLM-as-a-judge* [Preprint]. arXiv.
+  https://arxiv.org/abs/2506.22316
+- Zheng, C., Zhou, H., Meng, F., Zhou, J., & Huang, M. (2024). Large language
+  models are not robust multiple choice selectors. *International Conference
+  on Learning Representations*.
+  https://proceedings.iclr.cc/paper_files/paper/2024/hash/54dd9e0cff6d9214e20d97eb2a3bae49-Abstract-Conference.html
+- Pezeshkpour, P., & Hruschka, E. (2024). Large language models sensitivity to
+  the order of options in multiple-choice questions. In *Findings of the
+  Association for Computational Linguistics: NAACL 2024* (pp. 2006–2017).
+  https://aclanthology.org/2024.findings-naacl.130/
+- Sharma, M., Tong, M., Korbak, T., Duvenaud, D., Askell, A., Bowman, S. R.,
+  Cheng, N., Durmus, E., Hatfield-Dodds, Z., Johnston, S. R., Kravec, S.,
+  Maxwell, T., McCandlish, S., Ndousse, K., Rausch, O., Schiefer, N., Yan, D.,
+  Zhang, M., & Perez, E. (2023). *Towards understanding sycophancy in language
+  models* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2310.13548
+  Research page:
+  https://www.anthropic.com/research/towards-understanding-sycophancy-in-language-models
+- Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark
+  for multimodal LLM routing* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2601.17814
+- Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
+  parameters for unidimensional multidimensional logistic item response
+  models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+- Iannario, M., Monti, A. C., & Scalera, P. (2022). The number of response
+  categories in ordered response models. *The International Journal of
+  Biostatistics, 18*(2), 593–611.
+  https://doi.org/10.1515/ijb-2021-0013
+- Jones, W. P., & Loe, S. A. (2013). Optimal number of questionnaire response
+  categories. *SAGE Open, 3*(2).
+  https://doi.org/10.1177/2158244013489691
+- Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
+  Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
+  (2023). *Judging LLM-as-a-judge with MT-Bench and Chatbot Arena* [Preprint].
+  arXiv. https://arxiv.org/abs/2306.05685
+- Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
+  & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
+  answering. In *Proceedings of EMNLP 2020* (pp. 6769–6781).
+  https://doi.org/10.18653/v1/2020.emnlp-main.550
+- Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM Computer
+  Communication Review, 18*(4), 314–329. https://doi.org/10.1145/52325.52356
+- Dean, J., & Barroso, L. A. (2013). The tail at scale. *Communications of the
+  ACM, 56*(2), 74–80. https://doi.org/10.1145/2408776.2408794
+- Gardner, K., Harchol-Balter, M., Scheller-Wolf, A., & Van Houdt, B. (2017).
+  Redundancy-d: The power of d choices for redundancy. *Operations Research,
+  65*(4), 1078–1094. https://doi.org/10.1287/opre.2016.1582
+- Codd, E. F. (1970). A relational model of data for large shared data banks.
+  *Communications of the ACM, 13*(6), 377–387.
+  https://doi.org/10.1145/362384.362685
+- Birrell, A. D., & Nelson, B. J. (1984). Implementing remote procedure calls.
+  *ACM Transactions on Computer Systems, 2*(1), 39–59.
+  https://doi.org/10.1145/2080.357392
+- Garcia-Molina, H., & Salem, K. (1987). Sagas. In *Proceedings of ACM SIGMOD*
+  (pp. 249–259). https://doi.org/10.1145/38713.38742
+- Yang, N., Barringer, H., & Zhang, N. (2007). A purpose-based access control
+  model. In *Proceedings of IAS 2007*. IEEE.
+  https://doi.org/10.1109/IAS.2007.29
+- Popa, R. A., Redfield, C. M. S., Zeldovich, N., & Balakrishnan, H. (2011).
+  CryptDB: Protecting confidentiality with encrypted query processing. In
+  *Proceedings of the 23rd ACM Symposium on Operating Systems Principles*
+  (pp. 85–100). https://doi.org/10.1145/2043556.2043566
+- Wolf, K., Pallas, F., & Tai, S. (2021). *Messaging with purpose limitation:
+  Privacy-compliant publish-subscribe systems* [Preprint]. arXiv.
+  https://arxiv.org/abs/2110.15150
 
 ## Batch execution / load balancing
 
@@ -110,3 +229,15 @@ Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
 M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
 data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
+
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
+Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
+(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2506.01048
+
+Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
+Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020

@@ -41,6 +41,41 @@ The replacement ordering ladder is evidence-only:
    responses per second. Token throughput remains separately observable and
    never changes the comparable-unit score.
 
+### Psychometric warm start for unseen contexts
+
+An exact previously judged context keeps its fitted model probabilities. The
+production default for an unseen context remains the previously validated
+single nearest finite-cosine context, including its existing non-positive
+fallback. The experimental held-out harness may enable two-neighbor
+interpolation, require positive similarity, and average each available
+candidate probability using those similarities as weights. No usable vector
+returns no psychometric evidence and falls back to the existing measured order.
+
+This bounded Nadaraya-style local interpolation replaces a discontinuous
+nearest-context copy without adding a trained router or bandwidth parameter.
+The seeded smooth-response benchmark is regression evidence only. It cannot
+authorize a production-policy change until a preregistered buyer-held-out
+matrix shows non-inferior accuracy and acceptable end-to-end latency.
+
+The fitted value is a conditional success estimate for one versioned deployment
+candidate: endpoint, model revision, system prompt, decoding policy, and enabled
+tools. Declared candidate configuration and the active role effort/sampling
+catalog are hashed into the evidence identity; a changed model, endpoint,
+capability, or decode policy cannot inherit earlier rows. Source commit
+`0554b3ac` preserves the production similarity rule and adds policy-change and
+restart invalidation tests.
+Persistence source commit `ffb1383b` serializes observation writes with
+candidate retention and pruning; a barrier-driven regression proves a
+concurrent pool update cannot silently delete or later revive a valid row.
+It is not a context-free "LLM ability" measurement. Scores must not be
+linked across candidate-catalog, policy, domain, or time changes unless anchor
+interactions establish scale continuity. Production calibration must also test
+local dependence and subgroup/domain DIF, report estimate uncertainty, model
+judge/rater effects, and record randomized exposure or routing propensity so
+adaptively missing outcomes do not turn the incumbent policy into ground truth.
+Failure of any required check yields no psychometric evidence and preserves the
+existing measured order.
+
 ### Workflow triage without keywords
 
 The auto-mode decision "route directly or run the multi-agent workflow" is
@@ -68,6 +103,10 @@ without a judge-capable member.
 - Learned routers trained offline (RouteLLM-style): require labeled
   preference data this gateway does not have per deployment; measured
   ledgers give per-deployment truth without training data.
+- Treating neural IRT coordinates as portable model ability: predictive fit
+  alone does not establish construct validity, invariance, scale linking, DIF,
+  or uncertainty. The same numerical score can change when the candidate pool,
+  judge, prompt policy, or exposure policy changes.
 - Pure latency routing: ignores whether answers were actually acceptable;
   the quality ledger exists precisely because fast wrong answers are worse
   than slower verified ones.
@@ -90,7 +129,8 @@ flowchart LR
   Tri -- false / cache hit --> Rank[evidence ladder]
   Rank --> E1[eligibility partition]
   E1 --> E2[declaration order<br/>+ cosine affinity]
-  E2 --> E3[measured group order<br/>quality then successful responses/sec]
+  E2 --> P[exact psychometric score<br/>or two-neighbor warm start]
+  P --> E3[measured group order<br/>quality then successful responses/sec]
   E3 --> Serve[serve answer]
   Serve --> Judge{real-time judge}
   Judge -- accepted --> LedgerQ[quality ledger +1 success]
@@ -106,9 +146,22 @@ flowchart LR
 - `tests/test_chat_model_capability_isolation.py::test_stale_embedding_agent_cannot_win_synthesizer_selection`
   proves the capability gate survives the rewrite.
 - Full suite green: 1891 unit/contract tests plus 12 property/fuzz tests.
+- PR #1061 candidate evidence: the fixed 24-training/24-held-out synthetic
+  surface reduces expected Brier from 0.1438369123 to 0.1418346845, log loss from
+  0.4525311878 to 0.4475784303, and mean top-choice regret from 0.0024259478 to
+  zero while decision p50 remains near 0.02 ms. Eleven focused psychometric
+  tests cover exact and interpolated scoring, iterable candidates, persistence,
+  and routing integration. Buyer-held-out and protected-main evidence remain
+  open, so two-neighbor interpolation remains disabled in production.
+- Measurement-validity gate remains open: versioned measurement units, anchors,
+  local-dependence checks, DIF, uncertainty, judge effects, and adaptive-exposure
+  correction have no buyer-held-out evidence yet. Consequently these fitted
+  values may order candidates only inside the current deployment sample and
+  cannot be published as stable model abilities.
 
 ## References
 
 See the doctoring record for full APA 7 references (Jacobson, 1988;
 Laplace via Gelman et al., 2013; Karpukhin et al., 2020; Ong et al., 2024;
-Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021).
+Chen et al., 2023; Zheng et al., 2023; Jeon et al., 2021; Nadaraya, 1964;
+Song et al., 2025).

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,6 +10,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def _scholarly_ids(text: str) -> set[str]:
+    """Return normalized identifiers from the scholarly hosts used here."""
+    arxiv_ids = {
+        match.lower()
+        for match in re.findall(
+            r"(?:arxiv(?:\.org/(?:abs|pdf)/|\.))([0-9]{4}\.[0-9]{4,5})",
+            text,
+            flags=re.IGNORECASE,
+        )
+    }
+    doi_ids: set[str] = set()
+    for raw_match in re.findall(
+        r'(?:doi\.org/|/doi/(?:pdf/)?)(10\.\d{4,9}/[-._;()/:A-Z0-9]+)',
+        text,
+        flags=re.IGNORECASE,
+    ):
+        match = raw_match.rstrip(".,;:)").lower()
+        for publisher_suffix in ("/html", "/pdf"):
+            if match.endswith(publisher_suffix):
+                match = match.removesuffix(publisher_suffix)
+        if match.startswith(("10.17487/", "10.6028/")):
+            continue
+        arxiv_doi = re.fullmatch(r"10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})", match)
+        doi_ids.add(arxiv_doi.group(1) if arxiv_doi else match)
+    hosted_ids = {
+        match.rstrip(".,;:").lower()
+        for match in re.findall(
+            r"https?://(?:aclanthology\.org/[^\s)\]}>]+|"
+            r"proceedings\.iclr\.cc/[^\s)\]}>]+|"
+            r"openreview\.net/forum\?id=[A-Za-z0-9_-]+|"
+            r"www\.anthropic\.com/research/[^\s)\]}>]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    }
+    return arxiv_ids | doi_ids | hosted_ids
 
 
 class RecordingClient:
@@ -115,6 +155,28 @@ def test_adr_records_include_verified_paper_and_standard_references() -> None:
     assert "planning ADR 0001" in msa_leaf
     assert "naruon and gyeot are permitted callers" in msa_leaf
     assert "https://doi.org/10.6028/NIST.SP.800-204" in msa_leaf
+
+
+def test_paper_inventory_covers_tracked_research_identifiers() -> None:
+    """Every scholarly identifier used by code/docs stays in the paper register."""
+    inventory_path = ROOT_DIR / "docs/papers/README.md"
+    inventory_ids = _scholarly_ids(inventory_path.read_text(encoding="utf-8"))
+    referenced_ids: set[str] = set()
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py", "*.md"],
+        cwd=ROOT_DIR,
+        check=True,
+        capture_output=True,
+    ).stdout.decode().split("\0")
+    for relative in tracked:
+        path = ROOT_DIR / relative
+        if not relative or path == inventory_path or any(
+            part.startswith(".") for part in Path(relative).parts
+        ):
+            continue
+        referenced_ids.update(_scholarly_ids(path.read_text(encoding="utf-8")))
+
+    assert referenced_ids <= inventory_ids, sorted(referenced_ids - inventory_ids)
 
 
 if __name__ == "__main__":  # pragma: no cover
