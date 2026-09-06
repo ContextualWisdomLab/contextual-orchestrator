@@ -256,4 +256,5 @@ def test_readme_inference_example_keeps_bearer_out_of_environment_and_arguments(
         env=environment,
         check=True,
         capture_output=True,
+        timeout=60,
     )
