@@ -358,6 +358,25 @@ exception whose string conversion deliberately raises. This local diagnostic
 repair does not make a provider available, change retries, establish request
 correlation, or retrospectively fill missing evidence in the old artifact.
 
+The full suite at `73f89777` retained one failure, 3462 passes and six skips
+in 690.53 seconds: an older debug-log regression required `[REDACTED]` to
+appear. The stronger contract omits the complete provider message instead.
+`b81739fc` updates that test to require the omission marker and absence of
+both the original sentence and fake credential; 108 related tests pass in
+15.88 seconds. A fresh full suite is required, not a flake rerun claim.
+
+Integration gate: the central sanitizer at protected `9aad23c0` drops the
+new failed-attempt format and removes request IDs. Central Draft
+[PR #1978](https://github.com/ContextualWisdomLab/.github/pull/1978), head
+`5dad3fe874f93b19b232f4452e7190b72655f18e`, carries the compatible parser
+(blob `9df99e1b7064ca4779a071cbd4c0d5b75afd8b82`). A coordinator's local
+paired run passed real producer `73f89777` timestamped logs through that
+exact parser blob: statuses 425/429/503 survived; fixture URL/text/body did
+not, and the body stream remained unread. This is independent local evidence,
+not protected publication or a hosted artifact result. The canonical consumer
+must be protected and verified before adopting the new producer pin. No
+sanitizer implementation is copied into CO.
+
 An actual screen-access attempt still returned a locked Mac. Administrator UI
 visual acceptance remains unverified; paper figure inspection is not UI proof.
 
