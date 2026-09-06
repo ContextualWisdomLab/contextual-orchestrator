@@ -253,6 +253,38 @@ in-memory-only pool reports history unavailable, not durable empty-history proof
 These are read-only operations; set/clear/restore HTTP actions, execution
 enforcement and UI acceptance remain incomplete.
 
+## Strix HTTP 500 and error correlation
+
+The [Strix run 34031339200](https://github.com/ContextualWisdomLab/.github/actions/runs/34031339200)
+installed CO `414f22973658c4ddc3d4320fcf7acd9b4e8ba991` (job log
+1280–1281). Artifact `9991542931` contains sidecar failures at
+14:53:36.102 and 14:53:54.577 UTC on 2026-09-06: `TimeoutError` at
+`_open_provider`, then generic HTTP 500. At the installed revision, the
+reported line 2281 waits for response headers. Strix reports failures within
+12 milliseconds of those events. This is temporal correlation, not an exact
+request-ID join: the sidecar does not contain either terminal response ID.
+The 5377-second wrapper duration is not one model request's timeout.
+
+`10225f43` first tested the authentication verifier failure incorrectly as a
+500; the existing fail-closed boundary correctly returned 401. The corrected
+`4b739339` test injects a generic handler failure and retains the actual RED:
+concurrent responses contain unique IDs absent from their corresponding logs.
+`0e7c03bd` reuses each error response's ID in the existing sanitized status/code
+log. No new telemetry system, transport timer, provider retry or fallback is
+introduced. Existing response details remain unchanged; noncanonical override
+IDs are omitted from logs rather than copied as arbitrary text.
+
+At `8c20f1e1`, 142 security, provider-error and passthrough tests pass in 14.36
+seconds. They cover concurrent HTTP 500 correlation, existing ID preservation,
+and rejection of arbitrary diagnostic text from logs. This is focused evidence,
+not a full-suite or protected-release claim. SSE-specific error events remain a
+separate correlation gap; this change addresses the ordinary HTTP error path.
+The underlying raw transport exception/fallback boundary still needs repair
+analysis separately from the default-null/model-lifetime contract.
+
+An actual screen-access attempt still returned a locked Mac. Administrator UI
+visual acceptance remains unverified; paper figure inspection is not UI proof.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*
