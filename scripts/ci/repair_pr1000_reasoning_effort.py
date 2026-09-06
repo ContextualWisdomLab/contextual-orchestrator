@@ -312,6 +312,14 @@ def patch_reasoning_test() -> None:
         if end < 0:
             raise RuntimeError("reasoning test import block end missing")
         end += 2
+        import_marker = "    PROFILE_VERSION,\n"
+        if text.count(import_marker) != 1:
+            raise RuntimeError("reasoning test profile import marker missing or ambiguous")
+        text = text.replace(
+            import_marker,
+            import_marker + "    ReasoningEffortProfile,\n",
+            1,
+        )
         text = text[:end] + explicit_catalog_helper() + text[end:]
     text = text.replace("default_role_effort_catalog()", "_explicit_role_effort_catalog()")
     REASONING_TEST.write_text(text, encoding="utf-8")
