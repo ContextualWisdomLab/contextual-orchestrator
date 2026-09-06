@@ -78,23 +78,46 @@ def test_model_timeout_policy_rejects_invalid_patch(invalid_limit: object) -> No
     assert orchestrator._agent(model_agent.id) == model_agent
 
 
-def test_model_timeout_policy_audit_failure_does_not_apply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_model_timeout_policy_audit_failure_does_not_apply(tmp_path: Path) -> None:
     """A rejected policy update must not leave a new durable or serving limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
 
-    def reject_audit(*args: object, **kwargs: object) -> None:
-        """Simulate unavailable audit storage before reporting update success."""
-        raise OSError("audit storage unavailable")
-
-    monkeypatch.setattr(orchestrator, "_append_audit_event", reject_audit)
-    with pytest.raises(OSError, match="audit storage unavailable"):
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_timeout_history BEFORE INSERT ON model_timeout_history "
+            "BEGIN SELECT RAISE(ABORT, 'audit storage unavailable'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="audit storage unavailable"):
         orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert (
         orchestrator._agent(model_agent.id).model_timeout_seconds,
         restored._agent(model_agent.id).model_timeout_seconds,
     ) == (None, None)
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (0,)
+
+
+def test_model_timeout_policy_requires_durable_store() -> None:
+    """Administrator policy cannot silently fall back to volatile memory."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    orchestrator = TaskOrchestrator([model_agent])
+    with pytest.raises(ValueError, match="durable"):
+        orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    assert orchestrator._agent(model_agent.id).model_timeout_seconds is None
+
+
+def test_model_timeout_policy_records_atomic_history(tmp_path: Path) -> None:
+    """Committed revisions retain their old and new limits in order."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    for limit in (7200, None):
+        orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": limit})
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT previous_seconds, timeout_seconds FROM model_timeout_history "
+            "WHERE agent_id = ? ORDER BY policy_revision", (model_agent.id,)
+        ).fetchall() == [(None, 7200.0), (7200.0, None)]
