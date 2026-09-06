@@ -41,6 +41,12 @@ in one transaction using the existing normalized writes; 122 related tests
 passed in 5.04 seconds. Cross-process refresh and end-to-end timeout delivery
 remain open; separate bootstrap operations are not one atomic batch.
 
+`a2951f67` adds actual authenticated HTTP evidence: stale ordinary edits fail
+without overwriting the other writer's policy, invalid credentials get 401,
+and the unfinished timeout write field remains rejected (1 focused pass,
+4.01 seconds). This is rejection-boundary evidence, not successful policy
+activation or inference enforcement.
+
 See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
 revisions, retained failures, corrected test-evidence limitations, owner
 boundaries and the full remaining acceptance gates. Local configuration work

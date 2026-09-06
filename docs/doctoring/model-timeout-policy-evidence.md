@@ -193,6 +193,22 @@ per-row group/discovery rollback gap above, but not cross-process serving
 refresh, separate bootstrap operations, audit streams outside the pool, or
 actual model deadline enforcement. No new full-suite result is claimed.
 
+## Authenticated HTTP conflict boundary
+
+At `a2951f67`, an actual loopback HTTP server and a separate orchestrator sharing
+the pool database verify: an invalid bearer gets 401; an authenticated stale
+priority PATCH gets 400 with reload guidance; a direct timeout PATCH remains
+400 because the new write field is not admitted. Serving candidates remain
+unchanged and restart retains the other writer's 7200-second policy/revision 1.
+The focused test passed in 4.01 seconds (1 passed, 20 deselected, exit 0).
+This proves existing HTTP rejection, not authenticated policy-write success,
+automatic serving refresh, actual inference selection, or deadline enforcement.
+
+The EgressWeave protected-main SHA was rechecked as `bd0339bf` and its GitHub
+release listing returned no entries. DeepWiki returned repository-not-found;
+neither result proves absence from every registry or absence of another writer.
+Runtime-owner coordination remains open; no consumer transport clone was added.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*
