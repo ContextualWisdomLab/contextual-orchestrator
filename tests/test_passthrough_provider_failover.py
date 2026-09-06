@@ -1312,6 +1312,47 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+def test_sdk_passthrough_unknown_outcome_never_replays() -> None:
+    """Exact SDK to real HTTP to passthrough preserves one unknown-outcome attempt."""
+    import asyncio
+    import threading
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    sdk = pytest.importorskip("openai", reason="run this integration probe with openai==2.54.0")
+    assert sdk.__version__ == "2.54.0"
+    transport = SequencedProxyClient({
+        "primary_agent": TimeoutError("token=private_test_value"),
+        "fallback_agent": {"model": "fallback-model"},
+    })
+    server = build_server(_build(transport), port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def request_completion():
+        async with sdk.AsyncOpenAI(
+            api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+        ) as client:
+            with pytest.raises(sdk.APIStatusError) as raised:
+                await client.chat.completions.create(
+                    model="contextual-orchestrator",
+                    messages=[{"role": "user", "content": "inspect locally"}],
+                    tools=[{"type": "function", "function": {"name": "inspect", "parameters": {"type": "object"}}}],
+                )
+            assert raised.value.status_code == 502
+            assert raised.value.body["code"] == "provider_outcome_unknown"
+            assert raised.value.body["detail"]["retryable"] is False
+            assert raised.value.response.headers["x-should-retry"] == "false"
+            assert "private_test_value" not in str(raised.value)
+
+    try:
+        asyncio.run(request_completion())
+        assert [agent_id for agent_id, _ in transport.calls] == ["primary_agent"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_virtual_effort_profile_selects_a_supported_provider() -> None:
     """Mixed pools skip unsupported candidates instead of aborting valid routing."""
     client = SequencedProxyClient(
