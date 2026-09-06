@@ -58,7 +58,7 @@ def test_request_retains_starting_policy(monkeypatch, entry_point, request_optio
         )
         assert seen_policies and all(policy == starting_policy for policy in seen_policies)
         assert result["policy_snapshot"] == starting_policy.as_dict()
-        assert all(row["selection_design"]["policy_hash"] == policy_hash for row in result["trace"])
+        assert all(row["selection_design"]["policy_snapshot_hash"] == policy_hash for row in result["trace"])
         assert gateway.policy.realtime_judge is True
         assert gateway.policy.verifier_required is False
     finally:
