@@ -2713,7 +2713,7 @@ failed after the verdict was already correctly published and enforced —
 a downstream status-publish step, not the review pipeline itself; not yet
 investigated.
 
-**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+**Historical incident, not current-runtime proof** (traced via `.github#1276`'s
 `noema-review` run, flagged by the user as "still not working" after the
 above fixes landed): `TaskOrchestrator._invoke()`
 (`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
@@ -2728,7 +2728,19 @@ nothing is truly hung, just still working through an unbounded internal
 retry chain. Reproduced once (`.github` run `33312258611`, job
 `99259327051`); org-wide evidence since the pingora/Strix fixes landed
 shows this is now occasional, not the dominant failure mode (most
-`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
-is an overall deadline on `_invoke`'s candidate/retry loop, not another
-timeout increase on the sidecar's client side — deferred rather than
-rushed into this heavily-tested core file without dedicated validation.
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed in that historical
+observation). The earlier proposed universal deadline is superseded by the
+explicit model-timeout requirement: model execution defaults to null, and only
+an administrator-configured model limit may bound its complete execution.
+Readiness probes have a separate finite operational contract. The old run does
+not prove current deployment behavior or justify imposing a global inference cap.
+
+### Read-only timeout policy visibility — local, not runtime activation
+
+Source `6774dab4` exposes an admin-only timeout-policy GET that separates fresh
+configured seconds/revision from the local serving snapshot. It reports seconds
+and `enforcement_available=false`; reads do not activate limits or refresh
+routing. The actual HTTP and related pool/policy/security checks pass 88 tests
+in 9.52 seconds. History navigation, HTTP set/clear/restore, released Rust
+runtime integration and actual administrator UI acceptance remain open. See
+[policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).

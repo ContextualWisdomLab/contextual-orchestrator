@@ -224,6 +224,24 @@ draft admission and #235 gateway migration are separate deltas. Their untracked
 lock/index/desktop files were preserved. No owner branch was taken over; no
 consumer source copy, release adoption or deadline activation occurred.
 
+## Read-only operator policy view
+
+`b80e64be` records the missing-route RED: authenticated GET returned 400 rather
+than exposing a fresh policy view. `2e12ed46` reuses the store's transactional
+snapshot for `GET /api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy`.
+It reports configured seconds/revision separately from the local serving
+snapshot, with seconds as the explicit unit and `enforcement_available=false`.
+Reading does not refresh routing, change policy or activate an execution limit.
+The existing full-snapshot read is linear in pool size; this is an operator
+read, not a routing hot path or an independently measured latency improvement.
+
+At `6774dab4`, 88 pool/policy/security tests pass in 9.52 seconds. Actual HTTP
+checks cover null defaults, a second writer's 7200-second revision, preservation
+of the stale serving snapshot, wrong and inference-only credentials, and a
+missing model. OpenAPI declares the admin-only contract and explicit inactive
+enforcement state. This does not implement history pagination, write/clear/
+restore HTTP operations, runtime integration or the administrator UI.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*
