@@ -215,7 +215,7 @@ def test_model_timeout_policy_records_verified_principal(tmp_path: Path) -> None
 
     security = SecurityConfig(admin_token="example_admin", inference_token="example_inference")
     headers = {"authorization": "Bearer example_admin"}
-    security.authorize(headers, "admin")
+    security.authorize(headers, "admin", "127.0.0.1")
     principal_id = security.principal_id(headers)
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
