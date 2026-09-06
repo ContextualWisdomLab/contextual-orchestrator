@@ -88,6 +88,24 @@ This proves that interleaving, not all distributed serving coherence. Policy
 restore, authenticated actor attribution, complete concurrent-write failure
 coverage and actual runtime enforcement are still unfinished and unshipped.
 
+`c08a5fd5` adds nullable opaque actor evidence to the same policy-history
+transaction. The corrected RED at `c1b372df` reached the missing actor argument;
+earlier `cbab94c8` and `e0dc4209` failed because of test-header casing and a
+missing authorization argument, not product behavior. A test first authorizes
+the administrator fixture with SecurityConfig, then passes its principal digest
+to the configuration boundary and checks the stored value contains no bearer.
+This is component composition, not an authenticated HTTP policy-write E2E.
+
+The caller-supplied actor must have the existing 64-character lowercase digest
+shape when present. Legacy/internal records can remain null and are explicitly
+unattributed. Static-token mode identifies a deployment principal, not an
+individual human; individual attribution needs the configured identity resolver.
+The actor migration does not invent identities for historical rows. HTTP write
+admission must require authenticated actor evidence when enabled; it remains
+closed until runtime enforcement and restore acceptance are complete.
+At `fc234020`, 45 related tests passed in 7.18 seconds, exit 0, including
+raw/malformed actor rejection and migration of an existing unattributed row.
+
 ## Remaining delivery gates
 
 - Complete revision-based change/history and restore with authenticated actor evidence.
