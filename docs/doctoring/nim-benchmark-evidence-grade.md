@@ -174,6 +174,38 @@ conditions and visible incompleteness. FrugalGPT and RouteLLM motivate measuring
 cost-quality routing trade-offs, but their results are not treated as evidence
 for this repository's models or tasks.
 
+### Locked versus exploratory evidence follow-up (2026-09-07, proposed)
+
+The shared-task comparison filtered locked observations, but policy summaries
+and the evidence-sufficiency calculation did not. An externally assembled mixed
+evaluation could therefore use exploratory work to change the locked report's
+score, completion fraction, hindsight baseline, frontier and review status.
+The ordinary evaluator already selects locked tasks; this finding does not
+establish contamination in a deployed run.
+
+Committed RED `5675b942` reproduces both directions: exploratory successes
+promote wholly failed locked evidence, and exploratory failures dilute wholly
+successful locked evidence. In the first case, 3,000 exploratory task pairs
+changed the reported successful-pair count from zero to 3,000 and completion
+from zero to 0.990099, satisfying a floor meant for locked observations.
+These constructed cells are regression fixtures, not empirical accuracy data.
+
+Source `4b0fd961` restricts the existing summary and evidence calculations to
+locked observations. The paired comparator already applies that boundary.
+Report artifacts retain the original cells, including exploratory observations;
+the fix neither discards raw evidence nor silently relabels its split. Filtering
+only the top-level assembler was rejected because direct callers of the shared
+calculations would retain the inconsistent boundary. No statistical kernel,
+dependency, threshold, model request or production routing default changes.
+
+The first related run preserved a RED result: 164 passed and one legacy fixture
+failed because it omitted its split. Test-only `23bec0fb` explicitly labels that
+fixture locked instead of weakening runtime admission to infer a missing split.
+The corrected related run passes **165 tests in 36.22 seconds**, exit zero.
+Current-head full/hosted verification, independent review and protected release
+remain separate gates. This corrects report provenance and cohort isolation;
+it does not establish probability sampling, model accuracy or faster decisions.
+
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
 
 The previous paired comparison selected only jointly successful cells even

@@ -1,5 +1,19 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 locked evidence isolation
+
+Mixed exploratory and locked observations could change policy summaries and
+promote insufficient evidence even though paired comparisons excluded the
+exploratory observations. RED `5675b942` reproduces two failures. Source
+`4b0fd961` filters the existing shared calculations; fixture correction
+`23bec0fb` explicitly labels locked evidence. **165 related tests pass in
+36.22 seconds**. Raw observations remain in report artifacts, and no threshold,
+estimator, provider call or live default changes. The
+[Proposed decision record](doctoring/nim-benchmark-evidence-grade.md#locked-versus-exploratory-evidence-follow-up-2026-09-07)
+preserves the failed intermediate run, alternatives and acceptance limits.
+This is cohort-isolation correctness, not measured buyer accuracy or latency;
+new-head full/hosted checks, independent approval and release remain required.
+
 ## 2026-09-06 availability-boundary parent synchronization
 
 This normal integration retains child `eba36d81` and parent `6ca30364`,
