@@ -58,6 +58,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   outcome counts, and report paired mean elapsed-time uncertainty. Report
   version 2 replaces the previous success-conditioned comparison; original
   unscored answers remain unknown, and production review gates still apply.
+- Provider availability updates no longer change answer-quality assessments
+  when no new answers have been evaluated.
 - Changes to answer-evaluation settings no longer reuse answers produced under
   different settings. Running work and its saved details retain the settings
   used when it started, including final answer preparation and streaming.

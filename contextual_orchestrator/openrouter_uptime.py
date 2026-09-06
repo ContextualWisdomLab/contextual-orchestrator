@@ -1,14 +1,14 @@
-"""Background telemetry collector for OpenRouter upstream endpoints.
+"""Background availability telemetry for the OpenRouter transport ledger.
 
 Each poll converts the provider's own ``uptime_last_30m`` measurement into
 exactly one window's worth of equivalent Bernoulli evidence:
 
     successes += uptime / 100 ; failures += (100 - uptime) / 100
 
-so the accumulated ``(alpha, beta)`` mass converges to true availability
-without any invented weighting constant — every count traces to a poll
-outcome and the failure denominator is the number of polls performed.
-Auditable counters are exposed for verification.
+This retains the existing transport prior's window-equivalent accounting.
+Overlapping rolling windows are not independent request trials, and the
+provider's best endpoint is not a measured delivered-route success rate.
+These summaries never update the answer-quality ledger or its prior.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING
 
-from .benchmark_priors import resolve_quality_prior
-from .model_group import ModelGroupRouter
+from .model_group import (
+    BETA_PRIOR_FAILURE_COUNT,
+    BETA_PRIOR_SUCCESS_COUNT,
+    ModelGroupRouter,
+)
 
 if TYPE_CHECKING:
     from .orchestrator import ModelAgent
@@ -35,13 +38,12 @@ _OPENROUTER_UPTIME_ORIGIN = "https://openrouter.ai/api/v1"
 
 
 class OpenRouterUptimeCollector:
-    """Periodically fold measured upstream availability into prior ledgers."""
+    """Periodically fold upstream availability into the transport prior."""
 
     def __init__(
         self,
-        agents: list["ModelAgent"],
+        agents: list[ModelAgent],
         group_router: ModelGroupRouter,
-        quality_router: ModelGroupRouter,
         interval_seconds: float = 300.0,
         startup_delay_seconds: float = 5.0,
     ) -> None:
@@ -50,7 +52,6 @@ class OpenRouterUptimeCollector:
         Args:
             agents: Orchestrator candidates scanned for openrouter members.
             group_router: Transport ledger receiving uptime evidence.
-            quality_router: Quality ledger receiving uptime evidence.
             interval_seconds: Wall-clock pause between full sweeps.
             startup_delay_seconds: Pause before the first sweep so orchestrator
                 construction stays non-blocking; tests inject smaller values.
@@ -60,7 +61,6 @@ class OpenRouterUptimeCollector:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._group_router = group_router
-        self._quality_router = quality_router
         self._openrouter_agents = [a for a in agents if a.provider_name == "openrouter"]
         # agent.id -> empirical window-equivalent (successes, failures).
         self._window_evidence: dict[str, tuple[float, float]] = {}
@@ -101,7 +101,7 @@ class OpenRouterUptimeCollector:
                 break
 
     def _poll_agent(self, agent: ModelAgent) -> None:
-        """Fold one endpoint measurement into ledgers as window evidence."""
+        """Fold one endpoint measurement into transport window evidence."""
         if agent.provider_name != "openrouter":
             return
         uptime = self._fetch_uptime(agent.model)
@@ -109,26 +109,15 @@ class OpenRouterUptimeCollector:
             return
         successes = max(0.0, min(1.0, uptime / 100.0))
         failures = 1.0 - successes
-        base_alpha, base_beta = resolve_quality_prior(agent.id)
         prev_alpha, prev_beta = self._window_evidence.get(agent.id, (0.0, 0.0))
         next_alpha = prev_alpha + successes
         next_beta = prev_beta + failures
         self._window_evidence[agent.id] = (next_alpha, next_beta)
-        self._apply_to_routers(
+        self._group_router.update_prior(
             agent.id,
-            base_alpha + next_alpha,
-            base_beta + next_beta,
+            BETA_PRIOR_SUCCESS_COUNT + next_alpha,
+            BETA_PRIOR_FAILURE_COUNT + next_beta,
         )
-
-    def _apply_to_routers(
-        self,
-        member_id: str,
-        alpha: float,
-        beta: float,
-    ) -> None:
-        """Publish one member's blended prior into both ledgers."""
-        self._group_router.update_prior(member_id, alpha, beta)
-        self._quality_router.update_prior(member_id, alpha, beta)
 
     def _fetch_uptime(self, model_id: str) -> float | None:
         """Fetch best-endpoint 30-minute availability for one logical model.
@@ -155,8 +144,8 @@ class OpenRouterUptimeCollector:
                     and endpoint.get("uptime_last_30m") is not None
                 ]
                 if uptimes:
-                    # Provider routes to its strongest upstream, so the
-                    # observed maximum reflects delivered reliability.
+                    # Best reported endpoint availability, not the actual
+                    # caller's route mix or an answer-correctness measurement.
                     return max(uptimes)
         except (
             AttributeError,

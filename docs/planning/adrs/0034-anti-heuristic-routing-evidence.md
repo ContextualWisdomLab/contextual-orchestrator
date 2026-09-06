@@ -41,6 +41,25 @@ The replacement ordering ladder is evidence-only:
    responses per second. Token throughput remains separately observable and
    never changes the comparable-unit score.
 
+### Availability boundary repair (Proposed, 2026-09-06)
+
+Provider availability may update the transport prior, never the answer-quality
+prior. Source `b3be48e3` removes the collector's quality dependency and uses the
+existing neutral transport prior instead of an answer-benchmark prior. The
+eight committed regression cases fail before repair and pass afterward; the
+controlled 50-poll scenario reduces quality-mean drift from `0.604839` to zero
+and preserves the judged member order. These are software-boundary checks,
+not calibrated accuracy, latency improvement, or protected-release evidence.
+
+In the context of judged member selection, facing uptime contaminating answer
+quality, we chose transport-only collection and rejected shared quality updates
+or a new blended score, to preserve evidence meaning, accepting the unresolved
+calibration of overlapping transport windows and existing benchmark priors.
+The [doctoring contract](../../doctoring/measured-routing-evidence.md#availability-and-answer-quality-separation-2026-09-06)
+records the product requirement, call path, alternatives, UML-level flow, exact
+RED/GREEN commands, test-fixture correction, API limitations, and remaining
+gates. This does not change ADR status, production defaults, or Rust ownership.
+
 ### Psychometric warm start for unseen contexts
 
 An exact previously judged context keeps its fitted model probabilities. The

@@ -3974,7 +3974,6 @@ class TaskOrchestrator:
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
             self._group_router,
-            self._quality_router,
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for

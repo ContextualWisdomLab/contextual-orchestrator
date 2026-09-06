@@ -21,13 +21,128 @@ groups. Two measurement systems feed the ladder:
   real-time fast-mlsirm judge on direct-route answers, so judged
   acceptability (not just transport success) steers intra-group order.
 
-The ranking quantity `stability / ewma_latency_seconds` has the unit expected
-successful responses per second across every member. Token throughput remains
+The ranking quantity `stability / ewma_latency_seconds` is a model-based
+successful-responses-per-second score, not an independently calibrated rate.
+Its validity depends on the prior, observation process, and latency denominator.
+Token throughput remains
 diagnostic evidence and is not mixed into that score. Workflow triage is a strict structured call that
 fails closed to conducted orchestration when its reply violates the exact
 `{"workflow_required": bool}` schema.
 
 ## Research-to-code mapping
+
+### Availability and answer-quality separation (2026-09-06)
+
+**Proposed implementation repair, not protected delivery.** The product
+requirement is that a provider availability update cannot rewrite evidence
+about whether an answer was acceptable. A reachable endpoint may return an
+incorrect answer. Applying AERA, APA, and NCME (2014, pp. 11–12, Standard 1.2)
+to this gateway is an engineering interpretation: the evidence supporting an
+intended score interpretation must match that interpretation. Those standards
+do not themselves validate this gateway or its judge.
+
+OpenRouter's endpoint API reports `uptime_last_30m` separately from latency
+and throughput. It does not report answer correctness. The existing collector
+reads the maximum reported endpoint uptime; that maximum is not the observed
+success rate of the gateway's actual provider mix. See the official
+[endpoint API](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model).
+The API documents authorization, while this collector's fetch currently sends
+none. This repair uses injected measurements and makes **zero external provider
+calls**; it establishes neither successful live polling nor a production incident.
+
+#### Failure, decision, and alternatives
+
+The old collector accumulated availability windows and refreshed **both**
+transport and quality priors. `ModelGroupRouter.update_prior` preserved the
+observed success/failure counters but changed the quality posterior and its
+response to later real judgments. The production selection path
+`_ranked_agents` → `_refine_partition` → `_measured_member_order` uses the
+quality ledger once judged observations exist. Counter preservation alone
+therefore did not protect answer-quality ordering.
+
+In the context of evidence-based member selection, facing unrelated uptime
+changing answer-quality evidence, we chose a transport-only collector
+dependency and rejected shared quality-prior updates or a new combined score,
+to preserve the meaning of judged outcomes, accepting that transport-prior
+calibration remains unresolved. This enforces ADR 0034's existing separation;
+it introduces no new statistical core, dependency, weight, or migration.
+
+Source `b3be48e31138877b6f99fe7288beef8528c46828` removes the collector's
+quality-router argument and reference, deletes its two-router wrapper, and
+updates the existing gateway wiring. Transport refresh uses the existing
+neutral prior constants plus the unchanged window mass, without importing an
+answer-benchmark prior. The ledgers are process-local. Repository constructor
+callers are updated; direct users of the internal collector must remove the
+old quality-router argument. The collector is not a package-root export.
+
+```text
+Provider availability summary -> transport prior -> fallback member order
+Answer judgment -------------> quality ledger ---> judged member order
+                              no uptime input
+```
+
+#### Runnable guards and measured KPI
+
+The fixed unit scenario contains two equivalent declared members, with 8/10
+and 2/10 accepted answers and successful-answer latency fixed at one second.
+Each member then receives 50 availability-only polls: 0% for the stronger
+judged member and 100% for the weaker one. There are no additional judgments.
+
+| Boundary KPI | Baseline collector | Repaired collector |
+| --- | --- | --- |
+| Quality posterior means before polls | 0.75 / 0.25 | 0.75 / 0.25 |
+| Quality posterior means after polls | 0.145161 / 0.854839 | 0.75 / 0.25 |
+| Maximum absolute reported-mean drift | 0.604839 | 0 |
+| Actual measured-group order | Reversed | Preserved |
+
+The controlled probe swaps collector source `450599f1` against `e5775648`
+inside the same current gateway; it is not a replay of two complete deployed
+builds. `paired-boundary-probe.json` in `/tmp/co-1067-uptime-quality.OI92QL`
+retains both complete quality snapshots and exact source identities.
+
+Committed RED `450599f15e84d7dc505d61b01f027f8270c54da0` produces **8 failures,
+7 passes in 1.31 seconds**, exit 1. Six cases combine cold/judged members with
+0%, 50%, and 100% uptime. They compare both the immediate snapshot and the
+effect of a subsequent real judgment: 50% uptime can hide added prior mass
+behind an unchanged mean. The other guards cover actual selection order and
+independence from a substituted answer-benchmark resolver. The latter uses a
+valid member ID; it does not establish that canonical member IDs match the
+benchmark table's hyphenated names.
+
+The earlier RED attempt `5d1f7e35` had six failures and nine passes, including
+one invalid hyphenated member-ID fixture. Its log is retained, but that setup
+failure is not counted as a product regression. At source `b3be48e3`, **100
+focused tests pass in 5.01 seconds**. Coverage from 15 passing tests is scoped
+to the collector constructor and `_poll_agent`: **19/19 statements, 4/4
+branches**; fetch, the entire gateway constructor, and the whole repository
+are not covered by that claim. Clean style head
+`e5775648223d561bacba93022a06c720f9d5613c` passes **132 focused tests in 234.74
+seconds**, exit 0. Changed-definition docstrings against main `414f2297` are
+**205/205** (runtime 45, scripts 44, tests 116), not a whole-repository census.
+
+```sh
+.venv/bin/python -m pytest -q tests/test_openrouter_uptime.py \
+  tests/test_model_group.py tests/test_measured_routing_evidence.py \
+  tests/test_benchmark_priors.py tests/test_request_policy_snapshot.py \
+  tests/test_psychometric_routing.py
+```
+
+Logs, JUnit, and coverage JSON are retained in the probe directory above.
+Full-suite and hosted evidence must name their own exact heads; earlier
+policy-snapshot full runs do not verify this later repair.
+
+#### Limits and next acceptance gates
+
+The invariant is zero quality change under availability-only input, not
+true-parameter RMSE, calibrated correctness, buyer accuracy, or reduced
+decision latency. It does not refute IRT-Router. Overlapping 30-minute windows
+remain correlated transport pseudo-counts; their accumulation and endpoint
+maximum need separate validation. The existing median/MAD–logistic benchmark
+prior and substring identity mapping also remain uncalibrated, separate gaps.
+Any replacement numerical model belongs to the canonical released Rust owner,
+not a Python clone. No production default or psychometric admission gate is
+opened. Independent review, terminal required checks, protected merge,
+immutable release, and observed buyer-held-out evidence remain necessary.
 
 ### Evaluation-policy attribution (2026-09-06)
 
@@ -445,6 +560,9 @@ prove a multilevel model. The ADR diagram separates the production
 single-neighbor default from opt-in two-neighbor held-out experiments.
 
 ## APA 7 references
+
+OpenRouter. (n.d.). *List all endpoints for a model*. Retrieved September 6,
+2026, from https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model
 
 American Educational Research Association, American Psychological
 Association, & National Council on Measurement in Education. (2014).
