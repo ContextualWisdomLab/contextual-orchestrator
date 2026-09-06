@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json as _json
 import re as _re
+import http.client
 import socket
 import ssl
 import urllib.error
@@ -283,7 +284,20 @@ def classify_provider_failure(
             retryable=dns_error.errno == socket.EAI_AGAIN,
             transport=transport,
         )
-    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
+    # http.client.HTTPException (IncompleteRead, BadStatusLine) is not an
+    # OSError but is the same event -- a stalled or dropped connection
+    # mid-read, as provider_error_body already notes -- so it shares the
+    # retryable connection classification instead of the opaque default.
+    if isinstance(
+        exc,
+        (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            socket.timeout,
+            http.client.HTTPException,
+        ),
+    ):
         return ProviderUpstreamError(
             agent_id=agent_id,
             model=model,
