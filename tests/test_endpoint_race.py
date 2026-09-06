@@ -256,6 +256,7 @@ def test_race_usage_sink_receives_completed_loser_but_not_winner() -> None:
 
 
 def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> None:
+    """Keep failed race calls and real repeated selections in the attempt record."""
     raw_contract = dict(contract(capability_set=("text",)).__dict__)
     agents = [
         ModelAgent(

@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 changed-definition parent synchronization
+
+This normal integration retains verified child
+`fa8eef97cd7368e8985a367dc5a7a8e0147fe4d5` and documentation parent
+`21691215d67f37de46d0eef3768dbbe0c04ea493`. Both complete baseline additions
+remain. Parent docstrings describe existing behavior; the child failed-task
+comparison and observed-data/paper evidence are preserved. The earlier clean
+child full suite completed 3,481 tests with two skips; it is not a full-suite
+run on this new integration. Draft and parent-first protected delivery remain.
+
 ## 2026-09-06 identity-batch parent synchronization
 
 This normal integration joins verified child `9207412ea8ac529d7d2622ab298989ef7899befb`
@@ -111,6 +121,34 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+## 2026-09-06 changed-definition documentation and completed full runs
+
+Documentation-only `02f60c40e0d1d9f8b0fe79ca8d8c53b43cda0903` fills 39
+missing explanations across the current PR's runtime and test definitions.
+Against protected main `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, the declared
+AST-difference scope improves from **90/129 to 129/129 documented definitions**:
+runtime 26/26, scripts 44/44, tests 59/59. This includes initializers, classes,
+private methods, and nested functions; unchanged definitions are not counted.
+It is neither whole-repository coverage nor CodeRabbit's historical scope.
+
+The seven Python files retain identical docstring-stripped ASTs to `d740602f`.
+Ruff passes, and **235 focused tests pass in 20.57 seconds** at clean `02f60c40`.
+No calculation, population size, dependency, production gate, or API is changed.
+The [doctoring audit](doctoring/measured-routing-evidence.md#complete-changed-definition-audit-2026-09-06)
+contains the exact reproduction script, test command, and evidence paths.
+
+Before this documentation repair, frozen parent
+`d740602fdd8c0e4f7d55e4d3ad37b9f560c09e01` completed **3,466 passed, two skipped,
+exit 0 in 733.63 seconds**. Frozen child
+`fa8eef97cd7368e8985a367dc5a7a8e0147fe4d5` completed **3,481 passed, two skipped,
+exit 0 in 664.63 seconds**. Start/end heads and clean tracked trees match.
+JUnit has 3,468 and 3,483 cases respectively, with zero failures or errors.
+Logs and JUnit are in `/tmp/co-1067-catalog-batch.84vEgu` and
+`/tmp/co-1074-catalog-batch.MIcuwO`; sessions 7424 and 79929 are terminal.
+These are exact earlier full-suite results, not full runs on a later
+documentation or integration commit. Hosted checks, independent approval,
+protected delivery, and a released statistical-owner API remain separate.
+
 
 ## 2026-09-06 operation-local identity snapshot
 

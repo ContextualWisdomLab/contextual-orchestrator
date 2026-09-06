@@ -29,6 +29,7 @@ from scripts.benchmark_psychometric_heldout import (
 
 
 def test_psychometric_benchmark_requires_python_312() -> None:
+    """Reject Python 3.11 with the runnable command and admit Python 3.12."""
     try:
         _require_runtime((3, 11))
     except SystemExit as error:
@@ -40,32 +41,42 @@ def test_psychometric_benchmark_requires_python_312() -> None:
 
 
 def test_psychometric_benchmark_last_context_request_tracks_context_count() -> None:
+    """Derive the final context ID and vector from the declared population size."""
     assert _last_context_request(512) == ("context_511", [1.0, 512.0])
     assert _last_context_request(3) == ("context_2", [1.0, 3.0])
 
 
 def test_psychometric_benchmark_last_context_request_rejects_nonpositive_counts() -> None:
+    """Reject an empty population instead of inventing a final context."""
     with pytest.raises(ValueError, match="context_count must be positive"):
         _last_context_request(0)
 
 
 def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
+    """Distinguish expected response loss from squared probability-estimation error."""
     assert _expected_brier(0.5, 0.5) == 0.25
     assert _expected_brier(1.0, 0.5) == 0.5
 
 
 def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
+    """Keep a constant within-context delta constant in every bootstrap replicate."""
     assert _paired_bootstrap_mean_ci(
         [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]
     ) == pytest.approx([-0.1, -0.1])
 
 
 def test_paired_bootstrap_interval_rejects_unpaired_samples() -> None:
+    """Reject unequal or empty pair inputs before computing an interval."""
     with pytest.raises(ValueError, match="non-empty and equal length"):
         _paired_bootstrap_mean_ci([0.1], [])
 
 
 def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None:
+    """Pin full-size synthetic diagnostics and retain unexecuted production gates.
+
+    Fixed latency doubles test report wiring; known-truth numerical fixtures do
+    not establish buyer validity, released-owner adoption, or live performance.
+    """
     monkeypatch.setattr(
         heldout_benchmark,
         "_measure_paired_latency",
@@ -823,6 +834,7 @@ def test_contextual_fast_mlsirm_evidence_orders_every_post_413_candidate(monkeyp
 def test_contextual_judge_observation_survives_restart_without_raw_prompt(
     tmp_path: Path,
 ) -> None:
+    """Restore matching candidate evidence without storing the raw prompt."""
     state_db = str(tmp_path / "state.sqlite3")
     agents = [ModelAgent("model_a", "model-a")]
     first = TaskOrchestrator(agents, state_db=state_db)
@@ -860,6 +872,7 @@ def test_contextual_judge_observation_survives_restart_without_raw_prompt(
 def test_contextual_judge_observation_does_not_survive_deployment_change(
     tmp_path: Path,
 ) -> None:
+    """Remove stale deployment evidence durably, including after a later revert."""
     state_db = str(tmp_path / "state.sqlite3")
     first = TaskOrchestrator([ModelAgent("model_a", "model-a")], state_db=state_db)
     first._observe_contextual_quality(
@@ -887,6 +900,7 @@ def test_contextual_judge_observation_does_not_survive_deployment_change(
 def test_contextual_judge_observation_does_not_survive_decode_policy_change(
     tmp_path: Path,
 ) -> None:
+    """Discard saved observations when the worker's declared temperature changes."""
     state_db = str(tmp_path / "state.sqlite3")
     agents = [ModelAgent("model_a", "model-a")]
     original = default_role_effort_catalog()
@@ -910,6 +924,7 @@ def test_contextual_judge_observation_does_not_survive_decode_policy_change(
 
 
 def test_runtime_deployment_change_discards_contextual_judge_observation() -> None:
+    """Invalidate current observations after an operator changes agent priority."""
     orchestrator = TaskOrchestrator([ModelAgent("model_a", "model-a")])
     orchestrator._observe_contextual_quality(
         "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
@@ -924,6 +939,7 @@ def test_runtime_deployment_change_discards_contextual_judge_observation() -> No
 def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Serialize observation persistence with agent edits so stale rows cannot return."""
     state_db = str(tmp_path / "state.sqlite3")
     orchestrator = TaskOrchestrator(
         [ModelAgent("model_a", "model-a")], state_db=state_db
@@ -934,6 +950,7 @@ def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
     original_save = orchestrator._store.save
 
     def blocking_save(kind, key, value, **kwargs):
+        """Hold an observation save open while the test starts the competing edit."""
         if kind == "psychometric_observation":
             saved.set()
             assert release.wait(timeout=2)
@@ -942,6 +959,7 @@ def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
     monkeypatch.setattr(orchestrator._store, "save", blocking_save)
 
     def run(callable_):
+        """Capture a worker-thread exception for the joining test to assert."""
         try:
             callable_()
         except BaseException as error:  # pragma: no cover - surfaced below
@@ -992,6 +1010,7 @@ def test_replacing_judge_row_removes_stale_trailing_items() -> None:
 
 
 def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
+    """Check opt-in interpolation of injected scores, including partial overlap."""
     evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
     evidence.observe("left", "model_a", True, [1.0, 0.0])
     evidence.observe("right", "model_a", True, [0.0, 1.0])
@@ -1024,6 +1043,7 @@ def test_semantic_warm_start_interpolates_two_nearest_contexts() -> None:
 
 
 def test_semantic_warm_start_reuses_observed_unit_vectors(monkeypatch) -> None:
+    """Normalize only the incoming query when observed unit vectors already exist."""
     evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
     evidence.observe("left", "model_a", True, [1.0, 0.0])
     evidence.observe("right", "model_a", True, [0.0, 1.0])
@@ -1036,6 +1056,7 @@ def test_semantic_warm_start_reuses_observed_unit_vectors(monkeypatch) -> None:
     calls = 0
 
     def counted(vector):
+        """Count norm evaluations while retaining the original numerical behavior."""
         nonlocal calls
         calls += 1
         return original(vector)
@@ -1049,6 +1070,7 @@ def test_semantic_warm_start_reuses_observed_unit_vectors(monkeypatch) -> None:
 
 
 def test_semantic_warm_start_defaults_to_validated_single_neighbor() -> None:
+    """Keep default warm starts on one neighbor rather than opt-in interpolation."""
     evidence = PsychometricRoutingEvidence()
     evidence.observe("left", "model_a", True, [1.0, 0.0])
     evidence.observe("right", "model_a", True, [0.0, 1.0])
@@ -1066,6 +1088,7 @@ def test_semantic_warm_start_defaults_to_validated_single_neighbor() -> None:
 
 
 def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
+    """Exclude an opposite vector from the opt-in positive-neighbor experiment."""
     evidence = PsychometricRoutingEvidence(semantic_warm_start_enabled=True)
     evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
     evidence._scores = {
@@ -1079,6 +1102,7 @@ def test_semantic_warm_start_rejects_non_positive_neighbors() -> None:
 
 
 def test_default_single_neighbor_preserves_non_positive_fallback() -> None:
+    """Preserve the existing single-neighbor fallback even for an opposite vector."""
     evidence = PsychometricRoutingEvidence()
     evidence.observe("opposite", "model_a", True, [-1.0, 0.0])
     evidence._scores = {
@@ -1092,6 +1116,7 @@ def test_default_single_neighbor_preserves_non_positive_fallback() -> None:
 
 
 def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
+    """Do not rank from a stored embedding containing a non-finite component."""
     evidence = PsychometricRoutingEvidence()
     evidence.observe("invalid", "model_a", True, [float("nan"), 1.0])
     evidence._scores = {
@@ -1105,6 +1130,7 @@ def test_semantic_warm_start_rejects_non_finite_embeddings() -> None:
 
 
 def test_cosine_is_finite_for_large_finite_embeddings() -> None:
+    """Avoid overflow when comparing equal vectors with large finite components."""
     similarity = PsychometricRoutingEvidence._cosine(
         [1e308, 1e308], [1e308, 1e308]
     )
@@ -1115,6 +1141,7 @@ def test_cosine_is_finite_for_large_finite_embeddings() -> None:
 
 
 def test_deployment_configuration_changes_psychometric_identity() -> None:
+    """Distinguish an agent ID reused for a different model and endpoint."""
     before = ModelAgent("model_a", "model-a", base_url="https://one.example/v1")
     after = ModelAgent("model_a", "model-b", base_url="https://two.example/v1")
     orchestrator = TaskOrchestrator([before])
@@ -1126,6 +1153,7 @@ def test_deployment_configuration_changes_psychometric_identity() -> None:
 
 
 def test_decode_policy_changes_psychometric_identity() -> None:
+    """Include changed worker reasoning effort in the candidate identity."""
     agent = ModelAgent("model_a", "model-a")
     original = default_role_effort_catalog()
     changed = dict(original)
@@ -1226,6 +1254,7 @@ def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> 
 
 
 def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
+    """Prevent an obsolete deployment score from overriding current static ordering."""
     old_agent = ModelAgent("reused_agent", "model-old", base_url="https://old.example/v1")
     orchestrator = TaskOrchestrator(
         [

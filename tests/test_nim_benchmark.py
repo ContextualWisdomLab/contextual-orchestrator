@@ -1912,6 +1912,7 @@ def test_evaluation_contract_failure_publishes_no_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Publish nothing when evaluation becomes malformed after valid discovery."""
     _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     dry_transport = nb.build_dry_run_transport()
@@ -2180,6 +2181,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
 def test_live_run_fails_closed_without_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Require a credential after isolating the reviewed-cost validity window."""
     _assume_current_cost_evidence(monkeypatch)
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(NotConfigured):
@@ -2194,6 +2196,7 @@ def test_live_run_fails_closed_without_credential(
 
 
 def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise live-mode report wiring with offline doubles, not provider evidence."""
     _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_validate = ModelClient._validate_provider
@@ -2227,6 +2230,7 @@ def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_live_run_uses_default_transport_builder_when_none_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Exercise the default transport seam using an offline replacement builder."""
     _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_builder = nb.build_default_transport
@@ -2308,6 +2312,7 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
 
 
 def test_cli_live_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a missing credential through the CLI's structured failure result."""
     _assume_current_cost_evidence(monkeypatch)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):

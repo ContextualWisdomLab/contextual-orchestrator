@@ -368,6 +368,7 @@ def test_would_route_true_for_route_false_for_conduct() -> None:
 
 
 def test_stream_route_yields_and_persists() -> None:
+    """Retain a streamed result and its deterministic candidate-selection record."""
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])
     deltas = list(orchestrator.stream_route([{"role": "user", "content": "stream this please"}]))
     answer = "".join(deltas)
@@ -380,6 +381,7 @@ def test_stream_route_yields_and_persists() -> None:
 
 
 def test_stream_route_rejects_automatically_ranked_excluded_worker() -> None:
+    """Reject role-excluded auto selection while preserving an explicit model choice."""
     excluded = ModelAgent(
         "excluded_worker", "m-model", provider_exclusions=("worker",)
     )

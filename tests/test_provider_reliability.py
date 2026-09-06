@@ -381,6 +381,7 @@ class _AgentDownClient(ModelClient):
 
 
 def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDownClient]:
+    """Build a scripted two-worker failover fixture without extra judge calls."""
     agents = [
         ModelAgent(
             "primary_worker",
@@ -408,6 +409,7 @@ def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDown
 
 
 def test_failover_to_backup_agent_when_primary_fails() -> None:
+    """Record ordered failover without claiming propensity or leaking configuration."""
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
     result = orchestrator.route_once([{"role": "user", "content": "route this"}])
     assert result["answer"] == "[backup_worker] answer"

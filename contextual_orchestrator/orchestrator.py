@@ -3900,6 +3900,11 @@ class TaskOrchestrator:
         allow_empty_agents: bool = False,
         token_counter: Any = None,
     ) -> None:
+        """Overlay stored agents, initialize routing ledgers, and restore optional state.
+
+        Start the uptime collector and retain the caller's opt-in effort catalog.
+        Call ``close()`` to release the collector and configured durable stores.
+        """
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -4122,6 +4127,11 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        """Restore configured durable state and discard obsolete candidate evidence.
+
+        Restore spend for every saved run, but keep pending verification out of
+        recent-run listings. The constructor calls this only with a state store.
+        """
         candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
             if str(observation["agent_id"]) not in candidate_ids:

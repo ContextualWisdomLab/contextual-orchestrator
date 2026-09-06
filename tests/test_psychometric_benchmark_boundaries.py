@@ -34,6 +34,7 @@ def test_selective_coverage_uses_actual_odd_sized_strata(
     candidate_index = -1
 
     def oracle(_bundle, responses, **_kwargs):
+        """Return the known trait sign, with selected strata deliberately unresolved."""
         nonlocal candidate_index
         if not responses:
             candidate_index += 1
@@ -111,6 +112,7 @@ def test_heldout_runtime_guard_precedes_optional_dependency_imports(monkeypatch)
     original_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
+        """Fail if an optional ML import precedes the supported-runtime check."""
         if name in {"fast_mlsirm", "numpy"}:
             raise AssertionError("optional dependency imported before runtime guard")
         return original_import(name, *args, **kwargs)

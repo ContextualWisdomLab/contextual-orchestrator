@@ -29,6 +29,100 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Research-to-code mapping
 
+### Complete changed-definition audit (2026-09-06)
+
+At `d740602f`, comparison with protected main `414f2297` found **90/129**
+documented changed definitions: runtime 24/26, scripts 44/44, tests 22/59.
+Documentation-only `02f60c40e0d1d9f8b0fe79ca8d8c53b43cda0903` adds the 39
+missing docstrings and reaches **129/129**, including classes, initializers,
+private methods, and nested test helpers. The seven modified Python files have
+identical docstring-stripped ASTs to `d740602f`. Ruff passes, and **235 focused
+tests passed in 20.57 seconds**, terminal exit 0 on the unchanged clean commit.
+
+The scope includes definitions whose AST differs from the declared base,
+including differences in docstrings and nested bodies. Unchanged definitions,
+module docstrings, non-Python files, and the rest of the repository are outside
+this count. It is not CodeRabbit's historical 107-function scope or a behavioral
+coverage result. The full-size numerical assertions, fixture populations,
+provider exclusions, persisted-run visibility, and production gates are
+unchanged. Offline live-mode doubles remain explicitly separate from live
+provider evidence.
+
+Reproduce the exact count and executable-structure guard with the existing
+project Python and Git, without installing an audit package:
+
+```sh
+.venv/bin/python - <<'PY'
+import ast
+import collections
+import json
+import subprocess
+
+base_revision = "414f22973658c4ddc3d4320fcf7acd9b4e8ba991"
+original_revision = "d740602fdd8c0e4f7d55e4d3ad37b9f560c09e01"
+head_revision = "02f60c40e0d1d9f8b0fe79ca8d8c53b43cda0903"
+def git_source(revision, file_name):
+    result = subprocess.run(["git", "show", f"{revision}:{file_name}"], capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else ""
+def definitions(source):
+    found = {}
+    def visit(node, parents=()):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qualified_name = (*parents, child.name)
+                found[".".join(qualified_name)] = child
+                visit(child, qualified_name)
+            else:
+                visit(child, parents)
+    visit(ast.parse(source))
+    return found
+def stripped_ast(source):
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and ast.get_docstring(node) is not None:
+            node.body = node.body[1:]
+    return ast.dump(tree, include_attributes=False)
+file_names = subprocess.check_output(["git", "diff", "--name-only", base_revision, head_revision, "--", "*.py"], text=True).splitlines()
+summary = collections.defaultdict(lambda: {"changed_definitions": 0, "documented": 0, "missing": []})
+for file_name in file_names:
+    old_defs = definitions(git_source(base_revision, file_name))
+    for qualified_name, node in definitions(git_source(head_revision, file_name)).items():
+        old_node = old_defs.get(qualified_name)
+        if old_node is not None and ast.dump(node, include_attributes=False) == ast.dump(old_node, include_attributes=False):
+            continue
+        scope = "tests" if file_name.startswith("tests/") else "scripts" if file_name.startswith("scripts/") else "runtime"
+        record = summary[scope]
+        record["changed_definitions"] += 1
+        if ast.get_docstring(node):
+            record["documented"] += 1
+        else:
+            record["missing"].append(f"{file_name}:{node.lineno}:{qualified_name}")
+changed_files = subprocess.check_output(["git", "diff", "--name-only", original_revision, head_revision, "--", "*.py"], text=True).splitlines()
+unequal = [file_name for file_name in changed_files if stripped_ast(git_source(original_revision, file_name)) != stripped_ast(git_source(head_revision, file_name))]
+print(json.dumps({"base": base_revision, "head": head_revision, "summary": dict(summary), "docstring_stripped_ast_comparison": {"original": original_revision, "files": changed_files, "unequal": unequal}}, indent=2))
+assert not unequal, unequal
+assert sum(row["changed_definitions"] for row in summary.values()) == 129
+assert all(not row["missing"] for row in summary.values()), dict(summary)
+PY
+```
+
+Focused verification:
+
+```sh
+.venv/bin/pytest -q tests/test_endpoint_race.py tests/test_nim_benchmark.py \
+  tests/test_provider_reliability.py tests/test_psychometric_benchmark_boundaries.py \
+  tests/test_psychometric_routing.py tests/test_true_streaming.py \
+  tests/test_agent_pool_db.py tests/test_docstring_coverage.py \
+  tests/test_product_planning_contract.py
+```
+
+The evidence directory is `/tmp/co-1067-changed-docs.VmQM1v`:
+`ast-audit.json` and `focused-valid-{pytest.log,junit.xml}`. An initial command
+named nonexistent `tests/test_paper_inventory.py` and exited 4 without running
+tests; its separately retained log is not source-failure or passing evidence.
+The actual paper contract is `tests/test_paper_contracts.py`.
+
+
 ### Operation-local identity snapshot (2026-09-06)
 
 The performance review exposed repeated catalog validation in ranking and
