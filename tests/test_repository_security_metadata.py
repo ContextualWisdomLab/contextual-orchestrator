@@ -81,6 +81,13 @@ def test_security_workflow_covers_core_repository_security_process():
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
 
 
+def test_local_quality_admits_stacked_pull_requests():
+    """Run the existing quality gate for PRs targeting an unmerged parent."""
+    workflow_text = read_text(".github/workflows/security.yml")
+    assert "\n  push:\n    branches: [main]\n" in workflow_text
+    assert "\n  pull_request:\n  schedule:\n" in workflow_text
+
+
 def test_dependabot_tracks_actions_and_python_dependencies():
     dependabot_text = read_text(".github/dependabot.yml")
 
