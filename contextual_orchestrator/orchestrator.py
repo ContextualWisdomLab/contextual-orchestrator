@@ -597,6 +597,8 @@ class ModelAgent:
     endpoint_equivalence: dict[str, Any] | None = None
     # Provider-declared support for the Chat Completions terminal usage frame.
     stream_usage_supported: bool = False
+    # Administrator-owned execution policy; runtime admission is a separate gate.
+    model_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -622,6 +624,10 @@ class ModelAgent:
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
+        if self.model_timeout_seconds is not None:
+            value = self.model_timeout_seconds
+            if type(value) not in (int, float) or not 0 < value <= 1.7976931348623157e308:
+                raise ValueError("model_timeout_seconds must be finite positive seconds or null")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -647,6 +653,7 @@ class ModelAgent:
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
             "stream_usage_supported": self.stream_usage_supported,
+            "model_timeout_seconds": self.model_timeout_seconds,
         }
 
     @property
@@ -682,6 +689,7 @@ class ModelAgent:
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
             stream_usage_supported=value.get("stream_usage_supported", False),
+            model_timeout_seconds=value.get("model_timeout_seconds"),
         )
 
 
@@ -3157,6 +3165,7 @@ class _AgentPoolStore:
             "context_window",
             "reasoning_effort_supported",
             "stream_usage_supported",
+            "model_timeout_seconds",
         }
     )
 
@@ -3196,6 +3205,8 @@ class _AgentPoolStore:
                 context_window INTEGER,
                 reasoning_effort_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
+                model_timeout_seconds REAL CHECK (model_timeout_seconds IS NULL OR
+                    (model_timeout_seconds > 0 AND model_timeout_seconds <= 1.7976931348623157e308)),
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_max_output_tokens_check
                     CHECK (
@@ -3255,8 +3266,9 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported,
+                model_timeout_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -3273,6 +3285,7 @@ class _AgentPoolStore:
                 config["context_window"],
                 config["reasoning_effort_supported"],
                 int(config["stream_usage_supported"]),
+                config["model_timeout_seconds"],
             ),
         )
         conn.executemany(
@@ -3344,6 +3357,13 @@ class _AgentPoolStore:
                 "CHECK (stream_usage_supported IN (0, 1))"
             )
             columns.add("stream_usage_supported")
+        if "model_timeout_seconds" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN model_timeout_seconds REAL "
+                "CHECK (model_timeout_seconds IS NULL OR "
+                "(model_timeout_seconds > 0 AND model_timeout_seconds <= 1.7976931348623157e308))"
+            )
+            columns.add("model_timeout_seconds")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -3439,7 +3459,8 @@ class _AgentPoolStore:
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
                         max_output_tokens = ?, context_window = ?,
-                        reasoning_effort_supported = ?, stream_usage_supported = ?
+                        reasoning_effort_supported = ?, stream_usage_supported = ?,
+                        model_timeout_seconds = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -3456,6 +3477,7 @@ class _AgentPoolStore:
                         config["context_window"],
                         config["reasoning_effort_supported"],
                         int(config["stream_usage_supported"]),
+                        config["model_timeout_seconds"],
                         agent.id,
                     ),
                 )
@@ -3552,7 +3574,7 @@ class _AgentPoolStore:
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
                            max_output_tokens, context_window,
-                           reasoning_effort_supported, stream_usage_supported
+                           reasoning_effort_supported, stream_usage_supported, model_timeout_seconds
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -3618,6 +3640,7 @@ class _AgentPoolStore:
                 context_window=row[11],
                 reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
                 stream_usage_supported=bool(row[13]),
+                model_timeout_seconds=row[14],
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -6023,6 +6046,8 @@ class TaskOrchestrator:
             patched = replace(patched, max_output_tokens=patch["max_output_tokens"])
         if "context_window" in patch:
             patched = replace(patched, context_window=patch["context_window"])
+        if "model_timeout_seconds" in patch:
+            patched = replace(patched, model_timeout_seconds=patch["model_timeout_seconds"])
         if "endpoint_equivalence" in patch:
             value = patch["endpoint_equivalence"]
             if value is not None and not isinstance(value, dict):
@@ -6220,6 +6245,7 @@ class TaskOrchestrator:
                 agent = replace(
                     agent,
                     group_name=updated_candidates[index].group_name,
+                    model_timeout_seconds=updated_candidates[index].model_timeout_seconds,
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
@@ -8427,6 +8453,7 @@ class TaskOrchestrator:
             "max_output_tokens": agent.max_output_tokens,
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
+            "model_timeout_seconds": agent.model_timeout_seconds,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
