@@ -3619,6 +3619,7 @@ class _AgentPoolStore:
         with self._lock:
             conn = self._connect(self._path)
             try:
+                conn.execute("BEGIN")
                 rows = conn.execute(
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
