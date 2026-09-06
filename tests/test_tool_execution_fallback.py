@@ -712,10 +712,11 @@ class _ProviderStoppedStreamingClient(ModelClient):
 
 
 @pytest.mark.parametrize(
-    ("error_code", "expected_calls"),
-    [("tool_execution_stopped", 1), ("conflict", 3)],
+    ("error_code", "status_code", "expected_calls"),
+    [("tool_execution_stopped", 409, 1), ("conflict", 409, 3),
+     ("provider_outcome_unknown", 502, 1)],
 )
-def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, expected_calls) -> None:
+def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, status_code, expected_calls) -> None:
     """The optional exact SDK probe uses real loopback HTTP, never a provider."""
     import asyncio
 
@@ -727,7 +728,7 @@ def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, exp
     def respond(handler):
         handler._read_json()
         received_calls.append(error_code)
-        handler._send_error(409, error_code, "request stopped", {"retryable": False})
+        handler._send_error(status_code, error_code, "request stopped", {"retryable": False})
 
     monkeypatch.setattr(server.RequestHandlerClass, "do_POST", respond)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -737,11 +738,12 @@ def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, exp
         async with sdk.AsyncOpenAI(
             api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
         ) as client:
-            with pytest.raises(sdk.ConflictError) as raised:
+            with pytest.raises(sdk.APIStatusError) as raised:
                 await client.chat.completions.create(
                     model="local_test_model", messages=[{"role": "user", "content": "fixture"}],
                 )
             assert raised.value.body["code"] == error_code
+            assert raised.value.status_code == status_code
 
     try:
         asyncio.run(request_completion())
