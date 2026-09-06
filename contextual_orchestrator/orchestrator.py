@@ -3467,153 +3467,176 @@ class _AgentPoolStore:
             )
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
+    @contextmanager
+    def _write_transaction(self) -> Iterable[sqlite3.Connection]:
+        """Commit the complete pool operation or roll back every affected row."""
+        with self._lock:
+            conn = self._connect(self._path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
+                conn.commit()
+            finally:
+                conn.close()
+
     def save(
         self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None,
         actor_id: str | None = None,
         restored_from_revision: int | None = None,
     ) -> int | None:
         """Persist one normalized model-agent definition."""
-        with self._lock:
-            conn = self._connect(self._path)
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                previous = timeout_previous if timeout_previous is not None else agent
-                revision = conn.execute(
-                    "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
-                    (agent.id,),
-                ).fetchone()[0]
-                if revision != previous.model_timeout_revision:
-                    raise ValueError("model timeout policy changed; reload before updating")
-                row = conn.execute(
-                    "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
-                    (agent.id,),
-                ).fetchone()
-                if row is not None and row[0] != previous.model_timeout_seconds:
-                    raise ValueError("model timeout policy changed; reload before updating")
-                if timeout_previous is not None:
-                    if row is not None:
-                        conn.execute(
-                            "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
-                            (agent.model_timeout_seconds, agent.id),
-                        )
-                        revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
-                        conn.commit()
-                        return revision
-                config = agent.to_config()
+        with self._write_transaction() as conn:
+            return self._save_in_transaction(
+                conn, agent, timeout_previous=timeout_previous, actor_id=actor_id,
+                restored_from_revision=restored_from_revision,
+            )
+
+    def save_many(self, agents: Iterable["ModelAgent"]) -> None:
+        """Persist a group or discovery operation without partial model updates."""
+        with self._write_transaction() as conn:
+            for agent in agents:
+                self._save_in_transaction(conn, agent)
+
+    def _save_in_transaction(
+        self, conn: sqlite3.Connection, agent: "ModelAgent", *,
+        timeout_previous: "ModelAgent | None" = None,
+        actor_id: str | None = None,
+        restored_from_revision: int | None = None,
+    ) -> int | None:
+        """Apply existing normalized writes inside the caller's transaction."""
+        previous = timeout_previous if timeout_previous is not None else agent
+        revision = conn.execute(
+            "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
+            (agent.id,),
+        ).fetchone()[0]
+        if revision != previous.model_timeout_revision:
+            raise ValueError("model timeout policy changed; reload before updating")
+        row = conn.execute(
+            "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
+            (agent.id,),
+        ).fetchone()
+        if row is not None and row[0] != previous.model_timeout_seconds:
+            raise ValueError("model timeout policy changed; reload before updating")
+        if timeout_previous is not None:
+            if row is not None:
                 conn.execute(
-                    """
-                    UPDATE agent_pool SET
-                        model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
-                        priority = ?, disabled = ?, provider_name = ?,
-                        local_credential_key = ?, auth_scheme = ?,
-                        max_output_tokens = ?, context_window = ?,
-                        reasoning_effort_supported = ?, stream_usage_supported = ?,
-                        model_timeout_seconds = ?
-                    WHERE agent_id = ?
-                    """,
-                    (
-                        config["model"],
-                        config["base_url"],
-                        config["api_key_env"],
-                        config["credential_key"],
-                        config["priority"],
-                        int(config["disabled"]),
-                        config["provider_name"],
-                        config["local_credential_key"],
-                        config["auth_scheme"],
-                        config["max_output_tokens"],
-                        config["context_window"],
-                        config["reasoning_effort_supported"],
-                        int(config["stream_usage_supported"]),
-                        config["model_timeout_seconds"],
-                        agent.id,
-                    ),
+                    "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
+                    (agent.model_timeout_seconds, agent.id),
                 )
-                if conn.execute("SELECT changes()").fetchone()[0] == 0:
-                    self._insert_agent(conn, agent)
-                else:
-                    conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
-                    conn.execute(
-                        "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
-                        (agent.id,),
-                    )
-                    conn.executemany(
-                        "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
-                        [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
-                    )
-                    conn.executemany(
-                        """
-                        INSERT INTO agent_pool_provider_exclusions
-                            (agent_id, exclusion_position, provider_name)
-                        VALUES (?, ?, ?)
-                        """,
-                        [
-                            (agent.id, position, provider)
-                            for position, provider in enumerate(agent.provider_exclusions)
-                        ],
-                    )
-                # Model-group membership is a normalized relation beside the pool.
-                conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
-                if agent.group_name:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
-                        (agent.group_name,),
-                    )
-                    conn.execute(
-                        "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
-                        (agent.id, agent.group_name),
-                    )
-                conn.execute(
-                    "DELETE FROM model_group WHERE NOT EXISTS ("
-                    "SELECT 1 FROM model_group_member "
-                    "WHERE model_group_member.group_name = model_group.group_name)"
-                )
-                conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
-                conn.execute(
-                    "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
-                    "SELECT 1 FROM endpoint_equivalence_member "
-                    "WHERE endpoint_equivalence_member.contract_id = "
-                    "endpoint_equivalence_contract.contract_id)"
-                )
-                if agent.endpoint_equivalence is not None:
-                    contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
-                    conn.execute(
-                        "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
-                        "reasoning_effort_profile=excluded.reasoning_effort_profile, "
-                        "structured_output_contract=excluded.structured_output_contract, "
-                        "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
-                        "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
-                        "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
-                        "cancellation_supported=excluded.cancellation_supported, "
-                        "execution_policy=excluded.execution_policy",
-                        (
-                            contract.contract_id, contract.model_revision,
-                            contract.reasoning_effort_profile, contract.structured_output_contract,
-                            contract.accuracy_class, contract.data_residency_policy,
-                            contract.retention_policy, contract.context_limit,
-                            contract.pricing_evidence_id, int(contract.hedge_eligible),
-                            int(contract.cancellation_supported), contract.execution_policy,
-                        ),
-                    )
-                    conn.execute(
-                        "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
-                        (contract.contract_id,),
-                    )
-                    conn.executemany(
-                        "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
-                        [(contract.contract_id, name) for name in contract.capability_set],
-                    )
-                    conn.execute(
-                        "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
-                        (agent.id, contract.contract_id),
-                    )
-                if timeout_previous is not None:
-                    revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
-                conn.commit()
-                return revision if timeout_previous is not None else None
-            finally:
-                conn.close()
+                revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
+                return revision
+        config = agent.to_config()
+        conn.execute(
+            """
+            UPDATE agent_pool SET
+                model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
+                priority = ?, disabled = ?, provider_name = ?,
+                local_credential_key = ?, auth_scheme = ?,
+                max_output_tokens = ?, context_window = ?,
+                reasoning_effort_supported = ?, stream_usage_supported = ?,
+                model_timeout_seconds = ?
+            WHERE agent_id = ?
+            """,
+            (
+                config["model"],
+                config["base_url"],
+                config["api_key_env"],
+                config["credential_key"],
+                config["priority"],
+                int(config["disabled"]),
+                config["provider_name"],
+                config["local_credential_key"],
+                config["auth_scheme"],
+                config["max_output_tokens"],
+                config["context_window"],
+                config["reasoning_effort_supported"],
+                int(config["stream_usage_supported"]),
+                config["model_timeout_seconds"],
+                agent.id,
+            ),
+        )
+        if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            self._insert_agent(conn, agent)
+        else:
+            conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
+            conn.execute(
+                "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
+                (agent.id,),
+            )
+            conn.executemany(
+                "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+                [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+            )
+            conn.executemany(
+                """
+                INSERT INTO agent_pool_provider_exclusions
+                    (agent_id, exclusion_position, provider_name)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (agent.id, position, provider)
+                    for position, provider in enumerate(agent.provider_exclusions)
+                ],
+            )
+        # Model-group membership is a normalized relation beside the pool.
+        conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
+        if agent.group_name:
+            conn.execute(
+                "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
+                (agent.group_name,),
+            )
+            conn.execute(
+                "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                (agent.id, agent.group_name),
+            )
+        conn.execute(
+            "DELETE FROM model_group WHERE NOT EXISTS ("
+            "SELECT 1 FROM model_group_member "
+            "WHERE model_group_member.group_name = model_group.group_name)"
+        )
+        conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
+        conn.execute(
+            "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
+            "SELECT 1 FROM endpoint_equivalence_member "
+            "WHERE endpoint_equivalence_member.contract_id = "
+            "endpoint_equivalence_contract.contract_id)"
+        )
+        if agent.endpoint_equivalence is not None:
+            contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
+            conn.execute(
+                "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
+                "reasoning_effort_profile=excluded.reasoning_effort_profile, "
+                "structured_output_contract=excluded.structured_output_contract, "
+                "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
+                "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
+                "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
+                "cancellation_supported=excluded.cancellation_supported, "
+                "execution_policy=excluded.execution_policy",
+                (
+                    contract.contract_id, contract.model_revision,
+                    contract.reasoning_effort_profile, contract.structured_output_contract,
+                    contract.accuracy_class, contract.data_residency_policy,
+                    contract.retention_policy, contract.context_limit,
+                    contract.pricing_evidence_id, int(contract.hedge_eligible),
+                    int(contract.cancellation_supported), contract.execution_policy,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
+                (contract.contract_id,),
+            )
+            conn.executemany(
+                "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
+                [(contract.contract_id, name) for name in contract.capability_set],
+            )
+            conn.execute(
+                "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
+                (agent.id, contract.contract_id),
+            )
+        if timeout_previous is not None:
+            revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
+        return revision if timeout_previous is not None else None
 
     @staticmethod
     def _append_timeout_history(
@@ -6301,12 +6324,8 @@ class TaskOrchestrator:
             for before, after in zip(previous_candidates, updated)
             if before.group_name != after.group_name
         }
-        for agent in updated:
-            if agent.id in requested:
-                if self._pool_store is not None:
-                    self._pool_store.save(agent)
-            elif agent.id in previous and self._pool_store is not None:
-                self._pool_store.save(agent)
+        if self._pool_store is not None:
+            self._pool_store.save_many(agent for agent in updated if agent.id in requested | previous)
         self.candidates = updated
         self.agents = [agent for agent in updated if not agent.disabled]
         self._routers_reset_members(changed)
@@ -6323,9 +6342,7 @@ class TaskOrchestrator:
         member_ids = set(current["member_agent_ids"])
         updated = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
         if self._pool_store is not None:
-            for agent in updated:
-                if agent.id in member_ids:
-                    self._pool_store.save(agent)
+            self._pool_store.save_many(agent for agent in updated if agent.id in member_ids)
         self.candidates = updated
         self.agents = [agent for agent in updated if not agent.disabled]
         self._routers_reset_members(member_ids)
@@ -6398,8 +6415,7 @@ class TaskOrchestrator:
             effective_discovered_agents.append(agent)
         self._require_role_effort_pool(updated_candidates)
         if self._pool_store is not None:
-            for agent in effective_discovered_agents:
-                self._pool_store.save(agent)
+            self._pool_store.save_many(effective_discovered_agents)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
