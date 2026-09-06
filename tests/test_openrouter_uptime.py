@@ -11,8 +11,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator.model_group import ModelGroupRouter
 from contextual_orchestrator import openrouter_uptime as uptime_module
+from contextual_orchestrator.model_group import ModelGroupRouter
 from contextual_orchestrator.openrouter_uptime import (
     OpenRouterUptimeCollector,
 )

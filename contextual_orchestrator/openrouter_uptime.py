@@ -21,7 +21,11 @@ import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING
 
-from .model_group import BETA_PRIOR_FAILURE_COUNT, BETA_PRIOR_SUCCESS_COUNT, ModelGroupRouter
+from .model_group import (
+    BETA_PRIOR_FAILURE_COUNT,
+    BETA_PRIOR_SUCCESS_COUNT,
+    ModelGroupRouter,
+)
 
 if TYPE_CHECKING:
     from .orchestrator import ModelAgent
@@ -38,7 +42,7 @@ class OpenRouterUptimeCollector:
 
     def __init__(
         self,
-        agents: list["ModelAgent"],
+        agents: list[ModelAgent],
         group_router: ModelGroupRouter,
         interval_seconds: float = 300.0,
         startup_delay_seconds: float = 5.0,
