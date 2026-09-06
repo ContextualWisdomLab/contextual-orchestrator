@@ -291,3 +291,55 @@ def test_model_timeout_policy_restore_rejects_stale_revision(tmp_path: Path) -> 
             expected_revision=first["model_timeout_revision"], actor_id="a" * 64,
         )
     assert orchestrator._agent(model_agent.id).model_timeout_seconds == 3600
+
+
+def test_model_timeout_policy_restore_rejects_foreign_history(tmp_path: Path) -> None:
+    """A history identifier from another model does not authorize restoration."""
+    first = ModelAgent("first_agent", "first-model")
+    second = ModelAgent("second_agent", "second-model")
+    orchestrator = TaskOrchestrator([first, second], agents_db=str(tmp_path / "agent-pool.db"))
+    changed = orchestrator.patch_agent("default", first.id, {"model_timeout_seconds": 7200})
+    with pytest.raises(KeyError, match="revision not found"):
+        orchestrator.restore_model_timeout(
+            "default", second.id, changed["model_timeout_revision"],
+            expected_revision=0, actor_id="a" * 64,
+        )
+    assert orchestrator._agent(second.id).model_timeout_seconds is None
+
+
+def test_model_timeout_policy_restore_audit_failure_rolls_back(tmp_path: Path) -> None:
+    """A rejected restore must preserve its prior value and revision."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    first = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    latest = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": None})
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_restore BEFORE INSERT ON model_timeout_history "
+            "BEGIN SELECT RAISE(ABORT, 'restore audit unavailable'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="restore audit unavailable"):
+        orchestrator.restore_model_timeout(
+            "default", model_agent.id, first["model_timeout_revision"],
+            expected_revision=latest["model_timeout_revision"], actor_id="a" * 64,
+        )
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds is None
+    assert restored._agent(model_agent.id).model_timeout_revision == latest["model_timeout_revision"]
+    assert orchestrator._agent(model_agent.id).model_timeout_revision == latest["model_timeout_revision"]
+
+
+@pytest.mark.parametrize("source_revision, expected_revision", [(True, 0), (0, 0), (2**63, 0), (1, True), (1, -1)])
+def test_model_timeout_policy_restore_validates_revision_types(
+    tmp_path: Path, source_revision: object, expected_revision: object
+) -> None:
+    """Reject malformed revision identifiers before history access or mutation."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=str(tmp_path / "agent-pool.db"))
+    with pytest.raises(ValueError):
+        orchestrator.restore_model_timeout(
+            "default", model_agent.id, source_revision,
+            expected_revision=expected_revision, actor_id="a" * 64,
+        )
+    assert orchestrator._agent(model_agent.id).model_timeout_revision == 0
