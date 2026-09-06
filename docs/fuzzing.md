@@ -75,7 +75,7 @@ Seed corpora live in `fuzz/corpus/<target>/`.
 
 ## CI
 
-`.github/workflows/fuzz.yml` runs the property tests on every push/PR and the
+`.github/workflows/security.yml` runs the property tests on every push/PR and the
 Atheris harnesses with a 60s-per-target budget on PRs (300s on the weekly
 schedule / manual dispatch) to keep CI cost bounded. Crash inputs are uploaded
 as artifacts.

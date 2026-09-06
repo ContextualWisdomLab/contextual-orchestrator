@@ -35,19 +35,17 @@ def test_security_workflow_covers_core_repository_security_process():
     workflow_text = read_text(".github/workflows/security.yml")
 
     expected_tokens = [
-        "name: Security",
+        "name: Security and Quality",
         "branches: [main]",
         "cron:",
         "workflow_dispatch:",
         "contents: read",
-        "ContextualWisdomLab/.github",
-        "Dependency review, Trivy filesystem, OSV, and OpenSSF Scorecard are covered",
-        "CodeQL and Python supply-chain evidence stay repo-local",
+        "Central required workflows still own dependency review, Trivy, OSV",
         "security-events: write",
         "actions/checkout@v7",
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
-        "python_supply_chain:",
+        "security:",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
@@ -70,6 +68,14 @@ def test_security_workflow_covers_core_repository_security_process():
     for duplicate_scanner in removed_duplicate_scanners:
         assert duplicate_scanner not in workflow_text
 
+    assert "local-quality-${{ github.repository }}-${{ github.event_name }}-${{" in workflow_text
+    assert "github.event.pull_request.number || github.event.schedule || github.ref" in workflow_text
+    assert "cancel-in-progress: true" in workflow_text
+
+    assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
+    assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
+    assert workflow_text.count("runs-on: ubuntu-latest") == 3
+
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
@@ -90,6 +96,22 @@ def test_dependabot_tracks_actions_and_python_dependencies():
     for entry in entries.values():
         assert "timezone: Asia/Seoul" in entry
         assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
+
+
+def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
+    """The combined fuzz job needs one consistent, continuation-safe lock set."""
+    project_lock = read_text("requirements.lock")
+    atheris_lock = read_text("fuzz/requirements-atheris.txt")
+    pinned = re.compile(r"(?m)^([A-Za-z0-9_.-]+)==([^ ;\\]+)")
+    project_versions = dict(pinned.findall(project_lock))
+    atheris_versions = dict(pinned.findall(atheris_lock))
+
+    for package_name in project_versions.keys() & atheris_versions.keys():
+        assert atheris_versions[package_name] == project_versions[package_name]
+    lines = atheris_lock.splitlines()
+    for line_number, line in enumerate(lines):
+        if line.lstrip().startswith("--hash="):
+            assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
 
 
 def test_review_adr_requires_enforced_exact_head_merge_controls():
@@ -169,7 +191,7 @@ def test_python_lockfile_uses_hash_pinning():
 
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     """CI must install the uv lock so git-backed runtime dependencies are present."""
-    workflow_text = read_text(".github/workflows/ci.yml")
+    workflow_text = read_text(".github/workflows/security.yml")
     setup_uv_line = find_uses_line(workflow_text, "astral-sh/setup-uv")
 
     assert re.search(r"@[0-9a-f]{40}(?:\s+#|$)", setup_uv_line)
