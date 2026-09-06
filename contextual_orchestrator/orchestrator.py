@@ -3418,6 +3418,9 @@ class _AgentPoolStore:
                 "previous_seconds REAL, timeout_seconds REAL, "
                 "created_at REAL NOT NULL)"
             )
+            history_columns = {row[1] for row in conn.execute("PRAGMA table_info(model_timeout_history)")}
+            if "actor_id" not in history_columns:
+                conn.execute("ALTER TABLE model_timeout_history ADD COLUMN actor_id TEXT")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -3459,7 +3462,10 @@ class _AgentPoolStore:
             )
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
-    def save(self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None) -> int | None:
+    def save(
+        self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None,
+        actor_id: str | None = None,
+    ) -> int | None:
         """Persist one normalized model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
@@ -3483,7 +3489,7 @@ class _AgentPoolStore:
                             "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
                             (agent.model_timeout_seconds, agent.id),
                         )
-                        revision = self._append_timeout_history(conn, timeout_previous, agent)
+                        revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id)
                         conn.commit()
                         return revision
                 config = agent.to_config()
@@ -3596,7 +3602,7 @@ class _AgentPoolStore:
                         (agent.id, contract.contract_id),
                     )
                 if timeout_previous is not None:
-                    revision = self._append_timeout_history(conn, timeout_previous, agent)
+                    revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id)
                 conn.commit()
                 return revision if timeout_previous is not None else None
             finally:
@@ -3604,13 +3610,14 @@ class _AgentPoolStore:
 
     @staticmethod
     def _append_timeout_history(
-        conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent"
+        conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent",
+        actor_id: str | None,
     ) -> int:
         """Write the policy change using the same uncommitted configuration transaction."""
         cursor = conn.execute(
             "INSERT INTO model_timeout_history "
-            "(agent_id, previous_seconds, timeout_seconds, created_at) VALUES (?, ?, ?, ?)",
-            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds, time.time()),
+            "(agent_id, previous_seconds, timeout_seconds, created_at, actor_id) VALUES (?, ?, ?, ?, ?)",
+            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds, time.time(), actor_id),
         )
         return int(cursor.lastrowid)
 
@@ -6074,7 +6081,10 @@ class TaskOrchestrator:
             "verifier": run.get("verification"),
         }
 
-    def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    def patch_agent(
+        self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any], *,
+        actor_id: str | None = None,
+    ) -> dict[str, Any]:
         """Apply governance updates without invalidating the active effort catalog."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
@@ -6121,9 +6131,14 @@ class TaskOrchestrator:
         if "model_timeout_seconds" in patch:
             if set(patch) != {"model_timeout_seconds"}:
                 raise ValueError("model timeout policy must be updated separately")
+            if actor_id is not None and (
+                type(actor_id) is not str or len(actor_id) != 64
+                or any(character not in "0123456789abcdef" for character in actor_id)
+            ):
+                raise ValueError("timeout actor must be an opaque principal digest")
             if self._pool_store is None:
                 raise ValueError("model timeout policy requires a durable agent store")
-            revision = self._pool_store.save(patched, timeout_previous=current)
+            revision = self._pool_store.save(patched, timeout_previous=current, actor_id=actor_id)
             patched = replace(patched, model_timeout_revision=revision)
             updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
