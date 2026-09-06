@@ -2741,6 +2741,9 @@ Source `6774dab4` exposes an admin-only timeout-policy GET that separates fresh
 configured seconds/revision from the local serving snapshot. It reports seconds
 and `enforcement_available=false`; reads do not activate limits or refresh
 routing. The actual HTTP and related pool/policy/security checks pass 88 tests
-in 9.52 seconds. History navigation, HTTP set/clear/restore, released Rust
-runtime integration and actual administrator UI acceptance remain open. See
+in 9.52 seconds. Source `f9505a5c` adds model-scoped audit history with stable
+older-revision cursors and at most 100 records per read; 96 related tests pass
+in 7.70 seconds, including HTTP authorization and invalid-bound checks. HTTP
+set/clear/restore, released Rust runtime integration and actual administrator
+UI acceptance remain open. See
 [policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).

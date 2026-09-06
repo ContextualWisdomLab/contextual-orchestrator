@@ -239,8 +239,19 @@ At `6774dab4`, 88 pool/policy/security tests pass in 9.52 seconds. Actual HTTP
 checks cover null defaults, a second writer's 7200-second revision, preservation
 of the stale serving snapshot, wrong and inference-only credentials, and a
 missing model. OpenAPI declares the admin-only contract and explicit inactive
-enforcement state. This does not implement history pagination, write/clear/
-restore HTTP operations, runtime integration or the administrator UI.
+enforcement state. That revision does not implement history pagination, write/
+clear/restore HTTP operations, runtime integration or the administrator UI.
+
+`80b3aa36` retains a missing-history-method RED. `5dc69bc1` adds a model-scoped
+descending revision cursor and a model/revision index. At `f9505a5c`, 96 related
+pool/policy/security tests pass in 7.70 seconds, including actual admin-only
+HTTP history reads and invalid-bound rejection. A page contains at most 100
+records. Newer insertions do not repeat or displace records on an older-page
+cursor; another model's revisions never enter the result. Restore provenance,
+nullable legacy actor digests and original timestamps are retained. An
+in-memory-only pool reports history unavailable, not durable empty-history proof.
+These are read-only operations; set/clear/restore HTTP actions, execution
+enforcement and UI acceptance remain incomplete.
 
 ## Source reference
 
