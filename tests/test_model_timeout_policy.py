@@ -8,6 +8,21 @@ import pytest
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 
 
+def test_ordinary_patch_rejects_stale_timeout_snapshot(tmp_path: Path) -> None:
+    """A priority edit cannot silently clear another writer's audited timeout."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    writer = TaskOrchestrator([model_agent], agents_db=database_path)
+    stale = TaskOrchestrator([model_agent], agents_db=database_path)
+    writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    with pytest.raises(ValueError, match="reload"):
+        stale.patch_agent("default", model_agent.id, {"priority": 7})
+    assert stale._agent(model_agent.id).priority == model_agent.priority
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds == 7200
+    assert restored._agent(model_agent.id).model_timeout_revision == 1
+
+
 def test_model_timeout_policy_defaults_to_null() -> None:
     """An ordinary model has no administrator-imposed execution limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
