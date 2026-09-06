@@ -30,6 +30,14 @@ class RecordingClient(ModelClient):
         self.reject_calls = reject_calls
         self.provider_calls: list[tuple[str, dict]] = []
 
+    def chat(self, agent, messages, **request_options):
+        """Serve orchestration stages locally before their final structured call."""
+        del messages, request_options
+        self.provider_calls.append((agent.id, {}))
+        if self.reject_calls:
+            raise urllib.error.HTTPError("https://provider.invalid/v1", 429, "unavailable", {}, None)
+        return '{"probe_status":"ready"}'
+
     def proxy_send_once(self, agent, endpoint, payload):
         """Capture forwarded capabilities and optionally exhaust the free provider."""
         self.provider_calls.append((agent.id, deepcopy(payload)))
