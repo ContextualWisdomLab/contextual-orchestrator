@@ -82,6 +82,7 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
+    EffortProfileError,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
@@ -5191,6 +5192,9 @@ class TaskOrchestrator:
             return result
         try:
             key = self._cache_key(messages, mode, model_name, cache_partition)
+        except EffortProfileError:
+            # Invalid execution settings are not a cache serialization failure.
+            raise
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
@@ -5355,6 +5359,7 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
+        """Partition cached answers by request settings and declared role effort."""
         snapshot = getattr(self.client, "request_settings_snapshot", None)
         parameters = snapshot() if callable(snapshot) else {
             "temperature": getattr(self.client, "default_temperature", None),
@@ -5364,6 +5369,10 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        if self.role_effort_catalog is not None:
+            parameters["reasoning_effort_snapshot_hash"] = snapshot_role_effort_catalog(
+                self.role_effort_catalog
+            ).snapshot_hash
         endpoint_partition = _request_endpoint_partition()
         cache_partition = (
             endpoint_partition
@@ -5404,20 +5413,20 @@ class TaskOrchestrator:
             cache_partition=cache_partition,
         )
         prompt = self._latest_user_text(messages)
-        record = self._with_effort_snapshot(
-            {
-                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-                "created_at": int(time.time()),
-                "mode": result["mode"],
-                "policy_mode": mode,
-                "prompt_text": prompt,
-                "answer": result["answer"],
-                "cache_status": result.get("cache_status", "disabled"),
-                "trace": result["trace"],
-                "policy_snapshot": self.policy.as_dict(),
-                "verification": result.get("verification"),
-            }
-        )
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": result["mode"],
+            "policy_mode": mode,
+            "prompt_text": prompt,
+            "answer": result["answer"],
+            "cache_status": result.get("cache_status", "disabled"),
+            "trace": result["trace"],
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": result.get("verification"),
+        }
+        if "reasoning_effort_snapshot" in result:
+            record["reasoning_effort_snapshot"] = copy.deepcopy(result["reasoning_effort_snapshot"])
         if owner_id is not None:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
