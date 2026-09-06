@@ -9,6 +9,7 @@ import pytest
 from contextual_orchestrator import ModelAgent, TaskOrchestrator, default_role_effort_catalog
 from contextual_orchestrator import orchestrator as runtime_module
 from contextual_orchestrator.reasoning_effort_profile import EffortProfileError, snapshot_role_effort_catalog
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
 def _orchestrator(**kwargs):
@@ -319,4 +320,68 @@ def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
         orchestrator.complete([{"role": "user", "content": "validation count fixture"}], mode=mode)
         assert len(calls) == 1
     finally:
+        orchestrator.close()
+
+
+def test_provider_retry_keeps_the_original_effort_profile(monkeypatch):
+    """A retryable transport failure does not switch the active request's effort."""
+    orchestrator, catalog = _orchestrator(tool_retry_attempts=1, tool_retry_backoff_seconds=0)
+    expected_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
+    received_efforts = []
+
+    def chat(agent, messages, *, effort_profile):
+        """Change the catalog after the initial attempt, then succeed on retry."""
+        received_efforts.append(effort_profile.reasoning_effort)
+        if len(received_efforts) == 1:
+            _change_effort(catalog)
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error",
+                message="retry fixture failure",
+                client_status=502,
+                provider_status=503,
+                retryable=True,
+            )
+        return "retried fixture answer"
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    try:
+        result = orchestrator.complete([{"role": "user", "content": "retry fixture"}], mode="route")
+        assert received_efforts == ["medium", "medium"]
+        assert result["reasoning_effort_snapshot"]["snapshot_hash"] == expected_hash
+    finally:
+        orchestrator.close()
+
+
+def test_nested_orchestrators_do_not_inherit_each_others_effort(monkeypatch):
+    """Nested execution on another instance restores its caller's distinct revision."""
+    orchestrator, catalog = _orchestrator()
+    other, other_catalog = _orchestrator()
+    _change_effort(other_catalog, "low")
+    expected_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
+    nested_results = []
+
+    def other_chat(agent, messages, *, effort_profile):
+        """Return the nested instance's own declared effort."""
+        return effort_profile.reasoning_effort
+
+    def chat(agent, messages, *, effort_profile):
+        """Execute a second gateway while retaining the outer request's snapshot."""
+        _change_effort(catalog)
+        nested_results.append(other.complete(messages, mode="route"))
+        assert orchestrator._role_effort_profile("worker").reasoning_effort == "medium"
+        return effort_profile.reasoning_effort
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    monkeypatch.setattr(other.client, "chat", other_chat)
+    try:
+        result = orchestrator.complete([{"role": "user", "content": "nested fixture"}], mode="route")
+        assert result["answer"] == "medium"
+        assert result["reasoning_effort_snapshot"]["snapshot_hash"] == expected_hash
+        assert nested_results[0]["answer"] == "low"
+        assert nested_results[0]["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(other_catalog).snapshot_hash
+        assert orchestrator._role_effort_profile("unknown_role") is None
+    finally:
+        other.close()
         orchestrator.close()
