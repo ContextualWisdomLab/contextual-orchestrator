@@ -67,8 +67,8 @@ def test_judged_ranking_log_does_not_label_quality_as_throughput() -> None:
     assert "success_rps=" not in output
 
 
-def test_send_with_retry_debug_logs_redact_secret_shaped_error_message() -> None:
-    """THE key secret-leak test: a fake credential shape must never reach captured logs."""
+def test_send_with_retry_debug_logs_omit_secret_shaped_error_message() -> None:
+    """Only typed metadata survives; even partially redacted provider text is omitted."""
 
     class LeakyClient(ModelClient):
         def __init__(self) -> None:
@@ -87,7 +87,8 @@ def test_send_with_retry_debug_logs_redact_secret_shaped_error_message() -> None
         else:  # pragma: no cover
             raise AssertionError("a failed provider request must raise")
     output = buffer.getvalue()
-    assert "[REDACTED]" in output
+    assert "provider_status=None error_message=<omitted>" in output
+    assert "upstream rejected request" not in output
     assert _FAKE_SECRET not in output
 
 
