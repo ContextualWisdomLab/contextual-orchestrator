@@ -17,6 +17,7 @@ from contextual_orchestrator import (
     default_role_effort_catalog,
 )
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
+from contextual_orchestrator.reasoning_effort_profile import EffortProfileError
 from scripts.benchmark_psychometric_routing import (
     _last_context_request,
     _require_runtime,
@@ -1177,6 +1178,10 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
     try:
         receipt = orchestrator._selection_design_receipt([agent], attempted_agents(), agent)
         selected_id = receipt["selected_deployment_id"]
+        assert selected_id == (
+            "audit_candidate:"
+            "f30639fe9ae8729e57eb659445325038a92c6c6e8d6810b8f84b36f3bce46bb9"
+        )
         assert receipt["candidate_deployment_ids"] == [selected_id]
         assert receipt["attempted_deployment_ids"] == [selected_id]
 
@@ -1184,6 +1189,38 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
         following = orchestrator._selection_design_receipt([agent], [agent], agent)
         assert following["selected_deployment_id"] != selected_id
         assert following["candidate_deployment_ids"] == following["attempted_deployment_ids"]
+    finally:
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("invalid_change", ["missing_role", "boolean_budget"])
+def test_selection_receipt_revalidates_catalog_changes(invalid_change) -> None:
+    """A previously valid snapshot cannot admit a later malformed catalog."""
+    agent = ModelAgent("audit_candidate", "model-a")
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator([agent], role_effort_catalog=catalog)
+    try:
+        orchestrator._selection_design_receipt([agent], [agent], agent)
+        if invalid_change == "missing_role":
+            del catalog["worker"]
+        else:
+            catalog["worker"] = replace(catalog["worker"], max_calls=True)
+        with pytest.raises(EffortProfileError):
+            orchestrator._selection_design_receipt([agent], [agent], agent)
+    finally:
+        orchestrator.close()
+
+
+def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> None:
+    """Removing every candidate must still clear observations with no active profile."""
+    agent = ModelAgent("audit_candidate", "model-a")
+    orchestrator = TaskOrchestrator([agent])
+    try:
+        orchestrator._psychometric_router.observe("audit context", "old_candidate", True, None)
+        orchestrator.candidates = []
+        orchestrator.role_effort_catalog = {}
+        orchestrator._retain_psychometric_candidates()
+        assert orchestrator._psychometric_router.records() == []
     finally:
         orchestrator.close()
 
