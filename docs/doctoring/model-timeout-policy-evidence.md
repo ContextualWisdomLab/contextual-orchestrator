@@ -209,6 +209,21 @@ release listing returned no entries. DeepWiki returned repository-not-found;
 neither result proves absence from every registry or absence of another writer.
 Runtime-owner coordination remains open; no consumer transport clone was added.
 
+## Canonical runtime dependency request
+
+The owner PRD/TRD at `bd0339bf` explicitly require finite request-phase waits
+and describe a Python runtime. Model response lifetime therefore requires an
+explicit Proposed contract change, not merely passing null into current APIs.
+The required Rust owner behavior, separate total/read deadlines, cancellation
+causes, resource/security invariants and five behavioral RED families are
+recorded in [the existing timeout-policy review lane](https://github.com/ContextualWisdomLab/EgressWeave/pull/220#issuecomment-5559695131).
+This is a dependency request, not accepted architecture or implementation.
+
+The visible owner worktrees were inspected read-only: Actions concurrency,
+draft admission and #235 gateway migration are separate deltas. Their untracked
+lock/index/desktop files were preserved. No owner branch was taken over; no
+consumer source copy, release adoption or deadline activation occurred.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*
