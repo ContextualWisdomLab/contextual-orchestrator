@@ -5,11 +5,6 @@ import time
 
 import pytest
 
-from contextual_orchestrator.batch_routing import (
-    EmbeddingBatchRequest,
-    ProviderEmbeddingBatchBackend,
-)
-from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator import (
     CostRoutingCoordinator,
     InMemoryConfigStore,
@@ -17,6 +12,11 @@ from contextual_orchestrator import (
     PriceBook,
     PriceEntry,
     TaskOrchestrator,
+)
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory
+from contextual_orchestrator.batch_routing import (
+    EmbeddingBatchRequest,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -87,7 +87,7 @@ def test_unknown_tokenizer_uses_authoritative_provider_usage(monkeypatch) -> Non
         )
 
         assert document["status"] == "completed"
-        assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
+        assert document["total_tokens"] == len(b"synthetic input")
         assert document["cost_micro_usd"] > 0
     finally:
         release.set()

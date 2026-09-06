@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 provider-usage test completion contract
+
+The availability-repair full suites are terminal: clean parent `6ca30364`
+passes **3,520 tests/two skips**; clean child `0707e524` has **one failure,
+3,534 passes/two skips**. The failed provider-usage test assumed an
+asynchronous batch had completed immediately. Barrier RED `cfef8462`
+reproduces that mismatch without relying on thread scheduling. Test-only
+`8d1ea613` uses the existing explicit wait contract in both affected tests,
+including the three Unicode cases, while preserving usage/cost assertions
+and cleaning up their worker resources. **137 related tests pass in 16.64
+seconds**, exit 0. No runtime, provider timeout, estimator, or production
+policy changes. The original failed full remains evidence; the
+[doctoring follow-up](doctoring/measured-routing-evidence.md#evaluation-policy-attribution-2026-09-06)
+records exact results and the separate corrected-full requirement. Actual
+Edge desktop screenshots of the PRs, collector diff, document diagram and KPI
+table were inspected; this is not product-admin/mobile E2E or deployed proof.
+
 ## 2026-09-06 availability and answer-quality boundary
 
 Committed RED `450599f1` reproduces eight failures: uptime polling changes
