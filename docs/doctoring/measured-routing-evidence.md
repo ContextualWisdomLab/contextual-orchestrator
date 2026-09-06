@@ -144,6 +144,55 @@ not a Python clone. No production default or psychometric admission gate is
 opened. Independent review, terminal required checks, protected merge,
 immutable release, and observed buyer-held-out evidence remain necessary.
 
+### Endpoint author and slug path repair (2026-09-06)
+
+**Proposed collection repair.** The official OpenRouter endpoint contract uses
+`/models/{author}/{slug}/endpoints`. Encoding the entire model identifier as one
+segment instead produced `/models/openai%2Fgpt-4o/endpoints`. Public metadata
+GETs reproduced HTTP 404 for that address and HTTP 200 for the documented
+two-segment address, including repeats with curl configuration disabled.
+These checks supplied no provider credential and performed no model inference.
+
+Source `98cdc3ec02d0121e8788c31c2bd2e775b8270ded` validates exactly two
+nonempty, non-dot path segments and encodes each separately with the existing
+stdlib URL encoder. Invalid identifiers return no measurement before I/O.
+We retained the fixed HTTPS origin and existing fetch/error path instead of
+adding a client abstraction or dependency. This changes neither authentication
+nor redirect handling, response-size limits, statistical estimation, or routing
+weights. Discovery identifiers outside the documented author/slug shape now
+contribute no update. The separately documented authentication contract still
+requires review; one anonymous public response does not prove fleet access.
+
+Committed RED `aee1e4973a491ae66c04dc3cd3ca7e10912c8488` has **16 failures,
+61 passes in 1.28 seconds**, exit 1: five exact request-path cases and eleven
+malformed identifiers. Tests include reserved characters, Unicode, literal
+percent escapes, extra separators, empty segments, and dot segments. They
+assert GET, the existing ten-second metadata timeout, no Authorization header,
+response closure, and no transport call for malformed identifiers. This does
+not claim coverage of non-string inputs or all transport security behavior.
+
+At source `98cdc3ec`, **147 related tests pass in 4.80 seconds**, exit 0.
+A separate 77-test run passes in 1.87 seconds and covers the changed fetch
+method at **18/18 statements and 6/6 branches**. Default Ruff passes. These
+are scoped results, not exhaustive input or repository-wide coverage.
+
+At 2026-09-06 12:05:50 UTC, an isolated invocation of the actual current-source
+collector successfully fetched `openai/gpt-4o` metadata and added window mass
+`[0.9997814685314685, 0.00021853146853145766]`; observed attempt count remained
+zero. No background service or model inference was started. This establishes
+one fetch-to-ledger integration, not sustained polling, deployed gateway
+behavior, observed delivery rate, calibrated correctness, or buyer latency.
+The endpoint maximum and overlapping-window interpretation remain open.
+
+Artifacts are retained in `/tmp/co-uptime-path.T7v9Rj`: RED/GREEN JUnit and
+logs, `coverage.json`, and `live-collector.log`. The HTTP baseline is in
+`/tmp/co-uptime-input.rjxaB9/live-endpoint-path-review.md`. The preceding input
+repair fulls completed at clean parent `db4d21da` (**3,566 passed/two skipped,
+739.03 seconds**) and child `5eebac47` (**3,581 passed/two skipped, 754.61
+seconds**), both exit 0 with matching start/end heads and parsed JUnit. They
+do not verify this later path repair. New-head full/hosted checks, independent
+review, Visual Inspection, protected merge, and release remain separate gates.
+
 ### Endpoint percentage input validation (2026-09-06)
 
 **Proposed input-boundary repair.** Availability evidence must come from a

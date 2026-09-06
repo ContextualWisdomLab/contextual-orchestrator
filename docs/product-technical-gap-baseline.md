@@ -1,5 +1,23 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 documented endpoint collection path
+
+Whole-identifier encoding produced HTTP 404 for `openai/gpt-4o`; the documented
+author/slug address returned HTTP 200 in public metadata checks. Committed RED
+`aee1e497` reproduces 16 request-path/admission failures. Source `98cdc3ec`
+validates two path segments and encodes each separately, with **147 related
+tests passing in 4.80 seconds**. The changed fetch method covers **18/18
+statements and 6/6 branches** in a separate 77-test run. One actual isolated
+current-source collector poll subsequently adds transport-window mass while
+leaving observed attempts at zero. No model inference, new dependency,
+estimator, or production weight is introduced. This is a collection repair,
+not a calibrated success probability or buyer accuracy/latency gain.
+The [Proposed evidence record](doctoring/measured-routing-evidence.md#endpoint-author-and-slug-path-repair-2026-09-06)
+preserves alternatives, source scope and limitations. Prior clean fulls at
+`db4d21da` (3,566 passes/two skips) and `5eebac47` (3,581 passes/two skips)
+completed with exit 0 but predate this repair. Both PRs stay Draft; new-head
+full, hosted, visual, independent-review and protected-release gates remain.
+
 ## 2026-09-06 endpoint percentage admission
 
 Malformed endpoint percentages could change transport evidence after numeric

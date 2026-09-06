@@ -54,6 +54,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Availability refresh now uses the provider's documented model address;
+  malformed model identifiers are rejected before a request is sent.
 - Invalid provider availability values no longer influence routing evidence;
   missing measurements remain unknown rather than counted as failures.
 - Provider availability updates no longer change answer-quality assessments
