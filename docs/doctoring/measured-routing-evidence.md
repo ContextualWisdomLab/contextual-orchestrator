@@ -144,6 +144,27 @@ not a Python clone. No production default or psychometric admission gate is
 opened. Independent review, terminal required checks, protected merge,
 immutable release, and observed buyer-held-out evidence remain necessary.
 
+### Full-suite follow-up: provider completion contract (2026-09-06)
+
+Full-suite follow-up to the availability repair: clean parent `6ca30364`
+completed **3,520 passed/two skipped/exit 0 in 1,624.03 seconds**. Child
+`0707e524` completed **one failed/3,534 passed/two skipped/exit 1 in 1,723.01
+seconds**. Matching clean start/end heads and JUnit are retained in the two
+`/tmp/co-1067-uptime-quality.OI92QL` and
+`/tmp/co-1074-uptime-quality.ji78pd` directories. Neither session is still live.
+
+The failure was a test contract error, not demonstrated availability-source
+breakage: `test_unknown_tokenizer_uses_authoritative_provider_usage` expected
+immediate completion from an asynchronous provider backend without supplying
+the existing explicit `wait_timeout`. Barrier-controlled RED `cfef8462`
+reproduces the same running-versus-completed failure deterministically in
+6.38 seconds. Test repair `8d1ea613` supplies that wait in the two affected
+tests (including three Unicode cases) and closes their resources. **137
+provider/batch/cost/registry tests pass in 16.64 seconds**, exit 0. Runtime
+asynchrony, provider-failure behavior, budget gates, exact token assertions,
+and production timeout policy are unchanged. This does not excuse the failed
+full run; corrected exact-head full runs must use separate artifacts.
+
 ### Evaluation-policy attribution (2026-09-06)
 
 An evaluation outcome must be attributed to the policy that actually produced
