@@ -62,5 +62,41 @@ def test_durable_bootstrap_report_uses_persisted_legacy_identity(monkeypatch, tm
     assert report.as_dict()["selected_agent_ids"] == [legacy_id]
 
 
+def test_durable_bootstrap_preserves_selected_model_order(tmp_path) -> None:
+    """Durable report order must match the selector instead of agent-ID sorting."""
+    selected = [
+        DiscoveredModel(
+            provider_name="z_provider",
+            model_id="cheap-model",
+            credential_name="Z_PROVIDER_API_KEY",
+            chat_base_url="https://z-provider.example/v1",
+            auth_scheme="Bearer",
+            prompt_price_per_1k=0.0,
+            completion_price_per_1k=0.0,
+            is_free=True,
+        ),
+        DiscoveredModel(
+            provider_name="a_provider",
+            model_id="expensive-model",
+            credential_name="A_PROVIDER_API_KEY",
+            chat_base_url="https://a-provider.example/v1",
+            auth_scheme="Bearer",
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+        ),
+    ]
+    expected_ids = tuple(
+        provider_bootstrap.agent_id_for(model) for model in selected
+    )
+    assert expected_ids != tuple(sorted(expected_ids))
+
+    enabled_ids = provider_bootstrap._synchronize_durable_agent_pool(
+        str(tmp_path / "ordered-agents.db"),
+        selected,
+    )
+
+    assert enabled_ids == expected_ids
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
