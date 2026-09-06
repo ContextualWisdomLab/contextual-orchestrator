@@ -232,6 +232,44 @@ def test_structured_sse_normal_chunks_carry_null_usage_when_include_usage() -> N
     assert usage_chunks[0]["usage"]["usage_source"] == "reported"
 
 
+def test_structured_sse_omits_unmeasured_workflow_usage() -> None:
+    chunks = _chat_response_sse_chunks(
+        {
+            "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            "cost": {"measurement_status": "estimated"},
+        },
+        model="structured-model",
+        include_usage=True,
+    )
+
+    assert all(chunk["choices"] for chunk in chunks)
+    assert all(chunk["usage"] is None for chunk in chunks)
+
+    measured = _chat_response_sse_chunks(
+        {
+            "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            "cost": {"measurement_status": "measured"},
+        },
+        model="structured-model",
+        include_usage=True,
+    )
+    assert measured[-1]["choices"] == []
+    assert measured[-1]["usage"]["usage_source"] == "reported"
+
+    missing_payload = {
+        "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+        "cost": {"measurement_status": "measured"},
+    }
+    missing = _chat_response_sse_chunks(
+        missing_payload,
+        model="structured-model",
+        include_usage=True,
+    )
+    assert all(chunk["choices"] for chunk in missing)
+
+
 def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
     orchestrator = TaskOrchestrator(
         [ModelAgent("structured_agent", "structured-model")],

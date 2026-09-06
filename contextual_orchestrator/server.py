@@ -5248,22 +5248,13 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
-        prompt_tokens = (
-            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        completion_tokens = (
-            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        if (
-            type(prompt_tokens) is int
-            and prompt_tokens >= 0
-            and type(completion_tokens) is int
-            and completion_tokens >= 0
+        cost = payload.get("cost")
+        if isinstance(cost, dict) and (
+            cost.get("measurement_status") != "measured"
+            or not isinstance(reported_usage, dict)
         ):
+            return chunks
+        if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
             measurement_status = "measured"
         else:
@@ -6957,14 +6948,10 @@ def build_server(
                         # unavailable otherwise; chat framing/tools are not reconstructed.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
-                        # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed when workflow-level usage is unavailable.
-                        if stream and include_usage and not tool_loop:
-                            raise RequestError(
-                                400,
-                                "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
-                            )
+                        # cost ledger, which may be unmeasured. Conduct-mode payloads
+                        # carry cost.measurement_status; SSE usage is emitted only when
+                        # that ledger is measured, so there is nothing to fail closed on
+                        # here — the stream still succeeds with usage omitted.
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body

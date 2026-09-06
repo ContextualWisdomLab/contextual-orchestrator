@@ -363,6 +363,12 @@ def test_structured_provider_workflow_records_each_reported_call() -> None:
     assert {record["workflow_run_id"] for record in records} == {
         result["orchestration"]["workflow_run_id"]
     }
+    client_call_count = len(records) - 1  # the model-group race loser is billed separately
+    assert result["usage"] == {
+        "prompt_tokens": 2 * client_call_count,
+        "completion_tokens": client_call_count,
+        "total_tokens": 3 * client_call_count,
+    }
 
 
 def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
@@ -401,6 +407,36 @@ def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
         (7, 3),
     }
     assert len(result["usage_record_ids"]) == 2
+
+
+def test_structured_unmeasured_race_loser_suppresses_response_usage() -> None:
+    coordinator = _coordinator()
+
+    def proxy_completion(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker", ("duplicate", "mock_worker", None)
+        )
+        return {
+            "model": "mock-a",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            "orchestration": {"workflow_run_id": "run_unmeasured_loser"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_unmeasured_loser",
+        "mode": "route",
+        "answer": "winner",
+        "trace": None,
+    }
+
+    result = coordinator.complete(
+        [{"role": "user", "content": "race"}],
+        provider_request={"model": "mock-a", "messages": []},
+    )
+
+    assert result["cost"]["measurement_status"] == "estimated"
+    assert "usage" not in result
 
 
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:

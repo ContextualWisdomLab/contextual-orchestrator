@@ -476,6 +476,10 @@ class CostRoutingCoordinator:
             usage = value[2]
         elif isinstance(value, dict):
             usage = value.get("usage")
+        counts = self._provider_usage(usage)
+        if counts is None:
+            context["race_usage_complete"] = False
+            return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
@@ -597,6 +601,7 @@ class CostRoutingCoordinator:
                 "workflow_ready": workflow_run_id is not None,
                 "records": [],
                 "pending_usage": [],
+                "race_usage_complete": True,
             }
             race_token = self._race_usage_context.set(race_context)
             try:
@@ -695,8 +700,29 @@ class CostRoutingCoordinator:
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "price_known": price_known,
-                "measurement_status": aggregate_measurement_status,
+                "measurement_status": (
+                    "estimated"
+                    if not race_context["race_usage_complete"]
+                    or any(record.measurement_status == "estimated" for record in records)
+                    else aggregate_measurement_status
+                ),
             }
+            if race_context["race_usage_complete"] and all(
+                record.measurement_status == "measured" for record in records
+            ):
+                race_ids = {record.usage_record_id for record in race_records}
+                client_records = [
+                    record for record in records if record.usage_record_id not in race_ids
+                ]
+                provider_response["usage"] = {
+                    "prompt_tokens": sum(record.prompt_tokens for record in client_records),
+                    "completion_tokens": sum(
+                        record.completion_tokens for record in client_records
+                    ),
+                    "total_tokens": sum(record.total_tokens for record in client_records),
+                }
+            else:
+                provider_response.pop("usage", None)
             if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
                 provider_response["cost"]["currency_components"] = [
                     {
@@ -731,6 +757,7 @@ class CostRoutingCoordinator:
             "workflow_ready": workflow_run_id is not None,
             "records": [],
             "pending_usage": [],
+            "race_usage_complete": True,
         }
         race_token = self._race_usage_context.set(race_context)
         try:
@@ -808,7 +835,7 @@ class CostRoutingCoordinator:
         client_usage_records = [
             item for item in records if item.usage_record_id not in race_record_ids
         ]
-        client_measurement_available = all(
+        client_measurement_available = race_context["race_usage_complete"] and all(
             item.measurement_status == "measured" for item in client_usage_records
         )
         result["usage"] = (
@@ -839,7 +866,12 @@ class CostRoutingCoordinator:
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
             "price_known": price_known,
-            "measurement_status": aggregate_measurement_status,
+            "measurement_status": (
+                "estimated"
+                if not race_context["race_usage_complete"]
+                or any(item.measurement_status == "estimated" for item in records)
+                else aggregate_measurement_status
+            ),
         }
         if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
             result["cost"]["currency_components"] = [
