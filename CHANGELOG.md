@@ -58,6 +58,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   outcome counts, and report paired mean elapsed-time uncertainty. Report
   version 2 replaces the previous success-conditioned comparison; original
   unscored answers remain unknown, and production review gates still apply.
+- In-flight requests retain their starting model-effort settings across
+  workflow steps, retries, and streaming; later requests can use updated settings.
 - Changing model-effort settings no longer reuses an answer cached under the
   previous settings. Saved run details retain the completed answer's settings.
 - Research materials now retain citations and source links when permission to

@@ -1,5 +1,14 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 request-effort parent synchronization
+
+This normal integration preserves child `2bf99a82` and parent `f660d71f`,
+including both complete baseline/changelog additions. Parent request-scope
+source, guards, and technical records are inherited unchanged; child NIM
+comparison, observed-data audit, and papers remain unchanged. Its previous
+3,485-pass full result does not verify this new integration. Draft status,
+parent-first protected delivery, and separate exact-head evidence remain.
+
 ## 2026-09-06 effort-cache parent synchronization
 
 This normal integration retains child `771fcff4` and parent `79d8d81d`,
@@ -130,6 +139,44 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+
+## 2026-09-06 request-local effort revision
+
+RED `beae9fb45f13d9401357444f0d527ba4be64645a` turns the remaining in-flight
+catalog problem into eight failing cases. Source
+`1eff633810e0269afda349ae8ccacba3bc9e447d` validates one catalog snapshot at
+each outer execution boundary and reuses it for role profiles, cache keys,
+effort identity, and result metadata. Independent requests stay concurrent;
+stream iteration/close uses an isolated context without leaking suspended
+state. Later requests observe updates, and returned batch records are detached.
+
+At guard head `1edf574b81a7d25c9eb54d47a10afd063375c1a6`, **317 integration
+tests pass in 18.90 seconds**. The request suite's 23 cases cover overlapping
+threads, nested orchestrators, stream cleanup, retry, invalid catalogs before
+execution, late opt-in, identity, cache replay, and subsequent updates.
+Seven scope/snapshot helpers cover **43/43 statements and 12/12 branches**;
+this is not whole-module or exhaustive interleaving coverage. The explicit
+changed-definition census against main `414f2297` is **173/173** documented.
+Test-only `ec3ad654` passes the 23 cases and the new test file's default Ruff
+selection. No lint rule, provider, production policy, or dependency is changed.
+
+Under a fixed one-worker unit fixture, validated catalog computations fall
+from **2 to 1 for route** and **5 to 1 for conduct**, with identical answers,
+snapshots, and selected identities. No-catalog executions remain at zero.
+These are exact operation counts, not measured latency or buyer accuracy.
+The [Proposed implementation record](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
+contains the product/technical contract, Y-Statement, alternatives, UML,
+reproduction commands, and evidence paths. The catalog guarantee does not
+extend to mutable deployment metadata, agent pools, or orchestration policy.
+
+The preceding frozen parent `79d8d81dc769bc3fcf681f3064bb07cdd0fb8978`
+completed **3,470 passed/two skipped in 665.66 seconds**; child
+`2bf99a82dccd9d551f3c51b73bc80fbab8543fab` completed **3,485 passed/two
+skipped in 664.51 seconds**, both exit 0 with identical clean start/end heads.
+Evidence: `/tmp/co-1067-effort-cache.u3eBJA` and
+`/tmp/co-1074-effort-cache.SClhY8`. Those full runs predate this request-scope
+repair and do not verify it. Current-head full/hosted checks, independent
+review, protected delivery, and released statistical/buyer evidence remain.
 
 ## 2026-09-06 effort-aware answer reuse and record attribution
 

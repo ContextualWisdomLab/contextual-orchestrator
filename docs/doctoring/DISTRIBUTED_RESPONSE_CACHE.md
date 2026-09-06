@@ -87,18 +87,19 @@ default selection still reports 31 findings already present in the RED
 orchestrator source, with identical code/message counts; it is not a full-lint
 success. Neither dependencies nor lint configuration were changed.
 
-### Remaining evidence limits
+### Limits of the sequential repair
 
 These are unit fixtures of declared settings, not evidence that a provider
 honors effort, an IRT construct is invariant, or routing quality improves.
 Snapshot hashing adds validation work to opted-in cached requests; no latency
 improvement is claimed. No-catalog requests avoid that additional validation.
-This patch does not provide one atomic settings revision across a long-running
-request, streaming, candidate selection, retries, policy changes, and catalog
-updates. Cache-disabled/bypass execution retains its existing validation timing.
-Do not mutate the catalog during an in-flight request and interpret its final
-metadata as proof that every attempt used that configuration. A request-scoped
-settings contract and its race tests remain a separate repair requirement.
+At `92858f33`, this patch did not provide a stable effort revision during an
+in-flight request, and cache-disabled/bypass execution kept its earlier
+validation timing. The later proposed
+[request-revision repair](reasoning-effort-profile.md#request-revision-contract-proposed)
+addresses that catalog-specific gap, including streaming, retry, and early
+validation. Neither repair freezes the agent pool and policy or proves that
+an upstream provider honors the declared controls.
 Hosted checks, independent review, protected delivery, and immutable release
 remain required before consumers adopt this unmerged change.
 

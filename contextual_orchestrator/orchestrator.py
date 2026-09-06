@@ -12,6 +12,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import wraps
+from inspect import isgeneratorfunction
 import http.client
 import io
 import ipaddress
@@ -82,11 +83,47 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
+    EffortCatalogSnapshot,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
 from .token_counting import TokenCountUnavailable, build_token_counter
+
+
+_REQUEST_EFFORT_SNAPSHOT: ContextVar[tuple[object, EffortCatalogSnapshot | None] | None] = ContextVar(
+    "contextual_orchestrator_request_effort_snapshot", default=None
+)
+
+
+def _request_effort_scoped(method: Callable) -> Callable:
+    """Share one catalog revision across nested calls without leaking suspended streams."""
+    if isgeneratorfunction(method):
+        @wraps(method)
+        def scoped_stream(self, *args, **kwargs):
+            """Advance and close a stream in its own captured request context."""
+            with self._request_effort_scope():
+                context = copy_context()
+                stream = method(self, *args, **kwargs)
+            exhausted = object()
+            try:
+                while True:
+                    item = context.run(next, stream, exhausted)
+                    if item is exhausted:
+                        return
+                    yield item
+            finally:
+                context.run(stream.close)
+
+        return scoped_stream
+
+    @wraps(method)
+    def scoped_call(self, *args, **kwargs):
+        """Restore the caller's context after a synchronous result or exception."""
+        with self._request_effort_scope():
+            return method(self, *args, **kwargs)
+
+    return scoped_call
 
 
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
@@ -5168,6 +5205,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
+    @_request_effort_scoped
     def complete(
         self,
         messages: list[ChatMessage],
@@ -5247,6 +5285,7 @@ class TaskOrchestrator:
             )
         )
 
+    @_request_effort_scoped
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -5368,10 +5407,9 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
-        if self.role_effort_catalog is not None:
-            parameters["reasoning_effort_snapshot_hash"] = snapshot_role_effort_catalog(
-                self.role_effort_catalog
-            ).snapshot_hash
+        effort_snapshot = self._effort_snapshot()
+        if effort_snapshot is not None:
+            parameters["reasoning_effort_snapshot_hash"] = effort_snapshot.snapshot_hash
         endpoint_partition = _request_endpoint_partition()
         cache_partition = (
             endpoint_partition
@@ -5531,6 +5569,7 @@ class TaskOrchestrator:
         )
         return output_tokens, round(output_cost, 6)
 
+    @_request_effort_scoped
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -6317,6 +6356,7 @@ class TaskOrchestrator:
             {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
         )
 
+    @_request_effort_scoped
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -6519,6 +6559,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @_request_effort_scoped
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -6764,11 +6805,34 @@ class TaskOrchestrator:
                 + ", ".join(unsupported_roles)
             )
 
+    @contextmanager
+    def _request_effort_scope(self):
+        """Validate once per outer request; preserve nested calls and other instances."""
+        active = _REQUEST_EFFORT_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            yield
+            return
+        token = _REQUEST_EFFORT_SNAPSHOT.set((self, self._effort_snapshot()))
+        try:
+            yield
+        finally:
+            _REQUEST_EFFORT_SNAPSHOT.reset(token)
+
+    def _effort_snapshot(self) -> EffortCatalogSnapshot | None:
+        """Read this request's catalog, or validate a fresh standalone-operation copy."""
+        active = _REQUEST_EFFORT_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            return active[1]
+        catalog = self.role_effort_catalog
+        return snapshot_role_effort_catalog(dict(catalog)) if catalog is not None else None
+
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
-        """Return the opt-in profile bound to one workflow role."""
-        if self.role_effort_catalog is None:
+        """Return the validated role profile from the active request revision."""
+        snapshot = self._effort_snapshot()
+        if snapshot is None:
             return None
-        return self.role_effort_catalog.get(role)
+        profile = snapshot.role_profiles.get(role)
+        return ReasoningEffortProfile(**profile) if profile is not None else None
 
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
         """Attach a replayable role-effort snapshot when the operator opted in.
@@ -6777,13 +6841,13 @@ class TaskOrchestrator:
         on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
         the constructor catalog to keep today's payload.
         """
-        if self.role_effort_catalog is None:
+        snapshot = self._effort_snapshot()
+        if snapshot is None:
             return result
-        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
         result["reasoning_effort_snapshot"] = {
             "profile_version": snapshot.profile_version,
             "snapshot_hash": snapshot.snapshot_hash,
-            "role_profiles": snapshot.role_profiles,
+            "role_profiles": copy.deepcopy(snapshot.role_profiles),
         }
         return result
 
@@ -7108,20 +7172,17 @@ class TaskOrchestrator:
         return self._psychometric_candidate_ids((agent,))[0]
 
     def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
-        """Bind an ordered batch to one freshly validated decode-policy snapshot.
+        """Bind an ordered batch to the request's validated decode-policy snapshot.
 
-        Materialize inputs before taking the snapshot; preserve repeated agents.
-        Nothing is cached across calls, so mutable catalog and deployment
-        configuration changes remain visible to the next operation.
+        Materialize inputs and preserve repeated agents. Standalone operations
+        validate a fresh catalog; request-nested operations reuse its revision.
+        Deployment configuration is read per operation, not frozen per request.
         """
         agents = list(agents)
         if not agents:
             return []
-        effort_catalog = (
-            snapshot_role_effort_catalog(self.role_effort_catalog).snapshot_hash
-            if self.role_effort_catalog is not None
-            else None
-        )
+        effort_snapshot = self._effort_snapshot()
+        effort_catalog = effort_snapshot.snapshot_hash if effort_snapshot is not None else None
         candidate_ids = []
         for agent in agents:
             configuration = json.dumps(
