@@ -6296,22 +6296,22 @@ class TaskOrchestrator:
             else agent
             for agent in self.candidates
         ]
-        self.candidates = updated
-        self.agents = [agent for agent in updated if not agent.disabled]
         changed = {
             before.id
             for before, after in zip(previous_candidates, updated)
             if before.group_name != after.group_name
         }
-        self._routers_reset_members(changed)
-        for agent_id in changed:
-            self._routers_register_member(agent_id)
         for agent in updated:
             if agent.id in requested:
                 if self._pool_store is not None:
                     self._pool_store.save(agent)
             elif agent.id in previous and self._pool_store is not None:
                 self._pool_store.save(agent)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
+        self._routers_reset_members(changed)
+        for agent_id in changed:
+            self._routers_register_member(agent_id)
         self._routers_forget_members({agent.id for agent in updated})
         self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
         return self.get_model_group(name)
@@ -6321,15 +6321,16 @@ class TaskOrchestrator:
         current = self.get_model_group(group_name)
         name = current["group_name"]
         member_ids = set(current["member_agent_ids"])
+        updated = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
+        if self._pool_store is not None:
+            for agent in updated:
+                if agent.id in member_ids:
+                    self._pool_store.save(agent)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
         self._routers_reset_members(member_ids)
         for agent_id in member_ids:
             self._routers_register_member(agent_id)
-        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
-        self.agents = [agent for agent in self.candidates if not agent.disabled]
-        if self._pool_store is not None:
-            for agent in self.candidates:
-                if agent.id in member_ids:
-                    self._pool_store.save(agent)
         self._routers_forget_members({agent.id for agent in self.candidates})
         self._append_audit_event("model_group_deleted", {"group_name": name})
         return {"group_name": name, "deleted": True}
@@ -6425,14 +6426,13 @@ class TaskOrchestrator:
             agent for agent in self.candidates if agent.id != worker_agent_id
         ]
         self._require_role_effort_pool(remaining_candidates)
+        if self._pool_store is not None:
+            # Persist the tombstone before removing the serving candidate.
+            self._pool_store.save(replace(target, disabled=True, group_name=""))
         self.candidates = remaining_candidates
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
-        if self._pool_store is not None:
-            # Disabled tombstone (not a row delete): it overlays the seed file on restart
-            # and startup drops disabled agents, so removal survives even for seed agents.
-            self._pool_store.save(replace(target, disabled=True, group_name=""))
         self._append_audit_event(
             "agent_removed",
             {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
