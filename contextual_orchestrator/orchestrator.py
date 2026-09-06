@@ -50,6 +50,7 @@ from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
     ProviderUpstreamError,
     classify_provider_failure,
     provider_error_body,
@@ -4577,6 +4578,17 @@ class TaskOrchestrator:
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
+                    if isinstance(exc, (TimeoutError, ConnectionError)):
+                        # No acceptance evidence: classify without enabling replay.
+                        raise ProviderUpstreamError(
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                            message="the provider request outcome is unknown; automatic replay is unsafe",
+                            client_status=502,
+                            retryable=False,
+                            transport="passthrough",
+                        ) from None
                     if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
                         raise classify_provider_failure(
                             exc,

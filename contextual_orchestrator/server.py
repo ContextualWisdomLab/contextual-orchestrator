@@ -57,7 +57,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import ProviderUpstreamError
+from .provider_errors import PROVIDER_OUTCOME_UNKNOWN_CODE, ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -8233,8 +8233,8 @@ def build_server(
                 "request_failed status=%s code=%s request_id=%s", status, code, safe_request_id
             )
             payload = _error_payload(code, message, error_detail)
-            if code == TOOL_FALLBACK_STOPPED_CODE:
-                # The SDK retries ordinary 409s; this explicit stop must not replay.
+            if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
+                # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
                 self._send(payload, status, extra_headers={"x-should-retry": "false"})
             else:
                 self._send(payload, status)

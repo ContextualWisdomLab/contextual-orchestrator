@@ -27,6 +27,7 @@ import urllib.error
 from typing import Any
 
 __all__ = [
+    "PROVIDER_OUTCOME_UNKNOWN_CODE",
     "MAX_PROVIDER_ERROR_BODY_BYTES",
     "MAX_SAFE_MESSAGE_CHARS",
     "PROVIDER_STATUS_SURFACES",
@@ -35,6 +36,8 @@ __all__ = [
     "provider_error_body",
     "safe_provider_message",
 ]
+
+PROVIDER_OUTCOME_UNKNOWN_CODE = "provider_outcome_unknown"
 
 #: Upper bound for any provider-supplied message that reaches a caller.
 MAX_SAFE_MESSAGE_CHARS = 300
