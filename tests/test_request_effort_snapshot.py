@@ -39,6 +39,27 @@ def _change_effort(catalog, effort="high"):
     catalog.update({role: replace(profile, reasoning_effort=effort) for role, profile in catalog.items()})
 
 
+def test_standalone_role_lookup_preserves_partial_catalog():
+    """A single-role adapter is not a full request, even inside another gateway's scope."""
+    outer, _unused_catalog = _orchestrator()
+    inner, catalog = _orchestrator()
+    judge_profile = replace(catalog["judge"], reasoning_effort="low")
+    inner.role_effort_catalog = {"judge": judge_profile}
+    try:
+        assert inner._role_effort_profile("judge") is judge_profile
+        assert inner._role_effort_profile("worker") is None
+        with outer._request_effort_scope():
+            assert inner._role_effort_profile("judge") is judge_profile
+            with pytest.raises(EffortProfileError, match="catalog must bind exactly"):
+                inner.complete([{"role": "user", "content": "partial catalog unit fixture"}])
+            assert outer._role_effort_profile("judge").reasoning_effort == "medium"
+        inner.role_effort_catalog = None
+        assert inner._role_effort_profile("judge") is None
+    finally:
+        inner.close()
+        outer.close()
+
+
 @pytest.mark.parametrize(
     ("entry_point", "options"),
     [
