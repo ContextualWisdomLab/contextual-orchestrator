@@ -129,6 +129,62 @@ def test_mock_embedding_vectors_are_deterministic() -> None:
     assert len(first) == orchestrator.client.MOCK_EMBEDDING_DIMENSION
 
 
+def test_embed_cached_records_candidate_attempt_only_on_provider_call() -> None:
+    """``_embed_cached`` calls ``client.embed`` directly (not through
+    ``_invoke``, which self-instruments), so it must record its own attempt --
+    but only when a provider call actually happens: a cache hit must not
+    falsely appear in ``attempted_candidate_ids`` evidence (#983 Devin
+    finding: "Attempt evidence omits provider calls")."""
+    orchestrator = _orch(
+        ModelAgent("embedding_member", "mock-embed", tags=("embedding",)),
+        ModelAgent("worker_agent", "mock-worker", tags=("reasoning",)),
+        ModelAgent("other_worker_agent", "mock-worker-2", tags=("reasoning",)),
+    )
+
+    # An embedding-only agent is not a general chat agent, so it cannot be
+    # pinned via routing.candidate_id -- excluding an unrelated candidate
+    # instead is enough to activate evidence collection (a second general
+    # chat agent stays eligible so the exclusion preflight itself passes).
+    with orchestrator.candidate_routing_policy({"exclude_candidate_ids": ["worker_agent"]}):
+        first = orchestrator._embed_cached("some task text")
+        first_evidence = orchestrator._candidate_routing_evidence({"trace": []})
+    with orchestrator.candidate_routing_policy({"exclude_candidate_ids": ["worker_agent"]}):
+        second = orchestrator._embed_cached("some task text")
+        second_evidence = orchestrator._candidate_routing_evidence({"trace": []})
+
+    assert first is not None and first == second
+    assert first_evidence["attempted_candidate_ids"] == ["embedding_member"]
+    assert second_evidence["attempted_candidate_ids"] == []
+
+
+def test_descriptor_vector_cached_records_candidate_attempt_only_on_provider_call() -> None:
+    """Mirror of the task-vector case above for the per-agent descriptor
+    embedding cache used by declaration-only affinity ranking (#983 Devin
+    finding: "Attempt evidence omits provider calls")."""
+    embedding_member = ModelAgent("embedding_member", "mock-embed", tags=("embedding",))
+    worker = ModelAgent("worker_agent", "mock-worker", tags=("reasoning",))
+    other_worker = ModelAgent("other_worker_agent", "mock-worker-2", tags=("reasoning",))
+    orchestrator = _orch(embedding_member, worker, other_worker)
+
+    # An embedding-only agent is not a general chat agent, so it cannot be
+    # pinned via routing.candidate_id -- excluding an unrelated candidate
+    # instead is enough to activate evidence collection.
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["other_worker_agent"]}
+    ):
+        first = orchestrator._descriptor_vector_cached(worker)
+        first_evidence = orchestrator._candidate_routing_evidence({"trace": []})
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["other_worker_agent"]}
+    ):
+        second = orchestrator._descriptor_vector_cached(worker)
+        second_evidence = orchestrator._candidate_routing_evidence({"trace": []})
+
+    assert first is not None and first == second
+    assert first_evidence["attempted_candidate_ids"] == ["embedding_member"]
+    assert second_evidence["attempted_candidate_ids"] == []
+
+
 def test_no_embedding_member_disables_affinity_entirely() -> None:
     agent = ModelAgent("plain_agent", "mock", tags=("reasoning",))
     orchestrator = _orch(agent)

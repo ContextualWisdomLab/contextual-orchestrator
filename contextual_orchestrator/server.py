@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from email.message import Message
 from http.cookies import CookieError, SimpleCookie
@@ -3172,7 +3173,7 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
 
 
 def _validate_routing(
-    routing: Any, *, allow_endpoint: bool = False
+    routing: Any, *, allow_candidate_controls: bool = False, allow_endpoint: bool = False
 ) -> dict[str, Any] | None:
     """OpenAI-adjacent routing hints for sync vs batch channel selection.
 
@@ -3185,6 +3186,8 @@ def _validate_routing(
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
     allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_candidate_controls:
+        allowed.update({"candidate_id", "exclude_candidate_ids"})
     if allow_endpoint:
         allowed.add("endpoint")
     unknown = sorted(set(routing) - allowed)
@@ -3231,6 +3234,50 @@ def _validate_routing(
         priority = routing.get("priority")
         if isinstance(priority, str) and priority.strip():
             cleaned["priority"] = priority.strip().lower()
+    candidate_id = routing.get("candidate_id")
+    if candidate_id is not None:
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or candidate_id != candidate_id.strip()
+        ):
+            raise RequestError(
+                400, "invalid_routing", "routing.candidate_id must be a non-empty string"
+            )
+        cleaned["candidate_id"] = candidate_id.strip()
+    excluded = routing.get("exclude_candidate_ids")
+    if excluded is not None:
+        if not isinstance(excluded, list):
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.exclude_candidate_ids must be an array of agent IDs",
+            )
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            for value in excluded
+        ):
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.exclude_candidate_ids must contain non-empty strings",
+            )
+        normalized = [value.strip() for value in excluded]
+        if len(normalized) != len(set(normalized)):
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.exclude_candidate_ids must contain unique agent IDs",
+            )
+        cleaned["exclude_candidate_ids"] = normalized
+    if cleaned.get("candidate_id") in set(cleaned.get("exclude_candidate_ids", ())):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.candidate_id cannot also be excluded",
+        )
     if "endpoint" in routing:
         endpoint = routing.get("endpoint")
         if not isinstance(endpoint, str) or not endpoint.strip():
@@ -3256,6 +3303,27 @@ def _validate_routing(
     if "endpoint" in cleaned:
         cleaned["channel"] = "sync"
     return cleaned if cleaned else {}
+
+
+def _validate_candidate_routing(
+    orchestrator: TaskOrchestrator,
+    routing: dict[str, Any] | None,
+    model_name: str,
+    *,
+    required_roles: tuple[str, ...] = ("worker",),
+    required_tags: tuple[str, ...] = (),
+) -> None:
+    """Fail closed on candidate controls before any response bytes are sent."""
+    try:
+        with orchestrator.candidate_routing_policy(
+            routing,
+            model_name=model_name,
+            required_roles=required_roles,
+            required_tags=required_tags,
+        ):
+            pass
+    except ValueError as exc:
+        raise RequestError(400, "invalid_routing", str(exc)) from exc
 
 
 def _validate_batch_requests(
@@ -5463,6 +5531,8 @@ def _orchestrated_response(
         response["usage_record_ids"] = result["usage_record_ids"]
     if result.get("cost") is not None:
         response["cost"] = result["cost"]
+    if result.get("candidate_routing") is not None:
+        response["orchestration"] = {"routing": result["candidate_routing"]}
     return response
 
 
@@ -6571,7 +6641,7 @@ def build_server(
                 request_policy.__enter__()
                 if path in {"/v1/chat/completions", "/v1/responses"}:
                     endpoint_routing = _validate_routing(
-                        body.get("routing"), allow_endpoint=True
+                        body.get("routing"), allow_candidate_controls=True, allow_endpoint=True
                     )
                     endpoint_policy = orchestrator.routing_endpoint_scope(
                         endpoint_routing.get("endpoint") if endpoint_routing else None,
@@ -6913,6 +6983,29 @@ def build_server(
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
+                    # Reuse the routing already validated once for endpoint
+                    # scoping above instead of re-validating the same
+                    # body.get("routing") with identical args (#983) --
+                    # _validate_routing is pure, so this is behavior-preserving
+                    # and keeps the two call sites from drifting apart.
+                    request_routing = endpoint_routing
+                    # Preflight against the request's own required tags (e.g. an
+                    # image-bearing message needs "vision") the same way the
+                    # ordinary chat and orchestrated Responses branches do, so an
+                    # incompatible pin fails closed here with invalid_routing
+                    # instead of surfacing later as a generic execution error
+                    # (#983).
+                    structured_routing_messages = _validate_messages(body.get("messages"))
+                    _validate_candidate_routing(
+                        orchestrator,
+                        request_routing,
+                        model_name,
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(structured_routing_messages)
+                            else ()
+                        ),
+                    )
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -7001,21 +7094,62 @@ def build_server(
                             self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
-                            proxied = self._run(
-                                lambda: orchestrator.proxy_completion(
-                                    body,
-                                    endpoint="chat/completions",
-                                    single_agent=True,
-                                )
-                            )
+                            def proxy_tool_request() -> dict[str, Any]:
+                                with orchestrator.candidate_routing_policy(
+                                    request_routing, model_name=model_name
+                                ):
+                                    result = orchestrator.proxy_completion(
+                                        body,
+                                        endpoint="chat/completions",
+                                        single_agent=True,
+                                    )
+                                evidence = result.pop("_candidate_routing", None)
+                                # Only republish gateway-computed evidence,
+                                # and never assume the provider's own
+                                # "orchestration" field (if any) is a
+                                # mapping -- both are untrusted provider
+                                # response content (#983 Devin findings:
+                                # "Provider fields forge routing evidence"
+                                # and "Provider metadata crashes tool
+                                # responses"). Without an active candidate
+                                # control, proxy_completion() never sets
+                                # `_candidate_routing` itself, so observing
+                                # one here can only mean it arrived
+                                # already-present on the provider's raw
+                                # response body.
+                                if evidence is not None and orchestrator._has_active_candidate_controls(
+                                    request_routing
+                                ):
+                                    orchestration = result.get("orchestration")
+                                    if not isinstance(orchestration, dict):
+                                        orchestration = {}
+                                        result["orchestration"] = orchestration
+                                    orchestration["routing"] = evidence
+                                return result
+
+                            proxied = self._run(proxy_tool_request)
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(
-                                body.get("routing"), allow_endpoint=True
+                            structured_routing = request_routing
+                            # Candidate controls force synchronous execution the
+                            # same way CostRoutingCoordinator.complete() does for
+                            # ordinary chat (cost_router.py has_candidate_controls);
+                            # only reject deferred batch hints when no candidate
+                            # control is active to pin/exclude a candidate.
+                            structured_has_candidate_controls = bool(
+                                structured_routing
+                                and (
+                                    structured_routing.get("candidate_id")
+                                    or structured_routing.get("exclude_candidate_ids")
+                                )
                             )
-                            if structured_routing and (
-                                structured_routing.get("channel") == "batch"
-                                or structured_routing.get("latency_tolerant") is True
+                            if (
+                                not structured_has_candidate_controls
+                                and structured_routing
+                                and (
+                                    structured_routing.get("channel") == "batch"
+                                    or structured_routing.get("latency_tolerant") is True
+                                )
                             ):
                                 raise RequestError(
                                     400,
@@ -7098,83 +7232,116 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
+                    _validate_candidate_routing(
+                        orchestrator,
+                        request_routing,
+                        model_name,
+                        required_roles=orchestrator.candidate_pin_required_roles(
+                            mode, model_name
+                        ),
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(messages)
+                            else ()
+                        ),
                     )
-                    if route_stream:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use Responses streaming",
-                            )
-                        include_trace = False
-                    elif include_trace:
-                        self._authorize_trace_access()
-                    # stream + stream_options already coerced/validated before passthrough.
-                    attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(
-                        body.get("routing"), allow_endpoint=True
-                    )
-                    # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the caller selected on the chat Completions path.
-                    # The pool was validated before the structured/passthrough
-                    # branch so every chat shape shares the same client-error contract.
-                    attribution = dict(attribution or {})
-                    # OpenAI chat ``user`` → account when unset.
-                    # Same fail-closed rules as Completions: present key must be a
-                    # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
-                    end_user_id = _validate_completions_user(body)
-                    if end_user_id is not None and not attribution.get("account"):
-                        attribution["account"] = end_user_id
-                    if model_name and not attribution.get("model_name"):
-                        attribution["model_name"] = model_name
-                    if not attribution.get("service"):
-                        attribution["service"] = "chat_completions_api"
-                    # sampling/controls already validated before passthrough branch.
-                    if "metadata" in body:
-                        _validate_openai_metadata(body)
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    with model_client.request_settings(
-                        max_output_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        presence_penalty=presence_penalty,
-                        frequency_penalty=frequency_penalty,
+                    # This scope stays open across both the would_route triage
+                    # decision and (for the streaming branch) the streamed
+                    # provider execution, so both share one attempted-candidate
+                    # list instead of the triage attempt being recorded in a
+                    # scope that closes before the stream starts (see #983).
+                    with orchestrator.candidate_routing_policy(
+                        request_routing, model_name=model_name
                     ):
+                        route_stream = bool(
+                            stream and orchestrator.would_route(messages, mode, model_name)
+                        )
                         if route_stream:
-                            self._stream_route_completion(
-                                orchestrator,
-                                security,
-                                messages,
-                                model_name,
-                                include_usage=include_usage,
-                            )
-                            orchestrator.record_analytics_event(
-                                "chat_completion_requested",
-                                {
-                                    "endpoint_path": "/v1/chat/completions",
-                                    "actor_scope": "inference",
-                                    "status_code": 200,
-                                    "run_mode": "route",
-                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                    "response_streamed": True,
-                                },
-                            )
+                            if explicit_trace:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use Responses streaming",
+                                )
+                            include_trace = False
+                            with model_client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                            ):
+                                self._stream_route_completion(
+                                    orchestrator,
+                                    security,
+                                    messages,
+                                    model_name,
+                                    routing=request_routing,
+                                    include_usage=include_usage,
+                                    candidate_scope_open=True,
+                                )
+                                orchestrator.record_analytics_event(
+                                    "chat_completion_requested",
+                                    {
+                                        "endpoint_path": "/v1/chat/completions",
+                                        "actor_scope": "inference",
+                                        "status_code": 200,
+                                        "run_mode": "route",
+                                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                        "response_streamed": True,
+                                    },
+                                )
                             return
-                        result = self._run(lambda: coordinator.complete(
-                            messages,
-                            mode=mode,
-                            attribution=attribution,
-                            hints=routing,
-                            model_name=model_name,
-                            workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
-                            cache_partition=cache_partition,
-                            owner_id=security.principal_id(self.headers),
-                            zdr_only=zdr_only,
-                        ))
+                        if include_trace:
+                            self._authorize_trace_access()
+                        # stream + stream_options already coerced/validated before passthrough.
+                        attribution = _validate_attribution(body.get("attribution"))
+                        routing = request_routing
+                        # Require model — silent default to contextual-orchestrator hid
+                        # which deployment the caller selected on the chat Completions path.
+                        # The pool was validated before the structured/passthrough
+                        # branch so every chat shape shares the same client-error contract.
+                        attribution = dict(attribution or {})
+                        # OpenAI chat ``user`` → account when unset.
+                        # Same fail-closed rules as Completions: present key must be a
+                        # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
+                        end_user_id = _validate_completions_user(body)
+                        if end_user_id is not None and not attribution.get("account"):
+                            attribution["account"] = end_user_id
+                        if model_name and not attribution.get("model_name"):
+                            attribution["model_name"] = model_name
+                        if not attribution.get("service"):
+                            attribution["service"] = "chat_completions_api"
+                        # sampling/controls already validated before passthrough branch.
+                        if "metadata" in body:
+                            _validate_openai_metadata(body)
+                        with model_client.request_settings(
+                            max_output_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            presence_penalty=presence_penalty,
+                            frequency_penalty=frequency_penalty,
+                        ):
+                            # candidate_scope_open=True: this whole branch (including
+                            # the would_route triage call above) runs inside the one
+                            # candidate_routing_policy scope opened at the top of this
+                            # block, so the triage attempt is not lost when it decides
+                            # to conduct instead of route (#983).
+                            result = self._run(lambda: coordinator.complete(
+                                messages,
+                                mode=mode,
+                                attribution=attribution,
+                                hints=routing,
+                                model_name=model_name,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                                owner_id=security.principal_id(self.headers),
+                                zdr_only=zdr_only,
+                                candidate_scope_open=True,
+                            ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -7498,6 +7665,15 @@ def build_server(
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
                     model_name = _validate_responses_model(body)
+                    # Reuse the routing already validated once for endpoint
+                    # scoping above instead of re-validating the same
+                    # body.get("routing") with identical args (#983) --
+                    # _validate_routing is pure, so this is behavior-preserving
+                    # and keeps the two call sites from drifting apart.
+                    responses_routing_control = endpoint_routing
+                    _validate_candidate_routing(
+                        orchestrator, responses_routing_control, model_name
+                    )
                     _validate_responses_conversation_controls(body)
                     if "store" in body:
                         _validate_responses_store(body)
@@ -7611,17 +7787,36 @@ def build_server(
                     if "metadata" in body:
                         _validate_openai_metadata(body)
                     if "routing" in body:
-                        routing = _validate_routing(
-                            body.get("routing"), allow_endpoint=True
-                        )
+                        routing = responses_routing_control
                         # Responses passthrough has no batch channel plane yet.
-                        if routing and routing.get("channel") == "batch":
+                        # Candidate controls force synchronous execution the
+                        # same way CostRoutingCoordinator.complete() and
+                        # structured chat do (cost_router.py
+                        # has_candidate_controls); only reject deferred batch
+                        # hints when no candidate control is active to pin or
+                        # exclude a candidate (#983 finding 1).
+                        responses_has_candidate_controls = bool(
+                            routing
+                            and (
+                                routing.get("candidate_id")
+                                or routing.get("exclude_candidate_ids")
+                            )
+                        )
+                        if (
+                            not responses_has_candidate_controls
+                            and routing
+                            and routing.get("channel") == "batch"
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_routing",
                                 "routing.channel=batch is not supported on /v1/responses",
                             )
-                        if routing and routing.get("latency_tolerant") is True:
+                        if (
+                            not responses_has_candidate_controls
+                            and routing
+                            and routing.get("latency_tolerant") is True
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_routing",
@@ -7667,6 +7862,21 @@ def build_server(
                                 "file_provider_unavailable",
                                 "no common referenced file provider is available",
                             )
+                        pinned = (responses_routing_control or {}).get("candidate_id")
+                        excluded = set(
+                            (responses_routing_control or {}).get(
+                                "exclude_candidate_ids", ()
+                            )
+                        )
+                        if (
+                            (pinned is not None and pinned not in valid_agents)
+                            or not (valid_agents - excluded)
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "candidate controls are incompatible with referenced file providers",
+                            )
                         body["_file_replicas"] = provider_ids
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
@@ -7707,6 +7917,20 @@ def build_server(
                         TaskOrchestrator.AUTO_MODEL,
                         TaskOrchestrator.FREE_MODEL,
                     } and stream:
+                        messages = _responses_to_chat_payload(body)["messages"]
+                        _validate_candidate_routing(
+                            orchestrator,
+                            responses_routing_control,
+                            model_name,
+                            required_roles=orchestrator.candidate_pin_required_roles(
+                                "auto", model_name
+                            ),
+                            required_tags=(
+                                ("vision",)
+                                if orchestrator._source_image_parts(messages)
+                                else ()
+                            ),
+                        )
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
                                 400,
@@ -7733,7 +7957,6 @@ def build_server(
                                 "invalid_response_format",
                                 "structured output is not supported for streamed orchestrated Responses requests",
                             )
-                        messages = _responses_to_chat_payload(body)["messages"]
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
                             orchestrator,
@@ -7742,6 +7965,7 @@ def build_server(
                             model_name,
                             coordinator=coordinator,
                             attribution=responses_attribution,
+                            routing=responses_routing_control,
                         )
                         orchestrator.record_analytics_event(
                             "responses_orchestrated",
@@ -7772,6 +7996,19 @@ def build_server(
                         and not _responses_virtual_requires_provider_path(input_value, body)
                     ):
                         messages = _responses_to_chat_payload(body)["messages"]
+                        _validate_candidate_routing(
+                            orchestrator,
+                            responses_routing_control,
+                            model_name,
+                            required_roles=orchestrator.candidate_pin_required_roles(
+                                "auto", model_name
+                            ),
+                            required_tags=(
+                                ("vision",)
+                                if orchestrator._source_image_parts(messages)
+                                else ()
+                            ),
+                        )
                         responses_attribution = dict(
                             _validate_attribution(body.get("attribution")) or {}
                         )
@@ -7780,11 +8017,7 @@ def build_server(
                             responses_attribution["account"] = responses_user_id
                         responses_attribution.setdefault("model_name", body["model"])
                         responses_attribution.setdefault("service", "responses_api")
-                        responses_routing = dict(
-                            _validate_routing(
-                                body.get("routing"), allow_endpoint=True
-                            ) or {}
-                        )
+                        responses_routing = dict(responses_routing_control or {})
                         # Responses has no batch job envelope on this path;
                         # force the coordinator's synchronous contract even
                         # when a priority or token threshold would select batch.
@@ -7855,6 +8088,27 @@ def build_server(
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
+                    # The early role-only preflight above (before "input" was
+                    # even parsed) cannot know whether this request carries an
+                    # image; re-check now that the request's true required
+                    # tags are known, the same way the orchestrated Responses
+                    # branches above already do, so an incompatible pin fails
+                    # closed here with invalid_routing instead of surfacing
+                    # later as a generic execution error on this provider
+                    # passthrough path (#983).
+                    _validate_candidate_routing(
+                        orchestrator,
+                        responses_routing_control,
+                        model_name,
+                        required_roles=orchestrator.candidate_pin_required_roles(
+                            "conduct", model_name
+                        ),
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(responses_messages)
+                            else ()
+                        ),
+                    )
                     response_max_tokens = next(
                         (
                             body.get(key)
@@ -7879,9 +8133,7 @@ def build_server(
                                 responses_messages,
                                 mode="conduct",
                                 attribution=responses_attribution,
-                                hints=_validate_routing(
-                                    body.get("routing"), allow_endpoint=True
-                                ),
+                                hints=responses_routing_control,
                                 model_name=body["model"],
                                 provider_request=body,
                                 provider_endpoint="responses",
@@ -8380,6 +8632,7 @@ def build_server(
             *,
             coordinator: Any = None,
             attribution: dict[str, Any] | None = None,
+            routing: dict[str, Any] | None = None,
         ) -> bool:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
@@ -8464,27 +8717,39 @@ def build_server(
                 }
                 emit("response.output_item.added", output_index=0, item=reasoning_item)
                 try:
-                    if orchestrator.would_route(messages, "auto", model_name):
-                        progress("worker", "started")
-                        workflow_run_id = f"run_{uuid.uuid4().hex}"
-                        parts = list(
-                            orchestrator.stream_route(
-                                messages,
-                                workflow_run_id=workflow_run_id,
-                                model_name=model_name,
+                    candidate_scope = (
+                        orchestrator.candidate_routing_policy(
+                            routing, model_name=model_name
+                        )
+                        if routing
+                        else nullcontext()
+                    )
+                    with candidate_scope:
+                        if orchestrator.would_route(messages, "auto", model_name):
+                            progress("worker", "started")
+                            workflow_run_id = f"run_{uuid.uuid4().hex}"
+                            parts = list(
+                                orchestrator.stream_route(
+                                    messages,
+                                    workflow_run_id=workflow_run_id,
+                                    model_name=model_name,
+                                )
                             )
-                        )
-                        progress("worker", "completed")
-                        result = (
-                            orchestrator.get_workflow_run(workflow_run_id)
-                            if coordinator is not None
-                            else {"answer": "".join(parts)}
-                        )
-                    else:
-                        conduct_kwargs = {"model_name": model_name, "progress": progress}
-                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
-                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
-                        result = orchestrator.conduct(messages, **conduct_kwargs)
+                            progress("worker", "completed")
+                            result = (
+                                orchestrator.get_workflow_run(workflow_run_id)
+                                if coordinator is not None
+                                else {"answer": "".join(parts)}
+                            )
+                        else:
+                            conduct_kwargs = {"model_name": model_name, "progress": progress}
+                            if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                                conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                            result = orchestrator.conduct(messages, **conduct_kwargs)
+                        evidence = orchestrator._candidate_routing_evidence(result)
+                        if evidence is not None:
+                            result = dict(result)
+                            result["candidate_routing"] = evidence
                 except ConnectionAbortedError:
                     raise
                 except ProviderUpstreamError as exc:
@@ -8606,9 +8871,19 @@ def build_server(
             messages: Any,
             model_name: str,
             *,
+            routing: dict[str, Any] | None = None,
             include_usage: bool = False,
+            candidate_scope_open: bool = False,
         ) -> None:
-            """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
+            """Pipe live provider deltas as OpenAI chat-completion SSE frames.
+
+            ``candidate_scope_open=True`` tells this method the caller already
+            has a ``candidate_routing_policy`` scope active (e.g. spanning the
+            auto-mode ``would_route`` triage decision) and it must not open a
+            second, independent scope here — doing so would silently discard
+            the triage attempt recorded in the caller's scope before the
+            streamed worker attempt is recorded in a fresh one (see #983).
+            """
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
             created = int(time.time())
@@ -8658,10 +8933,28 @@ def build_server(
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
-                    for delta in orchestrator.stream_route(messages, **stream_kwargs):
-                        if not self._write_sse(frame({"content": delta})):
-                            return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    candidate_scope = (
+                        nullcontext()
+                        if candidate_scope_open or not routing
+                        else orchestrator.candidate_routing_policy(
+                            routing, model_name=model_name
+                        )
+                    )
+                    with candidate_scope:
+                        for delta in orchestrator.stream_route(messages, **stream_kwargs):
+                            if not self._write_sse(frame({"content": delta})):
+                                return
+                        evidence = None
+                        if routing:
+                            record = orchestrator.get_workflow_run(run_id)
+                            evidence = orchestrator._candidate_routing_evidence(record)
+                    terminal_delta: dict[str, Any] = {}
+                    terminal = frame(terminal_delta, finish="stop")
+                    if evidence is not None:
+                        terminal_payload = json.loads(terminal.removeprefix("data: "))
+                        terminal_payload["orchestration"] = {"routing": evidence}
+                        terminal = f"data: {json.dumps(terminal_payload, ensure_ascii=False)}\n\n"
+                    if not self._write_sse(terminal):
                         return
                     if (
                         include_usage

@@ -2680,3 +2680,107 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-02 — PR #983 candidate-control no-heuristics repair
+
+Live RCA found two decision-affecting rules in the request-local candidate-control
+owner: a repository-authored 32-ID exclusion ceiling and serving-candidate inference
+from output equality/trace position when exact identity was absent. Neither had an
+identified mathematical, standards, experimental, or research basis. The canonical
+repair removes the cardinality rule, retaining normal authenticated request-size
+controls, and makes serving identity fail closed unless exact `answering_step_id` or
+explicit `served_agent_id` evidence exists. Regression coverage exercises more than
+32 exclusions, missing identity, and explicit identity provenance. Exact-head hosted
+checks remain authoritative before merge.
+
+## 2026-09-02 — PR #983 follow-up: unconditional `served_agent_id` regression
+
+A full local suite run of the above repair surfaced a real regression it introduced:
+making `route_once`/`stream_route` stamp `served_agent_id` on every trace row
+unconditionally (to give the no-heuristics evidence reader an explicit fact even for
+an unchanged serving agent) broke a separate, pre-existing regression guard —
+`test_provider_reliability.py`'s and `test_tool_execution_fallback.py`'s "the default
+mock path must behave exactly as before: single attempt, no failover metadata" — by
+adding `served_agent_id` to trace rows that must never carry it outside a failover.
+Root-caused by diffing the failure against a clean `origin/main` worktree (no
+failure) versus the PR head (regressed), confirming the stamp change was the exact
+cause rather than a full-suite pollution artifact. Fixed by scoping the unconditional
+stamp to only fire while request-local candidate-attempt tracking is active (inside a
+`candidate_routing_policy` scope, detectable via
+`_REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None`), leaving the ordinary
+no-candidate-policy path's trace shape unchanged. All 200 tests across the affected
+files plus the full local suite (3355 passed, 2 pre-existing sandbox-only failures:
+`fast_mlsirm` unavailable, `test_spend_analytics` local-tokenizer artifact) pass
+clean. Lesson: a production fact-recording change made for one evidence consumer's
+sake must be checked against every other consumer of the same trace shape, not just
+the consumer it was written for.
+
+## 2026-09-02 — PR #983 follow-up: stale OpenAPI schema cardinality cutoff
+
+Owner-verified, exact-head finding: `contextual_orchestrator/api_contract.py`'s
+published `CandidateRoutingControls.exclude_candidate_ids` schema still declared
+`maxItems: 32` after the runtime's own repository-authored 32-ID cutoff had already
+been removed as unsupported (see the first 2026-09-02 entry above). The PR body,
+CHANGELOG, ADR direction, and Devin resolution all claimed the cutoff was gone, but
+the schema — the actual source generated/OpenAPI clients build against — still
+enforced it, so the documentation claim was false at the live source. Fixed by
+removing `maxItems: 32` from the schema (no replacement cardinality heuristic;
+`uniqueItems`, lexical ID constraints, and normal authenticated request-size bounds
+are untouched) and adding a RED-before/GREEN-after regression
+(`test_openapi_documents_compatibility_front_door` in `tests/test_api_contract.py`)
+validating a 64-ID exclusion list against the schema, which fails against the old
+`maxItems: 32` schema and passes against the corrected one. Verified the runtime
+validator (`server.py`'s `_validate_routing`) has no other hidden count-based
+cutoff on this field. Lesson: a schema/contract file is a second, independent
+publication surface for the same invariant as runtime code — removing a rule from
+one without checking the other leaves the claim false in whichever one still has it.
+
+## 2026-09-03 — PR #983 follow-up: base merge and a pre-existing judge-selection double-call
+
+Merged current `main` into the branch (clean, no conflicts) to pick up main's
+`test_admin_contract.py` `import json` fix (main PR #1035) that this PR's stale base
+predated. Hosted CI's "Full unit and contract suite" job (run `33692781067`) then
+showed two of this PR's own new tests failing with an extra `worker_only` call in
+`client.calls`: `test_http_auto_preflight_accepts_worker_only_pin_when_free_model_
+always_routes` and `test_coordinator_auto_route_only_pin_succeeds_for_free_model`
+(both in `tests/test_candidate_routing_controls.py`). Neither test failed locally in
+this or any earlier round, in isolation or full-suite, because this sandbox's
+blocked `fast-mlsirm` GitHub-archive download (documented since the first
+2026-09-02 entry above) always short-circuits `_model_judge_verification` to its
+"fast-mlsirm judge is unavailable" fail-closed return before any judge is selected
+or called — hiding a real, pre-existing (predates PR #983 entirely; present
+unchanged at merge-base `212ff437`) selection bug that only a hosted run with
+fast-mlsirm actually importable can exercise. Root cause: `_ranked_agents`
+deliberately still returns role-ineligible members — it appends them after every
+eligible one, per its own docstring — so a caller wanting only role-eligible
+candidates must re-apply `role not in agent.provider_exclusions` itself, exactly as
+`_plan_generated` and `_parse_workflow_plan` already do. `_model_judge_verification`'s
+judge-selection `next(...)` was missing that filter, so with a single-candidate pool
+excluded from `verifier` (PR #983's own new `orchestrator/free` worker-only
+provable-route fixture), it picked that ineligible agent as judge anyway instead of
+failing closed — an extra, unrequested live call. `_invoke`'s own failover path
+already enforced this same exclusion for a *backup* judge
+(`test_fast_mlsirm_judge_failover_honors_verifier_exclusions`); this closes the
+identical gap for the *primary* selection. Fixed by adding
+`if "verifier" not in agent.provider_exclusions` to the judge-selection generator in
+`_model_judge_verification` (`contextual_orchestrator/orchestrator.py`). RED-before
+confirmed by a stub `_resolve_fast_mlsirm_components` whose judge constructor
+records the selected agent id: before the fix it recorded the sole, role-excluded
+`worker_only` agent; after the fix `next(...)` raises `StopIteration` (caught by the
+existing broad fail-closed handler) and the judge is never constructed
+(`test_model_judge_never_selects_a_verifier_excluded_sole_candidate`,
+`tests/test_model_judge.py`). GREEN: that regression plus
+`test_fast_mlsirm_judge_failover_honors_verifier_exclusions` (2 passed);
+`test_model_judge.py` + `test_candidate_routing_controls.py` +
+`test_candidate_routing_no_heuristic_limits.py` + `test_api_contract.py` +
+`test_admin_contract.py` (98 passed); full local suite (Python 3.12, matching CI's
+`uv run` toolchain) 3441 passed, 2 pre-existing sandbox-only failures unrelated to
+this change and already documented above (`fast_mlsirm` unavailable;
+`test_spend_analytics`'s local-tokenizer artifact — the same missing-fast-mlsirm
+mechanism, now also confirmed to flip an unrelated `spend_analytics` conduct-mode
+trace's `usage_source` from the expected `mixed` to `tokenizer` when the judge step
+never runs). `interrogate` on `orchestrator.py`: 100%. Lesson: a fail-closed branch
+that this sandbox can only reach one way (dependency unavailable) can mask a real
+selection bug in the branch that never runs locally; a caller of a "still includes
+ineligible members, ranked last" helper must re-apply the eligibility filter at
+every call site, not assume it inherited from one.

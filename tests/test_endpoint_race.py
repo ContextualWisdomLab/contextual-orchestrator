@@ -212,6 +212,77 @@ def test_text_group_uses_same_complete_valid_race_boundary() -> None:
     assert result["answer"] == "completed by fast_endpoint"
 
 
+def test_race_attempts_all_reach_candidate_routing_evidence() -> None:
+    """Every candidate a race actually calls survives into routing evidence.
+
+    Each ``race_first_valid`` attempt runs ``call(agent)`` inside a
+    ``copy_context().run(...)`` worker-thread context, and
+    ``_record_candidate_attempt`` records the call by mutating the *list
+    object* the ``_REQUEST_ATTEMPTED_CANDIDATE_IDS`` ContextVar was bound to
+    before the race started (``candidate_routing_policy`` sets it once,
+    up front) -- it never rebinds the ContextVar itself with ``.set()``.
+    ``copy_context()`` only isolates ``ContextVar.set()``/``reset()`` calls
+    made inside the copy; it is a shallow copy that keeps every already-set
+    variable pointing at the exact same value object, so an in-place
+    mutation of that shared list from a raced worker thread is visible from
+    the parent request context once the race returns. This asserts that
+    guarantee holds for every candidate whose provider call actually ran,
+    not just the winner or a candidate that happened to run on the main
+    thread.
+    """
+    raw_contract = dict(contract(capability_set=("text",)).__dict__)
+    agents = [
+        ModelAgent(
+            endpoint_id, "provider/shared", tags=("reasoning",),
+            group_name="shared_text_group", endpoint_equivalence=raw_contract,
+        )
+        for endpoint_id in ("slow_endpoint", "fast_endpoint")
+    ] + [ModelAgent("decoy_agent", "decoy-model", tags=("reasoning",))]
+    orchestrator = TaskOrchestrator(agents)
+    started: list[str] = []
+    loser_started = threading.Event()
+    release_loser = threading.Event()
+
+    def chat(agent: ModelAgent, _messages: list[dict], **_kwargs: object) -> str:
+        started.append(agent.id)
+        if agent.id == "slow_endpoint":
+            # Signal that this attempt's _record_candidate_attempt has
+            # already run (it runs before chat() in call()), then block so
+            # the winner cannot be declared before this call is provably
+            # in flight -- a genuine timing overlap, not a coincidence of
+            # which thread the OS scheduler happened to start first.
+            loser_started.set()
+            release_loser.wait(2)
+        else:
+            assert loser_started.wait(2), "slow_endpoint never started its call"
+        return f"completed by {agent.id}"
+
+    orchestrator.client.chat = chat  # type: ignore[method-assign]
+    try:
+        # An exclusion (rather than a candidate_id pin) activates the same
+        # request-scoped attempt-tracking ContextVar production traffic
+        # uses, without narrowing the race down to a single allowed
+        # candidate.
+        with orchestrator.candidate_routing_policy(
+            {"exclude_candidate_ids": ["decoy_agent"]},
+            model_name=orchestrator.GATEWAY_DEFAULT_MODEL,
+        ):
+            result = orchestrator.route_once(
+                [{"role": "user", "content": "use the declared replica group"}],
+                model_name="shared-text-group",
+            )
+            evidence = orchestrator._candidate_routing_evidence(result)
+    finally:
+        release_loser.set()
+
+    # Both race members actually ran (the fast one wins while the slow one
+    # is still mid-flight) -- both must be attempted.
+    assert set(started) == {"slow_endpoint", "fast_endpoint"}
+    assert evidence is not None
+    assert set(evidence["attempted_candidate_ids"]) == set(started)
+    assert evidence["served_candidate_id"] == "fast_endpoint"
+
+
 def test_text_race_preserves_request_scoped_sampling_and_token_limits() -> None:
     raw_contract = dict(contract(capability_set=("text",)).__dict__)
     agents = [

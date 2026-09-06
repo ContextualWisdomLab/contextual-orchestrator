@@ -18,6 +18,7 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 from contextvars import ContextVar
@@ -543,6 +544,7 @@ class CostRoutingCoordinator:
         provider_request: Optional[Dict[str, Any]] = None,
         provider_endpoint: str = "chat/completions",
         zdr_only: bool = False,
+        candidate_scope_open: bool = False,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -554,17 +556,47 @@ class CostRoutingCoordinator:
         Each trace step backed by valid provider token counts is ``measured``.
         A missing count is recorded with an ``unavailable`` status and numeric
         storage sentinels; API usage and cost remain null.
+
+        ``candidate_scope_open=True`` tells the ``messages``-based sync path
+        (``provider_request is None``) that the caller already has a
+        ``candidate_routing_policy`` scope open -- e.g. because it ran
+        :meth:`TaskOrchestrator.would_route`'s triage call under that scope
+        before deciding to conduct rather than route -- so this call must not
+        open a second, independent scope that would discard the triage
+        attempt from ``attempted_candidate_ids`` (#983). Ignored on the
+        ``provider_request`` path, which always scopes itself around its own
+        ``proxy_completion`` call.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
+        routing_controls = hints if isinstance(hints, dict) else {}
+        # TaskOrchestrator._has_active_candidate_controls is the single
+        # source of truth: it detects an active control by key *presence*,
+        # not truthiness, so an explicitly malformed value (candidate_id=
+        # None, exclude_candidate_ids=None or a non-list/tuple) still
+        # forces the sync path below, giving candidate_routing_policy's
+        # real validation a chance to reject it instead of silently falling
+        # through the batch branch's early return and dropping the
+        # malformed control entirely. An explicit empty exclude_candidate_ids
+        # list/tuple is the one genuine no-op (#983 Devin/CodeRabbit
+        # finding: direct Python API callers can lose or bypass routing
+        # validation). The same predicate also gates whether this method's
+        # own provider-response evidence handling below may trust a
+        # `_candidate_routing` field (#983 Devin finding: "Provider fields
+        # forge routing evidence").
+        has_candidate_controls = self.orchestrator._has_active_candidate_controls(
+            routing_controls
+        )
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         try:
             prompt_tokens = self.token_counter.count_messages(messages, model_name)
         except TokenCountUnavailable:
             prompt_tokens = None
         decision = self.policy.decide(routing_hints, prompt_tokens)
+        if has_candidate_controls and decision.channel == "batch":
+            decision = replace(decision, channel="sync", reason="candidate controls require sync routing")
 
         if decision.channel == "batch" and provider_request is None:
             request = BatchRequest(
@@ -600,7 +632,17 @@ class CostRoutingCoordinator:
             }
             race_token = self._race_usage_context.set(race_context)
             try:
-                with self.orchestrator.request_policy(zdr_only):
+                with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
+                    routing_controls,
+                    model_name=model_name,
+                    required_roles=("thinker", "worker", "verifier", "synthesizer")
+                    if self.orchestrator.proxy_completion_requires_conduct(
+                        provider_request,
+                        endpoint=provider_endpoint,
+                        single_agent=False,
+                    )
+                    else ("worker",),
+                ):
                     provider_response = self.orchestrator.proxy_completion(
                         provider_request,
                         endpoint=provider_endpoint,
@@ -621,6 +663,17 @@ class CostRoutingCoordinator:
             ):
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
+            routing_evidence = provider_response.pop("_candidate_routing", None)
+            # Only republish gateway-computed evidence: the raw provider
+            # response is untrusted (#983 Devin finding: "Provider fields
+            # forge routing evidence"). Without an active candidate control
+            # on this request, proxy_completion() never sets
+            # `_candidate_routing` itself, so a `_candidate_routing` field
+            # observed here with no active control can only have arrived
+            # already-present on the provider's own response body -- never
+            # trust it as gateway evidence in that case.
+            if has_candidate_controls and routing_evidence is not None:
+                lineage["routing"] = routing_evidence
             race_records = list(race_context["records"])
             records = list(race_records)
             # The caller's request prompt is attributed at most once per
@@ -734,8 +787,28 @@ class CostRoutingCoordinator:
         }
         race_token = self._race_usage_context.set(race_context)
         try:
-            with self.orchestrator.request_policy(zdr_only):
+            # candidate_scope_open=True means the caller already has a
+            # candidate_routing_policy scope open (see the docstring above);
+            # entering a second, independent one here would reset the
+            # attempted-candidate ContextVar and discard whatever the caller
+            # already recorded under it, so reuse a no-op context instead.
+            candidate_scope = (
+                contextlib.nullcontext()
+                if candidate_scope_open
+                else self.orchestrator.candidate_routing_policy(
+                    routing_controls,
+                    model_name=model_name,
+                    required_roles=self.orchestrator.candidate_pin_required_roles(
+                        mode, model_name
+                    ),
+                )
+            )
+            with self.orchestrator.request_policy(zdr_only), candidate_scope:
                 result = self.orchestrator.run(messages, **run_kwargs)
+                routing_evidence = self.orchestrator._candidate_routing_evidence(result)
+                if routing_evidence is not None:
+                    result = dict(result)
+                    result["candidate_routing"] = routing_evidence
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]
             race_context["workflow_ready"] = True
