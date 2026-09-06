@@ -107,7 +107,7 @@ class OpenRouterUptimeCollector:
         uptime = self._fetch_uptime(agent.model)
         if uptime is None:
             return
-        successes = max(0.0, min(1.0, uptime / 100.0))
+        successes = uptime / 100.0
         failures = 1.0 - successes
         prev_alpha, prev_beta = self._window_evidence.get(agent.id, (0.0, 0.0))
         next_alpha = prev_alpha + successes
@@ -126,8 +126,9 @@ class OpenRouterUptimeCollector:
             model_id: Discovery-sourced logical model identifier.
 
         Returns:
-            The highest reported endpoint uptime in ``[0, 100]``, or
-            ``None`` when the provider response cannot yield one.
+            The highest finite numeric endpoint uptime in ``[0, 100]``, or
+            ``None`` when any supplied percentage is invalid or none exists.
+            Null/missing measurements are absent, not observed failures.
         """
         segment = urllib.parse.quote(model_id, safe="")
         url = f"{_OPENROUTER_UPTIME_ORIGIN}/models/{segment}/endpoints"
@@ -138,15 +139,19 @@ class OpenRouterUptimeCollector:
                 payload = json.loads(response.read().decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
                 uptimes = [
-                    float(endpoint["uptime_last_30m"])
+                    endpoint["uptime_last_30m"]
                     for endpoint in endpoints
                     if isinstance(endpoint, dict)
                     and endpoint.get("uptime_last_30m") is not None
                 ]
+                # Validate before aggregation: coercion or clamping can turn
+                # booleans, NaN, or out-of-range values into availability mass.
+                if any(type(value) not in (int, float) or not 0 <= value <= 100 for value in uptimes):
+                    raise ValueError("endpoint uptime must be a numeric percentage in [0, 100]")
                 if uptimes:
                     # Best reported endpoint availability, not the actual
                     # caller's route mix or an answer-correctness measurement.
-                    return max(uptimes)
+                    return float(max(uptimes))
         except (
             AttributeError,
             KeyError,

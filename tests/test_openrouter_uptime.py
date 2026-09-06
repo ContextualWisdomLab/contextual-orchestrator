@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -200,6 +201,59 @@ def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
     collector._poll_agent(agent)
     reference.update_prior(agent.id, 2.0, 1.0)
     assert group_router.member_report(agent.id) == reference.member_report(agent.id)
+
+
+@pytest.mark.parametrize("raw_value", [
+    "NaN", "Infinity", "-Infinity", "1e400", "-1e400",
+    "true", "false", '"99.5"', '"NaN"', "-0.01", "100.01", "{}", "[]",
+])
+@pytest.mark.parametrize("placement", ["only", "first", "last"])
+def test_invalid_endpoint_percentage_cannot_update_evidence(monkeypatch, raw_value, placement):
+    """Malformed telemetry cannot become window mass, regardless of endpoint order."""
+    endpoint_rows = ['{"uptime_last_30m":' + raw_value + '}']
+    if placement == "first":
+        endpoint_rows.append('{"uptime_last_30m":50}')
+    elif placement == "last":
+        endpoint_rows.insert(0, '{"uptime_last_30m":50}')
+    response_body = ('{"data":{"endpoints":[' + ','.join(endpoint_rows) + ']}}').encode()
+    http_response = BytesIO(response_body)
+    monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
+    group_router = ModelGroupRouter()
+    agent = _agents()[0]
+    group_router.observe_success(agent.id, 0.2)
+    group_router.observe_failure(agent.id)
+    report_before = group_router.snapshot()
+    collector = OpenRouterUptimeCollector([agent], group_router)
+
+    collector._poll_agent(agent)
+
+    assert http_response.closed
+    assert collector.window_evidence(agent.id) == (0.0, 0.0)
+    assert group_router.snapshot() == report_before
+
+
+@pytest.mark.parametrize(("raw_endpoints", "expected_mass"), [
+    ('[{"uptime_last_30m":0}]', (0.0, 1.0)),
+    ('[{"uptime_last_30m":50}]', (0.5, 0.5)),
+    ('[{"uptime_last_30m":100}]', (1.0, 0.0)),
+    ('[{"uptime_last_30m":null},{},{"uptime_last_30m":99.5}]', (0.995, 0.005)),
+    ('[{"uptime_last_30m":25},{"uptime_last_30m":75}]', (0.75, 0.25)),
+    ('[{"uptime_last_30m":null},{}]', (0.0, 0.0)),
+    ('[]', (0.0, 0.0)),
+])
+def test_endpoint_percentage_parsing_preserves_valid_and_absent_values(monkeypatch, raw_endpoints, expected_mass):
+    """Valid percentages retain existing window accounting; absent values add nothing."""
+    http_response = BytesIO(('{"data":{"endpoints":' + raw_endpoints + '}}').encode())
+    monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
+    group_router = ModelGroupRouter()
+    agent = _agents()[0]
+    collector = OpenRouterUptimeCollector([agent], group_router)
+
+    collector._poll_agent(agent)
+
+    assert http_response.closed
+    assert collector.window_evidence(agent.id) == pytest.approx(expected_mass)
+    assert group_router.member_observation_count(agent.id) == 0
 
 
 if __name__ == "__main__":
