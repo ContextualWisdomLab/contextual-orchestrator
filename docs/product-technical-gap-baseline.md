@@ -1,5 +1,25 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 model-specific timeout policy: local, not delivered
+
+PR #1053's remote `661ce8db` has a completed 3400-pass/2-skip regression suite
+for removing the implicit client timeout. The subsequent local durable-policy
+implementation at `439da2e5` has 31 related passes, but does not yet enforce
+model-specific execution limits. HTTP write admission and UI controls remain
+closed for the new setting. Neither result proves deployment or buyer latency.
+
+A new failure-injection test at `6236e982` demonstrates an unresolved audit
+atomicity gap: the update reports an audit error while both memory and a
+restarted instance retain the new 7200-second policy. Policy change/history
+must commit atomically before administrator write admission. Restore,
+precedence, cancellation semantics, released Rust runtime integration and
+actual administrator visual/E2E evidence also remain open.
+
+See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
+revisions, retained failures, corrected test-evidence limitations, owner
+boundaries and the full remaining acceptance gates. Local configuration work
+must not be represented as released enforcement or psychometric accuracy gain.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
