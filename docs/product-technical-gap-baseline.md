@@ -1,5 +1,27 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+
+## 2026-09-07 PR #971: durable bootstrap selection order
+
+Observation: exact predecessor `1e59d4fc9a628a898e404cd1bcacb412747c3b5b`
+passed the unchanged full suite and coverage-guided fuzz lane, but external
+review thread `PRRT_kwDOTB3CTs6elTYC` remained valid. The ephemeral bootstrap
+report retained `select_model_group_diverse_models` order, while
+`_synchronize_durable_agent_pool` converted the resolved identities to a set
+and returned an alphabetically sorted tuple. A restart-backed report could
+therefore discard the selector's cost/model-group order without changing pool
+membership.
+
+RED commit `98aed1a811cb894881b4c9aeb20de4f0b00fb634` adds a two-model
+durable-pool contract whose selected order is deliberately the reverse of
+agent-ID lexical order. The smallest GREEN retains a set only for membership
+and collision checks, records resolved persisted identities in selector order,
+activates them in that order, and returns the ordered tuple. It introduces no
+new ranking, quota, provider heuristic, timeout, or dependency. Status remains
+Proposed until the successor head completes the focused regression, full suite,
+security, and required review lanes; the other three open #971 architecture
+findings remain separate.
+
 ## 2026-09-02 PR #971: main-merge conflict resolution, remaining ThreadPoolExecutor shutdown-blocks, and a verified false positive
 
 Observation time: 2026-09-02 Asia/Seoul, later the same day as the entries

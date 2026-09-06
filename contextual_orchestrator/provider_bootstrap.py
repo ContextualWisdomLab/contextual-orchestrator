@@ -299,7 +299,8 @@ def _synchronize_durable_agent_pool(
             )
         selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
-        selected_ids = set()
+        selected_ids: set[str] = set()
+        ordered_selected_ids: list[str] = []
         for agent in agents:
             matches = [
                 candidate
@@ -311,9 +312,12 @@ def _synchronize_durable_agent_pool(
             ]
             if not matches:
                 continue
-            selected_ids.add(
-                next((item.id for item in matches if item.id == agent.id), matches[-1].id)
+            selected_id = next(
+                (item.id for item in matches if item.id == agent.id),
+                matches[-1].id,
             )
+            selected_ids.add(selected_id)
+            ordered_selected_ids.append(selected_id)
         if len(selected_ids) != len(agents):
             raise ProviderBootstrapError(
                 "selected discovered models conflict with operator-managed agent identities"
@@ -326,14 +330,12 @@ def _synchronize_durable_agent_pool(
                 if not candidate.disabled:
                     bootstrap.remove_agent("default", candidate.id)
 
-        for agent_id in selected_ids:
+        for agent_id in ordered_selected_ids:
             bootstrap.patch_agent("default", agent_id, {"status": "active"})
 
         # The patch loop above raises KeyError if any selected agent is missing from
-        # the pool, so the enabled set equals selected_ids by construction here.
-        return tuple(
-            sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
-        )
+        # the pool. Preserve the selector's cost/model-group order in the report.
+        return tuple(ordered_selected_ids)
     finally:
         bootstrap.close()
 
