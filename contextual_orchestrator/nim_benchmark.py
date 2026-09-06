@@ -2370,9 +2370,11 @@ def pareto_frontier(
 
 
 def summarize_policies(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Aggregate evaluation cells per policy with honest unknown-cost labeling."""
+    """Aggregate locked cells per policy with honest unknown-cost labeling."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for cell in cells:
+        if cell["task_split"] != "locked":
+            continue
         grouped.setdefault(cell["policy_name"], []).append(cell)
     summaries = []
     for policy_name in sorted(grouped):
@@ -2615,7 +2617,10 @@ def _evaluation_evidence_summary(
 ) -> dict[str, Any]:
     """Classify whether benchmark evidence can inform production review."""
     headline_cells = [
-        cell for cell in cells if cell["policy_name"] != "cheapest_eligible_worker"
+        cell
+        for cell in cells
+        if cell["task_split"] == "locked"
+        and cell["policy_name"] != "cheapest_eligible_worker"
     ]
     successful_cells = [
         cell for cell in headline_cells if cell["run_outcome"] == "success"
