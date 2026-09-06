@@ -58,6 +58,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   outcome counts, and report paired mean elapsed-time uncertainty. Report
   version 2 replaces the previous success-conditioned comparison; original
   unscored answers remain unknown, and production review gates still apply.
+- Availability refresh now uses the provider's documented model address;
+  malformed model identifiers are rejected before a request is sent.
 - Invalid provider availability values no longer influence routing evidence;
   missing measurements remain unknown rather than counted as failures.
 - Provider availability updates no longer change answer-quality assessments

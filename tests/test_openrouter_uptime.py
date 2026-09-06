@@ -256,6 +256,48 @@ def test_endpoint_percentage_parsing_preserves_valid_and_absent_values(monkeypat
     assert group_router.member_observation_count(agent.id) == 0
 
 
+@pytest.mark.parametrize(("model_id", "encoded_model"), [
+    ("openai/gpt-4o", "openai/gpt-4o"),
+    ("org/model:free", "org/model%3Afree"),
+    ("org name/model?#%", "org%20name/model%3F%23%25"),
+    ("조직/모델", "%EC%A1%B0%EC%A7%81/%EB%AA%A8%EB%8D%B8"),
+    ("org/model%2Fname", "org/model%252Fname"),
+])
+def test_endpoint_request_preserves_author_slug_boundary(monkeypatch, model_id, encoded_model):
+    """Only the documented author/slug separator remains structural in the URL."""
+    http_response = BytesIO(b'{"data":{"endpoints":[{"uptime_last_30m":99.5}]}}')
+
+    def checked_open(request, *, timeout):
+        """Check the real assembled request without contacting a provider."""
+        assert request.full_url == f"https://openrouter.ai/api/v1/models/{encoded_model}/endpoints"
+        assert request.get_method() == "GET"
+        assert request.get_header("Authorization") is None
+        assert timeout == 10.0
+        return http_response
+
+    monkeypatch.setattr(uptime_module.urllib.request, "urlopen", checked_open)
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+
+    assert collector._fetch_uptime(model_id) == 99.5
+    assert http_response.closed
+
+
+@pytest.mark.parametrize("model_id", [
+    "", "model", "/model", "org/", "org/model/extra", "//example.invalid/model",
+    "https://example.invalid/model", "../model", "org/..", "./model", "org/.",
+])
+def test_malformed_model_path_never_reaches_transport(monkeypatch, model_id):
+    """Absent or traversal path components cannot become endpoint requests."""
+    def reject_open(*_args, **_kwargs):
+        """Make any unexpected transport request a visible contract failure."""
+        pytest.fail("malformed model ID reached transport")
+
+    monkeypatch.setattr(uptime_module.urllib.request, "urlopen", reject_open)
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+
+    assert collector._fetch_uptime(model_id) is None
+
+
 if __name__ == "__main__":
     test_start_without_openrouter_agents_is_inert()
     test_poll_folds_one_window_of_measured_mass()
