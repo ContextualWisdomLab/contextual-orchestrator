@@ -6254,7 +6254,7 @@ class TaskOrchestrator:
         serving = self._agent_in_pool(agent_pool_id, worker_agent_id)
         configured = serving
         if self._pool_store is not None:
-            # Reuse the transactional configuration snapshot, never refresh routing here.
+            # ponytail: one full snapshot per admin read; indexed lookup if pool size warrants it.
             configured = next(
                 (agent for agent in self._pool_store.load_all() if agent.id == worker_agent_id),
                 serving,

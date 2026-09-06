@@ -489,12 +489,15 @@ def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) ->
     database_path = str(tmp_path / "pool.db")
     writer = TaskOrchestrator(seeds, agents_db=database_path)
     serving = TaskOrchestrator(seeds, agents_db=database_path)
-    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    server = build_server(serving, port=0, security=SecurityConfig(
+        admin_token="pool_token", inference_token="inference_token",
+    ))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
     try:
         assert _call(base + "/timeout_policy", "GET", "wrong_token")[0] == 401
+        assert _call(base + "/timeout_policy", "GET", "inference_token")[0] == 401
         status, initial = _call(base + "/timeout_policy", "GET", "pool_token")
         assert status == 200
         assert initial["configured_seconds"] is None
@@ -510,6 +513,14 @@ def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) ->
         assert serving._agent("general_agent").model_timeout_revision == 0
         missing = base.replace("general_agent", "missing_agent")
         assert _call(missing + "/timeout_policy", "GET", "pool_token")[0] == 404
+        from contextual_orchestrator.api_contract import OPENAPI_SPEC
+        operation = OPENAPI_SPEC["paths"][
+            "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy"
+        ]["get"]
+        assert operation["security"] == [{"admin_bearer_auth": []}]
+        schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        assert set(schema["required"]) == set(policy)
+        assert schema["properties"]["enforcement_available"] == {"const": False}
     finally:
         server.shutdown()
         server.server_close()

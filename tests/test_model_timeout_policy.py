@@ -74,6 +74,10 @@ def test_model_timeout_policy_defaults_to_null() -> None:
     """An ordinary model has no administrator-imposed execution limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     assert model_agent.to_config()["model_timeout_seconds"] is None
+    policy = TaskOrchestrator([model_agent]).get_model_timeout_policy("default", model_agent.id)
+    assert policy["configured_seconds"] is None
+    assert policy["revision"] == 0
+    assert policy["enforcement_available"] is False
 
 
 def test_model_timeout_policy_accepts_large_finite_seconds(tmp_path: Path) -> None:

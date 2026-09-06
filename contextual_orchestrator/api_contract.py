@@ -471,6 +471,39 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Agent pool collection"}},
             }
         },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy": {
+            "get": {
+                "operationId": "get_model_timeout_policy",
+                "summary": "Read configured timeout and serving snapshot without activating a limit",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+                    for name in ("agent_pool_id", "worker_agent_id")
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stored policy and local snapshot; runtime enforcement is not integrated",
+                        "content": {"application/json": {"schema": {
+                            "type": "object", "additionalProperties": False,
+                            "required": ["configured_seconds", "revision", "unit",
+                                         "serving_snapshot_seconds", "serving_snapshot_revision",
+                                         "enforcement_available"],
+                            "properties": {
+                                "configured_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "revision": {"type": "integer", "minimum": 0},
+                                "unit": {"const": "seconds"},
+                                "serving_snapshot_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "serving_snapshot_revision": {"type": "integer", "minimum": 0},
+                                "enforcement_available": {"const": False},
+                            },
+                        }}},
+                    },
+                    "401": {"description": "Authentication required"},
+                    "403": {"description": "Administrator scope required"},
+                    "404": {"description": "Model configuration not found"},
+                },
+            },
+        },
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}": {
             "patch": {
                 "operationId": "patch_worker_agent",
