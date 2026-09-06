@@ -35,7 +35,7 @@ results are retained. The initial migration/large-value checks at `94c6856c`
 could replay seeds without proving persisted rows; their pass is not counted
 as durable-storage evidence.
 
-## Confirmed unresolved audit failure
+## Reproduced audit failure and local transactional repair
 
 At `6236e982`, the committed policy suite reports 1 failed and 11 passed in
 4.72 seconds. Injecting an audit-storage exception during a 7200-second update
@@ -44,7 +44,7 @@ instance read 7200.0 rather than the previous null. This is a direct internal
 configuration-path reproduction, not an externally admitted HTTP exploit:
 HTTP create/PATCH allowlists still reject the new field.
 
-The current pool save commits before the general audit append, which uses a
+The reproduced pool save committed before the general audit append, which uses a
 separate state-store transaction. Moving the audit earlier cannot prove atomic
 success, and blindly restoring a prior value could overwrite a concurrent
 update. The next implementation must make policy revision/history and the
@@ -52,9 +52,29 @@ configuration change atomic at their owning store, with failure injection and
 concurrent-update checks. General telemetry must not be mistaken for the
 authoritative policy history.
 
+Local `4e839ce1` now commits timeout history and the configuration change on
+the same pool connection, then publishes the in-memory candidate. Existing
+rows receive a timeout-only update, preserving unrelated stored attributes.
+Changing policy requires a durable store and a separate timeout-only patch.
+The generic audit stream no longer owns this policy transaction. A database
+trigger that rejects history insertion rolls back the associated policy write,
+including initial-row creation. The failure test now targets that actual
+transaction rather than the former generic audit callback; the original
+failure remains preserved in the earlier commit and JUnit.
+
+At `c3879439cd4a0547ff06e7cbe8561cce787e3a1f`, 37 related cases passed in
+2.65 seconds, exit 0. They cover rejection on history failure for both missing
+and existing rows, ordered old/new values, durable-store requirements, a
+stale writer with a different committed timeout and preservation of other
+stored model attributes. This is not complete concurrent-policy correctness:
+value-based conflict detection does not detect an ABA change, and serving
+snapshots across processes do not yet carry a policy revision. Authenticated
+actor evidence, revision-based restore and complete concurrency/commit-failure
+injection remain required before exposing administrator policy writes.
+
 ## Remaining delivery gates
 
-- Implement atomic change/history and restore with authenticated actor evidence.
+- Complete revision-based change/history and restore with authenticated actor evidence.
 - Resolve request snapshot, precedence, inheritance and in-flight update rules.
 - Bind actual execution to the released canonical Rust runtime contract;
   do not add a Python timer clone or consume an unreleased owner branch.

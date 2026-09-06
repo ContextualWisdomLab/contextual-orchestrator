@@ -11,7 +11,11 @@ closed for the new setting. Neither result proves deployment or buyer latency.
 A new failure-injection test at `6236e982` demonstrates an unresolved audit
 atomicity gap: the update reports an audit error while both memory and a
 restarted instance retain the new 7200-second policy. Policy change/history
-must commit atomically before administrator write admission. Restore,
+was subsequently moved into one local pool transaction at `4e839ce1`;
+`c3879439` has 37 related passes, including history-insertion rollback for
+new/existing rows and rejection of a stale different-value writer. This does
+not yet cover ABA revisions, authenticated actor evidence or cross-process
+serving snapshots. Restore,
 precedence, cancellation semantics, released Rust runtime integration and
 actual administrator visual/E2E evidence also remain open.
 
