@@ -6238,6 +6238,20 @@ def build_server(
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
+                    if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6:] == ["timeout_policy", "history"]):
+                        page_size = self._parse_positive_int(
+                            (query.get("page_size") or [None])[0], "page_size", 20, 100,
+                        )
+                        before_revision = self._parse_optional_int(query, "before_revision")
+                        try:
+                            self._send(orchestrator.list_model_timeout_history(
+                                segments[3], segments[5], page_size=page_size,
+                                before_revision=before_revision,
+                            ))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
                     if (len(segments) == 7 and segments[:3] == ["api", "v1", "agent_pools"]
                             and segments[4] == "worker_agents" and segments[6] == "timeout_policy"):
                         try:

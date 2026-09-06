@@ -3426,6 +3426,10 @@ class _AgentPoolStore:
                     "ALTER TABLE model_timeout_history ADD COLUMN restored_from_revision INTEGER "
                     "REFERENCES model_timeout_history(policy_revision)"
                 )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS model_timeout_history_agent_revision "
+                "ON model_timeout_history(agent_id, policy_revision)"
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -3660,6 +3664,24 @@ class _AgentPoolStore:
              time.time(), actor_id, restored_from_revision),
         )
         return int(cursor.lastrowid)
+
+    def timeout_history(self, agent_id: str, page_size: int, before_revision: int | None) -> list[dict[str, Any]]:
+        """Read one bounded, model-scoped audit page plus a continuation sentinel."""
+        with self._lock:
+            conn = self._connect(self._path)
+            try:
+                rows = conn.execute(
+                    "SELECT policy_revision, previous_seconds, timeout_seconds, created_at, "
+                    "actor_id, restored_from_revision FROM model_timeout_history "
+                    "WHERE agent_id = ? AND (? IS NULL OR policy_revision < ?) "
+                    "ORDER BY policy_revision DESC LIMIT ?",
+                    (agent_id, before_revision, before_revision, page_size + 1),
+                ).fetchall()
+            finally:
+                conn.close()
+        fields = ("revision", "previous_seconds", "configured_seconds", "changed_at",
+                  "actor_id", "restored_from_revision")
+        return [dict(zip(fields, row)) for row in rows]
 
     def timeout_at_revision(self, agent_id: str, policy_revision: int) -> float | None:
         """Read a historical value only when its revision belongs to this model."""
@@ -6266,6 +6288,26 @@ class TaskOrchestrator:
             "serving_snapshot_seconds": serving.model_timeout_seconds,
             "serving_snapshot_revision": serving.model_timeout_revision,
             "enforcement_available": False,
+        }
+
+    def list_model_timeout_history(
+        self, agent_pool_id: str, worker_agent_id: str, *, page_size: int = 20,
+        before_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Page older model policy changes without offset drift during new writes."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be an integer between 1 and 100")
+        if before_revision is not None and (
+            type(before_revision) is not int or not 1 <= before_revision <= _AGENT_POOL_INTEGER_MAX
+        ):
+            raise ValueError("before_revision must be a positive stored revision")
+        rows = self._pool_store.timeout_history(worker_agent_id, page_size, before_revision) if self._pool_store else []
+        items = rows[:page_size]
+        return {
+            "items": items,
+            "next_before_revision": items[-1]["revision"] if len(rows) > page_size else None,
+            "history_available": self._pool_store is not None,
         }
 
     def restore_model_timeout(
