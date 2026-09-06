@@ -290,7 +290,7 @@ def test_terminated_stream_closes_provider_in_its_own_context(monkeypatch, termi
         orchestrator.close()
 
 
-@pytest.mark.parametrize("entry_point", ["complete", "bypass", "route_once", "conduct", "batch_route", "stream_route"])
+@pytest.mark.parametrize("entry_point", ["complete", "bypass", "route_once", "conduct", "batch_route", "stream_route", "provider_workflow"])
 def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entry_point):
     """Every execution boundary validates an operator update before making calls."""
     orchestrator, catalog = _orchestrator()
@@ -302,7 +302,7 @@ def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entr
         provider_calls.append(True)
         raise AssertionError("provider called with an invalid catalog")
 
-    for method in ("chat", "stream_chat", "batch_chat"):
+    for method in ("chat", "stream_chat", "batch_chat", "proxy_send"):
         monkeypatch.setattr(orchestrator.client, method, forbidden_call)
     messages = [{"role": "user", "content": "invalid catalog fixture"}]
     try:
@@ -313,6 +313,11 @@ def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entr
                 list(orchestrator.stream_route(messages))
             elif entry_point == "bypass":
                 orchestrator.complete(messages, mode="route", bypass_cache=True)
+            elif entry_point == "provider_workflow":
+                orchestrator.proxy_completion(
+                    {"model": "mock", "input": "invalid catalog fixture"},
+                    endpoint="responses", single_agent=False,
+                )
             else:
                 getattr(orchestrator, entry_point)(messages)
         assert not provider_calls

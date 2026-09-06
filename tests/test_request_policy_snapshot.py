@@ -1,8 +1,8 @@
 """Execution-policy regressions for judging, request identity, and saved evidence."""
 
+import json
 from dataclasses import replace
 from hashlib import sha256
-import json
 
 import pytest
 
