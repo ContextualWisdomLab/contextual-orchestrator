@@ -650,6 +650,7 @@ def test_tool_retry_backoff_requires_finite_nonnegative_number(value: object) ->
 def _post_fallback_json(
     port: int,
     payload: dict[str, object],
+    response_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, object]]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -665,6 +666,8 @@ def _post_fallback_json(
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
+        if response_headers is not None:
+            response_headers.update(error.headers)
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
@@ -792,6 +795,7 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
 
 
 def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
+    response_headers: dict[str, str] = {}
     agents = [
         ModelAgent(
             "primary_worker",
@@ -822,6 +826,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
                 "mode": "route",
                 "messages": [{"role": "user", "content": "send this message"}],
             },
+            response_headers,
         )
     finally:
         server.shutdown()
@@ -830,6 +835,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
     assert status == 409
     assert body["error"]["code"] == "tool_execution_stopped"
     assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert response_headers["x-should-retry"] == "false"
     assert client.calls == ["primary_worker"]
     assert "provider.example" not in json.dumps(body)
 
