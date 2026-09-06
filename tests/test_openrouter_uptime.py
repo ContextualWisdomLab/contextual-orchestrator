@@ -38,7 +38,6 @@ def _collectors(uptime: float | None):
     collector = OpenRouterUptimeCollector(
         _agents(),
         group_router,
-        quality_router,
         interval_seconds=0.05,
         startup_delay_seconds=0.05,
     )
@@ -49,9 +48,8 @@ def _collectors(uptime: float | None):
 def test_start_without_openrouter_agents_is_inert() -> None:
     """No openrouter members means no thread and no evidence writes."""
     group_router = ModelGroupRouter()
-    quality_router = ModelGroupRouter()
     plain = [ModelAgent("general_agent", "mock-planner", tags=("reasoning",))]
-    collector = OpenRouterUptimeCollector(plain, group_router, quality_router)
+    collector = OpenRouterUptimeCollector(plain, group_router)
     collector.start()
     assert collector.window_evidence("general_agent") == (0.0, 0.0)
     collector.stop()
@@ -193,11 +191,11 @@ def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
     """A substituted quality prior must not change the transport ledger's neutral base."""
     agent = ModelAgent("openrouter_member", "mock", provider_name="openrouter")
     monkeypatch.setattr(uptime_module, "resolve_quality_prior", lambda _member: (7.0, 3.0), raising=False)
-    group_router, quality_router, reference = ModelGroupRouter(), ModelGroupRouter(), ModelGroupRouter()
+    group_router, reference = ModelGroupRouter(), ModelGroupRouter()
     for router in (group_router, reference):
         router.observe_success(agent.id, 1.0)
         router.observe_failure(agent.id)
-    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
+    collector = OpenRouterUptimeCollector([agent], group_router)
     collector._fetch_uptime = lambda _model: 100.0
     collector._poll_agent(agent)
     reference.update_prior(agent.id, 2.0, 1.0)
