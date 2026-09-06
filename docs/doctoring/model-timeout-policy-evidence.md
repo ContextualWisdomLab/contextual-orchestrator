@@ -177,6 +177,22 @@ failure may leave earlier durable rows changed even though serving publication
 is withheld. Batch rollback and concurrent serving refresh remain open gates;
 the single-target regressions above do not prove either requirement.
 
+## Multi-model transaction rollback
+
+At `ad337e18`, group assignment, group deletion and discovery each reproduced
+a partial durable write when the second model had a stale timeout revision:
+3 failed, 38 deselected, 2.78 seconds. The first model remained changed after
+restart even though the operation failed and memory remained unchanged.
+
+At `36fc35df`, single and batch saves reuse the same per-connection normalized
+write body. Each group/discovery operation uses one immediate transaction;
+any exception closes the uncommitted connection and rolls back earlier rows.
+The three reproductions and policy/pool/governance/group/mixed-role/bootstrap
+boundary suites passed 122 tests in 5.04 seconds, exit 0. This supersedes the
+per-row group/discovery rollback gap above, but not cross-process serving
+refresh, separate bootstrap operations, audit streams outside the pool, or
+actual model deadline enforcement. No new full-suite result is claimed.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*

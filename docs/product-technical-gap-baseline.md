@@ -35,6 +35,12 @@ reproduced failures; 103 related tests passed in 15.34 seconds. Multi-model
 batch rollback and cross-process serving refresh remain unproven. Neither
 change supplies model deadline enforcement or a new full-suite result.
 
+Subsequent `ad337e18` reproduced partial persistence in all three group/discovery
+batch paths when the second model conflicted. `36fc35df` now commits each batch
+in one transaction using the existing normalized writes; 122 related tests
+passed in 5.04 seconds. Cross-process refresh and end-to-end timeout delivery
+remain open; separate bootstrap operations are not one atomic batch.
+
 See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
 revisions, retained failures, corrected test-evidence limitations, owner
 boundaries and the full remaining acceptance gates. Local configuration work
