@@ -123,18 +123,21 @@ class OpenRouterUptimeCollector:
         """Fetch best-endpoint 30-minute availability for one logical model.
 
         Args:
-            model_id: Discovery-sourced logical model identifier.
+            model_id: Discovery-sourced ``author/slug`` model identifier.
 
         Returns:
             The highest finite numeric endpoint uptime in ``[0, 100]``, or
             ``None`` when any supplied percentage is invalid or none exists.
             Null/missing measurements are absent, not observed failures.
         """
-        segment = urllib.parse.quote(model_id, safe="")
-        url = f"{_OPENROUTER_UPTIME_ORIGIN}/models/{segment}/endpoints"
+        model_parts = model_id.split("/")
+        if len(model_parts) != 2 or any(part in {"", ".", ".."} for part in model_parts):
+            return None
+        model_path = "/".join(urllib.parse.quote(part, safe="") for part in model_parts)
+        url = f"{_OPENROUTER_UPTIME_ORIGIN}/models/{model_path}/endpoints"
         request = urllib.request.Request(url, method="GET")
         try:
-            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; model_id is percent-encoded before interpolation and never reaches the scheme/authority.
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; author and slug are separately percent-encoded and cannot reach the scheme/authority.
             with urllib.request.urlopen(request, timeout=10.0) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
