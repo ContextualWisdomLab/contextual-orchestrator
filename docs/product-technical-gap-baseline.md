@@ -2762,3 +2762,10 @@ local evidence, not a protected release or live-provider result; full-suite
 verification of these new commits remains pending. Higher-level Strix
 retries, SSE errors, default-null full-response lifetime and UI acceptance
 remain open. See [incident and SDK evidence](doctoring/model-timeout-policy-evidence.md).
+
+The separate Naruon Noema 429 incident lacks per-attempt upstream status;
+final gateway status alone cannot establish every candidate's failure cause.
+Local `0b949aa2` adds bounded numeric status to the existing common failed-
+attempt log without reading provider text or bodies (89 related tests pass,
+15.28 seconds). Full verification and release of this diagnostic addition
+remain pending; provider availability itself is not repaired by better logs.

@@ -337,6 +337,27 @@ the normal suite must remain distinct from this explicit SDK-enabled run.
 This does not prove higher-level Strix replay prevention or live upstream
 cleanup, and it does not remove the legacy runtime's finite timeout.
 
+### Noema final 429 and missing attempt-status evidence
+
+The separate Naruon Noema run `34039160343`, job `101508094555`, installed
+CO `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`. Its caller made one attempt,
+reported 222.9 seconds, and ended with gateway HTTP 429. Artifact `9992599042`
+records two approximately 90-second timeout attempts and subsequent HTTPError
+attempts across several providers before the final rate-limit classification.
+It omits individual HTTP status codes and request IDs; therefore neither
+every candidate returning 429 nor a particular account's quota exhaustion
+is established. This is distinct from the earlier generic HTTP 500 incident.
+
+`a35a3c6c` retains eight RED cases for missing upstream status in the shared
+attempt logger. `b20f9945` records only actual HTTPError or typed-provider
+status integers from 100 through 599. Absent or invalid status becomes None,
+never a fabricated zero. The helper no longer stringifies the exception and
+does not read its body. At `0b949aa2`, 89 related tests pass in 15.28 seconds,
+including 425 versus 429, invalid values, typed status, no body reads and an
+exception whose string conversion deliberately raises. This local diagnostic
+repair does not make a provider available, change retries, establish request
+correlation, or retrospectively fill missing evidence in the old artifact.
+
 An actual screen-access attempt still returned a locked Mac. Administrator UI
 visual acceptance remains unverified; paper figure inspection is not UI proof.
 
