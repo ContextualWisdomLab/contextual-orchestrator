@@ -2714,3 +2714,37 @@ genuinely different, non-equivalent models to dodge a slow candidate would
 itself be an undocumented production routing/quality change, not a safe
 default. The measured stall durations and root cause recorded above remain
 accurate; only the "add a deadline" recommendation is superseded.
+
+**Amendment (2026-09-06): option (a) above is missing a second half, and
+the existing circuit breaker is not the exclusion mechanism it looks
+like.** Read at pin `414f2297`, `TaskOrchestrator` already carries a
+per-agent breaker — `_record_failure` (`contextual_orchestrator/orchestrator.py:8048`)
+counts failures and opens at `circuit_failure_threshold = 3`, and
+`_circuit_open` (`:8031`) gates admission. Two measured properties stop it
+from excluding a stalled candidate:
+
+1. **The tool-bearing passthrough path never reaches it.** Noema's
+   no-tools `_invoke` route-walk recorded timeouts as `circuit_failure`
+   and failed over (9 of 14 and 10 of 15 in two samples), while Strix's
+   passthrough recorded **0 of 21, 0 of 48, 0 of 63 and 0 of 65** across
+   four samples. A bare `TimeoutError` is re-raised as a
+   `500 internal_error` before `_record_failure` runs, so the breaker
+   never sees the failure it exists to count. That is exactly the scope
+   of the still-open `#1082`.
+2. **`circuit_reset_seconds = 30.0` is short relative to one stalled
+   attempt.** `_circuit_open` sets `state["failures"] = 0.0` once
+   `circuit_reset_seconds` have elapsed since `opened_at` (`:8036-8038`),
+   so the counter is cleared, not merely the open flag. Against the ~90 s
+   attempts these stalls actually take, a route is re-admitted after 30 s
+   and needs three fresh failures — up to another ~270 s of wall clock —
+   to be excluded again. The breaker suppresses roughly a tenth of the
+   time spent on a known-bad route; it does not skip it.
+
+So landing `#1082` is necessary but not sufficient for option (a): it
+makes the failures countable, and a durable exclusion still needs a reset
+policy scaled to the observed attempt duration rather than a fixed 30 s.
+`#911` remains unmerged as of this amendment (verified 2026-09-06), so the
+ranking-observation half is also still outstanding. None of this changes
+the conclusion above — a fixed wall-clock deadline on the candidate/retry
+loop is still barred by section 8 — it only records that the "not-yet-built"
+mechanism has two independent missing pieces, not one.
