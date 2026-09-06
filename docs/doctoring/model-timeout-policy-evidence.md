@@ -163,6 +163,20 @@ deadline enforcement, HTTP authorization, or a new full-suite result.
 A fresh visual-inspection attempt on 2026-09-06 could not proceed because the
 Mac was locked. Earlier remote PR screenshots do not verify these local changes.
 
+## Serving publication after rejected pool edits
+
+At `1edf0fba`, three regressions reproduced removal, group assignment and group
+deletion changing the in-memory serving candidates despite a rejected stale
+policy save (3 failed, 35 deselected, 0.70 seconds). At `befe04ce`, these callers
+publish candidate lists and reset routing state only after durable saves.
+Policy, pool, governance, model-group and mixed-role-effort suites passed
+103 tests in 15.34 seconds, exit 0. No full-suite or transport claim follows.
+
+Multi-model group/discovery writes still commit one row at a time. A later
+failure may leave earlier durable rows changed even though serving publication
+is withheld. Batch rollback and concurrent serving refresh remain open gates;
+the single-target regressions above do not prove either requirement.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*

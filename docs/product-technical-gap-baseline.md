@@ -28,6 +28,13 @@ audit-failure rejection. Authenticated HTTP restore,
 precedence, cancellation semantics, released Rust runtime integration and
 actual administrator visual/E2E evidence also remain open.
 
+Local `9701dec2` guards ordinary pool saves against stale policy value/revision
+overwrites (60 focused passes). `befe04ce` additionally delays removal and
+group-change serving publication until durable saves succeed, following three
+reproduced failures; 103 related tests passed in 15.34 seconds. Multi-model
+batch rollback and cross-process serving refresh remain unproven. Neither
+change supplies model deadline enforcement or a new full-suite result.
+
 See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
 revisions, retained failures, corrected test-evidence limitations, owner
 boundaries and the full remaining acceptance gates. Local configuration work
