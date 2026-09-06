@@ -182,3 +182,42 @@ def test_replacing_judge_row_removes_stale_trailing_items() -> None:
     evidence.observe("prompt", "model", False, None, (0,))
 
     assert evidence.records()[0]["irt_row"] == [0]
+
+
+def test_unseen_context_does_not_borrow_nearest_observed_score(monkeypatch) -> None:
+    """Cosine-nearest transfer is not a validated psychometric generalization model."""
+    evidence = PsychometricRoutingEvidence()
+    observed_id = evidence.context_id("observed prompt")
+    evidence._contexts[observed_id] = [1.0, 0.0]
+    evidence._scores = {observed_id: {"model_a": 0.9}}
+    monkeypatch.setattr(evidence, "_fit_locked", lambda: None)
+
+    assert evidence.ranked_evidence(
+        ["model_a"], "unseen prompt", [1.0, 0.0]
+    ) == []
+
+
+def test_equal_psychometric_scores_fail_closed_without_agent_id_tie_break(monkeypatch) -> None:
+    """An arbitrary identifier cannot decide a fitted-probability tie."""
+    evidence = PsychometricRoutingEvidence()
+    context = "exact prompt"
+    context_id = evidence.context_id(context)
+    evidence._contexts[context_id] = None
+    evidence._scores = {context_id: {"model_b": 0.5, "model_a": 0.5}}
+    monkeypatch.setattr(evidence, "_fit_locked", lambda: None)
+
+    assert evidence.ranked_evidence(
+        ["model_b", "model_a"], context, None
+    ) == []
+
+
+def test_legacy_context_cap_cannot_evict_routing_evidence() -> None:
+    """The retired cardinality argument is compatibility-only, not decision authority."""
+    evidence = PsychometricRoutingEvidence(max_contexts=1)
+    evidence.observe("first prompt", "model", True, None)
+    evidence.observe("second prompt", "model", False, None)
+
+    assert {record["context_id"] for record in evidence.records()} == {
+        PsychometricRoutingEvidence.context_id("first prompt"),
+        PsychometricRoutingEvidence.context_id("second prompt"),
+    }

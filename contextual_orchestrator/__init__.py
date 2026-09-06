@@ -1,5 +1,6 @@
 """Public package exports for the contextual orchestration runtime."""
 
+from . import batch_routing as _batch_routing
 from .batch_routing import (
     BatchDownloadError,
     BatchJob,
@@ -8,17 +9,32 @@ from .batch_routing import (
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
     LocalBatchBackend,
-    LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
     PgLlmBatchEmbeddingBackend,
     ProviderEmbeddingBatchBackend,
     RoutingDecision,
     RoutingHints,
-    RoutingPolicy,
     build_embeddings_jsonl_body,
-    cheapest_upstream,
-    heuristic_embedding,
 )
+from .evidence_batch_routing import (
+    LocalEmbeddingBatchBackend,
+    RoutingPolicy,
+    cheapest_upstream,
+    prohibited_heuristic_embedding,
+    resolve_embedding_target_evidence_only,
+)
+
+# Patch the already-loaded protocol module before downstream modules import its
+# decision surfaces. Direct ``contextual_orchestrator.batch_routing`` imports
+# also observe these fail-closed replacements because Python initializes the
+# package before returning a submodule to callers. The legacy SHA-derived
+# implementation remains unreachable and is exposed only as a tombstone that
+# raises instead of fabricating a semantic vector.
+_batch_routing.RoutingPolicy = RoutingPolicy
+_batch_routing.cheapest_upstream = cheapest_upstream
+_batch_routing.LocalEmbeddingBatchBackend = LocalEmbeddingBatchBackend
+_batch_routing.heuristic_embedding = prohibited_heuristic_embedding
+
 from .cost_ledger import (
     ATTRIBUTION_DIMENSIONS,
     AttributionDimensions,
@@ -39,6 +55,13 @@ from .cost_ledger import (
 )
 from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
+
+# The legacy coordinator still contains a price/order ranking helper used by
+# historical tests and non-authoritative diagnostics. Production embedding
+# target resolution is replaced at class load so both package and submodule
+# imports require explicit or uniquely eligible routing evidence.
+CostRoutingCoordinator._resolve_embedding_target = resolve_embedding_target_evidence_only
+
 from .cefr_language_observation import (
     CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1,
     FAST_MLSIRM_SCORING_SCHEMA_VERSION,
@@ -66,6 +89,26 @@ from .rater_observation import (
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .evidence_model_selection import (
+    get_model_group_diagnostic,
+    measured_member_order_fail_closed,
+    prohibited_static_rank_key,
+    ranked_agents_evidence_only,
+    requested_agent_evidence_only,
+)
+
+# Runtime model selection must not fall through to the historical static
+# priority/cosine/id key or the hand-composed transport score. Keep the
+# compatibility source available for incremental deletion, but make every
+# package/submodule import observe the fail-closed selection boundary now.
+TaskOrchestrator._ranked_agents = ranked_agents_evidence_only
+TaskOrchestrator._requested_agent = requested_agent_evidence_only
+TaskOrchestrator._static_rank_key = prohibited_static_rank_key
+TaskOrchestrator._measured_member_order = measured_member_order_fail_closed
+# Admin group serialization remains available without pretending its canonical
+# identifier order is an inference preference.
+TaskOrchestrator.get_model_group = get_model_group_diagnostic
+
 from .release_authorization import evaluate_release_authorization
 from .reasoning_effort_profile import (
     EffortProfileError,
@@ -165,7 +208,6 @@ __all__ = [
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
     "ProviderEmbeddingBatchBackend",
-    "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",

@@ -25,7 +25,7 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
 # resolves the credential by name.
 python -m contextual_orchestrator nim-benchmark \
   --max-total-requests 2000 \
-  --max-output-tokens 264 \
+  --max-output-tokens "$NIM_BENCHMARK_MAX_OUTPUT_TOKENS" \
   --git-sha "$GITHUB_SHA" \
   --workflow-run-id "$GITHUB_RUN_ID"
 ```
@@ -33,10 +33,13 @@ python -m contextual_orchestrator nim-benchmark \
 The provider secret is never accepted through argv, printed, or serialized.
 Artifact writing fails closed if the resolved secret appears in any output.
 
-`--max-output-tokens` is the per-provider-call output cap. The equal
-cell-wide prompt-plus-completion budget is five times that cap by default
-(`1,320` tokens), which leaves the fixed five-call conduct workflow enough room
-for its prompts while keeping the same cell budget for every policy.
+`--max-output-tokens` is the explicit per-provider-call output cap for a live
+benchmark. There is no repository-authored live default: the caller must supply
+a value justified by the governed evaluation design or the run fails closed.
+The equal cell-wide prompt-plus-completion allowance is then derived exactly as
+that explicit cap multiplied by the declared workflow-step envelope. The value
+`264` remains only as a deterministic dry-run fixture and is not production
+allocation evidence.
 
 ## Provider-egress security boundary
 
@@ -168,16 +171,14 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
-tasks kept outside the decision set. It proves integration behavior but does not
-authorize production routing. A report reaches
-`evidence_review_required` only when it contains at least 30 paired locked tasks
-and at least 90% successful comparison cells. Otherwise it reports
-`insufficient_evidence` and explains the shortfall.
-
-These thresholds are explicit conservative governance floors, not universal
-statistical guarantees. Every report keeps `routing_recommendation` null even
-when the floor is met; a human review remains required.
+The bundled thirty-task manifest is an integration fixture with two exploratory
+tasks kept outside the measurement set. It can exercise the benchmark contract
+but cannot establish statistical sufficiency or authorize production routing.
+The report therefore records observed paired-task and completion quantities as
+measurement evidence only; it does not convert them through a hand-selected
+sample-size or completion-fraction cutoff. `routing_recommendation` remains null.
+A production decision requires an independently justified, pre-registered and
+validated evaluation design appropriate to the estimand and deployment scope.
 
 - Seeded paired bootstrap intervals preserve task pairing.
 - Pareto frontiers cover quality versus latency and quality versus reviewed

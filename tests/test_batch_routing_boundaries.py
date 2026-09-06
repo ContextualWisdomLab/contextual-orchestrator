@@ -42,21 +42,44 @@ class _MixedPriceBook:
 
 
 def test_cheapest_upstream_returns_none_for_no_candidates() -> None:
-    assert cheapest_upstream([], _StaticPriceBook(1.0)) is None
+    assert cheapest_upstream(
+        [], _StaticPriceBook(1.0), prompt_tokens=1, completion_tokens=1
+    ) is None
 
 
-def test_cheapest_upstream_tie_keeps_input_order() -> None:
+def test_cheapest_upstream_tie_fails_closed() -> None:
     first = {"provider": "alpha", "model": "model_one"}
     second = {"provider": "beta", "model": "model_two"}
-    best = cheapest_upstream([first, second], _StaticPriceBook(0.5))
-    assert best is first  # strict less-than keeps the earlier candidate on ties
+    best = cheapest_upstream(
+        [first, second],
+        _StaticPriceBook(0.5),
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    assert best is None
 
 
 def test_cheapest_upstream_excludes_unknown_prices() -> None:
     known = {"provider": "known", "model": "priced"}
     unknown = {"provider": "unknown", "model": "unpriced"}
-    assert cheapest_upstream([unknown, known], _MixedPriceBook()) is known
-    assert cheapest_upstream([unknown], _MixedPriceBook()) is None
+    assert cheapest_upstream(
+        [unknown, known], _MixedPriceBook(), prompt_tokens=10, completion_tokens=5
+    ) is known
+    assert cheapest_upstream(
+        [unknown], _MixedPriceBook(), prompt_tokens=10, completion_tokens=5
+    ) is None
+
+
+def test_cheapest_upstream_rejects_non_authoritative_token_quantities() -> None:
+    candidate = {"provider": "known", "model": "priced"}
+    with pytest.raises(ValueError, match="prompt_tokens"):
+        cheapest_upstream(
+            [candidate], _MixedPriceBook(), prompt_tokens=-1, completion_tokens=5
+        )
+    with pytest.raises(ValueError, match="completion_tokens"):
+        cheapest_upstream(
+            [candidate], _MixedPriceBook(), prompt_tokens=1, completion_tokens=True
+        )
 
 
 def test_local_backend_rejects_invalid_concurrency() -> None:
@@ -71,11 +94,9 @@ def test_extract_answer_handles_missing_choices_and_message() -> None:
     assert _extract_answer({"choices": [{}]}) == ""
 
 
-def test_heuristic_embedding_rejects_non_positive_dimension() -> None:
-    with pytest.raises(ValueError, match="dimension must be positive"):
-        heuristic_embedding("route text", dimension=0)
-    with pytest.raises(ValueError, match="dimension must be positive"):
-        heuristic_embedding("route text", dimension=-3)
+def test_retired_heuristic_embedding_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="heuristic embeddings are prohibited"):
+        heuristic_embedding("route text", dimension=8)
 
 
 def test_embedding_request_jsonl_line_shape() -> None:
@@ -285,7 +306,7 @@ def test_extract_embedding_normalizes_values() -> None:
     assert _extract_embedding({}) == []
     assert _extract_embedding({"data": []}) == []
     assert _extract_embedding({"data": [{}]}) == []
-    vector = _extract_embedding({"data": [{"embedding": [1, "2.5"]}]} )
+    vector = _extract_embedding({"data": [{"embedding": [1, "2.5"]}]})
     assert vector == [1.0, 2.5]
 
 

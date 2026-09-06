@@ -35,8 +35,8 @@ Those files are planning history. They are not a second source of truth for the 
 
 1. Take the next `docs/adr/NNNN` number. Do not reuse a planning number as
    if the two series were one.
-2. Keep the decision text honest to the running control plane (heuristic
-   routing, injected batch client, fail-closed judge composition).
+2. Keep the decision text honest to the running control plane (evidence-only,
+   fail-closed routing, injected batch client, fail-closed judge composition).
 3. Verify every DOI or official URL before citing. If a URL does not
    resolve, omit the source.
 4. Add a row to the table above and a short Unreleased note in

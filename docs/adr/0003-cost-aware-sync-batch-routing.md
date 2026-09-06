@@ -1,6 +1,6 @@
-# ADR 0003: Cost-aware sync-versus-batch routing
+# ADR 0003: Evidence-bounded sync-versus-batch routing
 
-- Status: Accepted
+- Status: Accepted; amended 2026-09-01
 - Date: 2026-08-25
 - Decision owners: ContextualWisdomLab
 - Series: `docs/adr` only. This is not planning ADR 0003
@@ -8,67 +8,73 @@
 
 ## Context
 
-LLM API prices differ by orders of magnitude across providers and models, and
-bulk or latency-tolerant work is cheaper on a batch path than on an
-interactive path. Three arXiv preprints already vendored in
-`docs/papers/README.md` ground that cost-review plus routing hub:
+LLM API prices differ materially across providers and models, and some providers
+expose distinct asynchronous batch products. FrugalGPT, RouteLLM, and Hybrid
+LLM show that cost/quality routing is an estimable or learned decision problem.
+They do **not** validate a hand-written `batch_min_tokens`, caller `priority`,
+`latency_tolerant` switch, fixed representative request shape, provider-order
+tie break, or pseudo-semantic hash embedding.
 
-- **FrugalGPT** shows heterogeneous LLM API prices and motivates pricing each
-  request, then selecting a cheaper capable combination (Chen et al., 2023).
-- **RouteLLM** frames routing as choosing a stronger or weaker model to hit a
-  cost/quality target (Ong et al., 2024).
-- **Hybrid LLM** routes easier or bulk queries to a cheaper path and keeps
-  harder or interactive queries on the responsive path (Ding et al., 2024).
+The preceding version of this ADR cited those papers while explicitly saying
+that this repository implemented a deterministic config policy instead of the
+learned/evaluated algorithms in the papers. Under the no-heuristics contract,
+that mismatch is not an acceptable permanent approximation: missing routing
+evidence must stay unresolved or fail closed rather than being replaced by an
+operational rule of thumb.
 
-Those papers describe *learned* routers (cascades, preference-trained
-routers, quality-gap predictors). This lab's current `RoutingPolicy` is
-deterministic and config-driven: request hints plus KV thresholds choose
-sync versus batch, and a price table can pick the cheapest capable upstream.
-There is no trained router in this repository.
-
-All three sources are arXiv **preprints** (DOIs under `10.48550/arXiv.*`).
-They are not treated as final archival versions. `docs/papers/README.md`
-notes Hybrid LLM as ICLR 2024; this ADR cites the verified arXiv record
-only.
+The already-vendored research inventory in `docs/papers/README.md` remains the
+paper source. This amendment changes the authority assigned to the evidence; it
+does not claim the repository has suddenly implemented RouteLLM, Hybrid LLM,
+Fugu, TRINITY, or Conductor.
 
 ## Decision
 
-1. **Cost review is first-class.** Every completion, sync and batch, writes a
-   prompt-safe usage record with token counts, computed cost, and the
-   seven attribution dimensions. Raw prompt and answer text are not stored
-   on the usage record.
-2. **Sync versus batch is a policy, not a model.** `RoutingPolicy` decides
-   from caller hints (`routing.latency_tolerant`, `channel`, `priority`) and
-   KV thresholds (`batch_enabled`, `batch_min_tokens`,
-   `interactive_forces_sync`). Interactive work stays on the sync path;
-   latency-tolerant or bulk work may go to a batch backend.
-3. **Learned routers are future work.** Do not add a preference-trained or
-   cascade router until evaluation logs show the deterministic policy is the
-   bottleneck. Cite FrugalGPT, RouteLLM, and Hybrid LLM as design grounding,
-   not as a claim that this lab implements those trained systems.
-4. **Batch execution is injected.** The production batch backend is an
-   optional `pg-llm-batch` client. A local in-process backend keeps the
-   standalone path working. Composition details are in
-   [ADR 0004](0004-msa-leaf-composition.md).
+1. **Measured cost remains first-class.** Every completion, sync and batch,
+   continues to write prompt-safe usage evidence with authoritative token
+   counts and price provenance when those measurements exist. Unknown usage or
+   incomparable price evidence stays unknown rather than becoming zero.
+2. **Sync versus batch is explicit contract selection until an evaluated
+   router exists.** `routing.channel=sync|batch` is authoritative caller
+   intent. An omitted or unrecognized channel stays synchronous because the
+   synchronous API contract must not silently change response shape. The
+   `batch_enabled=false` setting is an operator kill switch. Compatibility
+   fields such as `latency_tolerant`, `priority`, prompt length,
+   `batch_min_tokens`, and `interactive_forces_sync` cannot select a channel.
+3. **Cost comparison uses the exact request shape.** Table-driven comparison
+   requires caller/runtime-supplied prompt and completion token quantities for
+   the request being compared. The former 1000-prompt/1000-completion token
+   assumption is retired. Unknown prices and equal minimum costs leave the
+   candidate unresolved instead of using input order as a tie break.
+4. **Local embeddings require explicit semantics.** A local embedding backend
+   may execute new work only when a semantic embedding implementation and an
+   authoritative tokenizer are explicitly injected. SHA/digest-derived values
+   may serve as identifiers or integrity digests, but are prohibited as
+   semantic vectors. The legacy pseudo-embedding entry point is retained only
+   as a fail-closed compatibility tombstone and is not exported by the package.
+5. **Multiple embedding candidates require evidence.** A single eligible
+   candidate needs no comparative ranking. When multiple candidates remain,
+   the caller must identify the exact agent or an independently validated
+   routing model must produce a unique decision. Price-only ranking, static
+   input order, and fallback-first ordering are not substitutes for that model.
+6. **Future automatic routing requires executable provenance.** A new router
+   must identify its estimand, training/evaluation design, calibration or
+   uncertainty contract, and exact decision inputs before production authority
+   changes. Fugu, Conductor, and TRINITY architecture contracts do not by
+   themselves justify thresholds, hand-set weights, or fallback ordering.
 
 ## Consequences
 
-### Positive
+The synchronous API no longer changes to batch because a request is labelled
+bulk/latency-tolerant or crosses a configured token threshold. Offline tests may
+still inject a deterministic test embedder, but the production/default path
+cannot fabricate semantic vectors. Cost optimization remains available when
+exact request measurements identify a unique minimum; otherwise uncertainty is
+preserved explicitly.
 
-- Operators can price and route without training data.
-- Interactive callers are not forced onto a 24-hour batch window.
-- Paper grounding stays honest: the literature motivates the split; the
-  implementation remains a config policy.
-
-### Negative
-
-- A learned router would likely beat hint-and-threshold routing on mixed
-  quality/cost workloads. That gap is accepted until measured.
-
-### Neutral
-
-- Upstream load-balancing among priced candidates (`cheapest_upstream`) is
-  table-driven. It is not RouteLLM's preference model.
+This is intentionally more conservative than the retired deterministic policy.
+It may leave work synchronous or selection unresolved until sufficient evidence
+exists. That behavior is the specified fail-closed boundary, not an implicit
+routing preference.
 
 ## References
 
