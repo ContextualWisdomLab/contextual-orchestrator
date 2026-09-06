@@ -8232,7 +8232,12 @@ def build_server(
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, safe_request_id
             )
-            self._send(_error_payload(code, message, error_detail), status)
+            payload = _error_payload(code, message, error_detail)
+            if code == TOOL_FALLBACK_STOPPED_CODE:
+                # The SDK retries ordinary 409s; this explicit stop must not replay.
+                self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            else:
+                self._send(payload, status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
