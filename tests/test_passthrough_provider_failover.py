@@ -1289,9 +1289,10 @@ def test_only_temporary_dns_failures_advance(
             )
 
 
-def test_ambiguous_timeout_is_not_replayed() -> None:
-    """A timeout may follow provider acceptance, so passthrough fails closed."""
-    failure = TimeoutError("provider outcome unknown")
+@pytest.mark.parametrize("error_type", [TimeoutError, ConnectionError])
+def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
+    """Unknown transport outcomes remain terminal and expose no raw diagnostics."""
+    failure = error_type("provider outcome unknown token=private_test_value")
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1299,9 +1300,15 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
         }
     )
 
-    with pytest.raises(TimeoutError, match="outcome unknown"):
+    with pytest.raises(ProviderUpstreamError) as raised:
         _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert raised.value.error_code == "provider_outcome_unknown"
+    assert raised.value.client_status == 502
+    assert raised.value.provider_status is None
+    assert raised.value.retryable is False
+    assert raised.value.transport == "passthrough"
+    assert "private_test_value" not in str(raised.value)
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
