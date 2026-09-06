@@ -14,9 +14,15 @@ worker, verifier, synthesizer, planner, and judge. It validates finite numeric
 budgets, rejects booleans-as-numbers and unknown keys, and keeps
 `reasoning_effort` separate from `temperature`, `top_p`, and `seed`.
 
-The catalog is hashed canonically so synchronous route, streaming route, batch
-route, generated planning, verification, and persisted runs can be replayed
-against the same configuration. A provider must explicitly declare
+The catalog is hashed canonically to identify declared configuration in
+synchronous route, streaming route, batch route, generated planning,
+verification, and persisted runs. This identifier does not freeze a mutable
+catalog for an entire provider request. Cached completions include the catalog
+hash in their key, and persisted runs preserve the completed result's snapshot
+instead of relabeling it with later settings. See the
+[cache attribution repair](DISTRIBUTED_RESPONSE_CACHE.md#effort-catalog-attribution-repair-2026-09-06)
+for tested boundaries and remaining concurrent-update limitations.
+A provider must explicitly declare
 `reasoning_effort_supported=true` before the native field is sent. Unknown
 support fails closed; the explicit `omit` fallback sends only independently
 valid output and sampling controls.

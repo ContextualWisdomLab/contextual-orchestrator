@@ -1,5 +1,38 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 effort-aware answer reuse and record attribution
+
+RED `80fe7d5f75973b40986cac895369613ac51803d5` demonstrates four failures:
+local and shared-provider cache paths reuse a medium-effort answer after a
+high-effort change, a malformed catalog can bypass validation on a cache hit,
+and persistence replaces a completion's settings with later operator settings.
+The failure occurs with sequential requests and a worker double; it is not a
+claim about a live provider or a concurrent-production incident.
+
+Source `29712e060645a1a127b49e2be90bc4d3e03dcb10` reuses the canonical catalog
+hash in the common cache key and copies the completion's declared settings
+into the saved record. Equal catalog content still hits the cache; invalid
+catalog errors are not treated as optional-cache outages. The no-catalog key
+envelope, provider-outage fallback, and production routing defaults remain.
+Follow-up `92858f33f52902460b9cc4d003e02a5aff21d28c` removes an accidentally
+duplicated import by retaining the pre-existing import.
+
+At clean `92858f33`, **148 focused tests pass in 15.25 seconds**. A separate
+27-test coverage run covers all eight statements and both branches of the
+cache-key method, the invalid-catalog rethrow, and both paths of the new
+snapshot-preservation condition. This is not whole-module or whole-method
+coverage for completion/persistence. The changed-definition census against
+protected main `414f2297` is **138/138**: runtime 29/29, scripts 44/44, tests
+65/65, using the same scope as the earlier documentation audit.
+
+Isolated Ruff E4/E7/E9/F checks pass. The environment's broader default Ruff
+selection reports 31 findings already present at RED `80fe7d5f`, with no new
+code/message pairs; that broader run is not green. No lint rule was changed.
+Exact commands, logs, rejected alternatives, and limits are in the
+[cache doctoring record](doctoring/DISTRIBUTED_RESPONSE_CACHE.md#effort-catalog-attribution-repair-2026-09-06).
+No request-wide atomic snapshot, end-to-end latency gain, buyer accuracy,
+protected merge, or released delivery is established by this repair.
+
 ## 2026-09-06 changed-definition documentation and completed full runs
 
 Documentation-only `02f60c40e0d1d9f8b0fe79ca8d8c53b43cda0903` fills 39

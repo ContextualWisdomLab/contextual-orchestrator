@@ -54,6 +54,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Changing model-effort settings no longer reuses an answer cached under the
+  previous settings. Saved run details retain the completed answer's settings.
 - Research materials now retain citations and source links when permission to
   bundle a paper has not been established. Licensed copies include their
   specific attribution and redistribution terms.
