@@ -157,3 +157,19 @@ def test_model_timeout_policy_preserves_other_stored_attributes(tmp_path: Path) 
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).priority == 9
     assert restored._agent(model_agent.id).model_timeout_seconds == 7200
+
+
+def test_model_timeout_policy_rejects_aba_writer(tmp_path: Path) -> None:
+    """Returning to null must not make an older policy snapshot current again."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    first = TaskOrchestrator([model_agent], agents_db=database_path)
+    stale = TaskOrchestrator([model_agent], agents_db=database_path)
+    for limit in (7200, None):
+        first.patch_agent("default", model_agent.id, {"model_timeout_seconds": limit})
+    with pytest.raises(ValueError, match="reload"):
+        stale.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds is None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (2,)
