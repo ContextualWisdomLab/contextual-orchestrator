@@ -148,6 +148,21 @@ the original failures and JUnit reports. These temporary paths are not public
 release artifacts. The local policy delta remains unpushed pending the gates
 above; the remote PR's completed full-suite result applies only to `661ce8db`.
 
+## Ordinary-save policy protection
+
+At `e0eab787`, a stale orchestrator's priority edit was accepted after another
+writer set a 7200-second policy (one failed test, 1.12 seconds). The ordinary
+pool UPDATE included the stale timeout without appending policy history.
+At `9701dec2`, every pool save checks the policy value and revision inside the
+existing immediate transaction before writing. A stale ordinary edit now fails
+before publishing its candidate; the durable policy and history remain intact.
+The policy, pool database, and governance suites passed 60 tests in 4.09 seconds.
+This is focused storage-boundary evidence, not distributed refresh, runtime
+deadline enforcement, HTTP authorization, or a new full-suite result.
+
+A fresh visual-inspection attempt on 2026-09-06 could not proceed because the
+Mac was locked. Earlier remote PR screenshots do not verify these local changes.
+
 ## Source reference
 
 ContextualWisdomLab. (n.d.). *Finite outbound request-timeout boundaries*
