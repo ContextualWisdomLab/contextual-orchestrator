@@ -40,6 +40,7 @@ JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
 ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
+ITEM_COVARIATE_MAX_ITER = 1_000
 UNCERTAINTY_SAMPLE_SIZE = 1_200
 UNCERTAINTY_SEED = 260_909
 INVARIANCE_DRIFT_TOLERANCE = 0.25
@@ -1111,7 +1112,7 @@ def _validate_item_covariate_effect() -> dict[str, object]:
         fast_mlsirm.FitConfig(
             model="ULSRM",
             estimator="mmle",
-            max_iter=1_000,
+            max_iter=ITEM_COVARIATE_MAX_ITER,
             latent_dim=1,
             q_theta=15,
             q_xi=7,
@@ -1124,6 +1125,7 @@ def _validate_item_covariate_effect() -> dict[str, object]:
     estimated_delta = float(result.population["delta"])
     return {
         "method": "multigroup_item_covariate",
+        "max_iterations": ITEM_COVARIATE_MAX_ITER,
         "sample_size": ITEM_COVARIATE_SAMPLE_SIZE,
         "seed": ITEM_COVARIATE_SEED,
         "contexts": len(covariate),
