@@ -20,6 +20,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `spend_analytics()["by_model"][].usage_source` now also accounts for
+  per-model prompt-token availability instead of classifying purely from
+  output-token source. A model whose output tokens are fully provider-reported
+  or fully exact-tokenizer-counted, but whose prompt tokens are partially or
+  entirely unmeasured, is now honestly reported as `"mixed"` rather than
+  overstated as pure `"reported"`/`"tokenizer"` — matching this project's
+  Honest metrics convention (see `tests/test_spend_analytics.py::test_exact_output_without_prompt_usage_is_explicitly_unavailable`).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
@@ -854,6 +861,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- **Ticking-time-bomb dates in `tests/test_nim_benchmark.py`.** Five tests
+  exercising unrelated `run_mode="live"` behavior (missing credential,
+  transport wiring, contract failures on a malformed catalog, CLI exit
+  codes) went through `_require_current_actual_cost_evidence()`, which
+  fails closed once the module-level `ACTUAL_COST_EVIDENCE["valid_until_date"]`
+  literal — a human review date for NVIDIA's published hosted-endpoint
+  terms — is in the past. That literal is intentionally a fixed calendar
+  date in production (a real re-review is required for it to move), but
+  the five tests above were coupled to it by accident: once wall-clock
+  time passed the recorded review window, they started failing for a
+  reason unrelated to what each one actually asserts. Added an opt-in
+  (not autouse) `current_actual_cost_evidence` fixture that a test requests
+  by name to pin the evidence window to real "now" for that test only,
+  leaving every other test in the file — and
+  `contextual_orchestrator/nim_benchmark.py`'s production evidence —
+  observing the literal review date by default.
+- **Same ticking-time-bomb class, third instance, in
+  `tests/test_nim_benchmark_release_acceptance.py`.** Its two pricing-scenario
+  contract tests (`test_live_run_rejects_unreviewed_pricing_before_egress`,
+  `test_live_run_rejects_incomplete_or_expired_pricing_before_egress`) are
+  designed to exercise `validate_live_pricing_scenario`'s own fail-closed
+  branches (lines 1708/1718: "must be independently reviewed" /
+  "reviewed pricing evidence expired"), but once the same literal
+  `ACTUAL_COST_EVIDENCE["valid_until_date"]` lapsed, `run_benchmark` started
+  raising `_require_current_actual_cost_evidence()`'s own "expired" error
+  first — before ever reaching the pricing-scenario check. Both tests kept
+  reporting green because their `pytest.raises(match=...)` substrings
+  ("reviewed" / "expired") happened to also match that earlier exception's
+  message, but the coverage gate caught what the green run hid: 0% branch
+  coverage on `validate_live_pricing_scenario`'s two fail-closed lines. Added
+  the same opt-in `current_actual_cost_evidence` fixture to this file (same
+  name and pattern as `tests/test_nim_benchmark.py`) and requested it from
+  both tests, restoring their intended coverage of the pricing-scenario gate
+  itself rather than the unrelated evidence-currency gate.
 
 ### Added
 

@@ -11,6 +11,7 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -58,6 +59,35 @@ def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
         set_backend(None)
         if saved_env is not None:
             os.environ[nb.NIM_CREDENTIAL_NAME] = saved_env
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture:
+    production ``run_mode="live"`` calls are meant to fail closed once that
+    literal calendar date lapses, until someone actually re-reviews the
+    official source (``_require_current_actual_cost_evidence``). That
+    review-cadence invariant itself is owned by
+    ``test_nim_benchmark_release_acceptance.py``, which injects an explicit
+    ``today`` alongside explicit reviewed/valid dates. A handful of tests in
+    this file exercise unrelated ``live``-path behavior (missing credential,
+    transport wiring, contract failures, ...) and only need to get past the
+    evidence gate to reach their own assertion — they request this fixture by
+    name. Deliberately **not** autouse: every other test in this file,
+    present or future, must keep observing the literal production evidence
+    dict by default so the fail-closed gate stays file-wide except where a
+    test explicitly opts out of it.
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _ok_json(payload: object) -> tuple[int, bytes]:
@@ -1791,6 +1821,7 @@ def _dry_report(output_dir: str) -> dict:
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
     tmp_path: Path,
+    current_actual_cost_evidence: None,
 ) -> None:
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     dry_transport = nb.build_dry_run_transport()
@@ -2056,7 +2087,40 @@ def test_dry_run_accepts_explicit_transport() -> None:
         )
 
 
-def test_live_run_fails_closed_without_credential() -> None:
+def test_live_run_without_evidence_fixture_still_fails_closed_on_expired_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A test that does not request ``current_actual_cost_evidence`` must still
+    observe the literal ``nb.ACTUAL_COST_EVIDENCE`` dict rather than some
+    other test's artificially-extended window -- proving the fixture above is
+    opt-in per test, not file-wide, even though this module also collects
+    tests that do request it. Deliberately expires the dict itself here
+    (rather than relying on real wall-clock time happening to be past
+    whatever the production ``valid_until_date`` currently is) so this
+    assertion stays stable across routine evidence refreshes such as #1073 --
+    a prior version of this test depended on that real-world timing and broke
+    the moment the production evidence was refreshed. A registered credential
+    is present so the run reaches the evidence gate (the first live-mode
+    check) rather than failing earlier for an unrelated reason.
+    """
+    register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2020-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2020-02-01")
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(nb.BenchmarkContractError, match="expired"):
+            nb.run_benchmark(
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                git_sha="f" * 40,
+                workflow_run_id="run-evidence-gate-regression",
+            )
+
+
+def test_live_run_fails_closed_without_credential(
+    current_actual_cost_evidence: None,
+) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(NotConfigured):
             nb.run_benchmark(
@@ -2069,7 +2133,7 @@ def test_live_run_fails_closed_without_credential() -> None:
             )
 
 
-def test_live_run_end_to_end_offline() -> None:
+def test_live_run_end_to_end_offline(current_actual_cost_evidence: None) -> None:
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
@@ -2099,7 +2163,9 @@ def test_live_run_end_to_end_offline() -> None:
     assert "nvapi-test-credential" not in json.dumps(report)
 
 
-def test_live_run_uses_default_transport_builder_when_none_given() -> None:
+def test_live_run_uses_default_transport_builder_when_none_given(
+    current_actual_cost_evidence: None,
+) -> None:
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_builder = nb.build_default_transport
     nb.build_default_transport = lambda timeout_seconds: nb.build_dry_run_transport()
@@ -2179,7 +2245,9 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
 
 
-def test_cli_live_fails_closed_without_secret() -> None:
+def test_cli_live_fails_closed_without_secret(
+    current_actual_cost_evidence: None,
+) -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(

@@ -43,6 +43,39 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert not any("estimated" in key for key in row | report["totals"])
 
 
+def test_usage_source_is_scoped_per_model_when_prompt_evidence_differs() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("known_agent", "known-model", tags=("reasoning",)),
+            ModelAgent("missing_agent", "missing-model", tags=("reasoning",)),
+        ]
+    )
+    orchestrator._workflow_runs["prompt-evidence-scope"] = {
+        "workflow_run_id": "prompt-evidence-scope",
+        "trace": [
+            {
+                "model_name": "known-model",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                "output": "known prompt and output usage",
+            },
+            {
+                "model_name": "missing-model",
+                "usage": {"completion_tokens": 11},
+                "output": "output usage only",
+            },
+        ],
+        "verification": None,
+    }
+
+    report = orchestrator.spend_analytics()
+    rows = {row["model"]: row for row in report["by_model"]}
+
+    assert report["measurement_status"] == "unavailable"
+    assert report["totals"]["prompt_tokens"] is None
+    assert rows["known-model"]["usage_source"] == "reported"
+    assert rows["missing-model"]["usage_source"] == "mixed"
+
+
 def test_exact_output_cost_uses_operator_price() -> None:
     orchestrator = _orchestrator(price=10.0)
     orchestrator.run([{"role": "user", "content": "calculate exact output cost"}])

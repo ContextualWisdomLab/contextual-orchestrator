@@ -208,7 +208,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
   -H "authorization: Bearer $local_token" | jq '.totals, .by_model, .budget'
 ```
 
-- **Tokens.** `by_model[].output_tokens` uses provider-reported completion/output tokens first. For exact full model IDs declared by ADR 0006, a missing output count may use the packaged Rust tokenizer over raw textual output only. Rows carry `usage_source: reported | tokenizer | mixed | unavailable`; unavailable rows return `output_tokens: null`. Prompt tokens are provider-reported or null because chat framing is not reconstructed.
+- **Tokens.** `by_model[].output_tokens` uses provider-reported completion/output tokens first. For exact full model IDs declared by ADR 0006, a missing output count may use the packaged Rust tokenizer over raw textual output only. Rows carry `usage_source: reported | tokenizer | mixed | unavailable`; unavailable rows return `output_tokens: null`. `reported`/`tokenizer` require that model's steps to be fully known on *both* axes — output token source **and** prompt-token availability; a model whose output is fully reported or fully exact-tokenizer but whose prompt tokens are partially or entirely unmeasured is honestly `mixed`, never overstated as pure `reported`/`tokenizer`. Prompt tokens are provider-reported or null because chat framing is not reconstructed.
 - **Cost.** Supply a price table to turn authoritative output tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models`; `cost_usd` remains null when a price or required token count is unavailable. No prices or token counts are assumed.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
