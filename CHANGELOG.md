@@ -854,6 +854,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
   than touching it itself, since it is only ever called after a prior
   successful header flush.
+- `_invoke`'s candidate failover loop now records every tried candidate
+  (agent, model, provider, error code, retryability) instead of discarding
+  all but the most recent failure, and the pool-exhausted
+  `ProviderUpstreamError` carries them as `attempts`/`stop_reason` so
+  `.detail` and the HTTP error body's message name how many routes were
+  tried and why the loop stopped, not just the last one. The 413
+  `request_too_large` HTTP response also now includes the previously
+  silently-dropped `error.detail` (agent/model/status) that
+  `ProviderRequestTooLargeError` already carried.
+- Closed two more gaps in the same attempt-history fix: a candidate that
+  rejects a request as oversized (`_is_request_too_large_error`) now also
+  gets an attempt record before `_invoke` breaks out of its retry loop, so
+  an all-oversized pool's aggregate `ProviderRequestTooLargeError` and a
+  mixed oversized/other-failure pool's raised error both carry every
+  candidate, not just the non-oversized ones. `ProviderResponseError`
+  (previously a bare `RuntimeError` with no fields) now carries the same
+  optional `attempts`/`stop_reason`/`.detail` shape as
+  `ProviderUpstreamError`, and `_invoke` sets them when every allowed
+  candidate in a bounded pool returns malformed structured output; the
+  `invalid_structured_output` 502 handler in `server.py` now surfaces that
+  evidence (attempt count and stop reason) the same way the 413 and other
+  provider-upstream handlers already do, without exposing any raw
+  malformed-response text.
+- `_failover_attempt_record` misclassified a raw or exception-chain-wrapped
+  provider 413 that never became a typed `ProviderUpstreamError` as
+  `error_code="unknown"`/`provider_status=None`, even though
+  `_is_request_too_large_error` already recognized the same shape via its
+  bounded cause-before-context traversal. That traversal is now shared
+  (`_find_request_too_large_error` returns the matching chain node) so a
+  raw/wrapped 413 records `error_code="request_too_large"`,
+  `provider_status=413`, `retryable=False`; a nested typed
+  `ProviderRequestTooLargeError` still preserves its own `provider_status`;
+  and an oversized-tool-description rejection preserves its real HTTP 400
+  status instead of a synthesized 413.
 
 ### Added
 

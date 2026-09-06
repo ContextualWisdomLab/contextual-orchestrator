@@ -535,6 +535,130 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     assert raised
 
 
+def test_all_agents_failing_reports_every_candidates_attempt_detail() -> None:
+    """A fully exhausted pool names every candidate it tried, not just the last.
+
+    Sibling of ``test_all_agents_failing_raises_after_trying_every_candidate``
+    above: here each agent fails with its own distinct classified upstream
+    error, so the exhausted pool's exception must carry both agents' attempts
+    -- not just the most recently tried one -- once ``_invoke`` gives up.
+    """
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
+    ]
+
+    def _classified_for(agent: ModelAgent) -> ProviderUpstreamError:
+        code = 429 if agent.id == "primary_worker" else 500
+        return classify_provider_failure(_http_error(code), agent_id=agent.id, model=agent.model)
+
+    class DistinctFailures(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            raise _classified_for(agent)
+
+    orchestrator = TaskOrchestrator(agents, client=DistinctFailures())
+    orchestrator._triage_fn = lambda text: False  # single-step route accounting
+    raised = False
+    try:
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+    except ProviderUpstreamError as exc:
+        raised = True
+        assert exc.stop_reason == "all_candidates_exhausted"
+        assert len(exc.attempts) == 2
+        by_agent = {attempt["agent_id"]: attempt for attempt in exc.attempts}
+        assert set(by_agent) == {"primary_worker", "backup_worker"}
+        assert by_agent["primary_worker"]["error_code"] == "rate_limit_exceeded"
+        assert by_agent["backup_worker"]["error_code"] == "api_error"
+    assert raised
+
+
+def test_all_oversized_pool_reports_every_candidates_attempt_detail() -> None:
+    """An all-oversized pool's aggregate error still names every candidate tried.
+
+    Before this fix, ``_invoke`` broke out of its retry loop on
+    ``_is_request_too_large_error`` without ever appending an attempt
+    record, so a pool where every candidate rejected the request as
+    oversized raised a ``ProviderRequestTooLargeError`` with an empty
+    ``attempts`` list -- the exact same "only the last one survives" bug
+    this PR fixed for every other failure kind, just unfixed for this one.
+    """
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
+    ]
+
+    class AllOversized(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=413,
+            )
+
+    orchestrator = TaskOrchestrator(agents, client=AllOversized())
+    orchestrator._triage_fn = lambda text: False  # single-step route accounting
+    raised = False
+    try:
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+    except ProviderRequestTooLargeError as exc:
+        raised = True
+        assert exc.stop_reason == "request_too_large"
+        assert len(exc.attempts) == 2
+        by_agent = {attempt["agent_id"]: attempt for attempt in exc.attempts}
+        assert set(by_agent) == {"primary_worker", "backup_worker"}
+        for record in by_agent.values():
+            assert record["error_code"] == "request_too_large"
+            assert record["retryable"] is False
+    assert raised
+
+
+def test_mixed_oversized_and_upstream_failure_preserves_both_attempt_records() -> None:
+    """A pool mixing an oversized rejection with a different failure keeps both.
+
+    Sibling of the all-oversized case above: here only the first candidate is
+    oversized and the second fails with a distinct classified upstream error
+    (so the pool is NOT ``every_failure_was_request_too_large`` and the
+    exhausted-pool exception is the ``ProviderUpstreamError`` branch instead
+    of the ``ProviderRequestTooLargeError`` one). The oversized candidate's
+    attempt record must still survive inside ``.attempts`` rather than being
+    silently dropped because it took the early oversized ``break``.
+    """
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
+    ]
+
+    class OversizedThenRateLimited(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            if agent.id == "primary_worker":
+                raise ProviderRequestTooLargeError(
+                    "provider request body is too large",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    provider_status=413,
+                )
+            return_status = 429
+            raise classify_provider_failure(
+                _http_error(return_status), agent_id=agent.id, model=agent.model
+            )
+
+    orchestrator = TaskOrchestrator(agents, client=OversizedThenRateLimited())
+    orchestrator._triage_fn = lambda text: False  # single-step route accounting
+    raised = False
+    try:
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+    except ProviderUpstreamError as exc:
+        raised = True
+        assert exc.stop_reason == "all_candidates_exhausted"
+        assert len(exc.attempts) == 2
+        by_agent = {attempt["agent_id"]: attempt for attempt in exc.attempts}
+        assert set(by_agent) == {"primary_worker", "backup_worker"}
+        assert by_agent["primary_worker"]["error_code"] == "request_too_large"
+        assert by_agent["backup_worker"]["error_code"] == "rate_limit_exceeded"
+    assert raised
+
+
 def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
     primary = orchestrator._agent("primary_worker")
@@ -766,6 +890,49 @@ def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent()
 
     assert excinfo.value.client_status == 503
     assert excinfo.value.agent_id == "free_route_b"
+    assert client.calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_free_model_exhausted_malformed_pool_reports_every_attempt() -> None:
+    """Every bounded candidate returning malformed output preserves attempt history.
+
+    ``allowed_agent_ids`` is set on this route (the free pool is bounded), so
+    ``_invoke``'s ``ProviderResponseError`` branch accumulates one attempt
+    record per candidate instead of raising on the first one. Before this
+    fix, the final raised ``ProviderResponseError`` carried none of that
+    history at all -- unlike ``ProviderUpstreamError``/
+    ``ProviderRequestTooLargeError``, it had no ``attempts``/``stop_reason``
+    fields to set in the first place.
+    """
+
+    class AllFreeRoutesMalformed(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "priced_worker":  # pragma: no cover - must never be reached
+                return "[priced_worker] answer"
+            raise ProviderResponseError(
+                f"provider {agent.id} response did not contain assistant content"
+            )
+
+    client = AllFreeRoutesMalformed()
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+    orchestrator.tool_retry_attempts = 0  # exhaust on the first attempt per candidate
+
+    with pytest.raises(ProviderResponseError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert excinfo.value.stop_reason == "all_candidates_exhausted"
+    assert len(excinfo.value.attempts) == 2
+    by_agent = {attempt["agent_id"]: attempt for attempt in excinfo.value.attempts}
+    assert set(by_agent) == {"free_route_a", "free_route_b"}
     assert client.calls == ["free_route_a", "free_route_b"]
     assert "priced_worker" not in client.calls
 
