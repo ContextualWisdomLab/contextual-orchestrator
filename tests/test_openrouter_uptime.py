@@ -7,16 +7,19 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.model_group import ModelGroupRouter
 from contextual_orchestrator.openrouter_uptime import (
     OpenRouterUptimeCollector,
 )
-from contextual_orchestrator.orchestrator import ModelAgent
+from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
 def _agents() -> list[ModelAgent]:
+    """Provide one telemetry-eligible member and one negative control."""
     return [
         ModelAgent("openrouter_member", "org/model-a", provider_name="openrouter"),
         ModelAgent("other_provider_member", "model-b", provider_name="bytez"),
@@ -24,6 +27,7 @@ def _agents() -> list[ModelAgent]:
 
 
 def _collectors(uptime: float | None):
+    """Keep transport and quality ledgers observable without fetching a provider."""
     group_router = ModelGroupRouter()
     quality_router = ModelGroupRouter()
     for agent in _agents():
@@ -133,6 +137,63 @@ def test_update_prior_rejects_invalid_components() -> None:
         router.update_prior("member_b", -1.0, 0.0)
     with pytest.raises(ValueError):
         router.update_prior("member_b", float("nan"), 0.0)
+
+
+@pytest.mark.parametrize("uptime", [0.0, 50.0, 100.0])
+@pytest.mark.parametrize("judged", [False, True])
+def test_availability_poll_cannot_change_answer_quality(uptime, judged):
+    """Availability-only evidence must leave both cold and judged quality rows intact."""
+    collector, group_router, quality_router, _before_group = _collectors(uptime)
+    member_id = _agents()[0].id
+    if judged:
+        quality_router.observe_success(member_id, 1.0)
+        quality_router.observe_failure(member_id)
+    before_quality = quality_router.snapshot()
+    for _ in range(3):
+        collector._poll_agent(_agents()[0])
+    assert quality_router.snapshot() == before_quality
+    assert sum(collector.window_evidence(member_id)) == 3
+    assert group_router.member_observation_count(member_id) == 0
+
+
+def test_availability_does_not_reverse_judged_member_order(monkeypatch):
+    """Fixed judged outcomes retain their order despite opposite uptime histories."""
+    monkeypatch.setattr(OpenRouterUptimeCollector, "start", lambda _self: None)
+    agents = [
+        ModelAgent("judged_strong", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
+        ModelAgent("judged_weak", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
+    ]
+    gateway = TaskOrchestrator(agents)
+    try:
+        for agent, accepted in zip(agents, (8, 2)):
+            for _ in range(accepted):
+                gateway._quality_router.observe_success(agent.id, 1.0)
+            for _ in range(10 - accepted):
+                gateway._quality_router.observe_failure(agent.id)
+        before = gateway._quality_router.snapshot()
+        assert gateway._refine_partition(agents, "worker") == agents
+        for agent, uptime in zip(agents, (0.0, 100.0)):
+            monkeypatch.setattr(gateway._openrouter_collector, "_fetch_uptime", lambda _model, value=uptime: value)
+            for _ in range(50):
+                gateway._openrouter_collector._poll_agent(agent)
+        assert gateway._refine_partition(agents, "worker") == agents
+        assert gateway._quality_router.snapshot() == before
+    finally:
+        gateway.close()
+
+
+def test_transport_refresh_does_not_import_answer_benchmark_prior():
+    """A benchmark-like identifier must not change the transport ledger's prior base."""
+    agent = ModelAgent("openrouter_gpt-4o", "mock", provider_name="openrouter")
+    group_router, quality_router, reference = ModelGroupRouter(), ModelGroupRouter(), ModelGroupRouter()
+    for router in (group_router, reference):
+        router.observe_success(agent.id, 1.0)
+        router.observe_failure(agent.id)
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
+    collector._fetch_uptime = lambda _model: 100.0
+    collector._poll_agent(agent)
+    reference.update_prior(agent.id, 2.0, 1.0)
+    assert group_router.member_report(agent.id) == reference.member_report(agent.id)
 
 
 if __name__ == "__main__":
