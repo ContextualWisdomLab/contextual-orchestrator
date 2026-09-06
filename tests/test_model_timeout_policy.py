@@ -76,3 +76,25 @@ def test_model_timeout_policy_rejects_invalid_patch(invalid_limit: object) -> No
             "default", model_agent.id, {"model_timeout_seconds": invalid_limit}
         )
     assert orchestrator._agent(model_agent.id) == model_agent
+
+
+def test_model_timeout_policy_audit_failure_does_not_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rejected policy update must not leave a new durable or serving limit."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+
+    def reject_audit(*args: object, **kwargs: object) -> None:
+        """Simulate unavailable audit storage before reporting update success."""
+        raise OSError("audit storage unavailable")
+
+    monkeypatch.setattr(orchestrator, "_append_audit_event", reject_audit)
+    with pytest.raises(OSError, match="audit storage unavailable"):
+        orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert (
+        orchestrator._agent(model_agent.id).model_timeout_seconds,
+        restored._agent(model_agent.id).model_timeout_seconds,
+    ) == (None, None)
