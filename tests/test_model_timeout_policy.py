@@ -214,7 +214,9 @@ def test_model_timeout_policy_records_verified_principal(tmp_path: Path) -> None
     from contextual_orchestrator.server import SecurityConfig
 
     security = SecurityConfig(admin_token="example_admin", inference_token="example_inference")
-    principal_id = security.principal_id({"Authorization": "Bearer example_admin"})
+    headers = {"authorization": "Bearer example_admin"}
+    security.authorize(headers, "admin")
+    principal_id = security.principal_id(headers)
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
