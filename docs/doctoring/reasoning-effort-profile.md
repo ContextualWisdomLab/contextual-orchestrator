@@ -17,9 +17,10 @@ budgets, rejects booleans-as-numbers and unknown keys, and keeps
 The catalog is hashed canonically to identify declared configuration in
 synchronous route, streaming route, batch route, generated planning,
 verification, and persisted runs. The proposed request-revision repair below
-captures the declared effort catalog once per outer execution. It does not
-freeze the agent pool or orchestration policy. Cached completions include the catalog
-hash in their key, and persisted runs preserve the completed result's snapshot
+captures the declared effort catalog and effective orchestration policy once
+per outer execution. It does not freeze the agent pool. Cached completions
+include both the catalog hash and policy content in their key, and persisted
+runs preserve the completed result's snapshots
 instead of relabeling it with later settings. See the
 [cache attribution repair](DISTRIBUTED_RESPONSE_CACHE.md#effort-catalog-attribution-repair-2026-09-06)
 for the preceding sequential repair and its historical limits.
@@ -35,12 +36,102 @@ not production quality claims, and cannot unlock a default change.
 
 ## Request revision contract (Proposed)
 
+### Policy attribution repair (2026-09-06)
+
+An operator can disable judging, obtain a cached answer, enable judging, and
+request the same answer again. At `0bf86aca`, that unit reproduction returns
+the unjudged cache entry with zero worker/judge calls but saves the new policy
+as if it had applied. Bypass runs one worker and one judge. This is a local
+reproduction, not evidence of a production incident or measured buyer harm.
+
+Product requirement: enabling answer evaluation must not silently reuse an
+answer produced under a different evaluation policy. Requests already running
+must retain their starting policy through retries, final synthesis, pending
+batch rows, and persistence; later independent requests must see updates.
+
+In the context of operator policy updates during model execution,
+facing unjudged answer reuse and incorrectly attributed evaluation records,
+we decided for extending the existing request context with the immutable policy
+and against cache-only partitioning, per-reader arguments, or a global lock,
+to achieve consistent execution and record attribution without serializing requests,
+accepting an additive completion field, cold entries for the new key format,
+and context-local reads that retain the starting policy until request exit.
+
+Cache-only partitioning leaves in-flight and completion-to-persistence drift.
+Threading a new argument through every existing reader duplicates the shared
+boundary. A global lock makes unrelated provider waits block one another.
+The existing Python adapter owns these lifecycle operations; no estimation
+kernel, dependency, provider fallback, or production routing default is added.
+
+The policy property returns the active request's immutable value. Assignment
+publishes a configured value for subsequent independent requests. Capture
+precedes catalog validation; it is not an atomic multi-setting update API.
+The full conducted provider adapter also establishes the scope, so its final
+Responses/chat synthesis and saved record use the same policy and effort as
+the evidence workflow. Direct single-role passthrough retains its existing
+contract and is not forced through six-role validation.
+
+Completion results now include `policy_snapshot`; saved runs copy it, including
+detached nested lists. Legacy/test-double completions without this field retain
+the prior configured-policy fallback. All changeable policy fields partition
+both local and shared caches; equal policy content preserves cache identity.
+This does not retroactively verify historical answers. The deterministic
+selection receipt's policy hash describes the effective request policy, while
+assignment propensity remains `not_identified`.
+
+RED `d70e68488e30aa4bb569dca8d1d2ce03c9ad1ddf` fails **12 cases in 0.26 seconds**.
+Source `6d4b5ac70ed62e732fec22f95887414488a14c9b` passes those 12 and the previous
+24 effort guards (**36 passed in 0.57 seconds**). At `55d5202a`, **262 focused
+tests pass in 14.30 seconds**, including standalone CEFR, provider passthrough,
+batch boundaries, streaming, and mixed-pool effort selection. Final test head
+`c922329e4f7297a22f83f5f6977af2f8321998f5` passes **48 request/cache guards in
+1.10 seconds** and both request test files' default Ruff checks.
+
+The 47-case coverage run at `55d5202a` covers **52/52 statements and 14/14
+branches** in nine context/snapshot definitions: the decorator, its two
+wrappers, policy getter/setter, scope manager, effort reader, role lookup, and
+metadata attachment. The coverage function map collapses the getter/setter
+name, so the getter's two statements were additionally checked against the
+file-level executed-line set. This is not whole-orchestrator, all-condition,
+or exhaustive concurrency coverage. The changed-definition docstring census
+against main `414f2297` is **196/196** at `c922329e` (runtime 42, scripts 44,
+tests 110), distinguishing property accessors rather than dropping the getter.
+
+The correctness KPI is 12 failing policy-attribution cases to zero. Existing
+once-per-request catalog-validation assertions still pass, including a policy
+update inside validation. No latency, buyer accuracy, causal identification,
+measurement invariance, or released delivery improvement is inferred from
+unit correctness or code coverage.
+
+Evidence: `/tmp/co-1067-policy-snapshot.hC9q25`, including `red-pytest.log`,
+`green-pytest.log`, `focused-valid-{pytest.log,junit.xml}`,
+`final-guard-{pytest.log,junit.xml}`, and `coverage.json`. The first expanded
+guard run had five test-only failures from using `policy_hash` instead of the
+existing `policy_snapshot_hash`; `guard-pytest.log` preserves them. An initial
+focused command named a nonexistent test file and exited 4 with no tests;
+`focused-pytest.log` is not a passing run. No runtime contract was renamed to
+make those mistakes pass. Reproduce the final guards with:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_request_policy_snapshot.py \
+  tests/test_request_effort_snapshot.py tests/test_distributed_cache_truth_and_isolation.py
+uv tool run --offline ruff check tests/test_request_policy_snapshot.py \
+  tests/test_request_effort_snapshot.py
+```
+
+Before this policy change, corrected exact clean parent `0bf86aca` completed
+**3,494 passed/two skipped in 661.00 seconds** and child `a762e433` completed
+**3,509 passed/two skipped in 663.74 seconds**, both exit 0 with matching
+start/end heads. Their `corrected-full-*` artifacts remain separate from the
+failed effort-scope runs below. They do not verify this later policy repair;
+it requires its own frozen full suites, hosted checks, review, and release.
+
 ### Requirement and decision
 
-Product requirement: an operator's effort update must affect later independent
+Product requirement: an operator's effort/policy update must affect later independent
 requests without changing a request already in progress. The answer, attempted
 role profiles, effort component of selection identity, cache identity, and
-saved effort metadata must describe the same declared revision. Independent
+saved settings must describe the same declared revision. Independent
 requests must not wait behind a global lock. Provider compliance with the
 declared controls remains a separate observation.
 
@@ -49,7 +140,7 @@ facing mixed execution and record revisions after operator updates,
 we decided for one validated request-local catalog snapshot
 and against constructor-wide freezing, a global execution lock, or metadata-only relabeling,
 to achieve consistent attribution while allowing independent requests to progress,
-accepting context-management overhead and a separate agent-pool/policy consistency boundary.
+accepting context-management overhead and a separate agent-pool consistency boundary.
 
 This is the implementation proposal for [ADR 0021](../planning/adrs/0021-reasoning-effort-profiles.md),
 not a newly accepted ADR or release. Constructor-wide freezing would hide
@@ -59,7 +150,8 @@ leave mixed profiles in workflow steps and retries.
 
 ### Technical contract and sequence
 
-`complete`, direct `route_once`/`conduct`, `batch_route`, and `stream_route`
+`complete`, direct `route_once`/`conduct`, `batch_route`, `stream_route`, and
+the conducted provider-completion adapter
 establish the boundary. Same-instance nested routing reuses it; a different
 orchestrator has its own revision and restores the caller's context on return.
 An entire `batch_route` invocation shares one revision. A stream captures it
@@ -76,8 +168,9 @@ remain absent; starting a full workflow with that partial catalog still fails
 before execution. This distinction does not promise a request-wide snapshot
 for the standalone adapter.
 
-The existing canonical snapshot is held in a module-level `ContextVar` with its
-owning instance. Profile, key, and evidence readers reuse that snapshot. The
+The existing canonical snapshot and immutable policy are held in a module-level
+`ContextVar` with their owning instance. Policy, profile, key, and evidence
+readers reuse them. The
 mutable role mapping is copied before validation, and exported metadata is
 deep-copied so one returned batch row cannot change another. Stream advancement
 and close run in a copied context; yielding restores the caller's context, so
@@ -89,30 +182,31 @@ global lock, new provider call, or production routing default is introduced.
 sequenceDiagram
     participant Caller
     participant Request as Request context
-    participant Catalog as Operator catalog
+    participant Catalog as Operator settings
     participant Worker as Execution
     participant Record as Saved evidence
     Caller->>Request: Start execution or first stream iteration
-    Request->>Catalog: Copy and validate revision S
-    Request->>Worker: Execute roles and retries with S
-    Catalog->>Catalog: Operator publishes later revision T
+    Request->>Catalog: Capture policy P; copy and validate catalog S
+    Request->>Worker: Execute roles, retries, and final synthesis with P and S
+    Catalog->>Catalog: Operator publishes later settings Q and T
     opt Streaming
         Worker-->>Request: Content delta
         Request-->>Caller: Yield with caller context restored
     end
     Worker-->>Request: Completed result
-    Request->>Record: Save result with detached S metadata
+    Request->>Record: Save result with detached P and S metadata
     Request-->>Caller: Return and release context
     Caller->>Request: Start later independent request
-    Request->>Catalog: Copy and validate T
+    Request->>Catalog: Capture Q; copy and validate T
 ```
 
 The existing Python control-plane adapter owns this context boundary; it adds
 no numerical estimation implementation. Rust-first statistical ownership is
 unchanged. The diagram does not promise an atomic transaction over deployment
 metadata, the mutable agent pool, sampling overrides outside the role catalog,
-or the orchestration policy. Same-instance nested calls belong to their outer
-effort scope; the catalog is not a general per-call override API.
+or independent operator updates of multiple settings. Same-instance nested
+calls belong to their outer execution scope; the catalog is not a general
+per-call override API.
 
 ### Exact local evidence and KPI
 

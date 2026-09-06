@@ -109,9 +109,11 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   locked until `production_default_change_allowed` passes a true-θ RMSE gate.
   The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
   The proposed [request-revision contract](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
-  binds nested execution and recorded effort to one validated catalog revision,
-  with isolated stream iteration and later-request updates. It does not freeze
-  agent-pool or policy changes, and is not protected-release evidence.
+  binds nested execution and recorded effort to one validated catalog revision
+  and effective immutable policy, including conducted provider final synthesis.
+  Stream iteration is isolated; later independent requests see operator updates.
+  Policy content partitions answer reuse and completion-owned settings are saved.
+  This does not freeze agent-pool changes or establish protected-release evidence.
   Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
   and keep live defaults unchanged while that gate is false.
 

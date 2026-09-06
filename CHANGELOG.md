@@ -54,6 +54,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Changes to answer-evaluation settings no longer reuse answers produced under
+  different settings. Running work and its saved details retain the settings
+  used when it started, including final answer preparation and streaming.
 - In-flight requests retain their starting model-effort settings across
   workflow steps, retries, and streaming; later requests can use updated settings.
 - Changing model-effort settings no longer reuses an answer cached under the
