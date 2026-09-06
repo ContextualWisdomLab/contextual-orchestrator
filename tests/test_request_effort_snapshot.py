@@ -1,15 +1,22 @@
 """Request-boundary regressions for declared effort, identity, and answer records."""
 
-from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Event
 
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator, default_role_effort_catalog
+from contextual_orchestrator import (
+    ModelAgent,
+    TaskOrchestrator,
+    default_role_effort_catalog,
+)
 from contextual_orchestrator import orchestrator as runtime_module
-from contextual_orchestrator.reasoning_effort_profile import EffortProfileError, snapshot_role_effort_catalog
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
+from contextual_orchestrator.reasoning_effort_profile import (
+    EffortProfileError,
+    snapshot_role_effort_catalog,
+)
 
 
 def _orchestrator(**kwargs):
@@ -306,7 +313,7 @@ def test_no_catalog_request_does_not_adopt_a_late_catalog(monkeypatch):
 @pytest.mark.parametrize("mode", ["route", "conduct"])
 def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
     """Reuse validation across key construction, nested execution, identity, and records."""
-    orchestrator, catalog = _orchestrator(cache_ttl=60)
+    orchestrator, _unused_catalog = _orchestrator(cache_ttl=60)
     original = runtime_module.snapshot_role_effort_catalog
     calls = []
 
