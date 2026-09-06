@@ -80,6 +80,32 @@ def test_model_timeout_policy_defaults_to_null() -> None:
     assert policy["enforcement_available"] is False
 
 
+def test_timeout_history_cursor_preserves_model_scope_and_new_insertions(tmp_path: Path) -> None:
+    """Paging older audit entries cannot repeat a new write or leak another model."""
+    seeds = [ModelAgent("first_agent", "first-model"), ModelAgent("second_agent", "second-model")]
+    orchestrator = TaskOrchestrator(seeds, agents_db=str(tmp_path / "pool.db"))
+    first = orchestrator.patch_agent("default", "first_agent", {"model_timeout_seconds": 7200})
+    orchestrator.patch_agent("default", "second_agent", {"model_timeout_seconds": 900})
+    cleared = orchestrator.patch_agent("default", "first_agent", {"model_timeout_seconds": None})
+    page = orchestrator.list_model_timeout_history("default", "first_agent", page_size=1)
+    assert page["history_available"] is True
+    assert page["items"][0]["revision"] == cleared["model_timeout_revision"]
+    assert page["items"][0]["configured_seconds"] is None
+    restored = orchestrator.restore_model_timeout(
+        "default", "first_agent", first["model_timeout_revision"],
+        expected_revision=cleared["model_timeout_revision"], actor_id="a" * 64,
+    )
+    older = orchestrator.list_model_timeout_history(
+        "default", "first_agent", page_size=1, before_revision=page["next_before_revision"],
+    )
+    assert [row["revision"] for row in older["items"]] == [first["model_timeout_revision"]]
+    assert older["next_before_revision"] is None
+    newest = orchestrator.list_model_timeout_history("default", "first_agent")["items"][0]
+    assert newest["revision"] == restored["model_timeout_revision"]
+    assert newest["actor_id"] == "a" * 64
+    assert newest["restored_from_revision"] == first["model_timeout_revision"]
+
+
 def test_model_timeout_policy_accepts_large_finite_seconds(tmp_path: Path) -> None:
     """Valid seconds must not accidentally use SQLite's signed integer binding."""
     model_agent = ModelAgent("timeout_agent", "example-model")
