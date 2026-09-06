@@ -10,6 +10,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Benchmark documentation now distinguishes simulated accuracy, unresolved
+  cases, and local decision timing from evidence of real-world performance.
 - Cosine scoring now feeds `math.fsum` with the standard-library multiplication
   iterator, preserving numerical semantics while reducing psychometric routing
   decision overhead.

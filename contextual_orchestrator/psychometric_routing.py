@@ -17,7 +17,8 @@ class PsychometricRoutingEvidence:
     interaction. A fast-mlsirm MLSRM fit estimates conditional response
     probabilities and latent interaction distance together. These local values
     are routing evidence, not a transportable or invariant model-ability scale.
-    New prompts interpolate at most two positive-cosine observed interactions.
+    New prompts use the nearest observed interaction by default. The opt-in
+    semantic warm start interpolates at most two positive-cosine interactions.
     Candidates without a fitted estimate remain unranked so the caller can
     preserve its existing measured-routing order.
     """
@@ -28,6 +29,11 @@ class PsychometricRoutingEvidence:
         *,
         semantic_warm_start_enabled: bool = False,
     ) -> None:
+        """Initialize empty, lock-protected observations and cached fit state.
+
+        ``max_contexts`` sets the retained-context limit used on observation.
+        The warm-start flag must be a bool and defaults to single-neighbor use.
+        """
         if type(semantic_warm_start_enabled) is not bool:
             raise TypeError("semantic_warm_start_enabled must be a boolean")
         self.max_contexts = max_contexts
@@ -121,7 +127,6 @@ class PsychometricRoutingEvidence:
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
                     return []
-                neighbor_limit = 2 if self.semantic_warm_start_enabled else 1
                 neighbors = (
                     sorted(comparable, reverse=True)[:2]
                     if self.semantic_warm_start_enabled

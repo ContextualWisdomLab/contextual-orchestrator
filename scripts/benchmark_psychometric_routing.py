@@ -23,6 +23,11 @@ def _require_runtime(
     *,
     benchmark_script: str = "scripts/benchmark_psychometric_routing.py",
 ) -> None:
+    """Reject Python below 3.12 before loading optional benchmark dependencies.
+
+    Tests may supply a version tuple; failures include the selected script's
+    invocation rather than attempting to install or switch the runtime.
+    """
     if tuple((sys.version_info if version_info is None else version_info)[:2]) < (3, 12):
         raise SystemExit(
             "psychometric routing benchmark requires Python 3.12 or newer; "

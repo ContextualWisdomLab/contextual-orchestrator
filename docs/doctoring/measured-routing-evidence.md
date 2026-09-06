@@ -29,6 +29,45 @@ fails closed to conducted orchestration when its reply violates the exact
 
 ## Research-to-code mapping
 
+### Internal benchmark contract audit (2026-09-05)
+
+The documentation audit covers the psychometric routing module and both
+psychometric benchmark scripts, including their private and nested functions.
+Use an empty configuration to avoid importing repository exclusions:
+
+```sh
+.venv/bin/interrogate -c /dev/null --fail-under 100 \
+  contextual_orchestrator/psychometric_routing.py \
+  scripts/benchmark_psychometric_routing.py \
+  scripts/benchmark_psychometric_heldout.py
+.venv/bin/pytest -q tests/test_psychometric_routing.py \
+  tests/test_psychometric_benchmark_boundaries.py \
+  tests/test_benchmark_priors.py tests/test_docstring_coverage.py
+```
+
+At `ae704491`, 41 of 61 entities had docstrings. Documentation-only `f8b142aa`
+raises this to 61/61 and leaves the docstring-stripped ASTs unchanged; its
+48-test run passed in 24.99 seconds. Subsequent `1710cfe7` removes one existing
+unused assignment reported by F841, passes Ruff and the same strict docstring
+check, and passes the 48 tests in 18.24 seconds. No other executable AST change
+remains after accounting for that exact assignment.
+
+The new contracts explicitly identify oracle fit-cache injection, synthetic
+true-probability calibration, selected-item-order response draws, unresolved
+candidate costs, and conditional classification risk. A Wilson endpoint used
+in a seeded screen is not an anytime-valid sequential guarantee. Pooled local
+ranking p95 and paired context medians do not measure end-to-end model latency.
+These distinctions document existing calculations without changing an estimator,
+sample size, production policy, or the wider CodeRabbit documentation scope.
+
+Subsequent normal merge `2340bea5` retains #1064 head `4c4e5f13` and its
+protected-main cost-evidence update; 244 integration tests passed in 32.90
+seconds. A later protected-main transport-retry correction (`414f2297`) is
+preserved by merge `c4008bb5`, whose 157 transport, failover, psychometric-routing,
+and streaming tests passed in 23.56 seconds. Logs and JUnit are retained in
+`/tmp/co-1067-documentation-audit.h2ZVMV`. These are distinct exact-head local
+checks, not a measured end-to-end latency gain or protected delivery claim.
+
 ### IRT-Router interpretation audit (2026-09-05)
 
 This review separates the ACL 2025 paper from public implementation revision

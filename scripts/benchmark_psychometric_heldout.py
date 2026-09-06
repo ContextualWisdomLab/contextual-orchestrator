@@ -69,15 +69,18 @@ SELECTIVE_CLASSIFICATION_REPLICATIONS = 10
 
 
 def _expected_brier(predicted: float, target: float) -> float:
+    """Return expected Bernoulli squared error for predicted and true probabilities."""
     return target * (1.0 - target) + (predicted - target) ** 2
 
 
 def _probability(model_index: int, angle: float) -> float:
+    """Return the declared synthetic response probability at an angle in radians."""
     phase = 2.0 * math.pi * model_index / len(MODEL_IDS)
     return 1.0 / (1.0 + math.exp(-2.5 * math.cos(angle - phase)))
 
 
 def _vector(angle: float) -> list[float]:
+    """Map radians to a two-dimensional unit-circle context vector."""
     return [math.cos(angle), math.sin(angle)]
 
 
@@ -97,6 +100,11 @@ def _paired_bootstrap_mean_ci(
 
 
 def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
+    """Inject known training probabilities to isolate the warm-start calculation.
+
+    Observations establish context identities; replacing the fit cache with
+    oracle scores bypasses parameter estimation and cannot validate fit quality.
+    """
     evidence = PsychometricRoutingEvidence(
         max_contexts=TRAIN_CONTEXTS, semantic_warm_start_enabled=two_neighbor
     )
@@ -119,6 +127,12 @@ def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
 def _evaluate_quality(
     evidence: PsychometricRoutingEvidence,
 ) -> tuple[dict[str, float], dict[str, list[float]]]:
+    """Compare half-step held-out contexts against the synthetic probability law.
+
+    Return aggregate diagnostics and per-context samples for paired comparison.
+    Calibration regresses true logits on predicted logits, not observed labels;
+    Brier and log loss are expectations under the declared Bernoulli law.
+    """
     context_brier: list[float] = []
     context_log_loss: list[float] = []
     context_calibration_logit_rmse: list[float] = []
@@ -182,6 +196,11 @@ def _measure_paired_latency(
     baseline: PsychometricRoutingEvidence,
     candidate: PsychometricRoutingEvidence,
 ) -> tuple[dict[str, float], dict[str, float], list[float], list[float]]:
+    """Time ranking calls in milliseconds, alternating policy order per context.
+
+    Keep every repetition, including the first. Return pooled timing summaries
+    and each policy's context medians; neither measures end-to-end model calls.
+    """
     all_samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
     context_medians: dict[str, list[float]] = {"baseline": [], "candidate": []}
     for context_index in range(TRAIN_CONTEXTS):
@@ -203,6 +222,7 @@ def _measure_paired_latency(
             context_medians[name].append(statistics.median(samples[name]))
 
     def summary(values: list[float]) -> dict[str, float]:
+        """Summarize nonempty timings with the median and nearest-rank p95."""
         ordered = sorted(values)
         return {
             "decision_p50_ms": statistics.median(values),
@@ -485,6 +505,11 @@ def _validate_sequential_drift() -> dict[str, object]:
     change_after = 100
 
     def evaluate(seed: int, threshold: float) -> dict[str, float | int]:
+        """Simulate seeded first alarms for the declared Bernoulli probability shift.
+
+        Delays exclude pre-change alarms. Every replication must alarm within
+        the fixed horizon; this experiment does not estimate censored delays.
+        """
         false_alarms = 0
         detection_delays: list[int] = []
         for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
@@ -723,6 +748,7 @@ def _validate_global_model_fit() -> dict[str, object]:
     )
 
     def fit_case(dimensions: int) -> dict[str, float | bool | str]:
+        """Fit one factor to seeded responses generated with the specified dimensions."""
         generator = np.random.default_rng(MODEL_FIT_SEED)
         ability = generator.normal(size=(MODEL_FIT_SAMPLE_SIZE, dimensions))
         item_dimension = np.repeat(np.arange(dimensions), item_count // dimensions)
@@ -792,6 +818,10 @@ def _validate_score_reliability() -> dict[str, object]:
     )
 
     def fit_case(discrimination: float) -> dict[str, float | int | str]:
+        """Vary synthetic discrimination with shared abilities and uniform draws.
+
+        Return fitted posterior reliability, not an observed repeat-test score.
+        """
         probabilities = 1.0 / (
             1.0
             + np.exp(
@@ -867,6 +897,7 @@ def _validate_conditional_information() -> dict[str, object]:
     trait_points = np.asarray([[-2.0], [0.0], [2.0]])
 
     def information(item_difficulty: np.ndarray) -> np.ndarray:
+        """Evaluate a synthetic one-factor bank at the declared trait points."""
         bundle = {
             "schema_version": 1,
             "n_items": item_count,
@@ -916,6 +947,10 @@ def _validate_classification_decision() -> dict[str, object]:
     measures = np.asarray([-1.0, -0.5, 0.5, 1.0])
 
     def classify(standard_error: float) -> dict[str, float]:
+        """Apply Rudner's normal approximation at cut zero with a shared score error.
+
+        Accuracy and consistency are model-based, not observed classifications.
+        """
         result = fast_mlsirm.rudner_classification(
             measures,
             np.full(len(measures), standard_error),
@@ -953,6 +988,10 @@ def _validate_selection_utility() -> dict[str, object]:
     }
 
     def evaluate(validity: float, total_cost: float) -> dict[str, float]:
+        """Calculate utility under the declared validity, cost, and selection conditions.
+
+        Inputs are synthetic scenario assumptions, not estimated buyer outcomes.
+        """
         utility = fast_mlsirm.selection_utility(
             n=conditions["selected_requests"],
             sdy=conditions["outcome_value_sd"],
@@ -1194,11 +1233,18 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     }
 
     def probability(theta: float, difficulty: float) -> float:
+        """Return synthetic success probability using the bank's additive b convention."""
         return 1.0 / (1.0 + math.exp(-discrimination * (theta + difficulty)))
 
     def evaluate(
         *, adaptive: bool
     ) -> tuple[dict[str, float], dict[str, list[float]]]:
+        """Simulate onboarding until the posterior error target or item cap is reached.
+
+        Modes share candidate seeds, but draws follow each mode's selected-item
+        order. Return true-theta error, unadministered-item prediction error,
+        query counts, and target attainment with per-candidate samples.
+        """
         squared_errors: list[float] = []
         candidate_prediction_errors: list[float] = []
         administered_counts: list[int] = []
@@ -1304,6 +1350,11 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         )
 
     def summarize_stratum(lower: float, upper: float | None) -> dict[str, float]:
+        """Summarize absolute true-theta distance in a lower-inclusive stratum.
+
+        The optional upper bound is exclusive. Reject empty or wholly unresolved
+        strata; resolved accuracy uses only confidence-resolved candidates.
+        """
         rows = [
             row
             for row in classification_rows
@@ -1367,6 +1418,13 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     def selective_point(
         seed: int, confidence: float
     ) -> tuple[dict[str, float], dict[str, list[float]]]:
+        """Simulate one seeded reject-option screen at a posterior-SD multiplier.
+
+        Unresolved candidates retain the full query cap in all-candidate costs.
+        Risk uses resolved candidates; coverage uses the generated strata.
+        Require resolutions in both directions. The Wilson upper endpoint is
+        a diagnostic, not an anytime-valid sequential error guarantee.
+        """
         resolved: list[tuple[int, float, float, bool]] = []
         resolution_flags: list[float] = []
         all_candidate_queries: list[float] = []
@@ -1476,6 +1534,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     )
 
     def monte_carlo_se(metric: str) -> float:
+        """Return the sample-SD-over-root-count error of a replication metric mean."""
         return statistics.stdev(row[metric] for row in replication_rows) / math.sqrt(
             replication_count
         )

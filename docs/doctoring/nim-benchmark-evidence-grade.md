@@ -127,14 +127,14 @@ issuing five calls.
 Actual access cost and hypothetical production cost are separate fields and
 separate evidence classes.
 
-As reviewed on 2026-08-05, NVIDIA's NIM General FAQ states that NVIDIA Developer
+As reviewed on 2026-09-05, NVIDIA's NIM General FAQ states that NVIDIA Developer
 Program members have free access to hosted NIM API endpoints for prototyping.
 The same source distinguishes development, testing, research, and evaluation
 from production and states that production requires NVIDIA AI Enterprise. The
 report therefore records `actual_cost_usd = 0.0` only for the reviewed hosted
 endpoint access context, includes the exact source, review date, validity
 horizon, program scope, production distinction, and uncertainty, and refuses a
-live run after 2026-09-04 until the source is reviewed again.
+live run after 2026-10-05 until the source is reviewed again.
 
 No NVIDIA model price is embedded or inferred. A live hypothetical pricing
 scenario is optional; absence means `unknown`. If supplied, it must be marked

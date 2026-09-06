@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 current-parent synchronization
+
+This normal integration joins existing child `402fd63a4f6a16558e8cb4e4cd8a3378da3827f6`
+with #1067 `bfeb73a6c58add7a23df052110593cdf43c0b0db`. Both baseline additions
+are retained. The child's failed-task comparison, observed-data audit, and
+licensed LLMRouter paper remain; parent measurement-contract documentation,
+cost-evidence dates, and protected-main transport-retry correction are inherited.
+The prior child's full-suite result and the parent checks below are historical
+evidence, not a full-suite result for this combined tree. Both PRs remain Draft
+with parent-first protected delivery and separate exact-head validation.
+
 ## 2026-09-05 measurement-boundary parent synchronization
 
 The next normal integration joins existing child
@@ -90,6 +101,60 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+
+## 2026-09-06 predecessor and protected-main integration
+
+Normal merge `2340bea5f3abfb06d8d78afdaf09df2742da68ac` retains the
+documentation/lint corrections below and current predecessor #1064 head
+`4c4e5f135d5745aa6273c0ed4036cac76c7bd03d`. That predecessor incorporates
+protected main `a080297d2546bb61e89520d637cabc202db331ec`, including the
+reviewed NVIDIA cost-evidence dates and their isolated test fixtures.
+At the clean merge head, **244 integration tests passed in 32.90 seconds**.
+
+A fresh branch read then found protected main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, which suppresses stacked transport
+retries when the orchestration loop owns retry-versus-failover decisions.
+Normal merge `c4008bb540ce5f2d59bffe93c3ef9408ea6b9410` preserves both histories
+without conflicts. Its **157 transport, failover, psychometric-routing, and
+streaming tests passed in 23.56 seconds**, terminal exit 0.
+Both runs retain logs and JUnit in `/tmp/co-1067-documentation-audit.h2ZVMV`.
+The 244-test result belongs to `2340bea5`; it does not cover the later transport
+merge. Full-suite verification of the combined tree remains separate.
+
+Predecessor PRs remain open. These integration results do not prove protected
+delivery of #1067, live gateway recovery, or improved buyer accuracy/latency.
+
+## 2026-09-05 internal measurement documentation audit
+
+Strict `interrogate -c /dev/null --fail-under 100` on
+`contextual_orchestrator/psychometric_routing.py`,
+`scripts/benchmark_psychometric_routing.py`, and
+`scripts/benchmark_psychometric_heldout.py` found 20 undocumented entities among
+61 at `ae704491fc24cd4618c709b036cc9353ea9923e5`: **67.2%** coverage.
+This empty-config scope includes initializers, private helpers, and nested
+functions rather than inheriting repository exclusions.
+
+Documentation-only `f8b142aab59e651ed5864dda8d344f27b06fc4a9` reaches **61/61,
+100%**, with identical docstring-stripped ASTs and 48 focused tests passing in
+24.99 seconds. Contracts now distinguish injected oracle probabilities from
+estimated parameters, expected losses from observed responses, resolved-only
+risk from all-candidate query burden, and local ranking time from end-to-end
+latency. The class description also separates default single-neighbor behavior
+from the opt-in positive two-neighbor experiment.
+
+The lint run exposed a pre-existing unread `neighbor_limit` assignment;
+stdin lint of `ae704491` independently reproduced F841. Follow-up
+`1710cfe76485e9a3b25041a3810b7865eb5d1ed0` removes only that assignment.
+All three files then pass Ruff and strict documentation coverage; the same
+48 tests pass in 18.24 seconds. ASTs match the baseline after removing
+docstrings and that one explicitly identified assignment. These are focused
+local results, not a new full-suite result or protected delivery evidence.
+
+This closes the declared three-file documentation gap, not CodeRabbit's wider
+107-function scope. Entity documentation coverage does not establish complete
+measurement validity, buyer accuracy, latency improvement, or release readiness.
+Reproduction and interpretation boundaries are in the
+[doctoring audit](doctoring/measured-routing-evidence.md#internal-benchmark-contract-audit-2026-09-05).
 
 ## 2026-09-05 exact-head gate verification and paper distribution audit
 
