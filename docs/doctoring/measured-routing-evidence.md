@@ -144,7 +144,7 @@ not a Python clone. No production default or psychometric admission gate is
 opened. Independent review, terminal required checks, protected merge,
 immutable release, and observed buyer-held-out evidence remain necessary.
 
-### Evaluation-policy attribution (2026-09-06)
+### Full-suite follow-up: provider completion contract (2026-09-06)
 
 Full-suite follow-up to the availability repair: clean parent `6ca30364`
 completed **3,520 passed/two skipped/exit 0 in 1,624.03 seconds**. Child
@@ -164,6 +164,8 @@ provider/batch/cost/registry tests pass in 16.64 seconds**, exit 0. Runtime
 asynchrony, provider-failure behavior, budget gates, exact token assertions,
 and production timeout policy are unchanged. This does not excuse the failed
 full run; corrected exact-head full runs must use separate artifacts.
+
+### Evaluation-policy attribution (2026-09-06)
 
 An evaluation outcome must be attributed to the policy that actually produced
 it before comparing routing regimes or attempting psychometric estimation.

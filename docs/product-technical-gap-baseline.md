@@ -12,7 +12,7 @@ including the three Unicode cases, while preserving usage/cost assertions
 and cleaning up their worker resources. **137 related tests pass in 16.64
 seconds**, exit 0. No runtime, provider timeout, estimator, or production
 policy changes. The original failed full remains evidence; the
-[doctoring follow-up](doctoring/measured-routing-evidence.md#evaluation-policy-attribution-2026-09-06)
+[doctoring follow-up](doctoring/measured-routing-evidence.md#full-suite-follow-up-provider-completion-contract-2026-09-06)
 records exact results and the separate corrected-full requirement. Actual
 Edge desktop screenshots of the PRs, collector diff, document diagram and KPI
 table were inspected; this is not product-admin/mobile E2E or deployed proof.
