@@ -453,6 +453,36 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def test_http_stale_policy_rejects_admin_edit_without_overwrite(tmp_path) -> None:
+    """Actual authenticated HTTP edits cannot overwrite another writer's policy."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    before = list(serving.candidates)
+    try:
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, _ = _call(url, "PATCH", "wrong_token", {"priority": 7})
+        assert status == 401
+        status, payload = _call(url, "PATCH", "pool_token", {"priority": 7})
+        assert status == 400
+        assert "reload" in json.dumps(payload)
+        status, _ = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 3600})
+        assert status == 400  # New policy writes stay closed until runtime delivery exists.
+        assert serving.candidates == before
+        restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").model_timeout_seconds == 7200
+        assert restored._agent("general_agent").model_timeout_revision == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_http_create_and_delete_worker_agents() -> None:
     token = "pool_token"
     orchestrator = TaskOrchestrator(_seed())
