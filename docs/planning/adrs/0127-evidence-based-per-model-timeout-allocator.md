@@ -136,6 +136,8 @@ An operator may still explicitly configure an administrative timeout through the
 
 ## Required executable contracts before implementation can be promoted
 
+Implementation remains blocked until the corresponding candidate review in [`docs/library_research.md`](../../library_research.md) selects a maintained dependency or records a bounded custom-core decision with executable conformance fixtures, provenance, and a removal condition. No hand-written Kaplan–Meier, Brookmeyer–Crowley, Binomial-distribution, or tail-model implementation is authorized by this design alone.
+
 The implementation PR must add RED-first tests where practical and then prove GREEN for at least:
 
 1. exact empirical quantile calculation from retained uncensored observations;
@@ -191,9 +193,9 @@ Rejected. Descriptive latency does not define the loss of terminating an unfinis
 
 ## References
 
-Brookmeyer, R., & Crowley, J. (1982). A confidence interval for the median survival time. *Journal of the American Statistical Association, 77*(378), 433–440. https://doi.org/10.1080/01621459.1982.10477833
+Brookmeyer, R., & Crowley, J. (1982). A confidence interval for the median survival time. *Biometrics, 38*(1), 29–41. https://doi.org/10.2307/2530286
 
-David, H. A., & Nagaraja, H. N. (2003). *Order statistics* (3rd ed.). Wiley.
+David, H. A., & Nagaraja, H. N. (2003). *Order statistics* (3rd ed.). Wiley. https://doi.org/10.1002/0471722162
 
 Kaplan, E. L., & Meier, P. (1958). Nonparametric estimation from incomplete observations. *Journal of the American Statistical Association, 53*(282), 457–481. https://doi.org/10.1080/01621459.1958.10501452
 
