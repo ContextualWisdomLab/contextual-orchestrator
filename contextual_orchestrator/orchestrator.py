@@ -3406,6 +3406,13 @@ class _AgentPoolStore:
                 "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE RESTRICT)"
             )
             self._migrate_legacy_groups(conn)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS model_timeout_history ("
+                "policy_revision INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "agent_id TEXT NOT NULL REFERENCES agent_pool(agent_id), "
+                "previous_seconds REAL, timeout_seconds REAL, "
+                "created_at REAL NOT NULL)"
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -3447,11 +3454,27 @@ class _AgentPoolStore:
             )
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
-    def save(self, agent: "ModelAgent") -> None:
+    def save(self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None) -> None:
         """Persist one normalized model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
             try:
+                if timeout_previous is not None:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
+                        (agent.id,),
+                    ).fetchone()
+                    if row is not None:
+                        if row[0] != timeout_previous.model_timeout_seconds:
+                            raise ValueError("model timeout policy changed; reload before updating")
+                        conn.execute(
+                            "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
+                            (agent.model_timeout_seconds, agent.id),
+                        )
+                        self._append_timeout_history(conn, timeout_previous, agent)
+                        conn.commit()
+                        return
                 config = agent.to_config()
                 conn.execute(
                     """
@@ -3561,9 +3584,22 @@ class _AgentPoolStore:
                         "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
                         (agent.id, contract.contract_id),
                     )
+                if timeout_previous is not None:
+                    self._append_timeout_history(conn, timeout_previous, agent)
                 conn.commit()
             finally:
                 conn.close()
+
+    @staticmethod
+    def _append_timeout_history(
+        conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent"
+    ) -> None:
+        """Write the policy change using the same uncommitted configuration transaction."""
+        conn.execute(
+            "INSERT INTO model_timeout_history "
+            "(agent_id, previous_seconds, timeout_seconds, created_at) VALUES (?, ?, ?, ?)",
+            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds, time.time()),
+        )
 
     def load_all(self) -> list["ModelAgent"]:
         """Load every persisted model-agent definition."""
@@ -6064,6 +6100,15 @@ class TaskOrchestrator:
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
         self._require_role_effort_pool(updated_candidates)
+        if "model_timeout_seconds" in patch:
+            if set(patch) != {"model_timeout_seconds"}:
+                raise ValueError("model timeout policy must be updated separately")
+            if self._pool_store is None:
+                raise ValueError("model timeout policy requires a durable agent store")
+            self._pool_store.save(patched, timeout_previous=current)
+            self.candidates = updated_candidates
+            self.agents = updated_agents
+            return self._agent_to_admin_payload(patched)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self.candidates = updated_candidates
