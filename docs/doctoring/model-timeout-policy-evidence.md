@@ -312,6 +312,31 @@ ambiguous passthrough timeouts, prevent higher-level Strix retries, or alter
 the model-lifetime contract. The previous 443aa5fb full-suite receipt does
 not validate these subsequent commits.
 
+### Unknown passthrough outcome without replay
+
+`08e51934` retains two RED cases: TimeoutError and ConnectionError escape
+unclassified from the non-failover branch. `260767da` retains an independent
+HTTP/SDK RED: a proposed unknown-outcome 502 produces three requests despite
+JSON retryable false. Existing explicit-stop and ordinary-conflict controls
+pass in that run (one failure, two passes, 4.61 seconds).
+
+`fe1e85a0` uses the existing provider-error type with a distinct
+`provider_outcome_unknown` code, no provider status, retryable false, and
+package-owned text. Only the existing non-failover passthrough branch's
+TimeoutError/ConnectionError handling changes; generic programming errors,
+accepted failover statuses and model timeout policy do not change. The same
+error code activates the existing no-retry-header mechanism. No tool execution
+is inferred, and no new retry or fallback is introduced.
+
+At `76d1caab`, a complete SDK 2.54.0 → actual loopback HTTP → orchestrator →
+mock provider test passes with one primary attempt, zero fallback attempts,
+typed 502, retryable false, the no-retry header, and no private exception
+text. All 212 related SDK-enabled tests pass in 14.63 seconds. These commits
+still require a fresh full suite and protected review. Optional SDK skips in
+the normal suite must remain distinct from this explicit SDK-enabled run.
+This does not prove higher-level Strix replay prevention or live upstream
+cleanup, and it does not remove the legacy runtime's finite timeout.
+
 An actual screen-access attempt still returned a locked Mac. Administrator UI
 visual acceptance remains unverified; paper figure inspection is not UI proof.
 

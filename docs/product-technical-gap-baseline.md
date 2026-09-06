@@ -2747,3 +2747,18 @@ in 7.70 seconds, including HTTP authorization and invalid-bound checks. HTTP
 set/clear/restore, released Rust runtime integration and actual administrator
 UI acceptance remain open. See
 [policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).
+
+### Unknown request outcome — local error-contract repair
+
+At `76d1caab`, a passthrough timeout or connection failure with unknown
+acceptance no longer escapes as a generic internal error. The existing
+single-attempt/no-fallback decision is retained, with a caller-safe
+`provider_outcome_unknown` response, `retryable=false` and an explicit
+SDK no-retry header. No tool execution is inferred from a model timeout.
+OpenAI SDK 2.54.0 → actual loopback HTTP → orchestrator → mock provider
+verifies one primary call, no fallback, and no raw diagnostic disclosure.
+The SDK-enabled related run passes 212 tests in 14.63 seconds. This is
+local evidence, not a protected release or live-provider result; full-suite
+verification of these new commits remains pending. Higher-level Strix
+retries, SSE errors, default-null full-response lifetime and UI acceptance
+remain open. See [incident and SDK evidence](doctoring/model-timeout-policy-evidence.md).
