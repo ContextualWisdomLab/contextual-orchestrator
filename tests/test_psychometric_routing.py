@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 import threading
 import pytest
+from contextual_orchestrator import orchestrator as routing_module
 import scripts.benchmark_psychometric_heldout as heldout_benchmark
 
 from contextual_orchestrator import (
@@ -1134,6 +1135,57 @@ def test_decode_policy_changes_psychometric_identity() -> None:
     assert before._psychometric_candidate_id(agent) != after._psychometric_candidate_id(agent)
     before.close()
     after.close()
+
+
+def test_selection_receipt_uses_one_catalog_snapshot(monkeypatch) -> None:
+    """Repeated attempts retain order without repeatedly validating one catalog."""
+    agents = [ModelAgent(f"audit_candidate_{index}", f"model-{index}") for index in range(3)]
+    orchestrator = TaskOrchestrator(agents, role_effort_catalog=default_role_effort_catalog())
+    original_snapshot = routing_module.snapshot_role_effort_catalog
+    snapshot_calls = []
+
+    def counted_snapshot(catalog):
+        """Count actual catalog validation while retaining its real implementation."""
+        snapshot_calls.append(catalog)
+        return original_snapshot(catalog)
+
+    monkeypatch.setattr(routing_module, "snapshot_role_effort_catalog", counted_snapshot)
+    try:
+        receipt = orchestrator._selection_design_receipt(
+            iter(agents), iter([*agents, agents[0]]), agents[-1]
+        )
+        candidate_ids = receipt["candidate_deployment_ids"]
+        assert len(candidate_ids) == 3
+        assert receipt["attempted_deployment_ids"] == [*candidate_ids, candidate_ids[0]]
+        assert receipt["selected_deployment_id"] == candidate_ids[-1]
+        assert len(snapshot_calls) == 1
+    finally:
+        orchestrator.close()
+
+
+def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
+    """A lazy input cannot split one receipt across two decode-policy revisions."""
+    agent = ModelAgent("audit_candidate", "model-a")
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator([agent], role_effort_catalog=catalog)
+
+    def attempted_agents():
+        """Change the caller-owned catalog while materializing the attempt input."""
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="high")
+        yield agent
+
+    try:
+        receipt = orchestrator._selection_design_receipt([agent], attempted_agents(), agent)
+        selected_id = receipt["selected_deployment_id"]
+        assert receipt["candidate_deployment_ids"] == [selected_id]
+        assert receipt["attempted_deployment_ids"] == [selected_id]
+
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="low")
+        following = orchestrator._selection_design_receipt([agent], [agent], agent)
+        assert following["selected_deployment_id"] != selected_id
+        assert following["candidate_deployment_ids"] == following["attempted_deployment_ids"]
+    finally:
+        orchestrator.close()
 
 
 def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
