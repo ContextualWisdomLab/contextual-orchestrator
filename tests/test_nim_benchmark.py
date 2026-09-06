@@ -71,6 +71,11 @@ def _fixed_transport(status: int, body: bytes):
     return transport
 
 
+def _assume_current_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep non-expiry tests focused after the reviewed evidence horizon passes."""
+    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
+
+
 def _mini_manifest(task_count: int = 2) -> dict:
     tasks = [
         {
@@ -1791,7 +1796,9 @@ def _dry_report(output_dir: str) -> dict:
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     dry_transport = nb.build_dry_run_transport()
     _, catalog_body = dry_transport(
@@ -2056,7 +2063,10 @@ def test_dry_run_accepts_explicit_transport() -> None:
         )
 
 
-def test_live_run_fails_closed_without_credential() -> None:
+def test_live_run_fails_closed_without_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assume_current_cost_evidence(monkeypatch)
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(NotConfigured):
             nb.run_benchmark(
@@ -2069,7 +2079,8 @@ def test_live_run_fails_closed_without_credential() -> None:
             )
 
 
-def test_live_run_end_to_end_offline() -> None:
+def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
@@ -2099,7 +2110,10 @@ def test_live_run_end_to_end_offline() -> None:
     assert "nvapi-test-credential" not in json.dumps(report)
 
 
-def test_live_run_uses_default_transport_builder_when_none_given() -> None:
+def test_live_run_uses_default_transport_builder_when_none_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_builder = nb.build_default_transport
     nb.build_default_transport = lambda timeout_seconds: nb.build_dry_run_transport()
@@ -2179,7 +2193,8 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
 
 
-def test_cli_live_fails_closed_without_secret() -> None:
+def test_cli_live_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assume_current_cost_evidence(monkeypatch)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import hashlib
+import math
+import operator
 import threading
 from typing import Iterable
 
@@ -11,18 +13,28 @@ from typing import Iterable
 class PsychometricRoutingEvidence:
     """Fit judged model-by-prompt responses and score the nearest prompt item.
 
-    The response matrix is model (person) by system/user interaction (item).
-    A fast-mlsirm MLSRM fit estimates model ability and latent interaction
-    distance together. New prompts use the single nearest observed interaction
-    by embedding cosine; there is no hand-tuned similarity threshold or score
-    weight. Candidates without a fitted estimate remain unranked so the caller
-    can preserve its existing measured-routing order.
+    The response matrix is versioned deployment candidate by system/user
+    interaction. A fast-mlsirm MLSRM fit estimates conditional response
+    probabilities and latent interaction distance together. These local values
+    are routing evidence, not a transportable or invariant model-ability scale.
+    New prompts interpolate at most two positive-cosine observed interactions.
+    Candidates without a fitted estimate remain unranked so the caller can
+    preserve its existing measured-routing order.
     """
 
-    def __init__(self, max_contexts: int = 512) -> None:
+    def __init__(
+        self,
+        max_contexts: int = 512,
+        *,
+        semantic_warm_start_enabled: bool = False,
+    ) -> None:
+        if type(semantic_warm_start_enabled) is not bool:
+            raise TypeError("semantic_warm_start_enabled must be a boolean")
         self.max_contexts = max_contexts
+        self.semantic_warm_start_enabled = semantic_warm_start_enabled
         self._lock = threading.Lock()
         self._contexts: OrderedDict[str, list[float] | None] = OrderedDict()
+        self._context_unit_vectors: dict[str, tuple[float, ...] | None] = {}
         self._responses: dict[tuple[str, str, int], int] = {}
         self._revision = 0
         self._fit_revision = -1
@@ -56,22 +68,24 @@ class PsychometricRoutingEvidence:
     ) -> None:
         """Restore or record one observation using a non-reversible context id."""
         with self._lock:
-            self._contexts[context_id] = vector
+            stored_vector = list(vector) if vector is not None else None
+            self._contexts[context_id] = stored_vector
+            self._context_unit_vectors[context_id] = (
+                self._unit_vector(stored_vector) if stored_vector is not None else None
+            )
             self._contexts.move_to_end(context_id)
             values = (int(accepted), *(int(value) for value in irt_row))
             if any(value not in (0, 1) for value in values):
                 raise ValueError("judge IRT rows must be dichotomous")
-            stale = [
-                key
-                for key in self._responses
-                if key[:2] == (agent_id, context_id) and key[2] >= len(values)
-            ]
-            for key in stale:
-                del self._responses[key]
+            stale_index = len(values)
+            while (agent_id, context_id, stale_index) in self._responses:
+                del self._responses[(agent_id, context_id, stale_index)]
+                stale_index += 1
             for item_index, value in enumerate(values):
                 self._responses[(agent_id, context_id, item_index)] = value
             while len(self._contexts) > self.max_contexts:
                 removed, _ = self._contexts.popitem(last=False)
+                self._context_unit_vectors.pop(removed, None)
                 self._responses = {
                     key: value for key, value in self._responses.items() if key[1] != removed
                 }
@@ -84,29 +98,65 @@ class PsychometricRoutingEvidence:
         vector: list[float] | None,
     ) -> list[tuple[str, float]]:
         """Return only candidates with a fitted contextual success estimate."""
+        agent_ids = tuple(agent_ids)
         with self._lock:
             self._fit_locked()
             if not self._scores:
                 return []
             exact_id = self.context_id(prompt_interaction)
             if exact_id in self._scores:
-                context_id = exact_id
+                context_scores = self._scores[exact_id]
             elif vector is not None:
+                unit_vector = self._unit_vector(vector)
+                if unit_vector is None:
+                    return []
                 comparable = [
-                    (self._cosine(vector, stored_vector), stored_id)
-                    for stored_id, stored_vector in self._contexts.items()
-                    if stored_id in self._scores and stored_vector is not None
+                    (
+                        self._cosine_unit_vectors(unit_vector, stored_unit_vector),
+                        stored_id,
+                    )
+                    for stored_id, stored_unit_vector in self._context_unit_vectors.items()
+                    if stored_id in self._scores and stored_unit_vector is not None
                 ]
                 comparable = [item for item in comparable if item[0] is not None]
                 if not comparable:
                     return []
-                context_id = max(comparable, key=lambda item: (item[0], item[1]))[1]
+                neighbor_limit = 2 if self.semantic_warm_start_enabled else 1
+                neighbors = (
+                    sorted(comparable, reverse=True)[:2]
+                    if self.semantic_warm_start_enabled
+                    else [max(comparable)]
+                )
+                if self.semantic_warm_start_enabled and neighbors[0][0] <= 0:
+                    return []
+                if len(neighbors) == 1 or (
+                    self.semantic_warm_start_enabled and neighbors[1][0] <= 0
+                ):
+                    context_scores = self._scores[neighbors[0][1]]
+                else:
+                    (first_similarity, first_id), (second_similarity, second_id) = neighbors
+                    first_scores = self._scores[first_id]
+                    second_scores = self._scores[second_id]
+                    context_scores = {}
+                    for agent_id in agent_ids:
+                        first_score = first_scores.get(agent_id)
+                        second_score = second_scores.get(agent_id)
+                        if first_score is None:
+                            if second_score is not None:
+                                context_scores[agent_id] = second_score
+                        elif second_score is None:
+                            context_scores[agent_id] = first_score
+                        else:
+                            context_scores[agent_id] = (
+                                first_similarity * first_score
+                                + second_similarity * second_score
+                            ) / (first_similarity + second_similarity)
             else:
                 return []
             scored = [
-                (agent_id, self._scores[context_id][agent_id])
+                (agent_id, context_scores[agent_id])
                 for agent_id in agent_ids
-                if agent_id in self._scores[context_id]
+                if agent_id in context_scores
             ]
             return sorted(scored, key=lambda item: (-item[1], item[0]))
 
@@ -114,6 +164,29 @@ class PsychometricRoutingEvidence:
         """Return whether embedding/fit work can affect a ranking."""
         with self._lock:
             return bool(self._responses)
+
+    def retain_agents(self, agent_ids: Iterable[str]) -> None:
+        """Discard observations from deployment candidates that are no longer active."""
+        allowed = set(agent_ids)
+        with self._lock:
+            responses = {
+                key: value for key, value in self._responses.items() if key[0] in allowed
+            }
+            if len(responses) == len(self._responses):
+                return
+            self._responses = responses
+            retained_contexts = {context_id for _agent_id, context_id, _item in responses}
+            self._contexts = OrderedDict(
+                (context_id, vector)
+                for context_id, vector in self._contexts.items()
+                if context_id in retained_contexts
+            )
+            self._context_unit_vectors = {
+                context_id: vector
+                for context_id, vector in self._context_unit_vectors.items()
+                if context_id in retained_contexts
+            }
+            self._revision += 1
 
     def records(self) -> list[dict[str, object]]:
         """Return prompt-free observations suitable for durable state storage."""
@@ -147,9 +220,10 @@ class PsychometricRoutingEvidence:
 
             agent_ids = sorted({agent_id for agent_id, _context_id, _item in self._responses})
             context_ids = list(self._contexts)
+            context_positions = {context_id: index for index, context_id in enumerate(context_ids)}
             item_keys = sorted(
                 {(context_id, item_index) for _agent, context_id, item_index in self._responses},
-                key=lambda item: (context_ids.index(item[0]), item[1]),
+                key=lambda item: (context_positions[item[0]], item[1]),
             )
             matrix = np.full((len(agent_ids), len(item_keys)), np.nan, dtype=float)
             for row, agent_id in enumerate(agent_ids):
@@ -188,11 +262,36 @@ class PsychometricRoutingEvidence:
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float | None:
         """Cosine similarity for two finite, equal-length embedding vectors."""
-        if not left or len(left) != len(right):
+        left_unit = PsychometricRoutingEvidence._unit_vector(left)
+        right_unit = PsychometricRoutingEvidence._unit_vector(right)
+        if left_unit is None or right_unit is None:
             return None
-        dot = sum(a * b for a, b in zip(left, right))
-        left_norm = sum(value * value for value in left) ** 0.5
-        right_norm = sum(value * value for value in right) ** 0.5
-        if left_norm == 0.0 or right_norm == 0.0:
+        return PsychometricRoutingEvidence._cosine_unit_vectors(
+            left_unit, right_unit
+        )
+
+    @staticmethod
+    def _finite_norm(vector: list[float]) -> float | None:
+        """Return a usable Euclidean norm for one finite embedding vector."""
+        if not vector or not all(math.isfinite(value) for value in vector):
             return None
-        return dot / (left_norm * right_norm)
+        norm = math.hypot(*vector)
+        return norm if norm else None
+
+    @staticmethod
+    def _unit_vector(vector: list[float]) -> tuple[float, ...] | None:
+        """Return one finite unit vector, or None when cosine is undefined."""
+        norm = PsychometricRoutingEvidence._finite_norm(vector)
+        return tuple(value / norm for value in vector) if norm is not None else None
+
+    @staticmethod
+    def _cosine_unit_vectors(
+        left: tuple[float, ...], right: tuple[float, ...]
+    ) -> float | None:
+        """Cosine similarity for two validated unit vectors."""
+        if len(left) != len(right):
+            return None
+        similarity = math.fsum(map(operator.mul, left, right))
+        if not math.isfinite(similarity):
+            return None
+        return max(-1.0, min(1.0, similarity))
