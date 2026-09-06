@@ -1,2 +1,3 @@
 repair synthetic reasoning-effort allocation and pseudo-ablation
-attempt=v4-exact-head-715f24a130416da3a255fa45823910410297845a
+attempt=v5-generated-test-helper-before-plan
+rca=insert test-only helper after imports, never inside PLAN dict literal

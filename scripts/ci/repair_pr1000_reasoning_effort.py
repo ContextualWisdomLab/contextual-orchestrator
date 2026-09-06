@@ -291,7 +291,7 @@ def patch_fixture_tests() -> None:
         GENERATED_TEST,
         '''from contextual_orchestrator import (  # noqa: E402\n    ModelAgent,\n    TaskOrchestrator,\n    default_role_effort_catalog,\n)\n''',
         '''from contextual_orchestrator import (  # noqa: E402\n    ModelAgent,\n    ReasoningEffortProfile,\n    TaskOrchestrator,\n)\nfrom contextual_orchestrator.reasoning_effort_profile import WORKFLOW_ROLES  # noqa: E402\n''',
-        'PLAN = {\n',
+        'from contextual_orchestrator.orchestrator import (  # noqa: E402\n    BudgetExceededError,\n    ModelClient,\n)\n',
     )
     patch_simple_fixture_test(
         PASSTHROUGH_TEST,
