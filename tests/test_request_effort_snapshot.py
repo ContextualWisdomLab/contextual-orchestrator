@@ -1,11 +1,14 @@
 """Request-boundary regressions for declared effort, identity, and answer records."""
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator, default_role_effort_catalog
-from contextual_orchestrator.reasoning_effort_profile import snapshot_role_effort_catalog
+from contextual_orchestrator import orchestrator as runtime_module
+from contextual_orchestrator.reasoning_effort_profile import EffortProfileError, snapshot_role_effort_catalog
 
 
 def _orchestrator(**kwargs):
@@ -157,4 +160,163 @@ def test_interleaved_streams_do_not_share_effort_context(monkeypatch):
         first_stream.close()
         if second_stream is not None:
             second_stream.close()
+        orchestrator.close()
+
+
+def test_concurrent_requests_keep_independent_catalogs_without_serializing(monkeypatch):
+    """A later request can finish under new settings while the first worker is blocked."""
+    orchestrator, catalog = _orchestrator()
+    old_hash = snapshot_role_effort_catalog(catalog).snapshot_hash
+    started, release = Event(), Event()
+
+    def chat(agent, messages, *, effort_profile):
+        """Hold the first provider double while the other request completes."""
+        if messages[-1]["content"] == "first concurrent fixture":
+            started.set()
+            assert release.wait(5), "second request was serialized behind the first"
+        return effort_profile.reasoning_effort
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first_future = pool.submit(orchestrator.complete, [{"role": "user", "content": "first concurrent fixture"}], "route")
+            try:
+                assert started.wait(5)
+                _change_effort(catalog)
+                second_future = pool.submit(orchestrator.complete, [{"role": "user", "content": "second concurrent fixture"}], "route")
+                second = second_future.result(timeout=5)
+            finally:
+                release.set()
+            first = first_future.result(timeout=5)
+        assert first["answer"] == "medium"
+        assert first["reasoning_effort_snapshot"]["snapshot_hash"] == old_hash
+        assert second["answer"] == "high"
+        assert second["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(catalog).snapshot_hash
+    finally:
+        orchestrator.close()
+
+
+def test_failed_request_restores_effort_context(monkeypatch):
+    """An exception must not pin the failed request's revision onto its successor."""
+    orchestrator, catalog = _orchestrator()
+
+    def interrupted(*args, **kwargs):
+        """Change configuration, then fail inside the scoped dispatch boundary."""
+        _change_effort(catalog)
+        raise RuntimeError("fixture interruption")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrator, "_dispatch", interrupted)
+            with pytest.raises(RuntimeError, match="fixture interruption"):
+                orchestrator.complete([{"role": "user", "content": "interrupted fixture"}], mode="route")
+        next_result = orchestrator.complete([{"role": "user", "content": "successor fixture"}], mode="route")
+        assert next_result["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(catalog).snapshot_hash
+    finally:
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("termination", ["close", "provider_error"])
+def test_terminated_stream_closes_provider_in_its_own_context(monkeypatch, termination):
+    """Close and error cleanup retain stream identity and release the caller context."""
+    orchestrator, catalog = _orchestrator()
+    closed_efforts = []
+
+    def stream_chat(agent, messages, *, effort_profile):
+        """Expose the context used when the provider iterator is finalized."""
+        try:
+            yield effort_profile.reasoning_effort
+            raise RuntimeError("stream fixture interruption")
+        finally:
+            closed_efforts.append(orchestrator._role_effort_profile("worker").reasoning_effort)
+
+    monkeypatch.setattr(orchestrator.client, "stream_chat", stream_chat)
+    stream = orchestrator.stream_route([{"role": "user", "content": "terminated fixture"}])
+    try:
+        assert next(stream) == "medium"
+        _change_effort(catalog)
+        if termination == "close":
+            stream.close()
+        else:
+            with pytest.raises(RuntimeError, match="stream fixture interruption"):
+                next(stream)
+        assert closed_efforts == ["medium"]
+        assert orchestrator._role_effort_profile("worker").reasoning_effort == "high"
+    finally:
+        stream.close()
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("entry_point", ["complete", "bypass", "route_once", "conduct", "batch_route", "stream_route"])
+def test_malformed_catalog_fails_before_any_provider_execution(monkeypatch, entry_point):
+    """Every execution boundary validates an operator update before making calls."""
+    orchestrator, catalog = _orchestrator()
+    catalog.pop("judge")
+    provider_calls = []
+
+    def forbidden_call(*args, **kwargs):
+        """Fail the test if execution is attempted before catalog validation."""
+        provider_calls.append(True)
+        raise AssertionError("provider called with an invalid catalog")
+
+    for method in ("chat", "stream_chat", "batch_chat"):
+        monkeypatch.setattr(orchestrator.client, method, forbidden_call)
+    messages = [{"role": "user", "content": "invalid catalog fixture"}]
+    try:
+        with pytest.raises(EffortProfileError, match="catalog must bind exactly"):
+            if entry_point == "batch_route":
+                orchestrator.batch_route(["invalid catalog fixture"])
+            elif entry_point == "stream_route":
+                list(orchestrator.stream_route(messages))
+            elif entry_point == "bypass":
+                orchestrator.complete(messages, mode="route", bypass_cache=True)
+            else:
+                getattr(orchestrator, entry_point)(messages)
+        assert not provider_calls
+    finally:
+        orchestrator.close()
+
+
+def test_no_catalog_request_does_not_adopt_a_late_catalog(monkeypatch):
+    """Opting in during a call affects the next request, not the active default path."""
+    orchestrator, catalog = _orchestrator()
+    orchestrator.role_effort_catalog = None
+    received_efforts = []
+
+    def chat(agent, messages, **kwargs):
+        """Install the operator catalog after the default request has already started."""
+        received_efforts.append(kwargs.get("effort_profile"))
+        orchestrator.role_effort_catalog = catalog
+        return "fixture answer"
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    messages = [{"role": "user", "content": "late opt-in fixture"}]
+    try:
+        first = orchestrator.complete(messages, mode="route")
+        second = orchestrator.complete(messages, mode="route")
+        assert received_efforts[0] is None
+        assert "reasoning_effort_snapshot" not in first
+        assert received_efforts[1].reasoning_effort == "medium"
+        assert second["reasoning_effort_snapshot"]["snapshot_hash"] == snapshot_role_effort_catalog(catalog).snapshot_hash
+    finally:
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("mode", ["route", "conduct"])
+def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
+    """Reuse validation across key construction, nested execution, identity, and records."""
+    orchestrator, catalog = _orchestrator(cache_ttl=60)
+    original = runtime_module.snapshot_role_effort_catalog
+    calls = []
+
+    def counted_snapshot(value):
+        """Count real catalog validations without substituting their output."""
+        calls.append(True)
+        return original(value)
+
+    monkeypatch.setattr(runtime_module, "snapshot_role_effort_catalog", counted_snapshot)
+    try:
+        orchestrator.complete([{"role": "user", "content": "validation count fixture"}], mode=mode)
+        assert len(calls) == 1
+    finally:
         orchestrator.close()
