@@ -25,15 +25,12 @@ def test_concurrent_error_responses_share_only_their_own_log_id(caplog) -> None:
     """Concurrent HTTP failures correlate without logging credentials or bodies."""
     from concurrent.futures import ThreadPoolExecutor
 
-    def reject_verification(token: str, scope: str) -> bool:
-        raise RuntimeError("verification unavailable")
-
-    server = build_server(build(), port=0, security=SecurityConfig(bearer_verifier=reject_verification))
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="private_test_credential"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with patch.object(server.RequestHandlerClass, "_authorize", side_effect=RuntimeError("test failure")), ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(
                 lambda _: request_json(
                     f"{base}/v1/models", "GET",
