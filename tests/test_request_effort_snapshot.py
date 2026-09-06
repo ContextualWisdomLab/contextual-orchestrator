@@ -48,7 +48,7 @@ def test_standalone_role_lookup_preserves_partial_catalog():
     try:
         assert inner._role_effort_profile("judge") is judge_profile
         assert inner._role_effort_profile("worker") is None
-        with outer._request_effort_scope():
+        with outer._request_execution_scope():
             assert inner._role_effort_profile("judge") is judge_profile
             with pytest.raises(EffortProfileError, match="catalog must bind exactly"):
                 inner.complete([{"role": "user", "content": "partial catalog unit fixture"}])
