@@ -119,3 +119,4 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+- **Cross-session know-how**: see AGENTS.md's "Recurring bug class: hardcoded review-cadence dates" and "Central review sidecar/egress gap (tracked, not yet closed)" sections for lessons learned this cycle before touching `nim_benchmark.py`'s evidence gates or the org's central review sidecar.
