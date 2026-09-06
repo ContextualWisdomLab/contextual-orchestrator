@@ -72,6 +72,22 @@ snapshots across processes do not yet carry a policy revision. Authenticated
 actor evidence, revision-based restore and complete concurrency/commit-failure
 injection remain required before exposing administrator policy writes.
 
+The ABA limitation was then directly reproduced at `ef76ade9` (1 failed,
+17 passed, 0.50 seconds). `d911a38e` reuses each model's latest history sequence
+as its policy revision and compares it inside the write transaction, rejecting
+a stale snapshot even when the value returned to null. Related tests passed
+38/38 in 4.30 seconds. Revision allocation remains owned by committed history.
+
+At `bceaeb23`, a deterministic interleaved WAL writer showed that loading model
+values and history in separate reads could attach revision 2 to the old
+3600-second value (1 failed, 18 passed, 6.88 seconds). `e5e9c96f` starts a read
+transaction before selecting model rows, so values, relations and revisions
+come from the same database snapshot. The same interleaving now returns
+3600 seconds with revision 1; 39 related tests passed in 4.43 seconds, exit 0.
+This proves that interleaving, not all distributed serving coherence. Policy
+restore, authenticated actor attribution, complete concurrent-write failure
+coverage and actual runtime enforcement are still unfinished and unshipped.
+
 ## Remaining delivery gates
 
 - Complete revision-based change/history and restore with authenticated actor evidence.
