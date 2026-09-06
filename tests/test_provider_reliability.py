@@ -855,6 +855,83 @@ def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
     assert client.calls == ["auto_primary", "auto_backup"]
 
 
+def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_agent() -> None:
+    """One flaky free route must not sink more than its own _invoke-level retry
+    budget of *real* network attempts before failover reaches a ready sibling.
+
+    Regression for the ContextualWisdomLab/.github PR #1912 ``noema-review``
+    incident: preflight found ``nvidia_nim_sub_deepseek_ai_deepseek_v4_flash_0731``
+    "escalated" (needed a retry to become ready) alongside two cleanly ready
+    siblings (``nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`` and
+    ``nvidia_nim_sub_deepseek_ai_deepseek_v4_pro_0813``); the real
+    ``orchestrator/free`` chat/completions request that followed then spent
+    1655.2s and still surfaced ``served_model=deepseek-ai/deepseek-v4-flash-0731``
+    -- the flaky route's own model -- in its final 503, never reaching either
+    ready sibling
+    (https://github.com/ContextualWisdomLab/.github/actions/runs/33993267732/job/101388341942).
+
+    ``test_free_model_advances_through_the_free_pool_on_retryable_5xx`` already
+    proves failover happens *eventually*, but it mocks ``ModelClient.chat()``
+    directly, which bypasses ``_send_with_retry``'s own internal
+    transient-retry-with-backoff entirely. This test overrides only ``_send``
+    (real transport boundary), so ``_send_with_retry``'s own retry loop and
+    ``_invoke``'s agent-level retry-then-failover loop both actually run
+    together, the way production does -- the interaction the incident exposed.
+    """
+    send_calls: list[str] = []
+
+    class RealTransportFlakyPool(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self._sleep = lambda _seconds: None  # keep any real backoff at 0s
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            return None  # no real DNS; _send below ignores destination anyway
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None, *, timeout=None) -> str:  # type: ignore[override]
+            send_calls.append(agent.id)
+            if agent.id == "flaky_escalated_agent":
+                raise _http_error(503)
+            return f"[{agent.id}] answer"
+
+    agents = [
+        ModelAgent(
+            agent_id,
+            f"{agent_id}-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+            tags=("reasoning", "cost:free"),
+        )
+        for agent_id in ("flaky_escalated_agent", "ready_sibling_b", "ready_sibling_c")
+    ] + [ModelAgent("priced_worker", "priced-model", tags=("reasoning",), priority=99)]
+    orchestrator = TaskOrchestrator(
+        agents,
+        client=RealTransportFlakyPool(),
+        tool_retry_attempts=1,
+        tool_retry_backoff_seconds=0.0,
+    )
+    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["trace"][0]["served_agent_id"] in {"ready_sibling_b", "ready_sibling_c"}
+    flaky_attempts = send_calls.count("flaky_escalated_agent")
+    # _invoke's own budget is 1 + tool_retry_attempts (=1 here) = 2 real tries
+    # against one candidate before it fails over -- never multiplied by
+    # ModelClient's own max_retries+1 (=3 by default) stacked underneath it.
+    assert flaky_attempts <= 2, (
+        f"flaky agent consumed {flaky_attempts} real network attempts before "
+        "failover, expected at most 2 (the _invoke-level retry budget); "
+        "ModelClient's own internal transient-retry-with-backoff must not "
+        "stack underneath _invoke's own retry-then-failover decision"
+    )
+    assert "priced_worker" not in send_calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
