@@ -78,11 +78,16 @@ def test_model_timeout_policy_rejects_invalid_patch(invalid_limit: object) -> No
     assert orchestrator._agent(model_agent.id) == model_agent
 
 
-def test_model_timeout_policy_audit_failure_does_not_apply(tmp_path: Path) -> None:
+@pytest.mark.parametrize("previous_limit", [None, 3600.0])
+def test_model_timeout_policy_audit_failure_does_not_apply(
+    tmp_path: Path, previous_limit: float | None
+) -> None:
     """A rejected policy update must not leave a new durable or serving limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
+    if previous_limit is not None:
+        orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": previous_limit})
 
     with sqlite3.connect(database_path) as connection:
         connection.execute(
@@ -95,9 +100,11 @@ def test_model_timeout_policy_audit_failure_does_not_apply(tmp_path: Path) -> No
     assert (
         orchestrator._agent(model_agent.id).model_timeout_seconds,
         restored._agent(model_agent.id).model_timeout_seconds,
-    ) == (None, None)
+    ) == (previous_limit, previous_limit)
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (
+            int(previous_limit is not None),
+        )
 
 
 def test_model_timeout_policy_requires_durable_store() -> None:
@@ -121,3 +128,32 @@ def test_model_timeout_policy_records_atomic_history(tmp_path: Path) -> None:
             "SELECT previous_seconds, timeout_seconds FROM model_timeout_history "
             "WHERE agent_id = ? ORDER BY policy_revision", (model_agent.id,)
         ).fetchall() == [(None, 7200.0), (7200.0, None)]
+
+
+def test_model_timeout_policy_rejects_stale_writer(tmp_path: Path) -> None:
+    """A stale model view cannot overwrite a different committed timeout value."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    first = TaskOrchestrator([model_agent], agents_db=database_path)
+    stale = TaskOrchestrator([model_agent], agents_db=database_path)
+    first.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    with pytest.raises(ValueError, match="reload"):
+        stale.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds == 7200
+    assert stale._agent(model_agent.id).model_timeout_seconds is None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (1,)
+
+
+def test_model_timeout_policy_preserves_other_stored_attributes(tmp_path: Path) -> None:
+    """A timeout-only write does not replay an old copy of unrelated attributes."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    first = TaskOrchestrator([model_agent], agents_db=database_path)
+    stale = TaskOrchestrator([model_agent], agents_db=database_path)
+    first.patch_agent("default", model_agent.id, {"priority": 9})
+    stale.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).priority == 9
+    assert restored._agent(model_agent.id).model_timeout_seconds == 7200
