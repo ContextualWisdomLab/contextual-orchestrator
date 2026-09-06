@@ -402,8 +402,10 @@ python tests/test_discovery_bootstrap_selection.py
 python tests/test_chat_capability.py
 python tests/test_review_gateway.py
 python tests/test_provider_bootstrap.py
+python tests/test_provider_bootstrap_report_identity.py
 python tests/test_provider_bootstrap_secret_normalization.py
 python tests/test_provider_catalog_bootstrap.py
+python tests/test_provider_catalog_bootstrap_report_identity.py
 python tests/test_provider_catalog_credential_promotion.py
 python tests/test_provider_catalog_store.py
 python tests/test_tool_execution_fallback.py

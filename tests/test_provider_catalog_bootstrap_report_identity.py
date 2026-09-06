@@ -71,3 +71,7 @@ def test_durable_catalog_report_uses_persisted_legacy_identity(tmp_path) -> None
     assert report.enabled_agent_ids == (legacy_id,)
     assert report.selected_agent_ids == report.enabled_agent_ids
     assert report.as_dict()["selected_agent_ids"] == [legacy_id]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
