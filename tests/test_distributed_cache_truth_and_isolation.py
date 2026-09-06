@@ -14,8 +14,13 @@ from contextual_orchestrator import (
     PriceBook,
     PriceEntry,
     TaskOrchestrator,
+    default_role_effort_catalog,
 )
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.reasoning_effort_profile import (
+    EffortProfileError,
+    snapshot_role_effort_catalog,
+)
 
 
 class _MemoryCache:
@@ -82,6 +87,105 @@ def test_cache_partition_prevents_cross_principal_reuse() -> None:
     assert first_a["cache_status"] == "miss"
     assert first_b["cache_status"] == "miss"
     assert second_a["cache_status"] == "hit"
+
+
+@pytest.mark.parametrize("cache_kind", ["local", "shared"])
+def test_effort_catalog_changes_do_not_reuse_prior_answers(monkeypatch, cache_kind):
+    """Separate declared decode settings in both cache paths; reuse equal content."""
+    catalog = default_role_effort_catalog()
+    cache_options = {"cache_ttl": 60} if cache_kind == "local" else {"cache_provider": _MemoryCache()}
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("audit_worker", "mock", tags=("reasoning",))],
+        role_effort_catalog=catalog,
+        **cache_options,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    worker_efforts = []
+
+    def chat(agent, messages, *, effort_profile):
+        """Expose the profile received by the worker double without external calls."""
+        worker_efforts.append(effort_profile.reasoning_effort)
+        return "answer-" + effort_profile.reasoning_effort
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    messages = [{"role": "user", "content": "same declared task"}]
+    try:
+        first = orchestrator.run(messages, mode="route")
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="high")
+        changed = orchestrator.run(messages, mode="route")
+        orchestrator.role_effort_catalog = dict(catalog)
+        repeated = orchestrator.run(messages, mode="route")
+
+        assert worker_efforts == ["medium", "high"]
+        assert [first["answer"], changed["answer"], repeated["answer"]] == [
+            "answer-medium", "answer-high", "answer-high"
+        ]
+        assert [first["cache_status"], changed["cache_status"], repeated["cache_status"]] == [
+            "miss", "miss", "hit"
+        ]
+        assert changed["reasoning_effort_snapshot"] == repeated["reasoning_effort_snapshot"]
+        assert changed["reasoning_effort_snapshot"]["snapshot_hash"] == (
+            snapshot_role_effort_catalog(catalog).snapshot_hash
+        )
+    finally:
+        orchestrator.close()
+
+
+def test_invalid_effort_catalog_cannot_hit_cache_or_execute_worker(monkeypatch):
+    """A malformed catalog is not a cache outage and must fail before execution."""
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("audit_worker", "mock", tags=("reasoning",))],
+        role_effort_catalog=catalog,
+        cache_ttl=60,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    worker_calls = []
+
+    def chat(agent, messages, **kwargs):
+        """Count worker calls on both warm-cache and invalid-catalog paths."""
+        worker_calls.append(agent.id)
+        return "answer"
+
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    messages = [{"role": "user", "content": "same declared task"}]
+    try:
+        orchestrator.complete(messages, mode="route")
+        catalog.pop("judge")
+        with pytest.raises(EffortProfileError, match="catalog must bind exactly"):
+            orchestrator.complete(messages, mode="route")
+        assert worker_calls == ["audit_worker"]
+    finally:
+        orchestrator.close()
+
+
+def test_run_preserves_completion_snapshot_after_settings_change(monkeypatch):
+    """Persist the completion's detached metadata, not later operator settings."""
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("audit_worker", "mock", tags=("reasoning",))],
+        role_effort_catalog=catalog,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    original_complete = orchestrator.complete
+    completed = []
+
+    def complete_then_change(*args, **kwargs):
+        """Change settings at the boundary after a genuine local completion returns."""
+        result = original_complete(*args, **kwargs)
+        completed.append(result)
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="high")
+        return result
+
+    monkeypatch.setattr(orchestrator, "complete", complete_then_change)
+    try:
+        record = orchestrator.run([{"role": "user", "content": "preserve settings"}], mode="route")
+        expected = copy.deepcopy(completed[0]["reasoning_effort_snapshot"])
+        assert record["reasoning_effort_snapshot"] == expected
+        completed[0]["reasoning_effort_snapshot"]["role_profiles"]["worker"]["reasoning_effort"] = "low"
+        assert record["reasoning_effort_snapshot"] == expected
+    finally:
+        orchestrator.close()
 
 
 def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() -> None:
