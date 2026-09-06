@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -177,17 +180,22 @@ def test_model_group_mutations_refresh_audit_events() -> None:
     assert "model_groups_refresh_warning" in ADMIN_TRANSLATIONS["ko"]
 
     def source_between(start_marker: str, end_marker: str) -> str:
+        """Extract one function declaration's source, parenthesized into an
+        expression so ``eval()`` yields the function itself rather than
+        ``undefined`` (eval's completion value for a bare declaration
+        statement)."""
         start_index = ADMIN_HTML.index(start_marker)
         end_index = ADMIN_HTML.index(end_marker, start_index)
-        return ADMIN_HTML[start_index:end_index].strip()
+        return "(" + ADMIN_HTML[start_index:end_index].strip() + ")"
 
     node_script = "\n".join(
         [
             'import assert from "node:assert/strict";',
-            f"const refreshModelGroups = eval({json.dumps(source_between('async function refreshModelGroups()', '    function showModelGroupRefreshWarning'))});",
-            f"const refreshAuditEvents = eval({json.dumps(source_between('async function refreshAuditEvents()', '    async function refreshModelGroupViews'))});",
+            f"const refreshModelGroups = eval({json.dumps(source_between('async function refreshModelGroups()', '    async function refreshAuditEvents'))});",
+            f"const refreshAuditEvents = eval({json.dumps(source_between('async function refreshAuditEvents()', '    function showModelGroupRefreshWarning'))});",
+            f"const showModelGroupRefreshWarning = eval({json.dumps(source_between('function showModelGroupRefreshWarning(message)', '    async function refreshModelGroupViews'))});",
             f"const refreshModelGroupViews = eval({json.dumps(source_between('async function refreshModelGroupViews()', '    async function saveModelGroup'))});",
-            f"const saveModelGroup = eval({json.dumps(source_between('async function saveModelGroup(event)', '    async function deleteModelGroup'))});",
+            f"const saveModelGroup = eval({json.dumps(source_between('async function saveModelGroup(event)', '    function renderTrace(result)'))});",
             f"const deleteModelGroup = eval({json.dumps(source_between('async function deleteModelGroup(groupName)', '    els.modelGroups.addEventListener'))});",
             "let queuedResponses = [];",
             "const calls = [];",

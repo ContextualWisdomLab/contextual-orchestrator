@@ -136,3 +136,29 @@ Official references:
 
 The cited standards are linked rather than vendored because redistribution
 permission for their PDFs is not assumed.
+
+## Web search / metasearch client (2026-09-02)
+
+ADR 0123 needs a grounded web-search tool. Metasearch and browser-automation
+options were checked live against their current repositories rather than
+recalled from training data, because license and maintenance status drift.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Metasearch engine | [SearXNG](https://github.com/searxng/searxng) (license: AGPL-3.0, confirmed live); its documented `/search?format=json` HTTP API | Call a self-hosted SearXNG instance's JSON API as a plain HTTP dependency (no SearXNG code vendored — same sidecar-service boundary this repo already uses for Wardnet/Camoufox). AGPL-3.0 governs SearXNG's own source, not a caller that only sends it HTTP requests. | Vendoring SearXNG or its plugins into this repository. |
+| Metasearch alternative #1 | [Whoogle](https://github.com/benbusby/whoogle-search) (license: MIT) | Rejected. The repository is archived (2026-08-14): Google closed the last scraping workaround Whoogle depended on in 2024, and the maintainer states search is non-functional. A permissive license does not offset a dead upstream. | Implementing a client for a defunct search backend. |
+| Metasearch alternative #2 | [YaCy](https://github.com/yacy/yacy_search_server) (license: GPL-2.0-or-later, confirmed live); built-in JSON/XML search API | Documented as the next self-hosted engine to support (own crawled P2P index, not dependent on scraping another engine's HTML — architecturally different from SearXNG's federation model, which is what "plural" engines is actually for). Not implemented this slice; add a second `_ENGINE_HANDLERS`-style entry in `web_search.py` when a real deployment exists to test against. | Implementing against an engine with no deployment to verify. |
+| Metasearch fallback (commercial) | Brave Search API (independent index, official JSON API, has a free tier) | Documented as the fallback if self-hosted engine coverage/quality proves insufficient later; not implemented — no product requirement to pay for search yet. | Any commercial search integration in this slice. |
+| Browser automation (for a later, separate slice) | [Camoufox](https://github.com/daijro/camoufox) (license: MPL-2.0, confirmed live) | Confirmed: MPL-2.0, Playwright-API-compatible Firefox fork, no *official* MCP server. This repository already consumes a third-party MCP wrapper (`ghcr.io/redf0x1/camofox-mcp`, pinned by digest) for one narrow use (`privacy_policy_analysis.py`'s Wardnet-proxied policy rendering) — reuse that existing, reviewed integration for the web-search follow-up rather than adding a second Camoufox transport. | Building a first-party Camoufox MCP server, or a second parallel browser-automation dependency. |
+| Transport / SSRF boundary | Existing `ModelClient._validate_provider` / `ModelClient._open_provider` (already reused by `privacy_policy_analysis.crawl_policy_document` for Wardnet) | Reuse the existing validated-HTTP primitive for the SearXNG call: HTTPS-only unless the host is an explicit loopback address, private/loopback/link-local/reserved destination IPs rejected, no vendored HTTP client. | A new HTTP client dependency, or a second hand-rolled SSRF check. |
+
+Session-isolation note: `ContextualWisdomLab/quarantine-sandbox-runtime`'s
+`develop` branch has no HTTP/CLI entrypoint or container backend yet (real
+work is an unmerged Draft PR stack #1→#6→#9→#10→#13, externally blocked on
+`ContextualWisdomLab/.github#1590`, no LSM-capable CI runner). Camoufox
+browsing already ships in this repository today gated behind **Wardnet**
+(DNS-pinned egress proxy + authenticated CONNECT boundary, see
+`compose.camoufox-wardnet.yaml` and the "Web-search boundary" /
+"Wardnet policy-document boundary" sections of `docs/kv-credentials.md`), not
+`quarantine-sandbox-runtime`. ADR 0123 records this as an open reconciliation
+question rather than silently picking one.

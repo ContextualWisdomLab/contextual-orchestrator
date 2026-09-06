@@ -41,6 +41,7 @@ def test_durable_bootstrap_report_uses_persisted_legacy_identity(monkeypatch, tm
         [replace(current_agent, id=legacy_id)],
         agents_db=agents_db,
     )
+    seeded.sync_discovered_agents([replace(current_agent, id=legacy_id)])
     seeded.close()
 
     monkeypatch.setattr(

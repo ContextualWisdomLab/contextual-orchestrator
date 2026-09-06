@@ -507,6 +507,7 @@ def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
         TaskOrchestrator([agent]),
         InMemoryConfigStore(),
         embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
     )
 
     coordinator.submit_embeddings_batch(
@@ -531,6 +532,7 @@ def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
         TaskOrchestrator([agent]),
         InMemoryConfigStore(),
         embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
     )
 
     coordinator.submit_embeddings_batch(
@@ -565,6 +567,7 @@ def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> No
         TaskOrchestrator([agent]),
         InMemoryConfigStore(),
         embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
     )
 
     coordinator.submit_embeddings_batch(
@@ -583,6 +586,7 @@ def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch)
         TaskOrchestrator([ModelAgent("removed_agent", "text-embedding-3-small")]),
         InMemoryConfigStore(),
         embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
     )
     monkeypatch.setattr(
         coordinator,

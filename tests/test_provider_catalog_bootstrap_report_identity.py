@@ -55,6 +55,7 @@ def test_durable_catalog_report_uses_persisted_legacy_identity(tmp_path) -> None
         [replace(current_agent, id=legacy_id)],
         agents_db=agents_db,
     )
+    seeded.sync_discovered_agents([replace(current_agent, id=legacy_id)])
     seeded.close()
 
     report = bootstrap_provider_catalog_runtime(
