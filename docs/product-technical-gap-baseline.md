@@ -22,7 +22,9 @@ the latter head has 39 related passes.
 Actor evidence is now stored as an optional opaque principal digest at local
 `c08a5fd5`; this is not yet authenticated HTTP policy-write E2E and null
 historical actors remain unknown. Static-token identity is deployment-scoped.
-Restore,
+Local `37bca9ca` adds revision-checked restoration as a new, source-linked
+history entry; `62ba3c3b` has 54 related passes including foreign-model and
+audit-failure rejection. Authenticated HTTP restore,
 precedence, cancellation semantics, released Rust runtime integration and
 actual administrator visual/E2E evidence also remain open.
 

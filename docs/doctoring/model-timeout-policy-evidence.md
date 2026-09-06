@@ -106,6 +106,21 @@ closed until runtime enforcement and restore acceptance are complete.
 At `fc234020`, 45 related tests passed in 7.18 seconds, exit 0, including
 raw/malformed actor rejection and migration of an existing unattributed row.
 
+Restoration was first missing at `2919652e` (2 failed, 25 deselected, 2.26
+seconds). Local `37bca9ca` adds a model-scoped historical lookup and restores
+its value through the same revision-checked policy transaction. The new history
+row references its source revision and supplied actor; existing rows remain
+unchanged. Both the expected current revision and the model owning the source
+history are checked. No HTTP restore endpoint is admitted yet.
+
+At `62ba3c3b`, 54 related tests passed in 6.65 seconds, exit 0. They include
+restore success as a new revision, stale-view rejection, foreign-model history
+rejection, malformed revision rejection and history-insertion failure rollback
+for both durable value and in-memory revision. This is local storage/domain
+evidence. Authenticated HTTP restore, user-facing history/restore controls,
+multi-process serving refresh, complete concurrency and actual model execution
+enforcement remain required before release.
+
 ## Remaining delivery gates
 
 - Complete revision-based change/history and restore with authenticated actor evidence.
