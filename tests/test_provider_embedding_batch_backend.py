@@ -46,12 +46,29 @@ class _SyntheticExactCounter:
         return len(text.split())
 
 
-def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
+def test_unknown_tokenizer_uses_authoritative_provider_usage(monkeypatch) -> None:
     """A byte-safe request completes only after the provider supplies exact usage."""
     agent = ModelAgent(
         "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
     )
-    orchestrator = TaskOrchestrator([agent], client=_SyntheticProviderClient())
+    client = _SyntheticProviderClient()
+    release = threading.Event()
+    provider_usage = client.embed_with_usage
+    backend_wait = ProviderEmbeddingBatchBackend.wait
+
+    def delayed_usage(agent, texts):
+        """Keep provider work pending until its caller explicitly waits."""
+        assert release.wait(timeout=2)
+        return provider_usage(agent, texts)
+
+    def release_and_wait(backend, job, *, timeout):
+        """Release the controlled worker before using the real wait contract."""
+        release.set()
+        return backend_wait(backend, job, timeout=timeout)
+
+    monkeypatch.setattr(client, "embed_with_usage", delayed_usage)
+    monkeypatch.setattr(ProviderEmbeddingBatchBackend, "wait", release_and_wait)
+    orchestrator = TaskOrchestrator([agent], client=client)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(
@@ -64,11 +81,16 @@ def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
         embedding_token_counter=UnavailableEmbeddingTokenCounter(),
     )
 
-    document = coordinator.complete_embeddings_batch(["synthetic input"])
+    try:
+        document = coordinator.complete_embeddings_batch(["synthetic input"])
 
-    assert document["status"] == "completed"
-    assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
-    assert document["cost_micro_usd"] > 0
+        assert document["status"] == "completed"
+        assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
+        assert document["cost_micro_usd"] > 0
+    finally:
+        release.set()
+        coordinator.close_embedding_backends()
+        orchestrator.close()
 
 
 def test_unknown_tokenizer_rejects_missing_provider_usage() -> None:
