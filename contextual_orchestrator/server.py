@@ -6238,6 +6238,13 @@ def build_server(
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
+                    if (len(segments) == 7 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6] == "timeout_policy"):
+                        try:
+                            self._send(orchestrator.get_model_timeout_policy(segments[3], segments[5]))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]

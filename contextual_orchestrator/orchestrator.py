@@ -6249,6 +6249,25 @@ class TaskOrchestrator:
             )
         return self._agent_to_admin_payload(patched)
 
+    def get_model_timeout_policy(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Read configured policy without publishing or claiming runtime enforcement."""
+        serving = self._agent_in_pool(agent_pool_id, worker_agent_id)
+        configured = serving
+        if self._pool_store is not None:
+            # Reuse the transactional configuration snapshot, never refresh routing here.
+            configured = next(
+                (agent for agent in self._pool_store.load_all() if agent.id == worker_agent_id),
+                serving,
+            )
+        return {
+            "configured_seconds": configured.model_timeout_seconds,
+            "revision": configured.model_timeout_revision,
+            "unit": "seconds",
+            "serving_snapshot_seconds": serving.model_timeout_seconds,
+            "serving_snapshot_revision": serving.model_timeout_revision,
+            "enforcement_available": False,
+        }
+
     def restore_model_timeout(
         self, agent_pool_id: str, worker_agent_id: str, source_revision: int, *,
         expected_revision: int, actor_id: str,
