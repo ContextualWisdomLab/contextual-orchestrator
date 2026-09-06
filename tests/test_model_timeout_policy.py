@@ -1,6 +1,7 @@
 """Administrator-owned model timeout policy must survive configuration changes."""
 
 from pathlib import Path
+from dataclasses import replace
 import sqlite3
 
 import pytest
@@ -42,6 +43,31 @@ def test_rejected_pool_change_preserves_serving_snapshot(tmp_path: Path, operati
             stale.delete_model_group("test_group")
     assert stale.candidates == before_candidates
     assert stale.agents == before_agents
+
+
+@pytest.mark.parametrize("operation", ["set_group", "delete_group", "discovery"])
+def test_late_batch_conflict_rolls_back_all_models(tmp_path: Path, operation: str) -> None:
+    """A stale second model cannot leave the first model partially committed."""
+    seeds = [ModelAgent("first_agent", "first-model", group_name="test_group"),
+             ModelAgent("second_agent", "second-model", group_name="test_group")]
+    database_path = str(tmp_path / "agent-pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    writer.sync_discovered_agents(seeds)
+    stale = TaskOrchestrator(seeds, agents_db=database_path)
+    before = list(stale.candidates)
+    writer.patch_agent("default", "second_agent", {"model_timeout_seconds": 7200})
+    with pytest.raises(ValueError, match="reload"):
+        if operation == "set_group":
+            stale.set_model_group("new_group", [agent.id for agent in seeds])
+        elif operation == "delete_group":
+            stale.delete_model_group("test_group")
+        else:
+            stale.sync_discovered_agents([replace(agent, priority=7) for agent in seeds])
+    assert stale.candidates == before
+    restored = TaskOrchestrator(seeds, agents_db=database_path)
+    assert restored._agent("first_agent") == seeds[0]
+    assert restored._agent("second_agent").model_timeout_seconds == 7200
+    assert restored._agent("second_agent").group_name == "test_group"
 
 
 def test_model_timeout_policy_defaults_to_null() -> None:
