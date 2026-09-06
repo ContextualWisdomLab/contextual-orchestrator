@@ -54,6 +54,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Invalid provider availability values no longer influence routing evidence;
+  missing measurements remain unknown rather than counted as failures.
 - Provider availability updates no longer change answer-quality assessments
   when no new answers have been evaluated.
 - Changes to answer-evaluation settings no longer reuse answers produced under

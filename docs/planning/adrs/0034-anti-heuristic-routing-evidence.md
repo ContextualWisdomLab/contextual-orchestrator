@@ -60,6 +60,16 @@ records the product requirement, call path, alternatives, UML-level flow, exact
 RED/GREEN commands, test-fixture correction, API limitations, and remaining
 gates. This does not change ADR status, production defaults, or Rust ownership.
 
+The subsequent input repair `b49d583f` validates numeric percentages before
+endpoint aggregation. In the context of telemetry admission, facing malformed
+input becoming window mass, we chose the existing no-update path and rejected
+coercion/clamping or partial endpoint selection, to preserve measurement
+admissibility, accepting that a mixed valid/invalid payload is not consumed.
+The [input contract](../../doctoring/measured-routing-evidence.md#endpoint-percentage-input-validation-2026-09-06)
+records 33/39 invalid unit payloads mutating evidence before repair and zero
+afterward, with 98 focused tests passing. It neither calibrates rolling-window
+pseudo-counts nor supplies buyer or current-head protected-delivery evidence.
+
 ### Psychometric warm start for unseen contexts
 
 An exact previously judged context keeps its fitted model probabilities. The

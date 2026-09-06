@@ -1,5 +1,21 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-06 endpoint percentage admission
+
+Malformed endpoint percentages could change transport evidence after numeric
+coercion and clamping. RED `e405b803` has 33 failures/28 passes; source
+`b49d583f` validates numeric type and the inclusive 0–100 domain before endpoint
+aggregation. Invalid input leaves the ledger unchanged; null/missing input
+remains absent, not an observed failure. The unit mutation KPI falls from
+**33/39 invalid cases to 0/39**, with **98 related tests passing in 1.83
+seconds**. Two changed methods cover **27/27 statements and 8/8 branches** in
+a separate 61-test run. This is zero-provider-call input validation, not an
+estimator replacement, live incident, or buyer accuracy/latency improvement.
+The [Proposed contract](doctoring/measured-routing-evidence.md#endpoint-percentage-input-validation-2026-09-06)
+records requirements, alternatives, flow, APA references, exact evidence, and
+remaining full/hosted/visual/release gates. Prior fulls at `7b634397` and
+`2f770351` passed but do not verify this later revision. Both PRs stay Draft.
+
 ## 2026-09-06 provider-usage test completion contract
 
 The availability-repair full suites are terminal: clean parent `6ca30364`

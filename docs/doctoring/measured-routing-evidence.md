@@ -144,6 +144,70 @@ not a Python clone. No production default or psychometric admission gate is
 opened. Independent review, terminal required checks, protected merge,
 immutable release, and observed buyer-held-out evidence remain necessary.
 
+### Endpoint percentage input validation (2026-09-06)
+
+**Proposed input-boundary repair.** Availability evidence must come from a
+numeric percentage in the inclusive range 0–100. The existing fetch converted
+booleans and strings with `float`, selected the endpoint maximum, and clamped
+the result. Consequently, malformed input could add apparently valid window
+mass without a valid measurement. This is separate from the interpretation
+and calibration of valid rolling windows.
+
+RFC 8259 Section 6 excludes NaN and Infinity tokens; Python's default JSON
+decoder nevertheless accepts them as extensions. A grammatically valid large
+exponent can also exceed the receiver's numeric range. Successful parsing is
+therefore insufficient. The official OpenRouter endpoint example reports
+numeric uptime separately from latency and throughput; neither source
+justifies coercing a boolean/string into a percentage.
+
+In the context of upstream telemetry admission, facing invalid values changing
+routing evidence, we chose validation before endpoint aggregation and rejected
+clamping/coercion or silently selecting another endpoint, to prevent invented
+window mass, accepting that a mixed valid/invalid payload contributes no update.
+Null and missing values retain their existing absent-measurement behavior;
+they are not transport failures. Source `b49d583fcdb0f13fd98cde76dfcb187229f52d6f`
+reuses the fetch boundary and its existing no-update error path. No new
+dependency, statistical estimator, authentication behavior, or routing weight
+is introduced. Both modified methods and both added tests have docstrings.
+
+```text
+Endpoint response -> numeric type and [0, 100] validation -> endpoint maximum
+                 -> invalid value: no update             -> transport window
+                 -> null/missing: absent                    (not answer quality)
+```
+
+Committed RED `e405b803b4ca888680c66218ea9e5a5d2d3ff848` produces **33 failed,
+28 passed in 0.47 seconds**, exit 1. Of 39 invalid-payload cases, six existing
+object/array cases already reject input; 33 incorrectly update evidence.
+The cases cover NaN, signed infinities, exponent overflow, booleans, numeric
+strings, out-of-range values, and placement before/after a valid endpoint.
+Seven additional payload controls retain valid boundaries, fractional values,
+endpoint maximum, null/missing values, and empty lists. All exercise actual
+fetch-to-poll parsing with an in-memory HTTP response, including response
+closure and unchanged observed-outcome counts; external provider calls are zero.
+
+At source `b49d583f`, **98 collector/group/prior tests pass in 1.83 seconds**,
+exit 0. The invalid-payload ledger-mutation KPI improves **33/39 to 0/39**
+in these unit cases, not in an observed production population. A separate
+61-test coverage run passes in 0.90 seconds and covers the two changed methods
+at **27/27 statements and 8/8 branches**; it does not prove exhaustive parser,
+whole-module, transport-provider, or buyer coverage. Default Ruff passes.
+
+```sh
+.venv/bin/python -m pytest -q tests/test_openrouter_uptime.py \
+  tests/test_model_group.py tests/test_benchmark_priors.py
+```
+
+Logs, JUnit, and coverage JSON are in `/tmp/co-uptime-input.rjxaB9`. The preceding
+provider-wait full suites are terminal: parent `7b634397` has 3,520 passes/two
+skips in 778.16 seconds; child `2f770351` has 3,535 passes/two skips in 771.71
+seconds, both exit 0 with matching clean heads. They predate this input repair.
+Current-head full/hosted checks, independent review, protected delivery, and
+new-head Visual Inspection remain separate requirements. Earlier desktop
+screenshots do not verify these new revisions; the last browser attempt was
+blocked by the locked Mac. Calibration, live collection, buyer accuracy, and
+decision latency are not established by this input-validation result.
+
 ### Full-suite follow-up: provider completion contract (2026-09-06)
 
 Full-suite follow-up to the availability repair: clean parent `6ca30364`
@@ -581,6 +645,13 @@ prove a multilevel model. The ADR diagram separates the production
 single-neighbor default from opt-in two-neighbor held-out experiments.
 
 ## APA 7 references
+
+Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange
+format* (RFC 8259). Internet Engineering Task Force.
+https://www.rfc-editor.org/rfc/rfc8259
+
+Python Software Foundation. (n.d.). *json: JSON encoder and decoder*.
+https://docs.python.org/3/library/json.html#infinite-and-nan-number-values
 
 OpenRouter. (n.d.). *List all endpoints for a model*. Retrieved September 6,
 2026, from https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model
