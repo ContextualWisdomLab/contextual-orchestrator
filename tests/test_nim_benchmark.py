@@ -1693,6 +1693,44 @@ def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
     assert summary["observed_completion_fraction"] == 1.0
 
 
+@pytest.mark.parametrize("locked_success", [True, False])
+def test_exploratory_outcomes_cannot_change_locked_policy_evidence(
+    locked_success: bool,
+) -> None:
+    """Exploratory successes or failures cannot promote or dilute locked evidence."""
+    locked_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"locked_{task_index}",
+            1.0 if locked_success else None,
+            "success" if locked_success else "failure",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    exploratory_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"exploratory_{task_index}",
+            None if locked_success else 1.0,
+            "failure" if locked_success else "success",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(100 * nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    for cell in exploratory_cells:
+        cell["task_split"] = "exploratory"
+    mixed_cells = locked_cells + exploratory_cells
+    expected_evidence = nb._evaluation_evidence_summary(
+        locked_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    )
+    assert nb._evaluation_evidence_summary(
+        mixed_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    ) == expected_evidence
+    assert nb.summarize_policies(mixed_cells) == nb.summarize_policies(locked_cells)
+    assert all(cell["task_split"] == "exploratory" for cell in exploratory_cells)
+
+
 def test_best_single_worker_hindsight_selection() -> None:
     assert (
         nb.best_single_worker_hindsight(
