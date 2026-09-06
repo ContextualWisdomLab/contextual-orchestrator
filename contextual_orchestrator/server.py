@@ -8221,8 +8221,18 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            error_detail = {"request_id": uuid.uuid4().hex, **(detail or {})}
+            request_id = error_detail["request_id"]
+            # Preserve response details, but never log arbitrary caller-supplied text.
+            safe_request_id = (
+                request_id if isinstance(request_id, str) and len(request_id) == 32
+                and all(character in "0123456789abcdef" for character in request_id)
+                else "<omitted>"
+            )
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, safe_request_id
+            )
+            self._send(_error_payload(code, message, error_detail), status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
