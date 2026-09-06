@@ -297,7 +297,6 @@ def _synchronize_durable_agent_pool(
             raise ProviderBootstrapError(
                 "selected discovered models conflict with operator-managed agent identities"
             )
-        selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
         selected_ids: set[str] = set()
         ordered_selected_ids: list[str] = []
