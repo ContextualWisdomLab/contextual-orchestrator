@@ -1,6 +1,7 @@
 """Administrator-owned model timeout policy must survive configuration changes."""
 
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -11,6 +12,27 @@ def test_model_timeout_policy_defaults_to_null() -> None:
     """An ordinary model has no administrator-imposed execution limit."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     assert model_agent.to_config()["model_timeout_seconds"] is None
+
+
+def test_model_timeout_policy_accepts_large_finite_seconds(tmp_path: Path) -> None:
+    """Valid seconds must not accidentally use SQLite's signed integer binding."""
+    model_agent = ModelAgent("timeout_agent", "example-model", model_timeout_seconds=2**63)
+    database_path = str(tmp_path / "agent-pool.db")
+    TaskOrchestrator([model_agent], agents_db=database_path)
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).model_timeout_seconds == float(2**63)
+
+
+def test_model_timeout_policy_migrates_existing_pool(tmp_path: Path) -> None:
+    """An older normalized pool gains a null policy without losing its models."""
+    model_agent = ModelAgent("timeout_agent", "example-model")
+    database_path = str(tmp_path / "agent-pool.db")
+    TaskOrchestrator([model_agent], agents_db=database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE agent_pool DROP COLUMN model_timeout_seconds")
+    restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id) == model_agent
+    assert restored._agent(model_agent.id).model_timeout_seconds is None
 
 
 def test_model_timeout_policy_survives_restart_and_rediscovery(tmp_path: Path) -> None:
