@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.model_group import ModelGroupRouter
+from contextual_orchestrator import openrouter_uptime as uptime_module
 from contextual_orchestrator.openrouter_uptime import (
     OpenRouterUptimeCollector,
 )
@@ -145,13 +146,19 @@ def test_availability_poll_cannot_change_answer_quality(uptime, judged):
     """Availability-only evidence must leave both cold and judged quality rows intact."""
     collector, group_router, quality_router, _before_group = _collectors(uptime)
     member_id = _agents()[0].id
-    if judged:
-        quality_router.observe_success(member_id, 1.0)
-        quality_router.observe_failure(member_id)
+    reference = ModelGroupRouter()
+    reference.register_member(member_id)
+    for router in (quality_router, reference):
+        if judged:
+            router.observe_success(member_id, 1.0)
+            router.observe_failure(member_id)
     before_quality = quality_router.snapshot()
     for _ in range(3):
         collector._poll_agent(_agents()[0])
     assert quality_router.snapshot() == before_quality
+    for router in (quality_router, reference):
+        router.observe_success(member_id, 1.0)
+    assert quality_router.member_report(member_id) == reference.member_report(member_id)
     assert sum(collector.window_evidence(member_id)) == 3
     assert group_router.member_observation_count(member_id) == 0
 
@@ -182,9 +189,10 @@ def test_availability_does_not_reverse_judged_member_order(monkeypatch):
         gateway.close()
 
 
-def test_transport_refresh_does_not_import_answer_benchmark_prior():
-    """A benchmark-like identifier must not change the transport ledger's prior base."""
-    agent = ModelAgent("openrouter_gpt-4o", "mock", provider_name="openrouter")
+def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
+    """A substituted quality prior must not change the transport ledger's neutral base."""
+    agent = ModelAgent("openrouter_member", "mock", provider_name="openrouter")
+    monkeypatch.setattr(uptime_module, "resolve_quality_prior", lambda _member: (7.0, 3.0), raising=False)
     group_router, quality_router, reference = ModelGroupRouter(), ModelGroupRouter(), ModelGroupRouter()
     for router in (group_router, reference):
         router.observe_success(agent.id, 1.0)
