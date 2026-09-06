@@ -699,6 +699,7 @@ def test_sufficient_evidence_is_still_human_review_gated() -> None:
                 {
                     "policy_name": policy_name,
                     "task_id": task_id,
+                    "task_split": "locked",
                     "run_outcome": "success",
                 }
             )
