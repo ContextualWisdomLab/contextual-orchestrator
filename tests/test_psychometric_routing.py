@@ -103,6 +103,21 @@ def test_paired_bootstrap_interval_requires_declared_coverage() -> None:
     ) == pytest.approx([-0.1, -0.1])
 
 
+def test_heldout_report_keys_do_not_embed_coverage() -> None:
+    """Interval fields must not bake 95 into the JSON name."""
+    source = Path("scripts/benchmark_psychometric_heldout.py").read_text(
+        encoding="utf-8"
+    )
+    for key in (
+        '"delta_ci95"',
+        '"paired_delta_ci95"',
+        '"query_delta_ci95"',
+        '"accuracy_delta_ci95"',
+        '"heldout_paired_delta_ci95"',
+    ):
+        assert key not in source
+
+
 def test_heldout_run_benchmark_requires_declared_bootstrap() -> None:
     """The harness entry cannot restore hidden bootstrap constants."""
     parameters = inspect.signature(heldout_benchmark.run_benchmark).parameters
