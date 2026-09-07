@@ -1375,7 +1375,7 @@ def _validate_adaptive_candidate_calibration(
         - statistics.fmean(random_samples[metric])
         for metric in adaptive_samples
     }
-    paired_delta_ci95 = {
+    paired_delta_interval = {
         metric: _paired_bootstrap_mean_ci(
             adaptive_samples[metric], random_samples[metric], **bootstrap
         )
@@ -1466,13 +1466,13 @@ def _validate_adaptive_candidate_calibration(
             float(left == right)
             for left, right in zip(sequential_correct, fixed_correct)
         ),
-        "query_delta_ci95": _paired_bootstrap_mean_ci(
+        "query_delta_interval": _paired_bootstrap_mean_ci(
             sequential_queries,
             [float(ADAPTIVE_CALIBRATION_MAX_ITEMS)]
             * ADAPTIVE_CALIBRATION_CANDIDATES,
             **bootstrap,
         ),
-        "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
+        "accuracy_delta_interval": _paired_bootstrap_mean_ci(
             sequential_correct, fixed_correct, **bootstrap
         ),
         "confidence_resolved_rate": statistics.fmean(
@@ -1628,7 +1628,7 @@ def _validate_adaptive_candidate_calibration(
             "all_candidate_queries": statistics.fmean(heldout_samples["queries"])
             - statistics.fmean(heldout_baseline_samples["queries"]),
         },
-        "heldout_paired_delta_ci95": {
+        "heldout_paired_delta_interval": {
             "coverage": _paired_bootstrap_mean_ci(
                 heldout_samples["resolved"],
                 heldout_baseline_samples["resolved"],
@@ -1692,7 +1692,7 @@ def _validate_adaptive_candidate_calibration(
         "adaptive": adaptive,
         "random_baseline": random_baseline,
         "paired_delta": paired_delta,
-        "paired_delta_ci95": paired_delta_ci95,
+        "paired_delta_interval": paired_delta_interval,
         "classification_stopping": classification_stopping,
         "mean_query_reduction": random_baseline["mean_calibration_queries"]
         - adaptive["mean_calibration_queries"],
@@ -1795,7 +1795,7 @@ def run_benchmark(
         - statistics.fmean(baseline_samples[metric])
         for metric in candidate_samples
     }
-    delta_ci95 = {
+    delta_interval = {
         metric: _paired_bootstrap_mean_ci(
             candidate_samples[metric], baseline_samples[metric], **bootstrap
         )
@@ -1803,7 +1803,7 @@ def run_benchmark(
     }
     gate_status = {
         "accuracy_noninferior": "passed" if all(
-            delta_ci95[metric][1] <= 0.0
+            delta_interval[metric][1] <= 0.0
             for metric in (
                 "brier_score",
                 "log_loss",
@@ -1813,7 +1813,7 @@ def run_benchmark(
         ) else "failed",
         "buyer_heldout": "not_executed",
         "decision_latency_improved": (
-            "passed" if delta_ci95["decision_median_ms"][1] < 0.0 else "failed"
+            "passed" if delta_interval["decision_median_ms"][1] < 0.0 else "failed"
         ),
         "measurement_validity": "not_executed",
     }
@@ -2051,7 +2051,7 @@ def run_benchmark(
         "contexts_held_out": TRAIN_CONTEXTS,
         "contexts_train": TRAIN_CONTEXTS,
         "delta": delta,
-        "delta_ci95": delta_ci95,
+        "delta_interval": delta_interval,
         "models": len(MODEL_IDS),
         "latency_repetitions_per_context": LATENCY_REPETITIONS,
         "production_default_change_allowed": all(gates.values()),
@@ -2088,7 +2088,7 @@ def run_benchmark(
     )
     assert all(
         math.isfinite(delta[metric])
-        and delta_ci95[metric][0] <= delta[metric] <= delta_ci95[metric][1]
+        and delta_interval[metric][0] <= delta[metric] <= delta_interval[metric][1]
         for metric in delta
     )
     assert result["production_default_change_allowed"] == all(gates.values())

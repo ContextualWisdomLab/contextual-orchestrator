@@ -281,8 +281,8 @@ synthetic fixtures stay comparable. The script entry writes 2,000, 0.95, and
 seed 568 as this run's choices. The report records those fields.
 
 Efron (1979) grounds resampling observed units. This slice does not change
-production route/conduct defaults. Other harness sample sizes remain later
-work.
+production route/conduct defaults. Nested interval key names are the
+successor slice recorded below. Other harness sample sizes remain later work.
 
 ```mermaid
 sequenceDiagram
@@ -293,6 +293,20 @@ sequenceDiagram
     Interval->>Interval: Fail closed on missing or non-representable declarations
     Interval->>Report: Mean difference and declared-coverage interval
     Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Coverage-neutral held-out interval keys (2026-09-07, proposed)
+
+After declared coverage, nested report fields still named `*_ci95` implied
+95% even when the run declared a different interval. Those fields are now
+`*_interval`. Coverage stays in `bootstrap_confidence_level`. IRT diagnostics
+that measure actual 95% coverage of standard-error intervals keep their names.
+
+```mermaid
+flowchart LR
+    declaration[Declared coverage] --> interval[Interval values]
+    interval --> report["JSON *_interval fields"]
+    declaration --> field[bootstrap_confidence_level]
 ```
 
 ### Failure-inclusive comparison repair (2026-09-05, proposed)

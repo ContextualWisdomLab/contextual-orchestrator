@@ -96,6 +96,40 @@ def test_calibration_rejects_undefined_resolution_summary(monkeypatch):
         heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
 
 
+def test_adaptive_calibration_report_uses_coverage_neutral_interval_keys(
+    monkeypatch,
+) -> None:
+    """Paired intervals must not bake 95 into the JSON field name."""
+    monkeypatch.setattr(heldout, "ADAPTIVE_CALIBRATION_CANDIDATES", 9)
+    monkeypatch.setattr(heldout, "SELECTIVE_CLASSIFICATION_REPLICATIONS", 2)
+    monkeypatch.setattr(heldout, "SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER", 1.0)
+    candidate_index = -1
+
+    def oracle(_bundle, responses, **_kwargs):
+        """Return the known trait sign for every generated candidate."""
+        nonlocal candidate_index
+        if not responses:
+            candidate_index += 1
+        theta = -2.0 + 4.0 * (candidate_index % 9 + 0.5) / 9
+        return {
+            "ranked_items": [len(responses)],
+            "theta_eap": [1.0 if theta >= 0.0 else -1.0],
+            "theta_sd": [0.0],
+        }
+
+    monkeypatch.setattr(heldout.fast_mlsirm, "cat_next_item", oracle)
+    report = heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
+    assert "paired_delta_interval" in report
+    assert "paired_delta_ci95" not in report
+    stopping = report["classification_stopping"]
+    assert "query_delta_interval" in stopping
+    assert "accuracy_delta_interval" in stopping
+    assert "query_delta_ci95" not in stopping
+    screen = stopping["risk_coverage_screen"]
+    assert "heldout_paired_delta_interval" in screen
+    assert "heldout_paired_delta_ci95" not in screen
+
+
 @pytest.mark.parametrize("sample_count", [1, 21, 101])
 def test_observation_p95_tracks_actual_sample_count(monkeypatch, capsys, sample_count):
     """Keep nearest-rank p95 semantics when diagnostic repetition counts change."""

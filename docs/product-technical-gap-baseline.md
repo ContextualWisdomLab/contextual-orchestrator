@@ -1,5 +1,20 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 held-out coverage-neutral interval keys (proposed)
+
+Successor of the declared held-out bootstrap slice renames nested JSON
+fields that embedded 95 (`delta_ci95`, `paired_delta_ci95`,
+`query_delta_ci95`, `accuracy_delta_ci95`, `heldout_paired_delta_ci95`) to
+`*_interval`. Declared coverage remains `bootstrap_confidence_level`. IRT
+`interval_95_coverage_rate` diagnostics are unchanged. ADR 0045 is Proposed.
+
+Local contract tests on this working tree: source-key and adaptive-calibration
+key checks plus existing declaration/boundary tests. This is not buyer-held-out
+accuracy, p95 latency, or protected merge evidence. Production route/conduct
+defaults stay locked. Other harness sample sizes remain later work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-07 declared held-out bootstrap coverage (proposed)
 
 Successor of the declared workflow-budget slice removes hidden
@@ -13,8 +28,9 @@ is Proposed.
 Local contract tests on this working tree: 19 related declaration and
 boundary tests passed. This is not buyer-held-out accuracy, p95 latency, or
 protected merge evidence. Production route/conduct defaults stay locked.
-Other harness sample sizes and nested `*_ci95` key names remain later work.
-Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+Nested interval key names are the successor slice. Other harness sample
+sizes remain later work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
 still needs independent review.
 
 ## 2026-09-07 declared workflow depth and token budgets (proposed)
