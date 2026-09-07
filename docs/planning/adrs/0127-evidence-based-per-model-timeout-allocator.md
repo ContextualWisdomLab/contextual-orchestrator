@@ -56,14 +56,14 @@ A prerequisite implementation shall persist one observation per governed model r
 - one observation for each upstream attempt, including raced winners, raced losers, and independently censored attempts, rather than one aggregate observation for the logical request;
 - immutable endpoint identity and the exact endpoint-equivalence-contract identity in force for that attempt;
 - `duration_seconds` computed from request start and terminal readings in the same monotonic clock domain, plus a stable clock-domain identifier;
-- an auditable UTC capture timestamp in RFC 3339 form for population-window membership; monotonic readings are not interpreted across workers, hosts, or reboots;
+- an auditable upstream-attempt start timestamp in UTC RFC 3339 form for population-window membership; monotonic readings are not interpreted across workers, hosts, or reboots;
 - terminal state such as completed, provider-ended, caller-cancelled, administrator-timeout, transport-failed, race-lost/cancelled, or otherwise explicitly classified;
 - time to first token when actually observable on streaming paths;
 - declared reasoning/test-time-compute profile identity when supplied by the governed request contract;
 - exact contextual-orchestrator version/source identity and analysis-schema version; and
 - privacy-safe provenance sufficient to reproduce the statistical population without storing prompt, response, credential, or other secret material.
 
-This ADR defines no magic rolling sample count and no repository-authored age cutoff for statistical validity. Retention is a separate storage/privacy/governance policy. `analysis_window` is an explicit caller/operator-supplied half-open UTC interval `[start_inclusive, end_exclusive)`, with both endpoints encoded as RFC 3339 timestamps. An attempt belongs to the population exactly when its persisted UTC capture timestamp is inside that interval; duration still comes only from the attempt-local monotonic readings. Every statistical result binds the exact included observation identities, endpoint/equivalence-contract identities, and analysis interval so the result is reproducible across workers and hosts regardless of the operational retention mechanism.
+This ADR defines no magic rolling sample count and no repository-authored age cutoff for statistical validity. Retention is a separate storage/privacy/governance policy. `analysis_window` is an explicit caller/operator-supplied half-open UTC interval `[start_inclusive, end_exclusive)`, with both endpoints encoded as RFC 3339 timestamps. An attempt belongs to the population exactly when its persisted UTC attempt-start timestamp is inside that interval; duration still comes only from the attempt-local monotonic readings. Every statistical result binds the exact included observation identities, endpoint/equivalence-contract identities, and analysis interval so the result is reproducible across workers and hosts regardless of the operational retention mechanism.
 
 ### 3. Completed uncensored observations use an explicit empirical quantile model
 
