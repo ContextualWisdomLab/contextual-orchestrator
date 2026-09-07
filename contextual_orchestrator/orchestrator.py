@@ -3979,6 +3979,7 @@ class TaskOrchestrator:
         allow_empty_agents: bool = False,
         token_counter: Any = None,
     ) -> None:
+        self._assistant_message_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -6429,6 +6430,23 @@ class TaskOrchestrator:
             "runtime_agent_retired",
             {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
         )
+
+    @property
+    def _last_assistant_message(self) -> dict[str, Any] | None:
+        """Tool_calls/finish_reason from THIS thread's most recent worker call.
+
+        ``ThreadingHTTPServer`` serves every request on its own thread and one
+        ``TaskOrchestrator`` is shared across all of them, so this must not be
+        plain instance state: a sibling request's ``_invoke`` would otherwise
+        reset it between this thread's write and its read, silently dropping
+        the tool call from the response.
+        """
+        return getattr(self._assistant_message_local, "value", None)
+
+    @_last_assistant_message.setter
+    def _last_assistant_message(self, value: dict[str, Any] | None) -> None:
+        """Store this thread's pending assistant extras."""
+        self._assistant_message_local.value = value
 
     def route_once(
         self,
