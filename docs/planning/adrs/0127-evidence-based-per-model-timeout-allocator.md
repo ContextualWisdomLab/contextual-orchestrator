@@ -43,7 +43,7 @@ The output contract therefore uses fields such as:
 }
 ```
 
-The numeric example above illustrates schema shape only; it is not a repository default or an admission threshold. `target_quantile_probability`, confidence level, analysis interval, and any later decision-model inputs must be explicit caller/operator-supplied analysis parameters and recorded in provenance. The software supplies no hidden defaults that alter a decision.
+The numeric example above illustrates schema shape only; it is not a repository default or an admission threshold. `target_quantile_probability`, confidence level, analysis interval, and any later decision-model inputs must be explicit caller/operator-supplied analysis parameters and recorded in provenance. `target_quantile_probability` and confidence level must each be finite real numbers strictly inside `(0, 1)`. An invalid analysis parameter rejects the analysis request before any result is computed or persisted; the service never emits a partial result or silently substitutes a default. The software supplies no hidden defaults that alter a decision.
 
 If the requested estimand is not mathematically identifiable from the supplied observations, the corresponding estimate is `null`. The system must fail closed rather than pool another population, change the target percentile, invent a tail model, or substitute an arbitrary constant.
 
@@ -53,14 +53,17 @@ A prerequisite implementation shall persist one observation per governed model r
 
 - immutable request-observation identity;
 - provider and concrete model identity as served, not inferred from names;
-- request start and terminal timestamps from the same monotonic timing boundary used to compute duration;
-- terminal state such as completed, provider-ended, caller-cancelled, administrator-timeout, transport-failed, or otherwise explicitly classified;
+- one observation for each upstream attempt, including raced winners, raced losers, and independently censored attempts, rather than one aggregate observation for the logical request;
+- immutable endpoint identity and the exact endpoint-equivalence-contract identity in force for that attempt;
+- `duration_seconds` computed from request start and terminal readings in the same monotonic clock domain, plus a stable clock-domain identifier;
+- an auditable UTC capture timestamp in RFC 3339 form for population-window membership; monotonic readings are not interpreted across workers, hosts, or reboots;
+- terminal state such as completed, provider-ended, caller-cancelled, administrator-timeout, transport-failed, race-lost/cancelled, or otherwise explicitly classified;
 - time to first token when actually observable on streaming paths;
 - declared reasoning/test-time-compute profile identity when supplied by the governed request contract;
 - exact contextual-orchestrator version/source identity and analysis-schema version; and
 - privacy-safe provenance sufficient to reproduce the statistical population without storing prompt, response, credential, or other secret material.
 
-This ADR defines no magic rolling sample count and no repository-authored age cutoff for statistical validity. Retention is a separate storage/privacy/governance policy. Every statistical result binds the exact included observation identities and analysis interval so the result is reproducible regardless of the operational retention mechanism.
+This ADR defines no magic rolling sample count and no repository-authored age cutoff for statistical validity. Retention is a separate storage/privacy/governance policy. `analysis_window` is an explicit caller/operator-supplied half-open UTC interval `[start_inclusive, end_exclusive)`, with both endpoints encoded as RFC 3339 timestamps. An attempt belongs to the population exactly when its persisted UTC capture timestamp is inside that interval; duration still comes only from the attempt-local monotonic readings. Every statistical result binds the exact included observation identities, endpoint/equivalence-contract identities, and analysis interval so the result is reproducible across workers and hosts regardless of the operational retention mechanism.
 
 ### 3. Completed uncensored observations use an explicit empirical quantile model
 
@@ -88,7 +91,7 @@ A request that is externally terminated before natural model completion is not a
 
 For right-censored time-to-completion data where the independent-censoring assumptions are documented and testable for the analysis design, use the Kaplan–Meier product-limit estimator for the completion-time survival distribution. Quantile confidence intervals use the Brookmeyer–Crowley inversion method or a documented mathematically equivalent survival-quantile procedure.
 
-The implementation must report censoring counts and terminal-reason strata. If the target quantile is not identifiable because the estimated survival curve does not cross the requested probability before the last supported event time, the quantile and its interval are `null`. No timeout value is inferred from the censoring boundary.
+The implementation must report censoring counts and terminal-reason strata. For target CDF probability `p`, the Kaplan–Meier quantile is the first supported event time `t` where the estimated survival function satisfies `Ŝ(t) ≤ 1 - p`. If that threshold is not reached at or before the last supported event time, the quantile and its interval are `null`. No timeout value is inferred from the censoring boundary.
 
 If independent censoring is not defensible for the requested analysis—such as when an existing budget deterministically truncates difficult reasoning runs—the Kaplan–Meier result is not promoted as an unbiased population latency estimate. The analysis must instead use a separately specified model appropriate to that censoring mechanism or fail closed.
 
