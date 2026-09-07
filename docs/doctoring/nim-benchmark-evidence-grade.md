@@ -409,8 +409,8 @@ That number chose Monte Carlo precision without an operator declaration.
 `_validate_candidate_group_dif` now requires an even `sample_size`. The
 harness run writes 4,000 as this run's choice and records `sample_size`.
 
-This slice does not change production route/conduct defaults. Other harness
-sample sizes remain later work.
+This slice does not change production route/conduct defaults. Score-reliability
+sample size is the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -420,6 +420,28 @@ sequenceDiagram
     Operator->>Dif: Even sample size
     Dif->>Dif: Fail closed on missing, non-positive, or odd declarations
     Dif->>Report: Flagged items and declared sample size
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared score-reliability sample size (2026-09-08, proposed)
+
+The empirical-reliability screen used a hidden 1,200-row person sample for
+weak- versus strong-information cases. That number chose Monte Carlo
+precision without an operator declaration. `_validate_score_reliability` now
+requires `sample_size`. The harness run writes 1,200 as this run's choice
+and records `sample_size_per_case`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Reliability as Empirical reliability
+    participant Report as Held-out report
+    Operator->>Reliability: Sample size
+    Reliability->>Reliability: Fail closed on missing or non-positive declarations
+    Reliability->>Report: Weak/strong reliability and declared sample size
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 

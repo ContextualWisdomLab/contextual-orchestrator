@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Held-out score-reliability evidence now requires a declared sample size.
+  The hidden 1,200-row default is removed. The harness run still writes 1,200
+  as this run's choice.
 - Held-out candidate-group DIF evidence now requires a declared even sample
   size. The hidden 4,000-row default is removed. The harness run still writes
   4,000 as this run's choice.

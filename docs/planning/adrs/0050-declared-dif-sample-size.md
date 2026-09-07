@@ -60,5 +60,6 @@ even positive count.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Score-reliability sample size moves to ADR 0051. Other repository-authored
+harness sample sizes stay open. This ADR is Proposed until independent
+review and protected delivery.
