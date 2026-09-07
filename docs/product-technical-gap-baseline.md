@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 prospective measurement design remains unexecuted
+
+The [research and proposed design record](doctoring/prospective-routing-measurement-design.md)
+connects Lakens (2022) to four distinct claims: delivered quality, routing
+decision speed, user waiting time, and psychometric recovery/transfer. Target
+population, planned task-policy matrix, scorer provenance, useful precision or
+effect targets, and a valid stopping/analysis contract still need execution.
+Count-only promotion is removed; this is not evidence that those claims pass.
+
+Exact `eccb8328` local full regression completed with 3602 passed and two
+optional-dependency skips. Subsequent `c96be353` clears the three benchmark
+files' 19 Ruff findings; 157 focused tests and benchmark coverage/public
+docstrings pass at 100%. This is not whole-repository lint/coverage or a new
+head full-suite result. Hosted checks, independent review, protected merge,
+release and real buyer KPIs remain separate. The reasoning-effort helper's
+fixed 55% declaration-only decision check remains an independent open gap.
+
 Parent `ec1c4e66512615ea1f00fa044f3bfba787aab567` is integrated below while
 retaining child `54b2b809` locked filtering and failure-inclusive comparison.
 The measurement-only decision-authority entry supersedes historical statements

@@ -44,6 +44,17 @@ the remaining sources are cited and linked without copying their files.
   ICLR 2024 publication record:
   https://proceedings.iclr.cc/paper_files/paper/2024/hash/b47d93c99fa22ac0b377578af0a1f63a-Abstract-Conference.html.
 
+## Prospective sample design
+
+- Lakens, D. (2022). Sample size justification. *Collabra: Psychology, 8*(1),
+  Article 33267. https://doi.org/10.1525/collabra.33267
+  Grounds choosing sample design against an explicit inferential goal and
+  useful precision/effect targets, not a universal count threshold. The
+  [CO design record](../doctoring/prospective-routing-measurement-design.md)
+  separates delivered quality, decision speed, end-to-end latency and
+  psychometric validity. It also records the actual Figure 5 visual inspection
+  and why the combined university PDF is linked rather than vendored.
+
 ## Role reasoning-effort profiles
 
 Issue #568 needs a provider-neutral `reasoning_effort_profile` so Fugu-style
