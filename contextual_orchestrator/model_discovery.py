@@ -2430,6 +2430,31 @@ def select_top_n_cheapest_discovered_agents(
     )[:limit]
 
 
+def _require_unambiguous_bootstrap_boundary(
+    ranked: list[DiscoveredModel],
+    selected: list[DiscoveredModel],
+    price_book: "PriceBook",
+) -> None:
+    """Reject a capacity cutoff that would use lexical identity as evidence."""
+    if len(selected) >= len(ranked):
+        return
+    selected_identities = {_serving_identity(model) for model in selected}
+    selected_evidence = {
+        _discovery_price_key(model, price_book)[:2] for model in selected
+    }
+    excluded_evidence = {
+        _discovery_price_key(model, price_book)[:2]
+        for model in ranked
+        if _serving_identity(model) not in selected_identities
+    }
+    if selected_evidence & excluded_evidence:
+        raise ValueError(
+            "bootstrap admission is ambiguous at the capacity boundary; "
+            "provide comparable price evidence or increase the limit to include "
+            "the tied candidates"
+        )
+
+
 def select_bootstrap_discovered_agents(
     discovered: list[DiscoveredModel],
     price_book: "PriceBook",
@@ -2487,6 +2512,7 @@ def select_bootstrap_discovered_agents(
         providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
+            _require_unambiguous_bootstrap_boundary(ranked, selected, price_book)
             return selected
 
     still_deferred: list[DiscoveredModel] = []
@@ -2498,8 +2524,10 @@ def select_bootstrap_discovered_agents(
         model_groups.add(model_group)
         selected.append(model)
         if len(selected) == limit:
+            _require_unambiguous_bootstrap_boundary(ranked, selected, price_book)
             return selected
 
     selected.extend(still_deferred[: limit - len(selected)])
+    _require_unambiguous_bootstrap_boundary(ranked, selected, price_book)
     return selected
 

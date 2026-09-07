@@ -228,6 +228,32 @@ def _known_cost_sort_key(
     return (1, float("inf"), model.provider_name, model.model_id)
 
 
+def _require_unambiguous_model_group_boundary(
+    ordered: Sequence[DiscoveredModel],
+    selected: Sequence[DiscoveredModel],
+) -> None:
+    """Reject a capacity cutoff that would use lexical identity as evidence."""
+    if len(selected) >= len(ordered):
+        return
+    selected_identities = {
+        (model.provider_name, model.credential_name, model.model_id)
+        for model in selected
+    }
+    selected_evidence = {_known_cost_sort_key(model)[:2] for model in selected}
+    excluded_evidence = {
+        _known_cost_sort_key(model)[:2]
+        for model in ordered
+        if (model.provider_name, model.credential_name, model.model_id)
+        not in selected_identities
+    }
+    if selected_evidence & excluded_evidence:
+        raise ProviderBootstrapError(
+            "provider bootstrap admission is ambiguous at the capacity boundary; "
+            "provide comparable price evidence or increase the limit to include "
+            "the tied candidates"
+        )
+
+
 def select_model_group_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
@@ -249,6 +275,7 @@ def select_model_group_diverse_models(
         selected.append(model)
         seen_model_groups.add(model_group)
         if len(selected) >= limit:
+            _require_unambiguous_model_group_boundary(ordered, selected)
             return selected
     selected_keys = {
         (item.provider_name, item.credential_name, item.model_id)
@@ -261,6 +288,7 @@ def select_model_group_diverse_models(
         selected.append(model)
         if len(selected) >= limit:
             break
+    _require_unambiguous_model_group_boundary(ordered, selected)
     return selected
 
 

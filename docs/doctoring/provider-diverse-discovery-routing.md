@@ -13,9 +13,14 @@ PR #770 makes model discovery fail closed for invalid catalog rows (a price
 that is negative, non-finite, or a nonzero value that underflows to zero),
 retains eligible candidates that simply have no reported price as an
 explicit unknown-cost fallback, and selects a provider-diverse bootstrap
-pool before ordinary chat routing. The selector is deterministic eligibility
-and cost accounting; it is not a learned answer-quality judge and does not
-claim to reproduce the learning systems in the cited work.
+pool before ordinary chat routing. Provider/model-group spread is an explicit
+availability constraint, not a weighted score and not evidence that one tied
+candidate is better than another. A capacity cutoff therefore fails closed
+when selected and excluded candidates have equal comparable cost or incomplete
+price evidence; operators must supply comparable price evidence or include the
+whole tied class. The selector is deterministic eligibility and cost
+accounting; it is not a learned answer-quality judge and does not claim to
+reproduce the learning systems in the cited work.
 
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
@@ -30,7 +35,8 @@ DNS failure can advance without changing an explicitly requested concrete model.
 | --- | --- | --- |
 | Reject malformed, negative, or non-finite price rows | A cost-aware router must not treat missing or invalid evidence as zero cost. | Discovery and persisted-price tests reject the row before selection. |
 | Keep unknown-price candidates only as an explicit fallback | Cost optimization must remain honest when price evidence is incomplete. | Selection tests never rank an unknown price above a valid priced candidate. |
-| Prefer distinct providers in the bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Provider-diversity tests assert the configured pool spans available providers. |
+| Prefer distinct providers in the discovery CLI bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Discovery-selector tests assert the configured pool spans available providers. |
+| Reject an evidence-tied capacity cutoff | Lexical provider/model identity is deterministic ordering metadata, not price, quality, or availability evidence. | Both selectors raise when a selected and excluded candidate share the same comparable-cost/unknown state. |
 | Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
 
@@ -40,6 +46,17 @@ stack base under `docs/papers/` (`routellm-routing-2406.18665.pdf`,
 `frugalgpt-cost-2305.05176.pdf`). This doctoring record makes their relevance
 to the exact discovery selector explicit instead of treating inherited files
 as incidental documentation.
+
+## Consumer migration boundary
+
+`provider_bootstrap.select_model_group_diverse_models` guarantees exact
+model-group spread and cost honesty; it does not promise one endpoint per
+provider. `model_discovery.select_bootstrap_discovered_agents`, used by the
+discovery CLI's `--enable-cheapest` path, adds provider spread as an explicit
+availability constraint. Consumers that relied on provider-level redundancy
+must call the discovery selector or express that requirement at their own
+approved contract boundary. Neither selector may break an equal/incomplete
+evidence tie by provider or model name.
 
 ## APA 7 references
 

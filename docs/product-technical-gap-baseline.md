@@ -1,5 +1,28 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 PR #971: fail-closed ambiguous bootstrap admission
+
+External review thread `PRRT_kwDOTB3CTs6eh3BQ` identified that both
+bootstrap selectors used provider/model-group passes and then let lexical
+provider/model identity decide a capacity cutoff when price evidence was equal
+or incomplete. Exact test-only commit
+`eeb9cc1bafe579032ab48778fa08c24e0b3f0aa1` made those two cases executable;
+Security and Quality run `34071330949`, job `101589111271`, failed exactly
+`2 failed, 3490 passed, 2 skipped` because neither selector raised.
+
+The smallest GREEN retains the existing provider/model-group availability
+constraints but removes lexical identity as admission evidence: if a selected
+and excluded candidate share the same comparable-cost state, including the
+all-unknown state, selection fails closed with an operator action to provide
+comparable price evidence or raise the limit to include the entire tied class.
+No weight, quota, fuzzy identity, provider preference, or learned-quality claim
+is added. The direct provider bootstrap selector promises exact model-group
+spread; the discovery CLI selector additionally promises provider spread, so
+consumers that need provider-level redundancy must use the latter boundary.
+ADR 0032 is Proposed while this PR remains open. Status remains Proposed until
+the successor exact head passes focused/full quality, security, and required
+review lanes.
+
 
 ## 2026-09-07 PR #971: durable bootstrap selection order
 
