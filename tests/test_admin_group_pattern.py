@@ -50,3 +50,17 @@ def test_group_pattern_compiles_and_preserves_name_rules() -> None:
         input=script, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_local_quality_pins_supported_node_runtime() -> None:
+    """Declare the maintained Node runtime required by UnicodeSets validation."""
+    repository_root = Path(__file__).resolve().parents[1]
+    workflow = (repository_root / ".github/workflows/security.yml").read_text()
+    readme = (repository_root / "README.md").read_text()
+    assert (
+        "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0"
+        in workflow
+    )
+    assert 'node-version: "24.18.1"' in workflow
+    assert "Node.js 24.18.1" in readme
+
