@@ -158,6 +158,7 @@ def test_inference_preflight_preserves_capability_requests(probe_name):
     contract = load_contract()
     probe_request = contract["probe_requests"][probe_name]
     assert probe_request["model"] == "orchestrator/free"
+    assert "max_tokens" not in probe_request
     assert probe_request["zdr_only"] is True
     with serve_gateway() as (port_number, client):
         status_code, response_body = request_gateway(
