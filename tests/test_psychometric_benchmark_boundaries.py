@@ -150,18 +150,22 @@ def test_paired_latency_requires_declared_repetitions() -> None:
     """Decision-latency KPIs cannot invent a 200-repetition default."""
     parameters = inspect.signature(heldout._measure_paired_latency).parameters
     assert parameters["repetitions_per_context"].default is None
+    assert parameters["context_count"].default is None
     evidence = heldout.PsychometricRoutingEvidence()
     with pytest.raises(ValueError, match="repetitions_per_context"):
-        heldout._measure_paired_latency(evidence, evidence)
+        heldout._measure_paired_latency(evidence, evidence, context_count=2)
     with pytest.raises(ValueError, match="repetitions_per_context"):
         heldout._measure_paired_latency(
-            evidence, evidence, repetitions_per_context=True
+            evidence, evidence, context_count=2, repetitions_per_context=True
+        )
+    with pytest.raises(ValueError, match="context_count"):
+        heldout._measure_paired_latency(
+            evidence, evidence, repetitions_per_context=3
         )
 
 
 def test_paired_latency_uses_declared_repetition_count(monkeypatch) -> None:
     """The declared repetition count is the actual per-context timing loop."""
-    monkeypatch.setattr(heldout, "TRAIN_CONTEXTS", 2)
     calls = {"count": 0}
     evidence = heldout.PsychometricRoutingEvidence()
 
@@ -172,9 +176,38 @@ def test_paired_latency_uses_declared_repetition_count(monkeypatch) -> None:
 
     monkeypatch.setattr(evidence, "ranked_evidence", ranked)
     heldout._measure_paired_latency(
-        evidence, evidence, repetitions_per_context=3
+        evidence, evidence, context_count=2, repetitions_per_context=3
     )
     assert calls["count"] == 12
+
+
+def test_heldout_quality_requires_declared_context_count() -> None:
+    """Accuracy KPIs cannot invent a 24-context held-out population."""
+    parameters = inspect.signature(heldout._evaluate_quality).parameters
+    assert parameters["context_count"].default is None
+    assert inspect.signature(heldout._build_evidence).parameters[
+        "context_count"
+    ].default is None
+    evidence = heldout.PsychometricRoutingEvidence()
+    with pytest.raises(ValueError, match="context_count"):
+        heldout._evaluate_quality(evidence)
+    with pytest.raises(ValueError, match="context_count"):
+        heldout._build_evidence(two_neighbor=False)
+
+
+def test_heldout_quality_uses_declared_context_count(monkeypatch) -> None:
+    """The declared context count is the actual held-out quality loop."""
+    calls = {"count": 0}
+    evidence = heldout.PsychometricRoutingEvidence()
+
+    def ranked(*_args, **_kwargs):
+        """Count ranking calls without exercising live routing work."""
+        calls["count"] += 1
+        return [("model_0", 0.5), ("model_1", 0.4), ("model_2", 0.3), ("model_3", 0.2)]
+
+    monkeypatch.setattr(evidence, "ranked_evidence", ranked)
+    heldout._evaluate_quality(evidence, context_count=3)
+    assert calls["count"] == 3
 
 
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
