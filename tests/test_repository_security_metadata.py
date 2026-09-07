@@ -76,6 +76,7 @@ def test_security_workflow_covers_core_repository_security_process():
         in workflow_text
     )
     assert workflow_text.count("github.event.pull_request.draft == false") == 3
+    assert workflow_text.count("github.event.action != 'closed'") == 3
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
