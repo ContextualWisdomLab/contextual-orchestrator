@@ -51,11 +51,12 @@ If the requested estimand is not mathematically identifiable from the supplied o
 
 A prerequisite implementation shall persist one observation per governed model request using a durable schema that can reconstruct the analysis population. At minimum it records:
 
-- immutable request-observation identity;
+- immutable logical-request identity and immutable upstream-attempt identity;
 - provider and concrete model identity as served, not inferred from names;
 - one observation for each upstream attempt, including raced winners, raced losers, and independently censored attempts, rather than one aggregate observation for the logical request;
 - immutable endpoint identity and the exact endpoint-equivalence-contract identity in force for that attempt;
-- `duration_seconds` computed from request start and terminal readings in the same monotonic clock domain, plus a stable clock-domain identifier;
+- `duration_seconds` computed only from that attempt's own monotonic start reading to its terminal monotonic reading in the same clock domain, plus a stable clock-domain identifier; time spent before the attempt starts or in another attempt is excluded;
+- separately named logical-request latency, when retained, computed from the logical request's own monotonic start and terminal readings and never substituted for an attempt duration;
 - an auditable upstream-attempt start timestamp in UTC RFC 3339 form for population-window membership; monotonic readings are not interpreted across workers, hosts, or reboots;
 - terminal state such as completed, provider-ended, caller-cancelled, administrator-timeout, transport-failed, race-lost/cancelled, or otherwise explicitly classified;
 - time to first token when actually observable on streaming paths;
@@ -64,6 +65,8 @@ A prerequisite implementation shall persist one observation per governed model r
 - privacy-safe provenance sufficient to reproduce the statistical population without storing prompt, response, credential, or other secret material.
 
 This ADR defines no magic rolling sample count and no repository-authored age cutoff for statistical validity. Retention is a separate storage/privacy/governance policy. `analysis_window` is an explicit caller/operator-supplied half-open UTC interval `[start_inclusive, end_exclusive)`, with both endpoints encoded as RFC 3339 timestamps. An attempt belongs to the population exactly when its persisted UTC attempt-start timestamp is inside that interval; duration still comes only from the attempt-local monotonic readings. Every statistical result binds the exact included observation identities, endpoint/equivalence-contract identities, and analysis interval so the result is reproducible across workers and hosts regardless of the operational retention mechanism.
+
+The owner must durably register the attempt identity and start evidence before invoking the provider, then update that same record with terminal or censoring evidence. Analysis also records an explicit RFC 3339 UTC `analysis_as_of` snapshot. If any registered member of the start-time cohort is still in flight at that snapshot, this first implementation returns the population estimate and interval as `null` and reports the blocking attempt identities; it does not delete the row, treat elapsed wall time as a completion, or analyze only the faster terminal members. A future implementation may right-censor live attempts only if a separately reviewed contract supplies a same-clock-domain monotonic snapshot for each attempt. No elapsed-time threshold or retention TTL may silently reclassify an in-flight attempt.
 
 ### 3. Completed uncensored observations use an explicit empirical quantile model
 
@@ -81,9 +84,21 @@ Q_n(p)=\inf\{t:F_n(t)\ge p\}.
 
 No fixed `n` floor controls whether the estimate exists. The estimate and its uncertainty are reported from the mathematical model for the exact observed sample.
 
-When a distribution-free confidence interval for a population quantile is requested, its order-statistic indices are derived from the exact Binomial\((n,p)\) distribution for the caller-supplied confidence level. The implementation records `n`, `p`, confidence level, selected order-statistic indices, and the exact observations used. There is no repository-authored p50/p90/p95/p99 sample table and no hand-written switch that silently changes estimator families.
+When a distribution-free confidence interval for a population quantile is requested, use the following deterministic equal-tailed construction. Let the caller-supplied confidence level be `c`, let `alpha = 1 - c`, and let `B ~ Binomial(n, p)`. Choose
 
-If the requested confidence interval cannot be represented because the finite sample does not support the requested order-statistic bounds, the interval is `null`; the system does not manufacture a narrower interval or borrow another population.
+\[
+k = 1 + \max\{j \in \{0,\ldots,n-1\}: P(B \le j) \le \alpha/2\}
+\]
+
+and
+
+\[
+l = \min\{j \in \{1,\ldots,n\}: P(B \ge j) \le \alpha/2\}.
+\]
+
+The reported interval is `[T_(k), T_(l)]` for the ascending order statistics. Its central coverage event is `k <= B <= l - 1`; the two excluded Binomial tails are each no larger than `alpha/2`. The implementation uses inclusive Binomial inequalities exactly as written, records `n`, `p`, `c`, `alpha`, both tail probabilities, `k`, `l`, library/version, and the exact observations, and applies no undocumented tie-break. This exact-Binomial statement assumes the latency distribution is continuous at the requested quantile. If clock discretization creates a mass point or ties that invalidate that assumption, the interval is `null` unless a separately documented discrete-data construction is selected and validated.
+
+If either index set is empty, `k >= l`, or the finite sample otherwise cannot provide both finite order-statistic bounds, the interval is `null`; the system does not manufacture a narrower interval, alter tail allocation, or borrow another population. There is no repository-authored p50/p90/p95/p99 sample table and no hand-written switch that silently changes estimator families.
 
 ### 4. Censored latency uses survival analysis, not completed-only deletion
 
