@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `OPENCODE_ZEN_API_KEY` is documented as the shared KV credential for both
+  OpenCode Zen and OpenCode Go catalogs; registering it once discovers both
+  accounts.
 - Virtual selectors (`orchestrator/free`, `orchestrator/auto`,
   `contextual-orchestrator`) keep tools and streaming on Fugu route /
   TRINITY-Conductor conduct. A tools array no longer ejects those calls into
