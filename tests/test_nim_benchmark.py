@@ -1753,7 +1753,7 @@ def test_exploratory_outcomes_cannot_change_locked_policy_evidence(
     assert all(cell["task_split"] == "exploratory" for cell in exploratory_cells)
 
 
-def test_best_single_worker_hindsight_selection() -> None:
+def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
     assert (
         nb.best_single_worker_hindsight(
             [{"policy_name": "route_once", "mean_task_score": 1.0}]
@@ -1769,6 +1769,18 @@ def test_best_single_worker_hindsight_selection() -> None:
     best = nb.best_single_worker_hindsight(summaries)
     assert best["model_id"] == "vendor/model-b"
     assert best["selection_basis"] == "hindsight_argmax_mean_locked_score"
+
+    tied = nb.summarize_policies(
+        [
+            _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
+            _synthetic_cell("direct_single_worker:vendor/model-b", "task_one", 1.0),
+        ]
+    )
+    with pytest.raises(
+        nb.BenchmarkContractError,
+        match="hindsight comparison has no unique quality maximum",
+    ):
+        nb.best_single_worker_hindsight(tied)
 
 
 def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
