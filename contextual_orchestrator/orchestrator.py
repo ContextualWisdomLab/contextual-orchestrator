@@ -2842,7 +2842,16 @@ class ModelClient:
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
         if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message=f"{agent.id} provider host is not allowlisted",
+                client_status=502,
+                provider_status=None,
+                retryable=False,
+                transport="chat",
+            )
         addresses = self._resolve_addresses(hostname, parsed.port or 443)
         for _family, sockaddr in addresses:
             ip_address = ipaddress.ip_address(sockaddr[0])
