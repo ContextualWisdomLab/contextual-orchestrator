@@ -26,10 +26,17 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
 EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
 FAKE_ENDPOINT = "https://nim.example.test/v1"
+DECLARED_MAX_WORKFLOW_DEPTH = 5
+DECLARED_MAX_OUTPUT_TOKENS = 264
+DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
+    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
+)
 DECLARED_RUN_KWARGS = {
     "resample_count": 2000,
     "confidence_level": 0.95,
     "comparison_pairs": (("conduct_bounded", "route_once"),),
+    "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
+    "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
 }
 
 
@@ -218,15 +225,41 @@ def test_probe_concurrency_executes_the_complete_cartesian_plan() -> None:
 def test_complete_request_plan_rejects_invalid_counts() -> None:
     """Planning inputs are positive integers, never booleans or empty counts."""
     invalid_cases = [
-        {"discovered_model_count": 0, "max_eval_models": 7, "locked_task_count": 10},
-        {"discovered_model_count": True, "max_eval_models": 7, "locked_task_count": 10},
-        {"discovered_model_count": 1, "max_eval_models": 0, "locked_task_count": 10},
-        {"discovered_model_count": 1, "max_eval_models": 7, "locked_task_count": 0},
+        {
+            "discovered_model_count": 0,
+            "max_eval_models": 7,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": True,
+            "max_eval_models": 7,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": 1,
+            "max_eval_models": 0,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": 1,
+            "max_eval_models": 7,
+            "locked_task_count": 0,
+            "maximum_calls": 5,
+        },
     ]
 
     for case in invalid_cases:
         with pytest.raises(nb.BenchmarkContractError, match="positive integer"):
             nb.plan_complete_request_budget(**case)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.plan_complete_request_budget(
+            discovered_model_count=1,
+            max_eval_models=7,
+            locked_task_count=10,
+        )
 
 
 def test_complete_request_plan_covers_a_127_model_catalog() -> None:
@@ -235,6 +268,7 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
         discovered_model_count=127,
         max_eval_models=7,
         locked_task_count=10,
+        maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH,
     )
 
     assert plan == {
@@ -248,7 +282,9 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
 
 def test_buyer_facing_request_plan_matches_internal_plan() -> None:
     """The stable operator view exposes the same complete-run reservation."""
-    assert nb.planned_complete_run_requests(127, 30, 7) == {
+    assert nb.planned_complete_run_requests(
+        127, 30, 7, maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH
+    ) == {
         "catalog_discovery_requests": 1,
         "capability_probe_requests": 127 * 9,
         "evaluation_worker_ceiling": 7,
@@ -381,7 +417,7 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
     assert evaluation["required_completion_fraction"] is None
     assert evaluation["routing_recommendation"] is None
     assert report["provenance"]["benchmark_parameters"]["policy_total_token_budget"] == (
-        nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        DECLARED_POLICY_TOTAL_TOKEN_BUDGET
     )
     assert report["honesty_labels"]["actual_cost_basis"] == (
         "deterministic_dry_run_no_provider_egress"

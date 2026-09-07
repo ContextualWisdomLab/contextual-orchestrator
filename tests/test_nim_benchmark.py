@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import inspect
 import io
 import json
 import os
@@ -1420,15 +1421,66 @@ def test_cheapest_priced_agent_selection() -> None:
 
 
 def test_planned_evaluation_requests_formula() -> None:
-    assert nb.planned_evaluation_requests(3, 10) == 10 * (
-        3 * 2 + nb.MAX_WORKFLOW_DEPTH + nb.MAX_WORKFLOW_DEPTH + 2
+    assert nb.planned_evaluation_requests(3, 10, maximum_calls=5) == 10 * (
+        3 * 2 + 5 + 5 + 2
     )
+
+
+def test_planned_evaluation_requests_require_declared_maximum_calls() -> None:
+    """Request planning cannot invent a five-step envelope."""
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=None)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=True)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=0)
+    assert nb.planned_evaluation_requests(3, 10, maximum_calls=4) == 10 * (
+        3 * 2 + 4 + 4 + 2
+    )
+
+
+def test_evaluate_policies_require_declared_workflow_budget() -> None:
+    """Equal-budget cells cannot inherit hidden token or call envelopes."""
+    parameters = inspect.signature(nb.evaluate_policies).parameters
+    assert parameters["total_token_budget"].default is None
+    assert parameters["maximum_calls"].default is None
+    client = ModelClient()
+    agents = _mock_agents("vendor/model-a")
+    with pytest.raises(nb.BenchmarkContractError, match="total_token_budget"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=None,
+            maximum_calls=5,
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=1320,
+            maximum_calls=None,
+        )
 
 
 def test_evaluate_policies_contract_failures() -> None:
     client = ModelClient()
     with pytest.raises(nb.BenchmarkContractError):
-        nb.evaluate_policies([], _mini_manifest(), None, client, nb.RequestBudget(100))
+        nb.evaluate_policies(
+            [],
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            **_declared_policy_kwargs(),
+        )
     agents = _mock_agents("vendor/model-a")
     exploratory_only = {
         "manifest_version": "1",
@@ -1436,11 +1488,21 @@ def test_evaluate_policies_contract_failures() -> None:
     }
     with pytest.raises(nb.BenchmarkContractError):
         nb.evaluate_policies(
-            agents, exploratory_only, None, client, nb.RequestBudget(100)
+            agents,
+            exploratory_only,
+            None,
+            client,
+            nb.RequestBudget(100),
+            **_declared_policy_kwargs(),
         )
     with pytest.raises(nb.BenchmarkBudgetError):
         nb.evaluate_policies(
-            agents, _mini_manifest(), None, client, nb.RequestBudget(2)
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(2),
+            **_declared_policy_kwargs(),
         )
 
     class RememberedContractClient(ModelClient):
@@ -1456,6 +1518,7 @@ def test_evaluate_policies_contract_failures() -> None:
             None,
             RememberedContractClient(),
             nb.RequestBudget(100),
+            **_declared_policy_kwargs(),
         )
 
 
@@ -1470,6 +1533,7 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
         nb._BudgetedModelClient(budget),
         budget,
         nb._deterministic_timer(),
+        **_declared_policy_kwargs(),
     )
     cells = evaluation["evaluation_cells"]
     policies = {cell["policy_name"] for cell in cells}
@@ -1483,18 +1547,19 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert evaluation["cheapest_worker_skip_reason"] is None
     conduct_cells = [cell for cell in cells if cell["policy_name"] == "conduct_bounded"]
     assert all(
-        cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+        cell["workflow_depth"] <= DECLARED_MAX_WORKFLOW_DEPTH for cell in conduct_cells
     )
     assert all(
-        cell["configured_total_token_budget"] == nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        cell["configured_total_token_budget"] == DECLARED_POLICY_TOTAL_TOKEN_BUDGET
         for cell in conduct_cells
     )
     assert all(
-        cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH
+        cell["configured_maximum_calls"] == DECLARED_MAX_WORKFLOW_DEPTH
         for cell in conduct_cells
     )
     assert all(
-        cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+        cell["observed_budget_calls"] <= DECLARED_MAX_WORKFLOW_DEPTH
+        for cell in conduct_cells
     )
     assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
     assert cells == sorted(
@@ -1517,6 +1582,7 @@ def test_evaluate_policies_preserves_reported_usage_source() -> None:
         None,
         ReportedUsageClient(),
         nb.RequestBudget(100),
+        **_declared_policy_kwargs(),
     )
     assert any(
         cell["token_usage_source"] == "reported"
@@ -1563,6 +1629,7 @@ def test_evaluate_policies_records_observed_budget_overflow() -> None:
         OversizedAnswerClient(),
         nb.RequestBudget(100),
         total_token_budget=512,
+        maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH,
     )
 
     assert evaluation["evaluation_cells"]
@@ -1576,7 +1643,12 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
     agents = _mock_agents("vendor/model-a")
     budget = nb.RequestBudget(200)
     evaluation = nb.evaluate_policies(
-        agents, _mini_manifest(), None, ModelClient(), budget
+        agents,
+        _mini_manifest(),
+        None,
+        ModelClient(),
+        budget,
+        **_declared_policy_kwargs(),
     )
     assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
     unpriced_scenario = {
@@ -1590,6 +1662,7 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
         unpriced_scenario,
         ModelClient(),
         nb.RequestBudget(200),
+        **_declared_policy_kwargs(),
     )
     assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
 
@@ -1694,6 +1767,11 @@ def test_pareto_frontier_excludes_dominated_rows() -> None:
 DECLARED_RESAMPLE_COUNT = 2000
 DECLARED_CONFIDENCE_LEVEL = 0.95
 DECLARED_COMPARISON_PAIRS = (("conduct_bounded", "route_once"),)
+DECLARED_MAX_WORKFLOW_DEPTH = 5
+DECLARED_MAX_OUTPUT_TOKENS = 264
+DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
+    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
+)
 
 
 def _declared_comparison_kwargs(**overrides: object) -> dict:
@@ -1708,12 +1786,24 @@ def _declared_comparison_kwargs(**overrides: object) -> dict:
     return payload
 
 
+def _declared_policy_kwargs(**overrides: object) -> dict:
+    """Return explicit equal-budget envelopes for policy evaluation fixtures."""
+    payload: dict = {
+        "total_token_budget": DECLARED_POLICY_TOTAL_TOKEN_BUDGET,
+        "maximum_calls": DECLARED_MAX_WORKFLOW_DEPTH,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _declared_run_kwargs(**overrides: object) -> dict:
     """Return explicit measurement declarations for benchmark runs."""
     payload: dict = {
         "resample_count": DECLARED_RESAMPLE_COUNT,
         "confidence_level": DECLARED_CONFIDENCE_LEVEL,
         "comparison_pairs": DECLARED_COMPARISON_PAIRS,
+        "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
+        "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
     }
     payload.update(overrides)
     return payload
@@ -1727,6 +1817,13 @@ CLI_MEASUREMENT_FLAGS = [
     "--comparison-pair",
     "conduct_bounded,route_once",
 ]
+CLI_WORKFLOW_BUDGET_FLAGS = [
+    "--max-workflow-depth",
+    "5",
+    "--max-output-tokens",
+    "264",
+]
+CLI_RUN_FLAGS = [*CLI_MEASUREMENT_FLAGS, *CLI_WORKFLOW_BUDGET_FLAGS]
 
 
 def _synthetic_cell(
@@ -2176,6 +2273,18 @@ def test_report_schema_validation_reports_missing_paths() -> None:
             ),
             "comparison_pairs",
         ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "max_output_tokens", 0
+            ),
+            "max_output_tokens",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "max_workflow_depth", True
+            ),
+            "max_workflow_depth",
+        ),
     ],
 )
 def test_report_schema_rejects_invalid_evaluation_contract(
@@ -2431,11 +2540,33 @@ def test_run_benchmark_rejects_output_cap_before_egress() -> None:
             TASK_MANIFEST_PATH,
             None,
             "unused",
-            max_output_tokens=0,
             transport=transport,
-            **_declared_run_kwargs(),
+            **_declared_run_kwargs(max_output_tokens=0),
         )
     assert calls == 0
+
+
+def test_run_benchmark_requires_declared_workflow_budget() -> None:
+    """Output-token and workflow-depth budgets are run declarations."""
+    parameters = inspect.signature(nb.run_benchmark).parameters
+    assert parameters["max_output_tokens"].default is None
+    assert parameters["max_workflow_depth"].default is None
+    with pytest.raises(nb.BenchmarkContractError, match="max_output_tokens"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            **_declared_run_kwargs(max_output_tokens=None, max_workflow_depth=None),
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="max_workflow_depth"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            **_declared_run_kwargs(max_workflow_depth=None),
+        )
 
 
 def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
@@ -2656,7 +2787,7 @@ def test_cli_dry_run_succeeds() -> None:
                     tmp,
                     "--max-total-requests",
                     "900",
-                    *CLI_MEASUREMENT_FLAGS,
+                    *CLI_RUN_FLAGS,
                 ]
             )
         assert exit_code == 0
@@ -2673,7 +2804,7 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
                 "--dry-run",
                 "--task-manifest",
                 "does/not/exist.json",
-                *CLI_MEASUREMENT_FLAGS,
+                *CLI_RUN_FLAGS,
             ]
         )
     assert exit_code == 1
@@ -2693,7 +2824,7 @@ def test_cli_live_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -
                 "d" * 40,
                 "--workflow-run-id",
                 "run-1",
-                *CLI_MEASUREMENT_FLAGS,
+                *CLI_RUN_FLAGS,
             ]
         )
     assert exit_code == 1
@@ -2710,7 +2841,7 @@ def test_cli_failure_redacts_resolved_bearer(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(nb, "run_benchmark", fail)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exit_code = nb.run_benchmark_cli(["--dry-run", *CLI_MEASUREMENT_FLAGS])
+        exit_code = nb.run_benchmark_cli(["--dry-run", *CLI_RUN_FLAGS])
     assert exit_code == 1
     assert secret not in stdout.getvalue()
     assert "[REDACTED]" in stdout.getvalue()
@@ -2731,6 +2862,22 @@ def test_cli_fails_closed_without_measurement_declaration() -> None:
         nb._comparison_pairs_from_cli([123])
     assert nb._comparison_pairs_from_cli(["conduct_bounded,route_once"]) == (
         ("conduct_bounded", "route_once"),
+    )
+
+
+def test_cli_fails_closed_without_workflow_budget_declaration() -> None:
+    """CLI cannot invent a five-step envelope or 264-token output cap."""
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = nb.run_benchmark_cli(
+            ["--dry-run", "--task-manifest", TASK_MANIFEST_PATH, *CLI_MEASUREMENT_FLAGS]
+        )
+    assert exit_code == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["benchmark_failed_closed"] is True
+    assert payload["error_class"] == "BenchmarkContractError"
+    assert "max_output_tokens" in payload["error_message"] or (
+        "max_workflow_depth" in payload["error_message"]
     )
 
 

@@ -91,6 +91,8 @@ def test_scheduled_live_budget_covers_the_reviewed_current_catalog_scale() -> No
     assert "--bootstrap-resample-count 2000" in workflow
     assert "--confidence-level 0.95" in workflow
     assert "--comparison-pair conduct_bounded,route_once" in workflow
+    assert "--max-workflow-depth 5" in workflow
+    assert "--max-output-tokens 264" in workflow
 
 
 def test_monthly_schedule_starts_inside_the_reviewed_evidence_window() -> None:

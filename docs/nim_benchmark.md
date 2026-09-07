@@ -21,15 +21,18 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
   --output-dir benchmark_artifacts \
   --bootstrap-resample-count 2000 \
   --confidence-level 0.95 \
-  --comparison-pair conduct_bounded,route_once
+  --comparison-pair conduct_bounded,route_once \
+  --max-workflow-depth 5 \
+  --max-output-tokens 264
 
 # Live CI run: the workflow injects NVIDIA_NIM_API_KEY only into the live step.
 # The process bootstraps it into the credential registry and runtime access
-# resolves the credential by name. Resample count, coverage, and comparison
-# pairs are required declarations; the values below are this run's choices,
-# not hidden code defaults.
+# resolves the credential by name. Resample count, coverage, comparison pairs,
+# workflow depth, and output-token cap are required declarations; the values
+# below are this run's choices, not hidden code defaults.
 python -m contextual_orchestrator nim-benchmark \
   --max-total-requests 2000 \
+  --max-workflow-depth 5 \
   --max-output-tokens 264 \
   --bootstrap-resample-count 2000 \
   --confidence-level 0.95 \
@@ -41,10 +44,11 @@ python -m contextual_orchestrator nim-benchmark \
 The provider secret is never accepted through argv, printed, or serialized.
 Artifact writing fails closed if the resolved secret appears in any output.
 
-`--max-output-tokens` is the per-provider-call output cap. The equal
-cell-wide prompt-plus-completion budget is five times that cap by default
-(`1,320` tokens), which leaves the fixed five-call conduct workflow enough room
-for its prompts while keeping the same cell budget for every policy.
+`--max-output-tokens` is the declared per-provider-call output cap.
+`--max-workflow-depth` is the declared equal-call envelope. The equal
+cell-wide prompt-plus-completion budget is their product. Historical dry-run
+flags used 264 and 5 (`1,320` tokens) so the locked smoke manifest stayed
+inside that envelope; omitting the flags fails closed.
 
 ## Provider-egress security boundary
 
@@ -126,10 +130,10 @@ Every policy × task cell receives the same:
 
 - locked task and scorer version;
 - total prompt-plus-completion token allowance configured by
-  `--max-output-tokens`;
-- five-call maximum envelope;
+  `--max-output-tokens` times `--max-workflow-depth`;
+- declared call envelope from `--max-workflow-depth`;
 - timeout policy; and
-- five-step workflow-depth ceiling.
+- declared workflow-depth ceiling.
 
 Provider retries and orchestration tool retries are disabled inside the benchmark
 cell so the declared request budget bounds actual egress and the measured call

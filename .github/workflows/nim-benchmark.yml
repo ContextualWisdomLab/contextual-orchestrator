@@ -75,6 +75,8 @@ jobs:
             --bootstrap-resample-count 2000 \
             --confidence-level 0.95 \
             --comparison-pair conduct_bounded,route_once \
+            --max-workflow-depth 5 \
+            --max-output-tokens 264 \
             --git-sha "$PROVENANCE_GIT_SHA" \
             --workflow-run-id "$PROVENANCE_RUN_ID"
 
@@ -144,6 +146,8 @@ jobs:
             --bootstrap-resample-count 2000 \
             --confidence-level 0.95 \
             --comparison-pair conduct_bounded,route_once \
+            --max-workflow-depth 5 \
+            --max-output-tokens 264 \
             --git-sha "$PROVENANCE_GIT_SHA" \
             --workflow-run-id "$PROVENANCE_RUN_ID"
 

@@ -54,8 +54,8 @@ are omitted rather than imputed. Hindsight identity remains a separate
 measurement; comparing against it requires an explicit pair.
 
 Report schema 4.0.0 records the declarations in provenance. Production
-route/conduct defaults stay locked. Token and workflow-depth budgets remain a
-later no-heuristics slice.
+route/conduct defaults stay locked. Token and workflow-depth budgets are the
+successor slice in ADR 0043.
 
 ## Alternatives considered
 
@@ -78,6 +78,6 @@ declarations; schema 3 reports cannot be reused.
 
 ## Remaining work
 
-Repository-authored `MAX_WORKFLOW_DEPTH` and `DEFAULT_MAX_OUTPUT_TOKENS`, and
-the psychometric held-out harness's 2,000-sample 95% interval, stay open.
-This ADR is Proposed until independent review and protected delivery.
+Token and workflow-depth budgets move to ADR 0043. The psychometric held-out
+harness's 2,000-sample 95% interval stays open. This ADR is Proposed until
+independent review and protected delivery.
