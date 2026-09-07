@@ -1368,7 +1368,7 @@ def test_sdk_passthrough_unknown_outcome_never_replays() -> None:
     import threading
     from contextual_orchestrator.server import SecurityConfig, build_server
 
-    sdk = pytest.importorskip("openai", reason="run this integration probe with openai==2.54.0")
+    import openai as sdk
     assert sdk.__version__ == "2.54.0"
     transport = SequencedProxyClient({
         "primary_agent": TimeoutError("token=private_test_value"),

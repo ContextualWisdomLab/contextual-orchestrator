@@ -717,10 +717,10 @@ class _ProviderStoppedStreamingClient(ModelClient):
      ("provider_outcome_unknown", 502, 1)],
 )
 def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, status_code, expected_calls) -> None:
-    """The optional exact SDK probe uses real loopback HTTP, never a provider."""
+    """The pinned SDK probe uses real loopback HTTP, never a provider."""
     import asyncio
 
-    sdk = pytest.importorskip("openai", reason="run this integration probe with openai==2.54.0")
+    import openai as sdk
     assert sdk.__version__ == "2.54.0"
     server = build_server(TaskOrchestrator([ModelAgent("local_worker", "mock-local")]), port=0)
     received_calls = []
