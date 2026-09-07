@@ -169,6 +169,17 @@ def test_diverse_selection_fails_closed_at_unpriced_boundary() -> None:
         provider_bootstrap.select_model_group_diverse_models(models, limit=1)
 
 
+def test_diverse_selection_fails_closed_at_equal_known_price_boundary() -> None:
+    """Equal comparable cost cannot be resolved by provider/model names."""
+    models = [
+        _model("bytez", "BYTEZ_API_KEY", "bytez-priced", 1.0),
+        _model("openrouter", "OPENROUTER_API_KEY", "router-priced", 1.0),
+    ]
+
+    with pytest.raises(provider_bootstrap.ProviderBootstrapError, match="ambiguous"):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=1)
+
+
 def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     """A missing prompt or completion price cannot become an invented zero."""
     partial = replace(

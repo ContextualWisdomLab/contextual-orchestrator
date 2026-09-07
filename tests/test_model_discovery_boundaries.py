@@ -492,5 +492,22 @@ def test_bootstrap_selection_fails_closed_at_unpriced_boundary() -> None:
         select_bootstrap_discovered_agents(models, book, 2)
 
 
+def test_bootstrap_selection_fails_closed_at_equal_known_price_boundary() -> None:
+    """Equal comparable cost cannot be resolved by provider/model names."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model(provider, f"{provider}-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        )
+        for provider in ("openai", "openrouter", "bytez")
+    ]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
