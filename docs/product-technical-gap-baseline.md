@@ -2779,3 +2779,16 @@ whole stack to land first.
 None of this changes the conclusion above — a fixed wall-clock deadline on the
 candidate/retry loop is still barred by section 8 — it only records that the
 "not-yet-built" mechanism has **three** independent missing pieces, not one.
+
+**No-heuristics boundary (2026-09-07): these observations are diagnostics, not
+automatic exclusion authority.** Neither #911's EWMA observations nor an
+observed-attempt-duration scale identifies a reset, failure count, window,
+weight, or admission decision. Until the canonical routing owner supplies an
+executable mathematical/statistical availability model, an identified
+loss/utility and preregistered validation design with uncertainty, or an
+authoritative standard governing this exact path, automatic candidate
+exclusion remains unset and must fail closed or use an explicit
+operator-supplied decision. Do not replace 3/30 seconds with different
+repository-authored values. #1000 owns the broad routing repair; #911's
+observations can remain evidence but are not by themselves a production
+policy.
