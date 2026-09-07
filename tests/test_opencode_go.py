@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-from contextual_orchestrator.credentials import register_credential
 from contextual_orchestrator.model_discovery import (
     PROVIDER_MODEL_SOURCES,
     _parse_openai_compatible,
@@ -70,7 +69,6 @@ def test_go_chat_model_reuses_existing_responses_conversion() -> None:
 
 def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
     """One OPENCODE_ZEN_API_KEY registration must query both OpenCode catalogs."""
-    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     fetched: list[str] = []
     sources = tuple(
         source
@@ -89,6 +87,10 @@ def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
         return {"data": [{"id": model_id}]}
 
     with (
+        patch(
+            "contextual_orchestrator.model_discovery.get_credential",
+            return_value="zen-key",
+        ),
         patch(
             "contextual_orchestrator.model_discovery._fetch_json",
             side_effect=fetch_json,

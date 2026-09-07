@@ -167,6 +167,16 @@ class _FailThenServeClient:
         finally:
             self._settings = previous
 
+    @contextmanager
+    def suppress_request_tools(self):
+        previous = dict(self._settings)
+        for key in ("tools", "tool_choice", "parallel_tool_calls"):
+            self._settings.pop(key, None)
+        try:
+            yield
+        finally:
+            self._settings = previous
+
     def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
         del messages, kwargs
         self.calls.append(agent.id)
@@ -521,6 +531,31 @@ def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
     assert message["tool_calls"][0]["function"]["name"] == "inspect_repository"
     assert body["choices"][0]["finish_reason"] == "tool_calls"
     assert body["orchestration"]["mode"] == "route"
+
+
+def test_conduct_does_not_forward_tools_to_non_worker_roles() -> None:
+    """Caller tools stay on the worker hop, not thinker/verifier/synthesizer."""
+    payloads: list[Any] = []
+
+    class RecordingClient(_FailThenServeClient):
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
+            del agent
+            payloads.append(self.request_settings_snapshot().get("tools"))
+            return "paper-role-output"
+
+        def take_assistant_message(self) -> None:
+            return None
+
+    client = RecordingClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    with client.request_settings(tools=_TOOLS, tool_choice="auto"):
+        result = orchestrator.conduct(
+            [{"role": "user", "content": "write one short sentence"}]
+        )
+    assert result["answer"]
+    assert payloads
+    assert payloads.count(_TOOLS) == 1
+    assert payloads.count(None) == len(payloads) - 1
 
 
 def test_conduct_two_argument_progress_callback_still_completes() -> None:

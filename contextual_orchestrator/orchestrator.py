@@ -1840,6 +1840,23 @@ class ModelClient:
         return snapshot
 
     @contextmanager
+    def suppress_request_tools(self):
+        """Hide caller tools from non-worker roles on this thread."""
+        scoped = getattr(self._local, "request_settings", None)
+        if not isinstance(scoped, dict) or not any(
+            key in scoped for key in ("tools", "tool_choice", "parallel_tool_calls")
+        ):
+            yield
+            return
+        previous = dict(scoped)
+        for key in ("tools", "tool_choice", "parallel_tool_calls"):
+            scoped.pop(key, None)
+        try:
+            yield
+        finally:
+            self._local.request_settings = previous
+
+    @contextmanager
     def request_settings(self, **overrides: Any):
         """Apply provider settings to only the current server request thread."""
         previous = getattr(self._local, "request_settings", None)
@@ -6736,7 +6753,7 @@ class TaskOrchestrator:
                 row["failover_from"] = agent.id
             trace.append(row)
             if progress is not None:
-                _notify_progress(progress, step.role, "completed", output)
+                _notify_progress(progress, step.role, "completed", redact_value(output))
 
         if plan_source == "generated":
             # Generated plans have variable shape: locate roles instead of fixed indices.
@@ -7916,7 +7933,13 @@ class TaskOrchestrator:
             def call(
                 agent: ModelAgent,
             ) -> tuple[str, str, str, dict[str, Any] | None, dict[str, Any] | None]:
-                with self.client.request_settings(**request_settings):
+                tool_scope = (
+                    self.client.suppress_request_tools()
+                    if role != "worker"
+                    and hasattr(self.client, "suppress_request_tools")
+                    else nullcontext()
+                )
+                with self.client.request_settings(**request_settings), tool_scope:
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
                         if effort_profile is not None
@@ -8001,7 +8024,13 @@ class TaskOrchestrator:
                     # existing ``take_usage`` duck-typing below.
                     single_attempt = getattr(self.client, "single_attempt_transport", None)
                     transport_scope = single_attempt() if callable(single_attempt) else nullcontext()
-                    with transport_scope:
+                    tool_scope = (
+                        self.client.suppress_request_tools()
+                        if role != "worker"
+                        and hasattr(self.client, "suppress_request_tools")
+                        else nullcontext()
+                    )
+                    with transport_scope, tool_scope:
                         output = (
                             self.client.chat(agent, messages, effort_profile=effort_profile)
                             if effort_profile is not None
