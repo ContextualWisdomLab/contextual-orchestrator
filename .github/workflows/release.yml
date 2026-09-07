@@ -56,8 +56,8 @@ on:
 permissions:
   contents: read
 
-# This repository's own known push-triggered job names (ci.yml, fuzz.yml,
-# security.yml) -- shared by both jobs' checks-green gate (see
+# This repository's push-triggered job names from the integrated security.yml
+# workflow -- shared by both jobs' checks-green gate (see
 # scripts/ci/release_checks_gate.sh) so a `commits/$SHA/check-runs` report
 # that is empty, or missing one of them, is treated as "not ready yet",
 # never as vacuously "nothing to block on". A dispatch fired moments after a
@@ -68,9 +68,9 @@ permissions:
 # let a release publish before Security/Fuzz/CodeQL had even started (Devin
 # finding). Kept in sync with those three workflows' job `name:` values by
 # tests/test_release_workflow_contract.py; update this list in the same PR
-# that adds, removes, or renames a push-triggered job in any of them.
+# that adds, removes, or renames a push-triggered quality job.
 env:
-  RELEASE_EXPECTED_PUSH_CHECKS: '["Full unit and contract suite","NIM benchmark coverage, docstrings, and package smoke","Hypothesis property tests","Atheris coverage-guided","CodeQL analysis","Python supply chain"]'
+  RELEASE_EXPECTED_PUSH_CHECKS: '["Tests and package quality","Property and coverage-guided fuzzing","CodeQL, supply chain, and SBOM"]'
 
 concurrency:
   group: release

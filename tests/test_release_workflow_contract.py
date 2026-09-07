@@ -406,14 +406,16 @@ def test_expected_push_checks_are_unique_after_central_workflow_migration() -> N
     assert len(expected) == len(set(expected)), "expected-checks list has a duplicate"
 
     assert expected
-    assert set(expected) == {
-        "Full unit and contract suite",
-        "NIM benchmark coverage, docstrings, and package smoke",
-        "Hypothesis property tests",
-        "Atheris coverage-guided",
-        "CodeQL analysis",
-        "Python supply chain",
+    quality_workflow = (
+        REPOSITORY_ROOT / ".github/workflows/security.yml"
+    ).read_text(encoding="utf-8")
+    actual_job_names = {
+        line.removeprefix("    name: ")
+        for line in quality_workflow.splitlines()
+        if line.startswith("    name: ")
     }
+    assert actual_job_names
+    assert set(expected) == actual_job_names
 
 
 def test_checks_gate_requires_expected_checks_before_checking_they_are_green() -> None:
