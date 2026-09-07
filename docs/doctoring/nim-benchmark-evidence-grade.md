@@ -321,8 +321,8 @@ required declarations. No-alarm replications are right-censored at the
 remaining post-change length. The Wilson upper bound uses the declared
 coverage and is stored as `false_alarm_rate_upper_bound`.
 
-This slice does not change production route/conduct defaults. Other harness
-sample sizes remain later work.
+This slice does not change production route/conduct defaults. Held-out
+decision-latency repetitions are the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -333,6 +333,28 @@ sequenceDiagram
     Screen->>Screen: Fail closed on missing or invalid declarations
     Screen->>Screen: Record no-alarm replications as horizon-censored delays
     Screen->>Report: False-alarm bound and detection-delay KPIs
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared held-out latency repetitions (2026-09-08, proposed)
+
+Paired ranking timings used a hidden 200-repetition loop per context. That
+number chose Monte Carlo precision for decision-latency p50/p95 without an
+operator declaration. `_measure_paired_latency` now requires
+`repetitions_per_context`. The harness run writes 200 as this run's choice
+and records `latency_repetitions_per_context`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Timing as Paired ranking timings
+    participant Report as Held-out report
+    Operator->>Timing: Repetitions per context
+    Timing->>Timing: Fail closed on missing or non-positive declarations
+    Timing->>Report: Decision p50/p95 and declared repetition count
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 

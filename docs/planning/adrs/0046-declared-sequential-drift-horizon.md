@@ -72,5 +72,6 @@ missed detections sit at the remaining horizon.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Held-out decision-latency repetitions move to ADR 0047. Other
+repository-authored harness sample sizes stay open. This ADR is Proposed
+until independent review and protected delivery.

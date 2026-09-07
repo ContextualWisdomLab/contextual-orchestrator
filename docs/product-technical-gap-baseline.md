@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 declared held-out latency repetitions (proposed)
+
+Successor of the sequential-drift horizon slice removes hidden
+`LATENCY_REPETITIONS = 200` from
+`scripts/benchmark_psychometric_heldout.py`. Per-context timing repetitions
+are a required positive integer declaration. Missing, boolean, or
+non-positive values fail closed. The harness run still writes 200 as this
+run's choice and records `latency_repetitions_per_context`. ADR 0047 is
+Proposed.
+
+Local contract tests on this working tree: latency declaration and loop-count
+checks plus existing held-out key/report pins. This is not buyer-held-out
+accuracy, p95 latency, or protected merge evidence. Production route/conduct
+defaults stay locked. Other harness sample sizes remain later work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-08 declared sequential-drift horizon and censored delays (proposed)
 
 Successor of the coverage-neutral interval-key slice removes the hidden
