@@ -5377,6 +5377,8 @@ class TaskOrchestrator:
                     self._group_router.observe_failure(agent.id)
                 if emitted or pinned is not None:
                     raise
+                if isinstance(exc, ToolFallbackStoppedError):
+                    raise
                 upstream = (
                     exc
                     if isinstance(exc, ProviderUpstreamError)
@@ -5407,6 +5409,7 @@ class TaskOrchestrator:
             usage_callback(usage)
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+        self._record_success(agent.id)
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the

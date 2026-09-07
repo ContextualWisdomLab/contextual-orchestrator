@@ -70,6 +70,7 @@ def test_go_chat_model_reuses_existing_responses_conversion() -> None:
 def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
     """One OPENCODE_ZEN_API_KEY registration must query both OpenCode catalogs."""
     fetched: list[str] = []
+    received_keys: list[tuple[str, str]] = []
     sources = tuple(
         source
         for source in PROVIDER_MODEL_SOURCES
@@ -78,11 +79,12 @@ def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
     list_urls = {source.list_url: source.provider_name for source in sources}
 
     def fetch_json(url, *, timeout, api_key="", auth_scheme="Bearer"):
-        del timeout, api_key, auth_scheme
+        del timeout, auth_scheme
         provider_name = list_urls.get(url)
         if provider_name is None:
             return {}
         fetched.append(provider_name)
+        received_keys.append((provider_name, api_key))
         model_id = "glm-5.3" if provider_name == "opencode_go" else "glm-4.6"
         return {"data": [{"id": model_id}]}
 
@@ -104,6 +106,10 @@ def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
 
     assert errors == []
     assert set(fetched) == {"opencode_zen", "opencode_go"}
+    assert set(received_keys) == {
+        ("opencode_zen", "zen-key"),
+        ("opencode_go", "zen-key"),
+    }
     assert {model.provider_name for model in discovered} == {
         "opencode_zen",
         "opencode_go",
