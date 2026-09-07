@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- The psychometric held-out harness now requires a declared resample count,
+  percentile coverage, and seed for paired intervals. Hidden 2,000-sample
+  95% defaults are removed. The script entry still writes 2,000, 0.95, and
+  seed 568 as this run's choices.
 - NIM equal-budget cells now require a declared workflow depth and per-call
   output-token cap. Hidden five-step and 264-token defaults are removed. Five
   and 264 in the workflow and CLI examples are run declarations, not code

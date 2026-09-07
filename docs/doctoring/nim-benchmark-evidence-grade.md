@@ -254,8 +254,8 @@ evaluation, CLI, and provenance now require positive integer declarations.
 of the declared output cap and the declared workflow depth. Five and 264 in
 the workflow YAML are run choices, not code defaults.
 
-This slice does not change production route/conduct defaults. The held-out
-psychometric harness still uses a 2,000-sample 95% interval.
+This slice does not change production route/conduct defaults. Held-out
+bootstrap coverage is the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -267,6 +267,31 @@ sequenceDiagram
     Plan->>Plan: Fail closed on missing or non-positive declarations
     Plan->>Cell: Equal call envelope and token product
     Cell->>Report: Configured budget and observed usage
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared held-out bootstrap coverage (2026-09-07, proposed)
+
+The psychometric held-out harness used a hidden 2,000-sample 95% paired
+interval. Those numbers chose Monte Carlo precision without an operator
+declaration. `_paired_bootstrap_mean_ci`, `run_benchmark`, and the adaptive
+calibration helper now require resample count, exclusive-unit-interval
+coverage, and seed. The existing floor/ceil index mapping is kept so
+synthetic fixtures stay comparable. The script entry writes 2,000, 0.95, and
+seed 568 as this run's choices. The report records those fields.
+
+Efron (1979) grounds resampling observed units. This slice does not change
+production route/conduct defaults. Other harness sample sizes remain later
+work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Interval as Held-out interval
+    participant Report as Held-out report
+    Operator->>Interval: Resample count, coverage, seed
+    Interval->>Interval: Fail closed on missing or non-representable declarations
+    Interval->>Report: Mean difference and declared-coverage interval
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
