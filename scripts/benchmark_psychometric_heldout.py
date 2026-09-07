@@ -62,7 +62,11 @@ ROSTER_INVARIANCE_SEED = 260_915
 GENERALIZABILITY_SEED = 260_916
 SEQUENTIAL_DRIFT_SEED = 260_917
 SEQUENTIAL_DRIFT_HOLDOUT_SEED = 270_917
-SEQUENTIAL_DRIFT_REPLICATIONS = 500
+# Script-entry run declarations for the CUSUM screen. Functions take these as
+# required arguments; they are not hidden statistical defaults.
+DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS = 500
+DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS = 250
+DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS = 100
 ADAPTIVE_CALIBRATION_CANDIDATES = 400
 ADAPTIVE_CALIBRATION_ITEMS = 31
 ADAPTIVE_CALIBRATION_MAX_ITEMS = 12
@@ -559,76 +563,121 @@ def _validate_functional_drift() -> dict[str, object]:
     }
 
 
-def _validate_sequential_drift() -> dict[str, object]:
-    """Measure the false-alarm and detection-delay tradeoff for a known shift."""
+def _evaluate_sequential_drift_threshold(
+    *,
+    seed: int,
+    threshold: float,
+    replications: int | None = None,
+    horizon_observations: int | None = None,
+    change_after_observations: int | None = None,
+    confidence_level: float | None = None,
+) -> dict[str, float | int]:
+    """Simulate seeded first alarms for the declared Bernoulli probability shift.
+
+    Delays exclude pre-change alarms. Replications that never alarm inside the
+    declared horizon are right-censored at the remaining post-change length and
+    counted as missed detections. Coverage is a required declaration.
+    """
+    replication_count = _require_declared_positive_int(replications, "replications")
+    horizon = _require_declared_positive_int(
+        horizon_observations, "horizon_observations"
+    )
+    change_after = _require_declared_positive_int(
+        change_after_observations, "change_after_observations"
+    )
+    if change_after >= horizon:
+        raise ValueError(
+            "change_after_observations must be below horizon_observations"
+        )
+    coverage = _require_declared_confidence_level(confidence_level)
     before_probability = 0.8
     after_probability = 0.3
-    change_after = 100
+    false_alarms = 0
+    censored_replications = 0
+    detection_delays: list[int] = []
+    for replication in range(replication_count):
+        generator = random.Random(seed + replication)
+        statistic = 0.0
+        alarm_observation: int | None = None
+        for observation_index in range(horizon):
+            probability = (
+                before_probability
+                if observation_index < change_after
+                else after_probability
+            )
+            accepted = generator.random() < probability
+            log_likelihood_ratio = (
+                math.log(after_probability / before_probability)
+                if accepted
+                else math.log((1.0 - after_probability) / (1.0 - before_probability))
+            )
+            statistic = max(0.0, statistic + log_likelihood_ratio)
+            if statistic >= threshold:
+                alarm_observation = observation_index + 1
+                break
+        if alarm_observation is None:
+            censored_replications += 1
+            detection_delays.append(horizon - change_after)
+        elif alarm_observation <= change_after:
+            false_alarms += 1
+        else:
+            detection_delays.append(alarm_observation - change_after)
+    if not detection_delays:
+        raise ValueError("sequential drift produced no post-change delay observations")
+    ordered_delays = sorted(detection_delays)
+    false_alarm_rate = false_alarms / replication_count
+    z_score = statistics.NormalDist().inv_cdf((1.0 + coverage) / 2.0)
+    denominator = 1.0 + (z_score**2 / replication_count)
+    false_alarm_upper_bound = (
+        false_alarm_rate
+        + z_score**2 / (2 * replication_count)
+        + z_score
+        * math.sqrt(
+            false_alarm_rate
+            * (1.0 - false_alarm_rate)
+            / replication_count
+            + z_score**2 / (4 * replication_count**2)
+        )
+    ) / denominator
+    detected = replication_count - false_alarms - censored_replications
+    return {
+        "threshold_log_likelihood_ratio": threshold,
+        "false_alarm_rate": false_alarm_rate,
+        "false_alarm_rate_upper_bound": false_alarm_upper_bound,
+        "censored_replications": censored_replications,
+        "post_change_detection_rate_among_no_false_alarm": (
+            detected / (replication_count - false_alarms)
+        ),
+        "detection_delay_p50_observations": statistics.median(detection_delays),
+        "detection_delay_p95_observations": ordered_delays[
+            math.ceil(0.95 * len(ordered_delays)) - 1
+        ],
+    }
+
+
+def _validate_sequential_drift(
+    *,
+    replications: int | None = None,
+    horizon_observations: int | None = None,
+    change_after_observations: int | None = None,
+    confidence_level: float | None = None,
+) -> dict[str, object]:
+    """Measure the false-alarm and detection-delay tradeoff for a known shift."""
+    declarations = {
+        "replications": replications,
+        "horizon_observations": horizon_observations,
+        "change_after_observations": change_after_observations,
+        "confidence_level": confidence_level,
+    }
 
     def evaluate(seed: int, threshold: float) -> dict[str, float | int]:
-        """Simulate seeded first alarms for the declared Bernoulli probability shift.
+        """Evaluate one threshold under the declared CUSUM horizon."""
+        return _evaluate_sequential_drift_threshold(
+            seed=seed, threshold=threshold, **declarations
+        )
 
-        Delays exclude pre-change alarms. Every replication must alarm within
-        the fixed horizon; this experiment does not estimate censored delays.
-        """
-        false_alarms = 0
-        detection_delays: list[int] = []
-        for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
-            generator = random.Random(seed + replication)
-            statistic = 0.0
-            alarm_observation: int | None = None
-            for observation_index in range(250):
-                probability = (
-                    before_probability
-                    if observation_index < change_after
-                    else after_probability
-                )
-                accepted = generator.random() < probability
-                log_likelihood_ratio = (
-                    math.log(after_probability / before_probability)
-                    if accepted
-                    else math.log(
-                        (1.0 - after_probability) / (1.0 - before_probability)
-                    )
-                )
-                statistic = max(0.0, statistic + log_likelihood_ratio)
-                if statistic >= threshold:
-                    alarm_observation = observation_index + 1
-                    break
-            assert alarm_observation is not None
-            if alarm_observation <= change_after:
-                false_alarms += 1
-            else:
-                detection_delays.append(alarm_observation - change_after)
-        ordered_delays = sorted(detection_delays)
-        false_alarm_rate = false_alarms / SEQUENTIAL_DRIFT_REPLICATIONS
-        z_95 = 1.959963984540054
-        denominator = 1.0 + (z_95**2 / SEQUENTIAL_DRIFT_REPLICATIONS)
-        false_alarm_upper_95 = (
-            false_alarm_rate
-            + z_95**2 / (2 * SEQUENTIAL_DRIFT_REPLICATIONS)
-            + z_95
-            * math.sqrt(
-                false_alarm_rate
-                * (1.0 - false_alarm_rate)
-                / SEQUENTIAL_DRIFT_REPLICATIONS
-                + z_95**2 / (4 * SEQUENTIAL_DRIFT_REPLICATIONS**2)
-            )
-        ) / denominator
-        return {
-            "threshold_log_likelihood_ratio": threshold,
-            "false_alarm_rate": false_alarm_rate,
-            "false_alarm_rate_upper_95": false_alarm_upper_95,
-            "post_change_detection_rate_among_no_false_alarm": (
-                len(detection_delays)
-                / (SEQUENTIAL_DRIFT_REPLICATIONS - false_alarms)
-            ),
-            "detection_delay_p50_observations": statistics.median(detection_delays),
-            "detection_delay_p95_observations": ordered_delays[
-                math.ceil(0.95 * len(ordered_delays)) - 1
-            ],
-        }
-
+    before_probability = 0.8
+    after_probability = 0.3
     calibration_baseline = evaluate(SEQUENTIAL_DRIFT_SEED, math.log(100.0))
     threshold_candidates = [value / 10.0 for value in range(60, 71)]
     evaluated_candidates = [
@@ -637,7 +686,7 @@ def _validate_sequential_drift() -> dict[str, object]:
     eligible_candidates = [
         value
         for value in evaluated_candidates
-        if value["false_alarm_rate_upper_95"] <= 0.05
+        if value["false_alarm_rate_upper_bound"] <= 0.05
         and value["detection_delay_p95_observations"] <= 25
     ]
     calibration_candidate = min(
@@ -655,10 +704,18 @@ def _validate_sequential_drift() -> dict[str, object]:
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
         "holdout_seed": SEQUENTIAL_DRIFT_HOLDOUT_SEED,
-        "replications": SEQUENTIAL_DRIFT_REPLICATIONS,
+        "replications": _require_declared_positive_int(
+            replications, "replications"
+        ),
+        "horizon_observations": _require_declared_positive_int(
+            horizon_observations, "horizon_observations"
+        ),
+        "change_after_observations": _require_declared_positive_int(
+            change_after_observations, "change_after_observations"
+        ),
+        "confidence_level": _require_declared_confidence_level(confidence_level),
         "before_probability": before_probability,
         "after_probability": after_probability,
-        "change_after_observations": change_after,
         "baseline": baseline,
         "candidate": candidate,
         "calibration_baseline": calibration_baseline,
@@ -670,8 +727,8 @@ def _validate_sequential_drift() -> dict[str, object]:
             "candidates": len(threshold_candidates),
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
-                "calibration candidates whose 95% false-alarm upper bound and "
-                "p95 delay meet both synthetic targets"
+                "calibration candidates whose declared-coverage false-alarm "
+                "upper bound and p95 delay meet both synthetic targets"
             ),
         },
         "synthetic_targets": {
@@ -679,7 +736,7 @@ def _validate_sequential_drift() -> dict[str, object]:
             "maximum_detection_delay_p95_observations": 25,
         },
         "candidate_meets_synthetic_targets": (
-            candidate["false_alarm_rate_upper_95"] <= 0.05
+            candidate["false_alarm_rate_upper_bound"] <= 0.05
             and candidate["detection_delay_p95_observations"] <= 25
         ),
     }
@@ -1769,7 +1826,12 @@ def run_benchmark(
     parameter_invariance = _validate_parameter_invariance()
     candidate_roster_invariance = _validate_candidate_roster_invariance()
     functional_drift = _validate_functional_drift()
-    sequential_drift = _validate_sequential_drift()
+    sequential_drift = _validate_sequential_drift(
+        replications=DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS,
+        horizon_observations=DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS,
+        change_after_observations=DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS,
+        confidence_level=bootstrap["confidence_level"],
+    )
     score_equating = _validate_score_equating()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
