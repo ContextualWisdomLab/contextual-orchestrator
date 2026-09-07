@@ -1214,6 +1214,34 @@ def test_free_virtual_model_fails_over_on_classified_retryable_transport_502() -
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
 
 
+
+def test_free_virtual_model_fails_over_on_raw_provider_http_500() -> None:
+    """A real upstream HTTP 500 advances to the next eligible free candidate."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(500),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
 def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> None:
     """Exhausted free passthrough keeps typed candidate evidence on the final 502."""
     primary = ProviderUpstreamError(
