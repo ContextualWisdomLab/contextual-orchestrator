@@ -9,65 +9,79 @@ import pytest
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 
 
-def test_ordinary_patch_rejects_stale_timeout_snapshot(tmp_path: Path) -> None:
-    """A priority edit cannot silently clear another writer's audited timeout."""
+def test_ordinary_patch_preserves_newer_timeout_policy(tmp_path: Path) -> None:
+    """An unrelated edit must not reject or overwrite another writer's policy."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
     writer = TaskOrchestrator([model_agent], agents_db=database_path)
     stale = TaskOrchestrator([model_agent], agents_db=database_path)
     writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
-    with pytest.raises(ValueError, match="reload"):
-        stale.patch_agent("default", model_agent.id, {"priority": 7})
-    assert stale._agent(model_agent.id).priority == model_agent.priority
+    patched = stale.patch_agent("default", model_agent.id, {"priority": 7})
+    assert patched["priority"] == 7
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
+    assert restored._agent(model_agent.id).priority == 7
     assert restored._agent(model_agent.id).model_timeout_seconds == 7200
     assert restored._agent(model_agent.id).model_timeout_revision == 1
 
 
 @pytest.mark.parametrize("operation", ["remove", "set_group", "delete_group"])
-def test_rejected_pool_change_preserves_serving_snapshot(tmp_path: Path, operation: str) -> None:
-    """A rejected durable edit must not publish a removal or membership change."""
+def test_pool_change_preserves_concurrent_timeout_policy(
+    tmp_path: Path, operation: str
+) -> None:
+    """Unrelated durable edits neither reject nor overwrite a newer policy."""
     model_agent = ModelAgent("timeout_agent", "example-model", group_name="test_group")
     other_agent = ModelAgent("other_agent", "other-model")
     database_path = str(tmp_path / "agent-pool.db")
     writer = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
     stale = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
-    before_candidates, before_agents = list(stale.candidates), list(stale.agents)
     writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
-    with pytest.raises(ValueError, match="reload"):
-        if operation == "remove":
-            stale.remove_agent("default", model_agent.id)
-        elif operation == "set_group":
-            stale.set_model_group("new_group", [model_agent.id])
-        else:
-            stale.delete_model_group("test_group")
-    assert stale.candidates == before_candidates
-    assert stale.agents == before_agents
+    if operation == "remove":
+        stale.remove_agent("default", model_agent.id)
+    elif operation == "set_group":
+        stale.set_model_group("new_group", [model_agent.id])
+    else:
+        stale.delete_model_group("test_group")
+    restored = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    if operation == "remove":
+        with pytest.raises(KeyError):
+            restored._agent(model_agent.id)
+    else:
+        persisted = restored._agent(model_agent.id)
+        assert persisted.model_timeout_seconds == 7200
+        assert persisted.model_timeout_revision == 1
+        assert persisted.group_name == ("new_group" if operation == "set_group" else "")
 
 
 @pytest.mark.parametrize("operation", ["set_group", "delete_group", "discovery"])
-def test_late_batch_conflict_rolls_back_all_models(tmp_path: Path, operation: str) -> None:
-    """A stale second model cannot leave the first model partially committed."""
-    seeds = [ModelAgent("first_agent", "first-model", group_name="test_group"),
-             ModelAgent("second_agent", "second-model", group_name="test_group")]
+def test_batch_change_preserves_concurrent_timeout_policy(
+    tmp_path: Path, operation: str
+) -> None:
+    """A batch edit preserves another writer's per-model timeout revision."""
+    seeds = [
+        ModelAgent("first_agent", "first-model", group_name="test_group"),
+        ModelAgent("second_agent", "second-model", group_name="test_group"),
+    ]
     database_path = str(tmp_path / "agent-pool.db")
     writer = TaskOrchestrator(seeds, agents_db=database_path)
     writer.sync_discovered_agents(seeds)
     stale = TaskOrchestrator(seeds, agents_db=database_path)
-    before = list(stale.candidates)
     writer.patch_agent("default", "second_agent", {"model_timeout_seconds": 7200})
-    with pytest.raises(ValueError, match="reload"):
-        if operation == "set_group":
-            stale.set_model_group("new_group", [agent.id for agent in seeds])
-        elif operation == "delete_group":
-            stale.delete_model_group("test_group")
-        else:
-            stale.sync_discovered_agents([replace(agent, priority=7) for agent in seeds])
-    assert stale.candidates == before
+    if operation == "set_group":
+        stale.set_model_group("new_group", [agent.id for agent in seeds])
+    elif operation == "delete_group":
+        stale.delete_model_group("test_group")
+    else:
+        stale.sync_discovered_agents([replace(agent, priority=7) for agent in seeds])
     restored = TaskOrchestrator(seeds, agents_db=database_path)
-    assert restored._agent("first_agent") == seeds[0]
-    assert restored._agent("second_agent").model_timeout_seconds == 7200
-    assert restored._agent("second_agent").group_name == "test_group"
+    second = restored._agent("second_agent")
+    assert second.model_timeout_seconds == 7200
+    assert second.model_timeout_revision == 1
+    if operation == "set_group":
+        assert {restored._agent(agent.id).group_name for agent in seeds} == {"new_group"}
+    elif operation == "delete_group":
+        assert {restored._agent(agent.id).group_name for agent in seeds} == {""}
+    else:
+        assert {restored._agent(agent.id).priority for agent in seeds} == {7}
 
 
 def test_model_timeout_policy_defaults_to_null() -> None:
