@@ -3516,26 +3516,35 @@ class _AgentPoolStore:
         restored_from_revision: int | None = None,
     ) -> int | None:
         """Apply existing normalized writes inside the caller's transaction."""
-        previous = timeout_previous if timeout_previous is not None else agent
-        revision = conn.execute(
-            "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
-            (agent.id,),
-        ).fetchone()[0]
-        if revision != previous.model_timeout_revision:
-            raise ValueError("model timeout policy changed; reload before updating")
-        row = conn.execute(
-            "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
-            (agent.id,),
-        ).fetchone()
-        if row is not None and row[0] != previous.model_timeout_seconds:
-            raise ValueError("model timeout policy changed; reload before updating")
         if timeout_previous is not None:
+            revision = conn.execute(
+                "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone()[0]
+            row = conn.execute(
+                "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone()
+            if (
+                revision != timeout_previous.model_timeout_revision
+                or (
+                    row is not None
+                    and row[0] != timeout_previous.model_timeout_seconds
+                )
+            ):
+                raise ValueError("model timeout policy changed; reload before updating")
             if row is not None:
                 conn.execute(
                     "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
                     (agent.model_timeout_seconds, agent.id),
                 )
-                revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
+                revision = self._append_timeout_history(
+                    conn,
+                    timeout_previous,
+                    agent,
+                    actor_id,
+                    restored_from_revision,
+                )
                 return revision
         config = agent.to_config()
         conn.execute(
@@ -3545,8 +3554,7 @@ class _AgentPoolStore:
                 priority = ?, disabled = ?, provider_name = ?,
                 local_credential_key = ?, auth_scheme = ?,
                 max_output_tokens = ?, context_window = ?,
-                reasoning_effort_supported = ?, stream_usage_supported = ?,
-                model_timeout_seconds = ?
+                reasoning_effort_supported = ?, stream_usage_supported = ?
             WHERE agent_id = ?
             """,
             (
@@ -3563,7 +3571,6 @@ class _AgentPoolStore:
                 config["context_window"],
                 config["reasoning_effort_supported"],
                 int(config["stream_usage_supported"]),
-                config["model_timeout_seconds"],
                 agent.id,
             ),
         )
