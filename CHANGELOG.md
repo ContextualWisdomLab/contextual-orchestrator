@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Held-out assignment-design evidence now requires a declared trial count.
+  The hidden 24,000-trial default is removed. The harness run still writes
+  24,000 as this run's choice.
 - Held-out accuracy and decision-latency now require a declared context
   population. The hidden 24-context default is removed from evidence
   construction, quality evaluation, and paired timings. The harness run still
