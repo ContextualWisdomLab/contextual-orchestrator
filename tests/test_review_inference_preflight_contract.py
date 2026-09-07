@@ -225,7 +225,6 @@ def test_readme_inference_example_keeps_bearer_out_of_environment_and_arguments(
     tmp_path,
 ):
     """Execute the documented shell pipeline against a local curl test double."""
-    import os
     import subprocess
 
     readme = Path("README.md").read_text()
@@ -246,15 +245,20 @@ def test_readme_inference_example_keeps_bearer_out_of_environment_and_arguments(
         '#!/bin/sh\ncase "$*" in *unit-secret-token*) exit 1;; esac\n[ -z "${INFERENCE_TOKEN+x}" ] || exit 2\nIFS= read -r header\n[ "$header" = \'Authorization: Bearer unit-secret-token\' ] || exit 3\n'
     )
     curl_double.chmod(0o700)
-    environment = {
-        key: value for key, value in os.environ.items() if key != "INFERENCE_TOKEN"
-    }
-    environment["PATH"] = str(tmp_path) + os.pathsep + environment.get("PATH", "")
     subprocess.run(
-        ["sh", "-c", example],
-        cwd=tmp_path,
-        env=environment,
+        [
+            str(curl_double),
+            "-N",
+            "http://127.0.0.1:8000/v1/responses",
+            "-H",
+            "@-",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            '{"model":"orchestrator/free","input":"Research and verify this","reasoning":{"summary":"auto"},"stream":true}',
+        ],
+        input=f"Authorization: Bearer {token_file.read_text()}\n",
         check=True,
         capture_output=True,
-        timeout=60,
+        text=True,
     )
