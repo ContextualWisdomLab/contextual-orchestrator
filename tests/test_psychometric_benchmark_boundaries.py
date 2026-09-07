@@ -146,6 +146,37 @@ def test_observation_p95_tracks_actual_sample_count(monkeypatch, capsys, sample_
     assert report["p95_observe_ms"] == (95 * sample_count + 99) // 100
 
 
+def test_paired_latency_requires_declared_repetitions() -> None:
+    """Decision-latency KPIs cannot invent a 200-repetition default."""
+    parameters = inspect.signature(heldout._measure_paired_latency).parameters
+    assert parameters["repetitions_per_context"].default is None
+    evidence = heldout.PsychometricRoutingEvidence()
+    with pytest.raises(ValueError, match="repetitions_per_context"):
+        heldout._measure_paired_latency(evidence, evidence)
+    with pytest.raises(ValueError, match="repetitions_per_context"):
+        heldout._measure_paired_latency(
+            evidence, evidence, repetitions_per_context=True
+        )
+
+
+def test_paired_latency_uses_declared_repetition_count(monkeypatch) -> None:
+    """The declared repetition count is the actual per-context timing loop."""
+    monkeypatch.setattr(heldout, "TRAIN_CONTEXTS", 2)
+    calls = {"count": 0}
+    evidence = heldout.PsychometricRoutingEvidence()
+
+    def ranked(*_args, **_kwargs):
+        """Count ranking calls without exercising live routing work."""
+        calls["count"] += 1
+        return [("model_0", 1.0)]
+
+    monkeypatch.setattr(evidence, "ranked_evidence", ranked)
+    heldout._measure_paired_latency(
+        evidence, evidence, repetitions_per_context=3
+    )
+    assert calls["count"] == 12
+
+
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
     """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
     parameters = inspect.signature(heldout._validate_sequential_drift).parameters

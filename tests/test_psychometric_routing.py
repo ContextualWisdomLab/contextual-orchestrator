@@ -153,7 +153,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     monkeypatch.setattr(
         heldout_benchmark,
         "_measure_paired_latency",
-        lambda _baseline, _candidate: (
+        lambda _baseline, _candidate, **_kwargs: (
             {"decision_p50_ms": 1.0, "decision_p95_ms": 1.0},
             {"decision_p50_ms": 2.0, "decision_p95_ms": 2.0},
             [1.0] * heldout_benchmark.TRAIN_CONTEXTS,
@@ -165,7 +165,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
 
     assert (
         report["latency_repetitions_per_context"]
-        == heldout_benchmark.LATENCY_REPETITIONS
+        == heldout_benchmark.DECLARED_LATENCY_REPETITIONS_PER_CONTEXT
     )
     assert report["delta"].keys() == report["delta_interval"].keys()
     for metric, point in report["delta"].items():
