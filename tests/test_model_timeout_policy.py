@@ -1,8 +1,8 @@
 """Administrator-owned model timeout policy must survive configuration changes."""
 
-from pathlib import Path
-from dataclasses import replace
 import sqlite3
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 

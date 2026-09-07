@@ -10,19 +10,19 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 
 def _seed() -> list[ModelAgent]:
@@ -569,7 +569,7 @@ def test_http_create_and_delete_worker_agents() -> None:
         status, read = _call(f"{base}/general_agent", "GET", token)
         assert status == 200 and read["stream_usage_supported"] is True
 
-        status, dup = _call(base, "POST", token, NEW_AGENT)
+        status, _ = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
 
         status, wrong_pool = _call(
