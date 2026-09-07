@@ -79,9 +79,9 @@ reviewed immutable release and successful live capability evidence.
 ## Credential example reference
 
 The README streams the private token file into curl's header input, rather than
-exporting the bearer or including it in command arguments. The documented shell
-pipeline is executed by a unit test using a local curl double; it performs no
-provider call. curl documents `--header @-` as reading headers from stdin.
+exporting the bearer or including it in command arguments. The unit test verifies the documented pipeline shape, then invokes the local
+curl double through fixed argv and stdin; README-controlled text is never passed
+to a shell and no provider call occurs. curl documents `--header @-` as reading headers from stdin.
 
 curl project. (n.d.). *curl man page: --header*.
 <https://curl.se/docs/manpage.html#-H>
