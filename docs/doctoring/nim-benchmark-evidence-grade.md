@@ -388,8 +388,8 @@ operator declaration. `_validate_assignment_design` now requires
 `trial_count`. The harness run writes 24,000 as this run's choice and
 records `trials`.
 
-This slice does not change production route/conduct defaults. Other harness
-sample sizes remain later work.
+This slice does not change production route/conduct defaults. Candidate-group
+DIF sample size is the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -399,6 +399,27 @@ sequenceDiagram
     Operator->>Assignment: Trial count
     Assignment->>Assignment: Fail closed on missing or non-positive declarations
     Assignment->>Report: Inverse-propensity RMSE and declared trial count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared candidate-group DIF sample size (2026-09-08, proposed)
+
+The purified logistic DIF screen used a hidden 4,000-row two-group sample.
+That number chose Monte Carlo precision without an operator declaration.
+`_validate_candidate_group_dif` now requires an even `sample_size`. The
+harness run writes 4,000 as this run's choice and records `sample_size`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Dif as Purified logistic DIF
+    participant Report as Held-out report
+    Operator->>Dif: Even sample size
+    Dif->>Dif: Fail closed on missing, non-positive, or odd declarations
+    Dif->>Report: Flagged items and declared sample size
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 

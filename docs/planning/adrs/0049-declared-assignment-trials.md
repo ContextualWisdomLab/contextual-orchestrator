@@ -60,5 +60,6 @@ declaration.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Candidate-group DIF sample size moves to ADR 0050. Other repository-authored
+harness sample sizes stay open. This ADR is Proposed until independent
+review and protected delivery.
