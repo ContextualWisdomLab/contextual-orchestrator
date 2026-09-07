@@ -2,6 +2,15 @@
 
 ## 2026-09-07 planned observation completeness repair (local)
 
+Integration follow-up: local coverage commit `e94dd035` preserves remote
+`f1662dcd` / `d217c053` through merge `f0ec6315`. That merge exposed 14
+failures because a tied hindsight maximum aborted all report publication.
+The follow-up retains no winner on ties while preserving observations and
+unrelated policy comparisons. A targeted regression first failed (1.04s).
+The combined benchmark, workflow-contract, and release-acceptance suites then
+passed 163 tests in 79.66s. These results precede this documentation update;
+new-head hosted checks and protected integration remain required.
+
 At PR #1074 base `77545c3a10041d65a7ce12d3d77268a5b7895f8d`, removing
 one task from every policy in a real dry-run report still allowed artifact
 publication. The writer regression failed as expected (one failure, 11.55s).

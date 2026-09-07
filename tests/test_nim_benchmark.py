@@ -1776,11 +1776,20 @@ def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
             _synthetic_cell("direct_single_worker:vendor/model-b", "task_one", 1.0),
         ]
     )
-    with pytest.raises(
-        nb.BenchmarkContractError,
-        match="hindsight comparison has no unique quality maximum",
-    ):
-        nb.best_single_worker_hindsight(tied)
+    assert nb.best_single_worker_hindsight(tied) is None
+    cells = [
+        _synthetic_cell(policy, "task_one", 1.0)
+        for policy in (
+            "direct_single_worker:vendor/model-a",
+            "direct_single_worker:vendor/model-b",
+            "route_once",
+            "conduct_bounded",
+        )
+    ]
+    comparisons = nb.paired_policy_comparisons(cells, seed=3)
+    assert len(comparisons) == 1
+    assert comparisons[0]["policy_a"] == "conduct_bounded"
+    assert comparisons[0]["policy_b"] == "route_once"
 
 
 def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
@@ -2245,8 +2254,14 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
             first["catalog_snapshot"]["invalid_entries"][0]["invalid_reason"]
             == "missing_model_id"
         )
-        # The evaluation compares every required system.
-        assert first["evaluation"]["best_single_worker_hindsight"] is not None
+        # Tied dry-run workers do not invent a unique hindsight selection.
+        direct_scores = [
+            row["mean_task_score"]
+            for row in first["evaluation"]["policy_summaries"]
+            if row["policy_name"].startswith("direct_single_worker:")
+        ]
+        assert direct_scores.count(max(direct_scores)) > 1
+        assert first["evaluation"]["best_single_worker_hindsight"] is None
         assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
         assert first["evaluation"]["paired_comparisons"]
         # Deterministic artifacts: identical reports across runs.

@@ -213,6 +213,9 @@ terminal outcome, including a failure or timeout. A fast failure is therefore
 visible alongside its zero delivery reward; lower elapsed time alone is not an
 improvement in service. The intervals condition on the common task set and the
 selected policies, including the explicitly labelled hindsight worker.
+When direct workers tie for the highest quality, no unique hindsight worker
+is selected and its comparisons are omitted. The observations and other policy
+comparisons remain available; model names never break a quality tie.
 
 Reports using version 1 compared only jointly successful tasks. Their values
 must not be pooled with version 2 or 3, and the validator rejects old schemas.

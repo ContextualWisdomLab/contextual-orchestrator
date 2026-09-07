@@ -2439,7 +2439,7 @@ def summarize_policies(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def best_single_worker_hindsight(
     summaries: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """The best direct single worker selected in hindsight on the locked split."""
+    """Return the unique hindsight leader, or no selection when absent or tied."""
     direct = [
         row
         for row in summaries
@@ -2450,9 +2450,7 @@ def best_single_worker_hindsight(
     maximum_score = max(row["mean_task_score"] for row in direct)
     leaders = [row for row in direct if row["mean_task_score"] == maximum_score]
     if len(leaders) != 1:
-        raise BenchmarkContractError(
-            "hindsight comparison has no unique quality maximum"
-        )
+        return None
     best = leaders[0]
     return {
         "policy_name": best["policy_name"],
