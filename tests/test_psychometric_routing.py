@@ -59,10 +59,17 @@ def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
     assert _expected_brier(1.0, 0.5) == 0.5
 
 
+DECLARED_HELDOUT_BOOTSTRAP = {
+    "resample_count": heldout_benchmark.DECLARED_BOOTSTRAP_RESAMPLE_COUNT,
+    "confidence_level": heldout_benchmark.DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL,
+    "seed": heldout_benchmark.DECLARED_BOOTSTRAP_SEED,
+}
+
+
 def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
     """Keep a constant within-context delta constant in every bootstrap replicate."""
     assert _paired_bootstrap_mean_ci(
-        [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]
+        [0.1, 0.2, 0.3], [0.2, 0.3, 0.4], **DECLARED_HELDOUT_BOOTSTRAP
     ) == pytest.approx([-0.1, -0.1])
 
 
@@ -106,6 +113,10 @@ def test_heldout_run_benchmark_requires_declared_bootstrap() -> None:
         heldout_benchmark._validate_adaptive_candidate_calibration
     ).parameters
     assert calibration["resample_count"].default is None
+    with pytest.raises(ValueError, match="resample_count"):
+        heldout_benchmark.run_benchmark()
+    with pytest.raises(ValueError, match="resample_count"):
+        heldout_benchmark._validate_adaptive_candidate_calibration()
 
 
 def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None:
@@ -125,7 +136,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         ),
     )
 
-    report = heldout_benchmark.run_benchmark()
+    report = heldout_benchmark.run_benchmark(**DECLARED_HELDOUT_BOOTSTRAP)
 
     assert (
         report["latency_repetitions_per_context"]
