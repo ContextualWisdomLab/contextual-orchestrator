@@ -1,5 +1,24 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 declared workflow depth and token budgets (proposed)
+
+Successor of the declared paired-bootstrap slice removes hidden
+`MAX_WORKFLOW_DEPTH = 5` and `DEFAULT_MAX_OUTPUT_TOKENS = 264` from
+`contextual_orchestrator/nim_benchmark.py`. Request planning, equal-budget
+cells, CLI, and provenance require positive integer declarations. Missing,
+boolean, or non-positive values fail closed. The equal cell token budget is
+the product of the two declarations. Workflow YAML and tests may still write
+5 and 264 as this run's choices. Report schema stays 4.0.0. ADR 0043 is
+Proposed.
+
+Local three-file coverage on this working tree: NIM statements/branches 100%,
+interrogate 100%, 181 related tests passed. This is not buyer-held-out
+accuracy, p95 latency, or protected merge evidence. Production route/conduct
+defaults stay locked. The psychometric held-out harness's 2,000-sample 95%
+interval remains later no-heuristics work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-07 declared paired-bootstrap coverage (proposed)
 
 Child successor of [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
@@ -16,10 +35,8 @@ defaults.
 Local three-file coverage on this working tree: NIM statements/branches 100%,
 interrogate 100%, 175 related tests passed. This is not buyer-held-out
 accuracy, p95 latency, or protected merge evidence. Production route/conduct
-defaults stay locked. Repository-authored inference/token/workflow budgets
-(`MAX_WORKFLOW_DEPTH`, `DEFAULT_MAX_OUTPUT_TOKENS`) and the psychometric
-held-out harness's 2,000-sample interval remain later no-heuristics work.
-Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+defaults stay locked. Token and workflow-depth budgets are the successor
+slice. Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
 still needs independent review.
 
 ## 2026-09-07 benchmark report identity coverage (proposed)
