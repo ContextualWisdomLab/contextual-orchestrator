@@ -27,9 +27,9 @@ from contextual_orchestrator.psychometric_routing import (  # noqa: E402
 
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 UNSEEN_MODEL_ID = "model_unseen"
-TRAIN_CONTEXTS = 24
 # Script-entry run declarations. Functions take these as required arguments;
 # they are not hidden statistical defaults.
+DECLARED_HELDOUT_CONTEXT_COUNT = 24
 DECLARED_BOOTSTRAP_RESAMPLE_COUNT = 2_000
 DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 DECLARED_BOOTSTRAP_SEED = 568
@@ -164,26 +164,36 @@ def _paired_bootstrap_mean_ci(
     return [means[lower_index], means[upper_index]]
 
 
-def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
+def _build_evidence(
+    *, two_neighbor: bool, context_count: int | None = None
+) -> PsychometricRoutingEvidence:
     """Inject known training probabilities to isolate the warm-start calculation.
 
     Observations establish context identities; replacing the fit cache with
     oracle scores bypasses parameter estimation and cannot validate fit quality.
+    ``context_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
     """
-    evidence = PsychometricRoutingEvidence(
-        max_contexts=TRAIN_CONTEXTS, semantic_warm_start_enabled=two_neighbor
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
     )
-    for context_index in range(TRAIN_CONTEXTS):
-        angle = 2.0 * math.pi * context_index / TRAIN_CONTEXTS
+    evidence = PsychometricRoutingEvidence(
+        max_contexts=declared_context_count,
+        semantic_warm_start_enabled=two_neighbor,
+    )
+    for context_index in range(declared_context_count):
+        angle = 2.0 * math.pi * context_index / declared_context_count
         context = f"train_{context_index}"
         evidence.observe(context, MODEL_IDS[0], True, _vector(angle))
 
     evidence._scores = {
         evidence.context_id(f"train_{context_index}"): {
-            model_id: _probability(model_index, 2.0 * math.pi * context_index / TRAIN_CONTEXTS)
+            model_id: _probability(
+                model_index, 2.0 * math.pi * context_index / declared_context_count
+            )
             for model_index, model_id in enumerate(MODEL_IDS)
         }
-        for context_index in range(TRAIN_CONTEXTS)
+        for context_index in range(declared_context_count)
     }
     evidence._fit_revision = evidence._revision
     return evidence
@@ -191,21 +201,28 @@ def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
 
 def _evaluate_quality(
     evidence: PsychometricRoutingEvidence,
+    *,
+    context_count: int | None = None,
 ) -> tuple[dict[str, float], dict[str, list[float]]]:
     """Compare half-step held-out contexts against the synthetic probability law.
 
     Return aggregate diagnostics and per-context samples for paired comparison.
     Calibration regresses true logits on predicted logits, not observed labels;
     Brier and log loss are expectations under the declared Bernoulli law.
+    ``context_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
     """
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
+    )
     context_brier: list[float] = []
     context_log_loss: list[float] = []
     context_calibration_logit_rmse: list[float] = []
     predicted_logits: list[float] = []
     truth_logits: list[float] = []
     regrets: list[float] = []
-    for context_index in range(TRAIN_CONTEXTS):
-        angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
+    for context_index in range(declared_context_count):
+        angle = 2.0 * math.pi * (context_index + 0.5) / declared_context_count
         context = f"held_out_{context_index}"
         vector = _vector(angle)
         ranked = evidence.ranked_evidence(MODEL_IDS, context, vector)
@@ -261,23 +278,29 @@ def _measure_paired_latency(
     baseline: PsychometricRoutingEvidence,
     candidate: PsychometricRoutingEvidence,
     *,
+    context_count: int | None = None,
     repetitions_per_context: int | None = None,
 ) -> tuple[dict[str, float], dict[str, float], list[float], list[float]]:
     """Time ranking calls in milliseconds, alternating policy order per context.
 
     Keep every repetition, including the first. Return pooled timing summaries
     and each policy's context medians; neither measures end-to-end model calls.
-    ``repetitions_per_context`` is a required declaration. ``None`` is a
-    fail-closed sentinel, not a statistical default.
+    ``context_count`` and ``repetitions_per_context`` are required
+    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
     """
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
+    )
     declared_repetitions = _require_declared_positive_int(
         repetitions_per_context, "repetitions_per_context"
     )
     all_samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
     context_medians: dict[str, list[float]] = {"baseline": [], "candidate": []}
-    for context_index in range(TRAIN_CONTEXTS):
+    for context_index in range(declared_context_count):
         context = f"held_out_{context_index}"
-        vector = _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS)
+        vector = _vector(
+            2.0 * math.pi * (context_index + 0.5) / declared_context_count
+        )
         samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
         for repetition in range(declared_repetitions):
             ordered = (
@@ -319,8 +342,8 @@ def _validate_assignment_design(
     observations = {model_id: 0 for model_id in MODEL_IDS}
     minimum_probability = EXPLORATION_RATE / len(MODEL_IDS)
     for trial_index in range(ASSIGNMENT_TRIALS):
-        context_index = trial_index % TRAIN_CONTEXTS
-        angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
+        context_index = trial_index % DECLARED_HELDOUT_CONTEXT_COUNT
+        angle = 2.0 * math.pi * (context_index + 0.5) / DECLARED_HELDOUT_CONTEXT_COUNT
         context = f"held_out_{context_index}"
         ranked = evidence.ranked_evidence(MODEL_IDS, context, _vector(angle))
         probabilities = {model_id: minimum_probability for model_id in MODEL_IDS}
@@ -347,9 +370,9 @@ def _validate_assignment_design(
         model_id: statistics.fmean(
             _probability(
                 model_index,
-                2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS,
+                2.0 * math.pi * (context_index + 0.5) / DECLARED_HELDOUT_CONTEXT_COUNT,
             )
-            for context_index in range(TRAIN_CONTEXTS)
+            for context_index in range(DECLARED_HELDOUT_CONTEXT_COUNT)
         )
         for model_index, model_id in enumerate(MODEL_IDS)
     }
@@ -1789,10 +1812,19 @@ def run_benchmark(
         confidence_level=confidence_level,
         seed=seed,
     )
-    baseline_evidence = _build_evidence(two_neighbor=False)
-    candidate_evidence = _build_evidence(two_neighbor=True)
-    baseline, baseline_samples = _evaluate_quality(baseline_evidence)
-    candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    context_count = DECLARED_HELDOUT_CONTEXT_COUNT
+    baseline_evidence = _build_evidence(
+        two_neighbor=False, context_count=context_count
+    )
+    candidate_evidence = _build_evidence(
+        two_neighbor=True, context_count=context_count
+    )
+    baseline, baseline_samples = _evaluate_quality(
+        baseline_evidence, context_count=context_count
+    )
+    candidate, candidate_samples = _evaluate_quality(
+        candidate_evidence, context_count=context_count
+    )
     adaptive_candidate_calibration = _validate_adaptive_candidate_calibration(
         **bootstrap
     )
@@ -1801,10 +1833,10 @@ def run_benchmark(
             candidate_evidence.ranked_evidence(
                 (UNSEEN_MODEL_ID,),
                 f"held_out_{context_index}",
-                _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS),
+                _vector(2.0 * math.pi * (context_index + 0.5) / context_count),
             )
         )
-        for context_index in range(TRAIN_CONTEXTS)
+        for context_index in range(context_count)
     )
     predictive_fit = {
         "method": "cross_validated_prediction_tasks",
@@ -1819,8 +1851,8 @@ def run_benchmark(
             "status": "failed_no_prediction",
             "candidates": "held_out",
             "items": "existing",
-            "contexts": TRAIN_CONTEXTS,
-            "prediction_coverage": unseen_predictions / TRAIN_CONTEXTS,
+            "contexts": context_count,
+            "prediction_coverage": unseen_predictions / context_count,
             "known_limit": (
                 "the router emits no psychometric estimate for an unseen "
                 "candidate deployment"
@@ -1856,6 +1888,7 @@ def run_benchmark(
         _measure_paired_latency(
             baseline_evidence,
             candidate_evidence,
+            context_count=context_count,
             repetitions_per_context=DECLARED_LATENCY_REPETITIONS_PER_CONTEXT,
         )
     )
@@ -2121,8 +2154,8 @@ def run_benchmark(
         "bootstrap_samples": bootstrap["resample_count"],
         "bootstrap_confidence_level": bootstrap["confidence_level"],
         "bootstrap_seed": bootstrap["seed"],
-        "contexts_held_out": TRAIN_CONTEXTS,
-        "contexts_train": TRAIN_CONTEXTS,
+        "contexts_held_out": context_count,
+        "contexts_train": context_count,
         "delta": delta,
         "delta_interval": delta_interval,
         "models": len(MODEL_IDS),
