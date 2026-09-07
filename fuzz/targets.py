@@ -340,22 +340,34 @@ def exercise_redaction(text: str) -> None:
 
 
 def _mock_orchestrator() -> TaskOrchestrator:
-    agents = [
-        ModelAgent(id="general_agent", model="mock-generalist", base_url="mock://generalist",
-                   tags=("reasoning", "writing", "planning"), priority=1),
-        ModelAgent(id="builder_agent", model="mock-builder", base_url="mock://builder",
-                   tags=("coding", "debugging", "implementation"), priority=2),
-        ModelAgent(id="reviewer_agent", model="mock-reviewer", base_url="mock://reviewer",
-                   tags=("verification", "security", "review"), priority=3),
-    ]
-    return TaskOrchestrator(agents)
+    """Build an offline fixture with no model-selection decision to allocate."""
+    agent = ModelAgent(
+        id="fuzz_fixture_agent",
+        model="mock-fuzz-fixture",
+        base_url="mock://fuzz-fixture",
+        tags=(
+            "reasoning",
+            "writing",
+            "planning",
+            "research",
+            "coding",
+            "debugging",
+            "implementation",
+            "verification",
+            "security",
+            "review",
+        ),
+    )
+    return TaskOrchestrator([agent])
 
 
 def exercise_orchestration(prompt: str, mode: str) -> None:
     """Run a full orchestration on arbitrary prompt text against mock providers.
 
-    Exercises ``_latest_user_text`` -> ``_needs_workflow`` -> ``_score_agent`` ->
-    route/conduct -> trace assembly -> SSE framing, all offline via ``mock://``.
+    Exercises ``_latest_user_text`` -> ``_needs_workflow`` -> explicit
+    single-agent route/conduct -> trace assembly -> SSE framing, all offline via
+    ``mock://``. Ambiguous multi-agent selection is covered by the dedicated
+    no-heuristics contract tests.
     """
     orchestrator = _mock_orchestrator()
     if mode not in server.ALLOWED_MODES:

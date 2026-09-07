@@ -2,8 +2,8 @@
 """Atheris coverage-guided harness: end-to-end orchestration on arbitrary prompt.
 
 Surface: ``orchestrator.TaskOrchestrator.run`` against ``mock://`` providers --
-drives prompt classification, agent scoring, route/conduct, trace assembly, and
-SSE framing entirely offline.
+drives prompt classification, explicit single-agent route/conduct, trace
+assembly, and SSE framing entirely offline.
 
 Run locally::
 
