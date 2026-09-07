@@ -164,6 +164,11 @@ released commit can have been `main`'s verified tip moments earlier rather
 than the newest tip. Cut a new patch/minor release from the intended current
 tip; never move or overwrite the earlier immutable tag.
 
+An existing SBOM asset is downloaded and compared byte-for-byte with the
+verified artifact before publication succeeds. Matching filenames alone are
+insufficient. A download failure or different content fails the run without
+overwriting the asset; investigate the provenance mismatch before retrying.
+
 A Release object can also exist temporarily without its required SBOM when
 `gh release create` succeeds and a later asset upload fails. That state is
 **not** a successful canonical release run: the workflow fails closed and a

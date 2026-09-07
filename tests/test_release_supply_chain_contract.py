@@ -1,6 +1,11 @@
 """Release tag identity and mandatory SBOM supply-chain contract."""
 
 from pathlib import Path
+import os
+import subprocess
+import textwrap
+
+import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -42,3 +47,48 @@ def test_sbom_asset_attachment_is_fail_closed() -> None:
     assert "release is published without it" not in attach_block
     assert 'gh release upload "v${RELEASE_VERSION}"' in attach_block
     assert "exit 1" in attach_block
+
+
+@pytest.mark.parametrize("scenario,success", [
+    ("same", True), ("different", False), ("absent", True),
+    ("download_failure", False), ("upload_failure", False),
+])
+def test_sbom_attachment_checks_remote_bytes(tmp_path: Path, scenario: str, success: bool) -> None:
+    """Execute the real attachment step; name equality cannot prove immutability."""
+    block = _workflow_text().split("      - name: Attach required release SBOM\n", 1)[1]
+    script = textwrap.dedent(block.split("        run: |\n", 1)[1])
+    evidence_dir = tmp_path / "sbom-download"
+    evidence_dir.mkdir()
+    (evidence_dir / "cyclonedx-sbom.json").write_text('{"serialNumber":"expected"}')
+    stub = tmp_path / "gh"
+    stub.write_text('''#!/bin/bash
+set -eu
+case "$2" in
+  view)
+    if [ "$SCENARIO" != absent ] && [ "$SCENARIO" != upload_failure ] || [ -f uploaded ]; then
+      echo cyclonedx-sbom.json
+    fi ;;
+  upload)
+    [ "$SCENARIO" != upload_failure ] || exit 1
+    touch uploaded ;;
+  download)
+    [ "$SCENARIO" != download_failure ] || exit 1
+    while [ "$1" != --dir ]; do shift; done
+    mkdir -p "$2"
+    if [ "$SCENARIO" = different ]; then
+      echo different > "$2/cyclonedx-sbom.json"
+    else
+      cp sbom-download/cyclonedx-sbom.json "$2/cyclonedx-sbom.json"
+    fi ;;
+  *) exit 99 ;;
+esac
+''')
+    stub.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+             "SCENARIO": scenario, "RELEASE_VERSION": "0.2.0",
+             "GITHUB_REPOSITORY": "example/test"},
+    )
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    assert (tmp_path / "uploaded").exists() is (scenario == "absent")

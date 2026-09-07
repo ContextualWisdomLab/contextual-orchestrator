@@ -335,10 +335,10 @@ def test_required_release_asset_attach_always_runs_and_fails_closed() -> None:
     # `Create the GitHub Release` ran or was skipped as already-resumed.
     assert "if:" not in step_header
     assert "set -euo pipefail" in attach_step
-    assert "if ! gh release upload" in attach_step
+    assert "elif ! gh release upload" in attach_step
     assert "::error::" in attach_step
     assert "exit 1" in attach_step
-    assert "--clobber" in attach_step
+    assert "--clobber" not in attach_step
 
 
 # --- Confirmed-absence vs transient-failure, and ancestor-vs-conflict,

@@ -66,7 +66,7 @@ permissions:
 # before GitHub has even created the entries, and filtering an empty/partial
 # list for "not complete+green" is vacuously empty too -- which previously
 # let a release publish before Security/Fuzz/CodeQL had even started (Devin
-# finding). Kept in sync with those three workflows' job `name:` values by
+# finding). Kept in sync with the integrated workflow's job `name:` values by
 # tests/test_release_workflow_contract.py; update this list in the same PR
 # that adds, removes, or renames a push-triggered quality job.
 env:
@@ -393,15 +393,22 @@ jobs:
           fi
           attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           if printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
-            echo "::notice::cyclonedx-sbom.json is already attached to v${RELEASE_VERSION}; mandatory asset is present."
-            exit 0
-          fi
-          if ! gh release upload "v${RELEASE_VERSION}" "${sbom_file}" --repo "${GITHUB_REPOSITORY}" --clobber; then
+            echo "::notice::Existing SBOM will be compared with the verified artifact."
+          elif ! gh release upload "v${RELEASE_VERSION}" "${sbom_file}" --repo "${GITHUB_REPOSITORY}"; then
             echo "::error::Could not attach mandatory cyclonedx-sbom.json to v${RELEASE_VERSION}; release workflow is failing closed. Re-dispatch to resume the asset attachment without moving the tag." >&2
             exit 1
           fi
           attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           if ! printf '%s\n' "${attached}" | grep -qxF "cyclonedx-sbom.json"; then
             echo "::error::GitHub Release does not report the mandatory cyclonedx-sbom.json after upload; release workflow is failing closed." >&2
+            exit 1
+          fi
+          remote_dir="$(mktemp -d)"
+          if ! gh release download "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern cyclonedx-sbom.json --dir "${remote_dir}"; then
+            echo "::error::Cannot retrieve the published SBOM for content verification." >&2
+            exit 1
+          fi
+          if ! cmp -s "${sbom_file}" "${remote_dir}/cyclonedx-sbom.json"; then
+            echo "::error::Published SBOM differs from verified evidence; refusing to overwrite it." >&2
             exit 1
           fi
