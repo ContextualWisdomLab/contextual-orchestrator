@@ -34,7 +34,7 @@ DECLARED_BOOTSTRAP_RESAMPLE_COUNT = 2_000
 DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 DECLARED_BOOTSTRAP_SEED = 568
 DECLARED_LATENCY_REPETITIONS_PER_CONTEXT = 200
-ASSIGNMENT_TRIALS = 24_000
+DECLARED_ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
 DIF_SAMPLE_SIZE = 4_000
@@ -334,14 +334,23 @@ def _measure_paired_latency(
 
 def _validate_assignment_design(
     evidence: PsychometricRoutingEvidence,
+    *,
+    trial_count: int | None = None,
 ) -> dict[str, object]:
-    """Validate a preregistered positive-propensity logging design on known truth."""
+    """Validate a preregistered positive-propensity logging design on known truth.
+
+    ``trial_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_trial_count = _require_declared_positive_int(
+        trial_count, "trial_count"
+    )
     generator = random.Random(ASSIGNMENT_SEED)
     weighted_rewards = {model_id: [] for model_id in MODEL_IDS}
     observed_rewards = {model_id: [] for model_id in MODEL_IDS}
     observations = {model_id: 0 for model_id in MODEL_IDS}
     minimum_probability = EXPLORATION_RATE / len(MODEL_IDS)
-    for trial_index in range(ASSIGNMENT_TRIALS):
+    for trial_index in range(declared_trial_count):
         context_index = trial_index % DECLARED_HELDOUT_CONTEXT_COUNT
         angle = 2.0 * math.pi * (context_index + 0.5) / DECLARED_HELDOUT_CONTEXT_COUNT
         context = f"held_out_{context_index}"
@@ -399,7 +408,7 @@ def _validate_assignment_design(
     confidence_intervals: dict[str, list[float]] = {}
     covered = 0
     for model_id, values in weighted_rewards.items():
-        standard_error = statistics.stdev(values) / math.sqrt(ASSIGNMENT_TRIALS)
+        standard_error = statistics.stdev(values) / math.sqrt(declared_trial_count)
         interval = [
             estimates[model_id] - 1.96 * standard_error,
             estimates[model_id] + 1.96 * standard_error,
@@ -410,7 +419,7 @@ def _validate_assignment_design(
         "assignment_mechanism": "epsilon_greedy",
         "exploration_rate": EXPLORATION_RATE,
         "minimum_assignment_probability": minimum_probability,
-        "trials": ASSIGNMENT_TRIALS,
+        "trials": declared_trial_count,
         "seed": ASSIGNMENT_SEED,
         "observations_by_candidate": observations,
         "inverse_propensity_value": estimates,
@@ -1860,7 +1869,9 @@ def run_benchmark(
             "calibration_screen": adaptive_candidate_calibration,
         },
     }
-    assignment_design = _validate_assignment_design(candidate_evidence)
+    assignment_design = _validate_assignment_design(
+        candidate_evidence, trial_count=DECLARED_ASSIGNMENT_TRIALS
+    )
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
     candidate_roster_invariance = _validate_candidate_roster_invariance()
