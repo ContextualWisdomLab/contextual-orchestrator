@@ -9,18 +9,19 @@ Sampling temperature is not reasoning effort.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.reasoning_effort_profile import (
     PROFILE_VERSION,
     WORKFLOW_ROLES,
     EffortProfileError,
+    _estimated_tokens_used,
     apply_request_profile,
     default_role_effort_catalog,
     estimate_theta,
@@ -29,7 +30,6 @@ from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     production_default_change_allowed,
     run_equal_budget_ablation,
     snapshot_role_effort_catalog,
-    _estimated_tokens_used,
 )
 
 
