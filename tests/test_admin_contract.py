@@ -167,6 +167,39 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Field encryption and audited release" not in ADMIN_HTML
 
 
+def test_timeout_audit_renders_operator_copy_not_internal_json() -> None:
+    """Execute the real renderer with a timeout event, without a browser mock UI."""
+    start = ADMIN_HTML.index("function renderAudit()")
+    end = ADMIN_HTML.index("function renderSecondaryViews()", start)
+    script = "\n".join([
+        'import assert from "node:assert/strict";',
+        f"const translations = {json.dumps(ADMIN_TRANSLATIONS)};",
+        'let currentLang = "ko";',
+        'const t = key => translations[currentLang][key] || key;',
+        'const escapeHtml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(\'"\', "&quot;");',
+        'const els = {auditRows: {innerHTML: ""}};',
+        'const state = {recent_audit_events: [{event_type: "model_timeout_policy_changed", created_at: 1788758435, event_detail: {worker_agent_id: "audit_worker", revision: 1, restored_from_revision: null}}]};',
+        ADMIN_HTML[start:end],
+        'renderAudit();',
+        'assert(!els.auditRows.innerHTML.includes("model_timeout_policy_changed"));',
+        'assert(!els.auditRows.innerHTML.includes("worker_agent_id"));',
+        'assert(els.auditRows.innerHTML.includes("audit_worker"));',
+        'for (const lang of ["en", "ko"]) {',
+        'currentLang = lang;',
+        'state.recent_audit_events[0].event_detail = {worker_agent_id: "x".repeat(300) + "<script>alert(1)</script>", revision: 3, restored_from_revision: 1};',
+        'state.recent_audit_events[0].created_at = "invalid";',
+        'renderAudit();',
+        'assert(els.auditRows.innerHTML.includes(t("audit_timeout_restored")));',
+        'assert(els.auditRows.innerHTML.includes(t("audit_date_unknown")));',
+        'assert(els.auditRows.innerHTML.includes("x".repeat(300)));',
+        'assert(!els.auditRows.innerHTML.includes("<script>"));',
+        'assert(els.auditRows.innerHTML.includes("&lt;script&gt;"));',
+        '}',
+    ])
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_model_group_mutations_refresh_audit_events() -> None:
     """Model-group mutations refresh the shared Audit view."""
     assert "async function refreshAuditEvents()" in ADMIN_HTML
