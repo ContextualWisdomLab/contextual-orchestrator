@@ -15,24 +15,25 @@ import io
 import json
 import os
 import socket
+import sys
 import tempfile
 import threading
 import urllib.error
 from pathlib import Path
-import sys
+from typing import ClassVar
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import nim_benchmark as nb  # noqa: E402
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator import nim_benchmark as nb
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import (  # noqa: E402
+from contextual_orchestrator.orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
@@ -164,8 +165,8 @@ class _FakeDirectResponse:
 class _FakeDirectConnection:
     """Scripted pinned connection that records address and authority evidence."""
 
-    plans: list[object] = []
-    instances: list["_FakeDirectConnection"] = []
+    plans: ClassVar[list[object]] = []
+    instances: ClassVar[list[_FakeDirectConnection]] = []
 
     def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
         self.server_hostname = server_hostname
@@ -658,7 +659,7 @@ def test_probe_supported_chat() -> None:
 
 def test_probe_timeout_and_network_failures() -> None:
     def timeout_transport(method, url, headers, body):
-        raise socket.timeout("slow")
+        raise TimeoutError("slow")
 
     def broken_transport(method, url, headers, body):
         raise ConnectionResetError("reset")
@@ -1274,7 +1275,7 @@ def test_cell_usage_rejects_unknown_agent_as_contract_error() -> None:
 def test_run_error_classification() -> None:
     assert nb._classify_run_error(TimeoutError("slow")) == "timeout"
     wrapped = RuntimeError("provider failed")
-    wrapped.__cause__ = socket.timeout("slow")
+    wrapped.__cause__ = TimeoutError("slow")
     assert nb._classify_run_error(wrapped) == "timeout"
     assert nb._classify_run_error(ValueError("bad")) == "failure"
 
@@ -2247,16 +2248,15 @@ def test_live_run_fails_closed_without_credential(
 ) -> None:
     """Require a credential after isolating the reviewed-cost validity window."""
     _assume_current_cost_evidence(monkeypatch)
-    with tempfile.TemporaryDirectory() as tmp:
-        with pytest.raises(NotConfigured):
-            nb.run_benchmark(
-                "live",
-                TASK_MANIFEST_PATH,
-                None,
-                tmp,
-                git_sha="a" * 40,
-                workflow_run_id="run-1",
-            )
+    with tempfile.TemporaryDirectory() as tmp, pytest.raises(NotConfigured):
+        nb.run_benchmark(
+            "live",
+            TASK_MANIFEST_PATH,
+            None,
+            tmp,
+            git_sha="a" * 40,
+            workflow_run_id="run-1",
+        )
 
 
 def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:

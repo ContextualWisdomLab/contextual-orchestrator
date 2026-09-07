@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
-from pathlib import Path
 import subprocess
 import sys
 import threading
 import urllib.parse
+from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -21,7 +21,6 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import ModelClient
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")

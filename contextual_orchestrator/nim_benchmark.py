@@ -59,8 +59,9 @@ import time
 import urllib.error
 import urllib.parse
 import wave
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any
 
 from .conventions import is_two_word_snake_case
 from .credentials import NotConfigured, get_credential, register_credential
@@ -785,7 +786,6 @@ def discover_model_catalog(
         urllib.error.URLError,
         TimeoutError,
         ConnectionError,
-        socket.timeout,
         socket.gaierror,
     ) as exc:
         raise CatalogDiscoveryError(
@@ -1238,7 +1238,7 @@ def execute_capability_probe(
     started = timer()
     try:
         status, body = transport("POST", url, headers, spec["body"](model_id))
-    except (TimeoutError, socket.timeout) as exc:
+    except TimeoutError as exc:
         return _probe_row(
             capability_name,
             "timeout",
@@ -1700,7 +1700,7 @@ def validate_live_pricing_scenario(
 
     Omitting a scenario is valid and leaves every hypothetical cost ``unknown``.
     Supplying one requires an explicit reviewed status, complete provenance, and
-    a validity horizon that includes the run date.
+    a validity horizon that includes the run date in the system local timezone.
     """
     if scenario is None:
         return
@@ -1709,7 +1709,9 @@ def validate_live_pricing_scenario(
             "live benchmark pricing scenario must be independently reviewed"
         )
     _validate_reviewed_pricing_metadata(scenario)
-    observed_date = today or datetime_module.date.today()
+    observed_date = today or (
+        datetime_module.datetime.now(datetime_module.timezone.utc).astimezone().date()
+    )
     reviewed_at = _parse_evidence_date(scenario["reviewed_at_date"], "reviewed_at_date")
     valid_until = _parse_evidence_date(scenario["valid_until_date"], "valid_until_date")
     if reviewed_at > observed_date:
@@ -2590,8 +2592,10 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
 def _require_current_actual_cost_evidence(
     today: datetime_module.date | None = None,
 ) -> None:
-    """Fail closed after the reviewed hosted-access validity horizon."""
-    observed_date = today or datetime_module.date.today()
+    """Fail closed after the validity horizon using the system local date."""
+    observed_date = today or (
+        datetime_module.datetime.now(datetime_module.timezone.utc).astimezone().date()
+    )
     reviewed_at = _parse_evidence_date(
         ACTUAL_COST_EVIDENCE["reviewed_at_date"],
         "reviewed_at_date",
@@ -2815,10 +2819,14 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- workflow run id: `{report['provenance']['workflow_run_id']}`",
         f"- catalog snapshot sha256: `{report['provenance']['catalog_snapshot_sha256']}`",
         f"- discovered models: {report['catalog_snapshot']['discovered_model_count']}",
-        f"- requests spent: {report['request_budget']['requests_spent']}"
-        f" / {report['request_budget']['max_total_requests']}",
-        f"- complete request plan: {report['request_budget']['planned_total_requests']} "
-        "(catalog + all capability probes + evaluation reserve)",
+        (
+            f"- requests spent: {report['request_budget']['requests_spent']}"
+            f" / {report['request_budget']['max_total_requests']}"
+        ),
+        (
+            f"- complete request plan: {report['request_budget']['planned_total_requests']} "
+            "(catalog + all capability probes + evaluation reserve)"
+        ),
         f"- evidence status: `{report['evaluation']['evidence_status']}`",
         f"- decision use: `{report['evaluation']['decision_use']}`",
         "",
@@ -2846,10 +2854,12 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "",
         "## Paired comparisons (95% bootstrap CI)",
         "",
-        "Differences are A minus B on all shared locked tasks. Failed delivery "
-        "earns zero task reward; the original unscored answer remains unknown. "
-        "Elapsed time includes failures and timeouts, so faster termination "
-        "alone does not establish better service.",
+        (
+            "Differences are A minus B on all shared locked tasks. Failed delivery "
+            "earns zero task reward; the original unscored answer remains unknown. "
+            "Elapsed time includes failures and timeouts, so faster termination "
+            "alone does not establish better service."
+        ),
         "",
     ]
     for comparison in report["evaluation"]["paired_comparisons"]:
