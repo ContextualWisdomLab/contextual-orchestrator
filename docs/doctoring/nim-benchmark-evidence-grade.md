@@ -211,6 +211,38 @@ Current-head full/hosted verification, independent review and protected release
 remain separate gates. This corrects report provenance and cohort isolation;
 it does not establish probability sampling, model accuracy or faster decisions.
 
+### Declared paired-bootstrap coverage (2026-09-07, proposed)
+
+The previous paired comparison used a hidden 2,000-resample 95% percentile
+interval and a hard-coded policy subset (`conduct_bounded` versus `route_once`,
+optional cheapest versus `route_once`, and hindsight pairs when a unique
+winner existed). Those choices were not reconstructible as operator
+declarations. Report version 4 requires `bootstrap_resample_count`,
+`confidence_level`, and `comparison_pairs` in provenance. The method name is
+`paired_bootstrap_percentile`. A coverage that cannot be represented with the
+resample count fails closed. CLI and workflow flags carry the same
+declarations; 2,000 and 0.95 in those files are run choices, not code
+defaults. Hindsight identity remains a measurement field; comparing against it
+requires an explicit pair.
+
+Efron (1979) grounds resampling observed task units. Efron and Tibshirani
+(1993) ground the percentile interval and treat *B* as Monte Carlo precision.
+This slice does not add a statistical dependency or change production
+route/conduct defaults. Token and workflow-depth budgets remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Compare as Paired comparison
+    participant Interval as Percentile interval
+    participant Report as Schema 4 report
+    Operator->>Compare: Policy pairs, resample count, coverage, seed
+    Compare->>Compare: Fail closed on missing or invalid declarations
+    Compare->>Interval: Shared locked-task differences
+    Interval->>Report: Mean difference and declared-coverage interval
+    Note over Operator,Report: Unobserved pairs are omitted; production gates still apply
+```
+
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
 
 The previous paired comparison selected only jointly successful cells even
@@ -460,6 +492,9 @@ of Standards and Technology. https://doi.org/10.6028/NIST.AI.600-1
 Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
 models while reducing cost and improving performance. *arXiv*.
 https://doi.org/10.48550/arXiv.2305.05176
+
+Efron, B., & Tibshirani, R. J. (1993). *An introduction to the bootstrap*.
+Chapman & Hall. https://doi.org/10.1201/9780429246593
 
 Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
 *The Annals of Statistics, 7*(1), 1–26.

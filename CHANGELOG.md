@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- NIM paired comparisons now require a declared resample count, percentile
+  coverage, and policy-pair list. Hidden 2,000-resample 95% defaults and the
+  baked-in conduct/route/cheapest/hindsight subset are removed. Report schema
+  4.0.0 records those declarations; older reports must be regenerated.
 - Benchmark report validation now fails closed on empty evaluation identities,
   invalid identity fields, non-positive task or worker counts, catalog worker
   mismatches, and unknown cheapest-worker skip reasons, so incomplete paired
