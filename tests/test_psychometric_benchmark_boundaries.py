@@ -240,6 +240,25 @@ def test_assignment_design_uses_declared_trial_count(monkeypatch) -> None:
     assert report["trials"] == 40
 
 
+def test_candidate_group_dif_requires_declared_sample_size() -> None:
+    """DIF evidence cannot invent a 4,000-row default."""
+    parameters = inspect.signature(heldout._validate_candidate_group_dif).parameters
+    assert parameters["sample_size"].default is None
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_candidate_group_dif()
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_candidate_group_dif(sample_size=True)
+    with pytest.raises(ValueError, match="even"):
+        heldout._validate_candidate_group_dif(sample_size=3)
+
+
+def test_candidate_group_dif_uses_declared_sample_size() -> None:
+    """The declared sample size is the actual two-group DIF population."""
+    report = heldout._validate_candidate_group_dif(sample_size=40)
+    assert report["sample_size"] == 40
+    assert len(report["expected_dif_items"]) == 1
+
+
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
     """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
     parameters = inspect.signature(heldout._validate_sequential_drift).parameters
