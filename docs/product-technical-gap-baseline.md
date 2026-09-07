@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 statistical owner adoption remains open
+
+The [canonical-owner readiness record](doctoring/prospective-routing-measurement-design.md#canonical-statistical-owner-readiness-2026-09-07)
+links CO #86 to existing RankWeave PR #41 and issue #45. Released RankWeave
+`v0.18.0` at `61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6` and proposed native
+`v0.19.0` at Draft head `529b915c0f2c282d915172f9f75b17caf7016008` must not be
+treated as interchangeable. CO still needs a released statistical contract,
+immutable artifact provenance, installed-artifact conformance, and the real
+prospective experiment. Native calculation timing is not a routing KPI.
+
+Exact CO `621cf4d9cd47d166bd568cfb07a25692c47df210` completed 3612 local tests
+with two optional-dependency skips; its local wheel's 45 Python files matched
+source. These results do not verify this later documentation revision, a
+published release, or buyer outcomes. Hosted tests/package and fuzzing remained
+in progress when inspected; the security job completed successfully. Independent
+review, protected integration, and release remain unproven.
+
 ## 2026-09-07 prospective measurement design remains unexecuted
 
 Proposed follow-up removes the reasoning-effort helper's declaration-only
