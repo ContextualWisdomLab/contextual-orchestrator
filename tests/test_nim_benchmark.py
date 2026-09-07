@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import inspect
 import io
 import json
 import os
@@ -1425,6 +1426,50 @@ def test_planned_evaluation_requests_formula() -> None:
     )
 
 
+def test_planned_evaluation_requests_require_declared_maximum_calls() -> None:
+    """Request planning cannot invent a five-step envelope."""
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=None)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=True)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=0)
+    assert nb.planned_evaluation_requests(3, 10, maximum_calls=4) == 10 * (
+        3 * 2 + 4 + 4 + 2
+    )
+
+
+def test_evaluate_policies_require_declared_workflow_budget() -> None:
+    """Equal-budget cells cannot inherit hidden token or call envelopes."""
+    parameters = inspect.signature(nb.evaluate_policies).parameters
+    assert parameters["total_token_budget"].default is None
+    assert parameters["maximum_calls"].default is None
+    client = ModelClient()
+    agents = _mock_agents("vendor/model-a")
+    with pytest.raises(nb.BenchmarkContractError, match="total_token_budget"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=None,
+            maximum_calls=5,
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=1320,
+            maximum_calls=None,
+        )
+
+
 def test_evaluate_policies_contract_failures() -> None:
     client = ModelClient()
     with pytest.raises(nb.BenchmarkContractError):
@@ -2438,6 +2483,30 @@ def test_run_benchmark_rejects_output_cap_before_egress() -> None:
     assert calls == 0
 
 
+def test_run_benchmark_requires_declared_workflow_budget() -> None:
+    """Output-token and workflow-depth budgets are run declarations."""
+    parameters = inspect.signature(nb.run_benchmark).parameters
+    assert parameters["max_output_tokens"].default is None
+    assert parameters["max_workflow_depth"].default is None
+    with pytest.raises(nb.BenchmarkContractError, match="max_output_tokens"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            **_declared_run_kwargs(),
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="max_workflow_depth"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            max_output_tokens=264,
+            **_declared_run_kwargs(),
+        )
+
+
 def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         first = _dry_report(os.path.join(tmp, "one"))
@@ -2732,6 +2801,20 @@ def test_cli_fails_closed_without_measurement_declaration() -> None:
     assert nb._comparison_pairs_from_cli(["conduct_bounded,route_once"]) == (
         ("conduct_bounded", "route_once"),
     )
+
+
+def test_cli_fails_closed_without_workflow_budget_declaration() -> None:
+    """CLI cannot invent a five-step envelope or 264-token output cap."""
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = nb.run_benchmark_cli(
+            ["--dry-run", "--task-manifest", TASK_MANIFEST_PATH, *CLI_MEASUREMENT_FLAGS]
+        )
+    assert exit_code == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["benchmark_failed_closed"] is True
+    assert payload["error_class"] == "BenchmarkContractError"
+    assert "max_output_tokens" in payload["error"] or "max_workflow_depth" in payload["error"]
 
 
 if __name__ == "__main__":
