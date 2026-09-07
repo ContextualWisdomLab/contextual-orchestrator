@@ -114,8 +114,8 @@ ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "evidence_schema_version": "1.0.0",
     "source_title": "NVIDIA NIM General FAQ",
     "source_url": "https://docs.api.nvidia.com/nim/docs/product",
-    "reviewed_at_date": "2026-08-05",
-    "valid_until_date": "2026-09-04",
+    "reviewed_at_date": "2026-09-05",
+    "valid_until_date": "2026-10-05",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (
