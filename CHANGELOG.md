@@ -20,6 +20,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual selectors (`orchestrator/free`, `orchestrator/auto`,
+  `contextual-orchestrator`) keep tools and streaming on Fugu route /
+  TRINITY-Conductor conduct. A tools array no longer ejects those calls into
+  single-agent passthrough, so a failed worker is re-selected on the control
+  plane (incident: ContextualWisdomLab/.github run 34079284863, Strix step 23).
+  Concrete model ids remain a debug pin. Psychometric θ̂/RMSE stays an
+  equal-budget score of those paper paths, not a separate router.
+- Streamed `/v1/responses` now emits OpenAI `response.reasoning_text.*`
+  events for TRINITY thinker/worker/verifier and Conductor step outputs,
+  while `response.reasoning_summary_*` stays the paper-role stage summary.
+  The synthesizer answer remains `output_text`. Chat Completions, audio,
+  image, video, embeddings, and rerank use the same worker re-selection
+  but cannot emit those reasoning events, so only the modality result is
+  returned.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

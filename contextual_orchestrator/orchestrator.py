@@ -1782,13 +1782,17 @@ class ModelClient:
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
         scoped = getattr(self._local, "request_settings", {})
-        return {
+        snapshot = {
             "temperature": scoped.get("temperature", self.default_temperature),
             "top_p": scoped.get("top_p", self.default_top_p),
             "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
             "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
             "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
         }
+        for key in ("tools", "tool_choice", "parallel_tool_calls"):
+            if key in scoped:
+                snapshot[key] = scoped[key]
+        return snapshot
 
     @contextmanager
     def request_settings(self, **overrides: Any):
@@ -1940,6 +1944,13 @@ class ModelClient:
             payload["presence_penalty"] = effective_presence
         if effective_frequency is not None:  # pragma: no cover
             payload["frequency_penalty"] = effective_frequency
+        tools = settings.get("tools")
+        if tools:
+            payload["tools"] = tools
+        if "tool_choice" in settings:
+            payload["tool_choice"] = settings["tool_choice"]
+        if "parallel_tool_calls" in settings:
+            payload["parallel_tool_calls"] = settings["parallel_tool_calls"]
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
@@ -5239,36 +5250,94 @@ class TaskOrchestrator:
         include_usage: bool = False,
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
-        """Stream a single worker's content deltas as they arrive, then persist the run.
+        """Stream Fugu-route content deltas, then persist the run.
 
-        True streaming for the route path. ponytail: no cross-agent failover here — bytes
-        already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
+        Chat Completions has no Responses reasoning events, so paper-role
+        process output is not shown here. Virtual selectors still re-select a
+        worker when the first stream call fails before any content delta.
+        Bytes already sent cannot be recalled, so a mid-stream failure
+        surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(
-            text, "worker", free_only=model_name == self.FREE_MODEL
-        )
-        parts: list[str] = []
+        prompt_context = self._prompt_interaction(messages)
+        free_only = model_name == self.FREE_MODEL
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
         if effort_profile is not None:
             stream_kwargs["effort_profile"] = effort_profile
         if include_usage:
             stream_kwargs["include_usage"] = True
-        stream = self.client.stream_chat(agent, messages, **stream_kwargs)
+        pinned = self._requested_agent(model_name)
+        primary = pinned or self._select_agent(
+            text, "worker", free_only=free_only, prompt_context=prompt_context
+        )
+        if pinned is not None:
+            candidates = [primary]
+        else:
+            free_ids = {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
+            candidates = self._failover_candidates(
+                primary,
+                text,
+                "worker",
+                allowed_agent_ids=free_ids if free_only else None,
+                prompt_context=prompt_context,
+                effort_profile=effort_profile,
+            )
+            candidates = _eligible_role_effort_candidates(candidates, effort_profile)
+        if not candidates:
+            candidates = [primary]
+
+        last_error: BaseException | None = None
+        agent = primary
+        parts: list[str] = []
         started_at = time.perf_counter()
-        try:
-            for delta in stream:
-                parts.append(delta)
-                yield delta
-        except Exception:
-            if agent.group_name or model_name == self.FREE_MODEL:
-                self._group_router.observe_failure(agent.id)
-            raise
+        for agent in candidates:
+            parts = []
+            emitted = False
+            started_at = time.perf_counter()
+            try:
+                for delta in self.client.stream_chat(agent, messages, **stream_kwargs):
+                    emitted = True
+                    parts.append(delta)
+                    yield delta
+            except Exception as exc:
+                if agent.group_name or free_only:
+                    self._group_router.observe_failure(agent.id)
+                if emitted or pinned is not None:
+                    raise
+                upstream = (
+                    exc
+                    if isinstance(exc, ProviderUpstreamError)
+                    else classify_provider_failure(
+                        exc,
+                        agent_id=agent.id,
+                        model=agent.model,
+                        transport="stream",
+                    )
+                )
+                if not isinstance(upstream, ProviderUpstreamError):
+                    raise
+                last_error = upstream
+                decision = classify_provider_transport_failure(upstream.retryable)
+                if decision.circuit_failure:
+                    self._record_failure(agent.id)
+                if decision.action is ToolFallbackAction.FAIL_CLOSED:
+                    raise upstream from None
+                continue
+            last_error = None
+            break
+        else:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("stream route has no eligible worker")
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
             usage_callback(usage)
-        if agent.group_name or model_name == self.FREE_MODEL:
+        if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
@@ -5282,7 +5351,7 @@ class TaskOrchestrator:
             served_id=agent.id,
             latency_seconds=latency_seconds,
             usage=usage,
-            free_only=model_name == self.FREE_MODEL,
+            free_only=free_only,
         )
         trace_step = {
             "id": 0,
@@ -6605,7 +6674,7 @@ class TaskOrchestrator:
                 row["failover_from"] = agent.id
             trace.append(row)
             if progress is not None:
-                progress(step.role, "completed")
+                progress(step.role, "completed", output)
 
         if plan_source == "generated":
             # Generated plans have variable shape: locate roles instead of fixed indices.
@@ -7678,7 +7747,17 @@ class TaskOrchestrator:
                     else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
-                last_error = exc
+                classified = (
+                    exc
+                    if isinstance(exc, ProviderUpstreamError)
+                    else classify_provider_failure(
+                        exc,
+                        agent_id=agent.id,
+                        model=agent.model,
+                        transport=capability,
+                    )
+                )
+                last_error = classified
                 saw_failure = True
                 request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
@@ -7686,6 +7765,10 @@ class TaskOrchestrator:
                 )
                 if not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(classified, ProviderUpstreamError):
+                    decision = classify_provider_transport_failure(classified.retryable)
+                    if decision.circuit_failure and not request_too_large:
+                        self._record_failure(agent.id)
                 continue
             if selection_sink is not None:
                 selected_result = selection_sink(agent, result)
@@ -7701,6 +7784,14 @@ class TaskOrchestrator:
             ) from last_error
         if isinstance(last_error, ProviderUpstreamError):
             raise last_error
+        if last_error is not None:
+            failed = candidates[-1] if candidates else None
+            raise classify_provider_failure(
+                last_error,
+                agent_id=failed.id if failed is not None else "",
+                model=failed.model if failed is not None else "",
+                transport=capability,
+            ) from None
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
