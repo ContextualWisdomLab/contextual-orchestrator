@@ -39,7 +39,7 @@ ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
 DECLARED_DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
-JUDGE_SAMPLE_SIZE = 1_000
+DECLARED_JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
 ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
@@ -1232,10 +1232,20 @@ def _validate_candidate_group_dif(
     }
 
 
-def _validate_judge_effects() -> dict[str, object]:
-    """Recover known judge severities from a connected fully crossed design."""
+def _validate_judge_effects(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Recover known judge severities from a connected fully crossed design.
+
+    ``sample_size`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
     generator = np.random.default_rng(JUDGE_SEED)
-    ability = generator.normal(size=JUDGE_SAMPLE_SIZE)
+    ability = generator.normal(size=declared_sample_size)
     item_difficulty = np.linspace(-1.0, 1.0, 6)
     true_severity = np.asarray([-0.7, 0.0, 0.7])
     logits = (
@@ -1250,7 +1260,7 @@ def _validate_judge_effects() -> dict[str, object]:
     result = fast_mlsirm.fit_facets(responses, n_cat=2)
     return {
         "method": "many_facet_rasch",
-        "sample_size": JUDGE_SAMPLE_SIZE,
+        "sample_size": declared_sample_size,
         "seed": JUDGE_SEED,
         "items": len(item_difficulty),
         "judges": len(true_severity),
@@ -1918,7 +1928,9 @@ def run_benchmark(
     candidate_group_dif = _validate_candidate_group_dif(
         sample_size=DECLARED_DIF_SAMPLE_SIZE
     )
-    judge_effects = _validate_judge_effects()
+    judge_effects = _validate_judge_effects(
+        sample_size=DECLARED_JUDGE_SAMPLE_SIZE
+    )
     item_covariate_effect = _validate_item_covariate_effect()
     parameter_uncertainty = _validate_parameter_uncertainty()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
