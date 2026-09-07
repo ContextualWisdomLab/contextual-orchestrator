@@ -94,7 +94,7 @@ def test_model_timeout_policy_defaults_to_null() -> None:
     policy = TaskOrchestrator([model_agent]).get_model_timeout_policy("default", model_agent.id)
     assert policy["configured_seconds"] is None
     assert policy["revision"] == 0
-    assert policy["enforcement_available"] is False
+    assert policy["enforcement_available"] is True
     assert TaskOrchestrator([model_agent]).list_model_timeout_history("default", model_agent.id) == {
         "items": [], "next_before_revision": None, "history_available": False,
     }

@@ -513,7 +513,7 @@ OPENAPI_SPEC = {
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy": {
             "get": {
                 "operationId": "get_model_timeout_policy",
-                "summary": "Read configured timeout and serving snapshot without activating a limit",
+                "summary": "Read configured timeout and whether serving applies that model wait",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
@@ -521,7 +521,7 @@ OPENAPI_SPEC = {
                 ],
                 "responses": {
                     "200": {
-                        "description": "Stored policy and local snapshot; runtime enforcement is not integrated",
+                        "description": "Stored policy and local snapshot; serving applies the selected model wait",
                         "content": {"application/json": {"schema": {
                             "type": "object", "additionalProperties": False,
                             "required": ["configured_seconds", "revision", "unit",
@@ -533,7 +533,7 @@ OPENAPI_SPEC = {
                                 "unit": {"const": "seconds"},
                                 "serving_snapshot_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
                                 "serving_snapshot_revision": {"type": "integer", "minimum": 0},
-                                "enforcement_available": {"const": False},
+                                "enforcement_available": {"const": True},
                             },
                         }}},
                     },
@@ -595,6 +595,12 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "stream_usage_supported": {"type": "boolean"},
+                                    "model_timeout_seconds": {
+                                        "anyOf": [
+                                            {"type": "number", "exclusiveMinimum": 0},
+                                            {"type": "null"},
+                                        ]
+                                    },
                                 },
                             },
                         },

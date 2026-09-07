@@ -1982,7 +1982,7 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
+        ), _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):
             return self._send_with_retry(agent, payload, destination)
 
     def apply_effort_profile(
@@ -2186,11 +2186,7 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        opened = (
-            self._open_provider(request, destination)
-            if timeout is None
-            else self._open_provider(request, destination, timeout=timeout)
-        )
+        opened = self._open_model_provider(request, destination, agent, timeout)
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
@@ -2258,6 +2254,29 @@ class ModelClient:
             raise RuntimeError(f"provider host {hostname!r} has no stream address")
         return resolved
 
+    def _resolved_model_timeout(
+        self, agent: ModelAgent, timeout: float | None = None
+    ) -> float | None:
+        """Prefer an explicit call timeout, then the model policy, then the client default."""
+        if timeout is not None:
+            return timeout
+        if agent.model_timeout_seconds is not None:
+            return agent.model_timeout_seconds
+        return self.timeout
+
+    def _open_model_provider(
+        self,
+        request: urllib.request.Request,
+        destination: ProviderDestination | None,
+        agent: ModelAgent,
+        timeout: float | None = None,
+    ) -> Any:
+        """Open one model request using the resolved per-model wait, or none."""
+        resolved = self._resolved_model_timeout(agent, timeout)
+        if resolved is None:
+            return self._open_provider(request, destination)
+        return self._open_provider(request, destination, timeout=resolved)
+
     def _open_provider(
         self,
         request: urllib.request.Request,
@@ -2281,7 +2300,7 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = timeout if timeout is not None else self.timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -2381,7 +2400,7 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+        ), _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)
 
     def _stream_send(
@@ -2407,7 +2426,7 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         try:
-            with self._open_provider(request, destination) as response:
+            with self._open_model_provider(request, destination, agent) as response:
                 for raw in response:
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
@@ -2569,7 +2588,7 @@ class ModelClient:
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):
                     chat_response = self._send_raw_with_retry(
                         agent,
                         "chat/completions",
@@ -2578,7 +2597,7 @@ class ModelClient:
                         allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -2604,7 +2623,7 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
                 return response.read(), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
             raise classify_provider_failure(
@@ -2648,8 +2667,8 @@ class ModelClient:
             headers=headers,
             method="GET",
         )
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent)
+        with self._open_model_provider(  # pragma: no cover
+            request, self._validate_provider(agent), agent
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
@@ -2685,8 +2704,8 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent)
+        with self._open_model_provider(  # pragma: no cover
+            request, self._validate_provider(agent), agent
         ) as response:
             result = json.loads(
                 self._read_bounded_response(response, max_response_bytes).decode("utf-8")
@@ -2771,7 +2790,7 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         return data
@@ -3060,7 +3079,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(
@@ -3082,7 +3101,7 @@ class ModelClient:
             },
             method=method,
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
             return json.loads(raw.decode("utf-8"))
 
@@ -3108,7 +3127,7 @@ class ModelClient:
             headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
             method="GET",
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             return response.read()
 
 
@@ -6313,7 +6332,7 @@ class TaskOrchestrator:
         return self._agent_to_admin_payload(patched)
 
     def get_model_timeout_policy(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
-        """Read configured policy without publishing or claiming runtime enforcement."""
+        """Read configured policy and whether serving applies the selected model wait."""
         serving = self._agent_in_pool(agent_pool_id, worker_agent_id)
         configured = serving
         if self._pool_store is not None:
@@ -6328,7 +6347,7 @@ class TaskOrchestrator:
             "unit": "seconds",
             "serving_snapshot_seconds": serving.model_timeout_seconds,
             "serving_snapshot_revision": serving.model_timeout_revision,
-            "enforcement_available": False,
+            "enforcement_available": True,
         }
 
     def list_model_timeout_history(

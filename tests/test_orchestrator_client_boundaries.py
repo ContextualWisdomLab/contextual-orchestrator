@@ -239,6 +239,68 @@ def test_batch_results_must_be_a_mapping() -> None:
 def test_default_model_timeout_is_unbounded() -> None:
     """Model and repair requests inherit no application wall-clock cap."""
     assert ModelClient().timeout is None
+    assert ModelClient().timeout not in {90, 900, 10800}
+
+
+def test_chat_applies_only_the_selected_model_timeout(monkeypatch) -> None:
+    """A configured model limit is per-agent; other models stay unbounded."""
+    limited = ModelAgent(
+        id="limited_chat_agent",
+        model="limited-chat-model",
+        base_url="https://limited.example/v1",
+        credential_key="LIMITED_CHAT_KEY",
+        model_timeout_seconds=12,
+    )
+    unbounded = ModelAgent(
+        id="open_chat_agent",
+        model="open-chat-model",
+        base_url="https://open.example/v1",
+        credential_key="OPEN_CHAT_KEY",
+    )
+    client = ModelClient()
+    slot_timeouts: list[float | None] = []
+    open_timeouts: list[float | None] = []
+    real_slot = _local_provider_slot
+
+    def capture_slot(agent, capacity, timeout):
+        slot_timeouts.append(timeout)
+        return real_slot(agent, capacity, timeout)
+
+    class _ProviderResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return (
+                b'{"choices":[{"message":{"content":"ok"}}],'
+                b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+            )
+
+    def open_provider(request, destination=None, timeout=None):
+        del request, destination
+        open_timeouts.append(timeout)
+        return _ProviderResponse()
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator._local_provider_slot", capture_slot
+    )
+    monkeypatch.setattr(client, "_validate_provider", lambda agent: None)
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator._provider_credential",
+        lambda agent: "test-token",
+    )
+    monkeypatch.setattr(client, "_open_provider", open_provider)
+
+    assert client.chat(limited, [{"role": "user", "content": "x"}]) == "ok"
+    assert client.chat(unbounded, [{"role": "user", "content": "x"}]) == "ok"
+    assert slot_timeouts == [12.0, None]
+    assert open_timeouts == [12.0, None]
+    assert 90 not in slot_timeouts + open_timeouts
+    assert 900 not in slot_timeouts + open_timeouts
+    assert 10800 not in slot_timeouts + open_timeouts
 
 
 def test_local_slot_accepts_unbounded_waits() -> None:

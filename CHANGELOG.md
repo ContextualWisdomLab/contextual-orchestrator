@@ -21,8 +21,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - Model, Agent, gateway, and structured-output repair requests now default to
-  no application timeout. Explicit probe, discovery, benchmark, and operator
-  limits remain bounded.
+  no application timeout. An administrator-owned per-model wait is applied only
+  to that model; there is no shared 90s/900s/3-hour ceiling. Explicit probe,
+  discovery, benchmark, and operator limits remain bounded.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

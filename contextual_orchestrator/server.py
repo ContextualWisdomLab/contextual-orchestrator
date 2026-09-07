@@ -283,7 +283,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
     "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
-    "context_window",
+    "context_window", "model_timeout_seconds",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -6321,7 +6321,12 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent patch path missing worker agent")
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_AGENT_PATCH_KEYS)
-                    updated = orchestrator.patch_agent(segments[3], segments[-1], body)
+                    patch_kwargs: dict[str, Any] = {}
+                    if "model_timeout_seconds" in body:
+                        patch_kwargs["actor_id"] = security.principal_id(self.headers)
+                    updated = orchestrator.patch_agent(
+                        segments[3], segments[-1], body, **patch_kwargs
+                    )
                     self._send(updated, 200)
                     return
                 if path.startswith("/api/v1/model_groups/"):

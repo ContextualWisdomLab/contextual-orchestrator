@@ -253,6 +253,15 @@ in-memory-only pool reports history unavailable, not durable empty-history proof
 These are read-only operations; set/clear/restore HTTP actions, execution
 enforcement and UI acceptance remain incomplete.
 
+## Serving enforcement and HTTP set/clear
+
+A later slice on the same PR applies `model_timeout_seconds` on the selected
+model's serving path. The client default stays null, and no shared 90s, 900s,
+or 3-hour ceiling is introduced. Authenticated timeout-only PATCH writes are
+admitted on the serving process. A stale serving snapshot still cannot
+overwrite a newer durable revision. HTTP restore and administrator UI remain
+unfinished. Cross-process serving refresh remains a separate gap.
+
 ## Strix HTTP 500 and error correlation
 
 The [Strix run 34031339200](https://github.com/ContextualWisdomLab/.github/actions/runs/34031339200)

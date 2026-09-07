@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 per-model serving timeout and HTTP policy writes
+
+PR #1053 now applies an administrator-owned `model_timeout_seconds` value on
+the selected model's serving path. The client default remains null. There is
+no shared application ceiling. Authenticated timeout-only PATCH writes are
+admitted and recorded with the opaque principal digest. GET
+`timeout_policy` still reports a stale serving snapshot when another process
+wrote the durable row; that cross-process refresh remains open. HTTP restore
+and administrator UI remain unfinished. This is local regression evidence,
+not a protected merge or live-provider recovery claim.
+
 ## 2026-09-07 timeout audit visibility repair
 
 On PR #1053 base `1ccc9599415096433214cd9ad0df611eddfc8fbb`, successful
