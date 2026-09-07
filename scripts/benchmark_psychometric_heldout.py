@@ -54,7 +54,7 @@ DIMENSIONALITY_SEED = 260_911
 DIMENSIONALITY_ITERATIONS = 360
 MODEL_FIT_SAMPLE_SIZE = 1_200
 MODEL_FIT_SEED = 260_912
-RELIABILITY_SAMPLE_SIZE = 1_200
+DECLARED_RELIABILITY_SAMPLE_SIZE = 1_200
 RELIABILITY_SEED = 260_913
 EQUATING_BOOTSTRAPS = 300
 EQUATING_SEED = 260_914
@@ -955,13 +955,23 @@ def _validate_global_model_fit() -> dict[str, object]:
     }
 
 
-def _validate_score_reliability() -> dict[str, object]:
-    """Verify posterior reliability rises with known item information."""
+def _validate_score_reliability(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Verify posterior reliability rises with known item information.
+
+    ``sample_size`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
     generator = np.random.default_rng(RELIABILITY_SEED)
     item_count = 12
-    ability = generator.normal(size=RELIABILITY_SAMPLE_SIZE)
+    ability = generator.normal(size=declared_sample_size)
     item_difficulty = np.linspace(-1.5, 1.5, item_count)
-    random_draws = generator.random((RELIABILITY_SAMPLE_SIZE, item_count))
+    random_draws = generator.random((declared_sample_size, item_count))
     factor_id = np.zeros(item_count, dtype=np.int64)
     config = fast_mlsirm.FitConfig(
         model="MIRT",
@@ -1000,7 +1010,7 @@ def _validate_score_reliability() -> dict[str, object]:
     strong_information = fit_case(1.5)
     return {
         "method": "posterior_variance_empirical_reliability",
-        "sample_size_per_case": RELIABILITY_SAMPLE_SIZE,
+        "sample_size_per_case": declared_sample_size,
         "seed": RELIABILITY_SEED,
         "items": item_count,
         "weak_information": weak_information,
@@ -1898,7 +1908,9 @@ def run_benchmark(
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
-    score_reliability = _validate_score_reliability()
+    score_reliability = _validate_score_reliability(
+        sample_size=DECLARED_RELIABILITY_SAMPLE_SIZE
+    )
     generalizability_design = _validate_generalizability_design()
     conditional_information = _validate_conditional_information()
     classification_decision = _validate_classification_decision()
