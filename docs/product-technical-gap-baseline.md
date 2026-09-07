@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 declared judge-effect sample size (proposed)
+
+Successor of the reliability sample-size slice removes hidden
+`JUDGE_SAMPLE_SIZE = 1_000` from
+`scripts/benchmark_psychometric_heldout.py`. Sample size is a required
+positive integer declaration. Missing, boolean, or non-positive values fail
+closed. The harness run still writes 1,000 as this run's choice and records
+`sample_size`. ADR 0052 is Proposed.
+
+Local contract tests on this working tree: judge sample-size declaration and
+population checks plus existing held-out key/report pins. This is not
+buyer-held-out accuracy, p95 latency, or protected merge evidence. Production
+route/conduct defaults stay locked. Other harness sample sizes remain later
+work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-08 declared score-reliability sample size (proposed)
 
 Successor of the DIF sample-size slice removes hidden

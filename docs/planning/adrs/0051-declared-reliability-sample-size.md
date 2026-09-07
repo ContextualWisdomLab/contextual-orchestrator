@@ -59,5 +59,6 @@ declaration.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Judge-effect sample size moves to ADR 0052. Other repository-authored
+harness sample sizes stay open. This ADR is Proposed until independent
+review and protected delivery.
