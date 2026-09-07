@@ -1,5 +1,32 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 release verification repair (Proposed, PR #1030)
+
+Source checkpoint: `8443719334d31012d8306dbb517cce6e023443c7`.
+The older September 2 narrative below is historical, including its optional
+SBOM and manual-owner-dispatch descriptions; it is not the current contract.
+
+The release gate now requires the three actual integrated quality jobs rather
+than six retired job names. A test compares this inventory with the current
+workflow. Existing SBOM assets must match the verified artifact byte-for-byte;
+same-name assets cannot bypass verification and are never overwritten.
+Missing, empty, different, or unavailable downloads fail publication.
+Real attachment-step execution with a stub GitHub CLI reproduced two false
+successes before repair. The 71 focused release checks then passed in 12.11s.
+These are software tests, not evidence of an actual published package.
+
+The user authorizes automatic eligible publication. Additional routine human
+dispatch approval is not a prerequisite, but protected integration, exact-head
+checks and required reviews remain mandatory. This lane still does not publish
+to PyPI: the direct-URL fast-mlsirm dependency requires its canonical registry
+release first (existing owner PRs #1692 and #1471 in fast-mlsirm).
+
+Remaining acceptance evidence includes a protected release, installed consumer
+conformance, and registry artifact provenance. Concurrent asset replacement and
+the interval between public Release creation and mandatory-asset attachment
+remain separate limitations. Neither local tests nor byte comparison proves
+buyer accuracy, routing latency, or complete release-transaction atomicity.
+
 ## 2026-09-02 canonical immutable release + resumable long-running execution
 
 Observation time: 2026-09-02 Asia/Seoul.
