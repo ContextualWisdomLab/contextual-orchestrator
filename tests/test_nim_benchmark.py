@@ -1776,11 +1776,7 @@ def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
             _synthetic_cell("direct_single_worker:vendor/model-b", "task_one", 1.0),
         ]
     )
-    with pytest.raises(
-        nb.BenchmarkContractError,
-        match="hindsight comparison has no unique quality maximum",
-    ):
-        nb.best_single_worker_hindsight(tied)
+    assert nb.best_single_worker_hindsight(tied) is None
 
 
 def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
