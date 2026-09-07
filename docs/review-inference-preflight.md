@@ -43,7 +43,9 @@ request must carry the same flag: successful preflight does not establish a
 session policy. A public-only consumer may explicitly choose `false`, but must
 record that choice and cannot claim ZDR enforcement. Failure must stop the review
 with a nonzero check and no paid/provider fallback. Cancellation is distinct
-from provider failure; this contract adds no model-duration timeout.
+from provider failure; this contract adds no model-duration timeout or
+consumer-selected generation-token budget. The gateway/provider terminates the
+model response under the released owner contract.
 
 Do not call `/readyz`: it intentionally requires admin scope, while `/healthz`
 only proves process liveness. Never request an admin token to make preflight
