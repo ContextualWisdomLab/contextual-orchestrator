@@ -187,9 +187,20 @@ for a target population or proof of an expected task-by-policy matrix.
 - Only locked tasks enter reported comparisons; exploratory tasks remain outside
   the decision evidence.
 
-### Comparison report version 2
+### Comparison report version 3
 
-Version 2 compares every locked task attempted by both policies, including
+Version 3 preserves a task/policy/split plan made before evaluation, including
+each direct worker and the optional cheapest policy only when eligible.
+Assembly and artifact publication reject missing, duplicate, or unexpected
+observations. Missing observations are not treated as failed deliveries.
+The plan must also match the locked task count and the complete policy matrix
+for the selected catalog workers, model limit, and cheapest-policy skip reason.
+This is an internal completeness check, not independently verified
+preregistration; coordinated changes to the plan, observations, and supporting
+metadata are outside its proof.
+Regenerate older reports because they lack this required plan.
+
+The version 2 comparison semantics are retained: every locked task attempted by both policies, including
 failures and timeouts. The delivered-task score is the scorer's value after a
 successful run and zero when no answer was delivered successfully. The original
 failure record retains `task_score: null`; zero delivery reward is not an
@@ -204,10 +215,11 @@ improvement in service. The intervals condition on the common task set and the
 selected policies, including the explicitly labelled hindsight worker.
 
 Reports using version 1 compared only jointly successful tasks. Their values
-must not be pooled with version 2, and the validator rejects the old schema.
-Regenerate comparison evidence using the original task observations. The
-production review floor still requires 30 **jointly successful** paired tasks
-and the existing completion fraction; including failed pairs does not relax it.
+must not be pooled with version 2 or 3, and the validator rejects old schemas.
+Version 2 observations require their independently preserved evaluation plan
+before migration; do not infer a complete plan from surviving observations.
+No task-count or completion-fraction threshold authorizes production promotion.
+The report remains measurement evidence only, with no routing recommendation.
 These mean intervals do not establish p95 performance, population
 representativeness, or uncertainty from choosing the hindsight winner.
 

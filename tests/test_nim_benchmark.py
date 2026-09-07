@@ -1953,6 +1953,35 @@ def _dry_report(output_dir: str) -> dict:
     )
 
 
+@pytest.mark.parametrize("mutation", ["omit_task", "duplicate", "unexpected", "split", "omit_both_task", "omit_both_policy"])
+def test_report_rejects_task_omitted_from_every_policy(tmp_path: Path, mutation: str) -> None:
+    """Shared missing observations must not pass as a complete evidence set."""
+    report = _dry_report(str(tmp_path / "complete_report"))
+    cells = report["evaluation"]["evaluation_cells"]
+    if mutation in {"omit_both_task", "omit_both_policy"}:
+        field = "task_id" if mutation == "omit_both_task" else "policy_name"
+        omitted = cells[0][field]
+        for key in ("evaluation_cells", "planned_evaluation_cells"):
+            report["evaluation"][key] = [
+                cell for cell in report["evaluation"][key] if cell[field] != omitted
+            ]
+    elif mutation == "omit_task":
+        omitted_task = cells[0]["task_id"]
+        report["evaluation"]["evaluation_cells"] = [
+            cell for cell in cells if cell["task_id"] != omitted_task
+        ]
+    elif mutation == "duplicate":
+        cells.append(dict(cells[0]))
+    elif mutation == "unexpected":
+        cells[0]["task_id"] = "unexpected_task"
+    else:
+        cells[0]["task_split"] = "exploratory"
+    incomplete_output = tmp_path / "incomplete_report"
+    with pytest.raises(nb.BenchmarkContractError):
+        nb.write_benchmark_artifacts(report, str(incomplete_output))
+    assert not incomplete_output.exists()
+
+
 def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Path) -> None:
     """Published uncertainty must show the new denominator, time, and schema."""
     report = _dry_report(str(tmp_path / "current_report"))
@@ -1967,7 +1996,7 @@ def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Pa
     assert "-1.0 [-1.0, -1.0]" in summary
     assert "200.0 [200.0, 200.0] ms" in summary
     assert "successful outcomes A/B 0/1 and 1/1" in summary
-    assert report["benchmark_schema_version"] == "2.0.0"
+    assert report["benchmark_schema_version"] == "3.0.0"
     report["benchmark_schema_version"] = "1.0.0"
     with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
         nb.validate_report_schema(report)

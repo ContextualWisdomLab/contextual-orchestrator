@@ -85,7 +85,7 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-BENCHMARK_SCHEMA_VERSION = "2.0.0"
+BENCHMARK_SCHEMA_VERSION = "3.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
@@ -2277,6 +2277,19 @@ def evaluate_policies(
             cell["task_score"] = None
         return cell
 
+    cheapest = cheapest_priced_agent(agents, pricing_scenario)
+    planned_policies = [
+        *(f"direct_single_worker:{agent.model}" for agent in agents),
+        "route_once",
+        "conduct_bounded",
+    ]
+    if cheapest is not None:
+        planned_policies.append("cheapest_eligible_worker")
+    planned_cells = [
+        {"policy_name": policy, "task_id": task["task_id"], "task_split": "locked"}
+        for policy in planned_policies
+        for task in tasks
+    ]
     cells: list[dict[str, Any]] = []
     for agent in agents:
         for task in tasks:
@@ -2293,7 +2306,6 @@ def evaluate_policies(
         cells.append(run_cell("conduct_bounded", task, agents, "conduct"))
 
     cheapest_skip_reason = None
-    cheapest = cheapest_priced_agent(agents, pricing_scenario)
     if cheapest is None:
         cheapest_skip_reason = (
             "no_pricing_scenario_supplied"
@@ -2313,6 +2325,7 @@ def evaluate_policies(
     cells.sort(key=lambda cell: (cell["policy_name"], cell["task_id"]))
     return {
         "evaluation_cells": cells,
+        "planned_evaluation_cells": planned_cells,
         "cheapest_worker_skip_reason": cheapest_skip_reason,
         "locked_task_count": len(tasks),
         "worker_count": len(agents),
@@ -2721,6 +2734,11 @@ _REPORT_REQUIRED_PATHS = (
     "catalog_snapshot.probed_models",
     "capability_summary",
     "evaluation.evaluation_cells",
+    "evaluation.planned_evaluation_cells",
+    "evaluation.locked_task_count",
+    "evaluation.worker_count",
+    "evaluation.cheapest_worker_skip_reason",
+    "provenance.benchmark_parameters.max_eval_models",
     "evaluation.policy_summaries",
     "evaluation.paired_comparisons",
     "evaluation.pareto_frontiers",
@@ -2761,6 +2779,51 @@ def validate_report_schema(report: dict[str, Any]) -> None:
         )
     if report["benchmark_schema_version"] != BENCHMARK_SCHEMA_VERSION:
         raise BenchmarkContractError("unsupported benchmark schema; regenerate the report")
+    evaluation = report["evaluation"]
+    identities = []
+    for field in ("planned_evaluation_cells", "evaluation_cells"):
+        rows = evaluation[field]
+        if not isinstance(rows, list) or not rows:
+            raise BenchmarkContractError("evaluation identities must be a non-empty list")
+        keys = []
+        for row in rows:
+            if not isinstance(row, dict) or any(
+                not isinstance(row.get(key), str) or not row[key]
+                for key in ("policy_name", "task_id", "task_split")
+            ):
+                raise BenchmarkContractError("evaluation identity is invalid")
+            keys.append((row["policy_name"], row["task_id"], row["task_split"]))
+        if len(keys) != len(set(keys)):
+            raise BenchmarkContractError("duplicate evaluation identity")
+        identities.append(set(keys))
+    if identities[0] != identities[1]:
+        raise BenchmarkContractError("observations do not match the planned evaluation identities")
+    task_ids = {task for _, task, _ in identities[0]}
+    for field in ("locked_task_count", "worker_count"):
+        value = evaluation[field]
+        if type(value) is not int or value < 1:
+            raise BenchmarkContractError("evaluation counts must be positive integers")
+    if len(task_ids) != evaluation["locked_task_count"]:
+        raise BenchmarkContractError("planned tasks do not match the locked task count")
+    model_limit = report["provenance"]["benchmark_parameters"]["max_eval_models"]
+    if type(model_limit) is not int or model_limit < 1:
+        raise BenchmarkContractError("evaluation model limit must be a positive integer")
+    workers = build_worker_agents(
+        report["catalog_snapshot"]["probed_models"], "mock://plan-validation", model_limit
+    )
+    if len(workers) != evaluation["worker_count"]:
+        raise BenchmarkContractError("planned workers do not match the selected catalog")
+    policies = {"route_once", "conduct_bounded"} | {
+        f"direct_single_worker:{worker.model}" for worker in workers
+    }
+    skip_reason = evaluation["cheapest_worker_skip_reason"]
+    if skip_reason is None:
+        policies.add("cheapest_eligible_worker")
+    elif skip_reason not in {"no_pricing_scenario_supplied", "no_worker_priced_by_scenario"}:
+        raise BenchmarkContractError("unknown cheapest worker skip reason")
+    expected = {(policy, task, "locked") for policy in policies for task in task_ids}
+    if identities[0] != expected:
+        raise BenchmarkContractError("planned evaluation is not the complete selected policy matrix")
 
 
 _CSV_CELL_COLUMNS = (
@@ -3013,6 +3076,7 @@ def assemble_benchmark_report(
         "capability_summary": capability_summary,
         "evaluation": {
             "evaluation_cells": cells,
+            "planned_evaluation_cells": evaluation["planned_evaluation_cells"],
             "policy_summaries": summaries,
             "best_single_worker_hindsight": best_single_worker_hindsight(summaries),
             "paired_comparisons": paired_policy_comparisons(cells, seed=seed),

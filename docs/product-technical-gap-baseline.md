@@ -1,5 +1,28 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 planned observation completeness repair (local)
+
+At PR #1074 base `77545c3a10041d65a7ce12d3d77268a5b7895f8d`, removing
+one task from every policy in a real dry-run report still allowed artifact
+publication. The writer regression failed as expected (one failure, 11.55s).
+The local repair records the task/policy/split identities before evaluation,
+including each direct worker and the eligible optional cheapest policy, and
+requires observed identities to match at assembly and publication. Empty,
+malformed, duplicate, missing, and unexpected identities are rejected.
+The report schema is now 3.0.0; old reports must be regenerated.
+
+Deleting the same task or policy from both plan and observations then exposed
+two additional failures (four controls passed, 2.98s). The repair now checks
+the locked task count and reconstructs the full policy matrix from the selected
+catalog workers, model limit, and optional cheapest-policy skip reason.
+The changed benchmark suite passed 123 tests in 6.61s. This is local dry-run
+contract evidence, not live provider or buyer KPI evidence, protected merge,
+or publication. Missing observations are never imputed as failed deliveries;
+observed completion retains its existing conditional denominator. The plan is
+not independently signed preregistration: coordinated alteration of plan,
+observations and their supporting metadata, stale derived summaries, external manifest verification,
+and research-design validity still need separate controls.
+
 ## 2026-09-07 statistical owner adoption remains open
 
 The [canonical-owner readiness record](doctoring/prospective-routing-measurement-design.md#canonical-statistical-owner-readiness-2026-09-07)
