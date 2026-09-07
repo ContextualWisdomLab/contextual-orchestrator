@@ -61,5 +61,6 @@ declaration.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Held-out context population moves to ADR 0048. Other repository-authored
+harness sample sizes stay open. This ADR is Proposed until independent
+review and protected delivery.

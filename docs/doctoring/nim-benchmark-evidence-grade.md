@@ -344,8 +344,8 @@ operator declaration. `_measure_paired_latency` now requires
 `repetitions_per_context`. The harness run writes 200 as this run's choice
 and records `latency_repetitions_per_context`.
 
-This slice does not change production route/conduct defaults. Other harness
-sample sizes remain later work.
+This slice does not change production route/conduct defaults. Held-out
+context population is the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -355,6 +355,28 @@ sequenceDiagram
     Operator->>Timing: Repetitions per context
     Timing->>Timing: Fail closed on missing or non-positive declarations
     Timing->>Report: Decision p50/p95 and declared repetition count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared held-out context population (2026-09-08, proposed)
+
+Accuracy and decision-latency averages used a hidden 24-context population.
+That number chose the held-out sample without an operator declaration.
+`_build_evidence`, `_evaluate_quality`, and `_measure_paired_latency` now
+require `context_count`. The harness run writes 24 as this run's choice and
+records `contexts_held_out` / `contexts_train`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Quality as Held-out quality and latency
+    participant Report as Held-out report
+    Operator->>Quality: Context population
+    Quality->>Quality: Fail closed on missing or non-positive declarations
+    Quality->>Report: Accuracy, decision latency, and declared context count
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
