@@ -67,6 +67,13 @@ push or open a PR.
 
 ### This repo: the org LLM gateway
 
+- Classify retry safety by the failure boundary, not a generic timeout name.
+  Only a direct local-slot admission failure proves no upstream send began;
+  wrapped exceptions and post-send timeouts do not authorize replay. Test the
+  real slot-to-transport path with per-candidate transport call counts and keep
+  unknown-outcome no-replay controls alongside it. Transport spies are not wire
+  delivery evidence. Preserve the default-null model timeout.
+
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.

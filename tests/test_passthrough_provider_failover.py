@@ -1312,6 +1312,56 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+@pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
+def test_wrapped_admission_timeout_does_not_authorize_replay(wrapper_type) -> None:
+    """Only the direct pre-send exception carries the local admission proof."""
+    from contextual_orchestrator.orchestrator import (
+        _LocalProviderAdmissionTimeout,
+        _is_passthrough_failover_error,
+    )
+
+    wrapped = wrapper_type("unknown outer operation")
+    wrapped.__cause__ = _LocalProviderAdmissionTimeout("earlier slot failure")
+    assert not _is_passthrough_failover_error(wrapped)
+
+
+@pytest.mark.parametrize("after_send", [False, True])
+def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send: bool) -> None:
+    """Only a failed slot acquisition may advance without replaying a sent request."""
+    from contextlib import nullcontext
+    from contextual_orchestrator.orchestrator import _local_provider_slot
+
+    client = ModelClient(timeout=0.001)
+    router = _build(client)
+    router.agents[0] = replace(
+        router.agents[0], base_url="local://127.0.0.1:19441/v1"
+    )
+    router.agents[1] = replace(
+        router.agents[1], base_url="local://127.0.0.1:19442/v1"
+    )
+    sent = []
+
+    def raw_send(agent, *args, **kwargs):
+        sent.append(agent.id)
+        if after_send:
+            raise TimeoutError("response not received after transport invocation")
+        return {"model": agent.model, "choices": []}
+
+    monkeypatch.setattr(client, "_send_raw_with_retry", raw_send)
+    slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
+    with slot:
+        if after_send:
+            with pytest.raises(ProviderUpstreamError) as raised:
+                router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert raised.value.error_code == "provider_outcome_unknown"
+            assert raised.value.retryable is False
+            assert sent == ["primary_agent"]
+        else:
+            result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert result["model"] == "fallback-model"
+            assert sent == ["fallback_agent"]
+
+
 def test_sdk_passthrough_unknown_outcome_never_replays() -> None:
     """Exact SDK to real HTTP to passthrough preserves one unknown-outcome attempt."""
     import asyncio

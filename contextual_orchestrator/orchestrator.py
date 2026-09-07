@@ -1041,6 +1041,10 @@ def _local_provider_state(base_url: str) -> _LocalProviderState:
         return _LOCAL_PROVIDER_STATES.setdefault(key, _LocalProviderState())
 
 
+class _LocalProviderAdmissionTimeout(TimeoutError):
+    """A local slot expired before any upstream request could be sent."""
+
+
 @contextmanager
 def _local_provider_slot(
     agent: ModelAgent,
@@ -1068,7 +1072,7 @@ def _local_provider_slot(
 
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
-                raise TimeoutError("local provider endpoint is busy past its request deadline")
+                raise _LocalProviderAdmissionTimeout("local provider endpoint is busy past its request deadline")
             state.condition.wait(remaining)
 
     try:
@@ -1639,6 +1643,8 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
 
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
     """Recognize failures proving that a passthrough request was not accepted."""
+    if isinstance(exc, _LocalProviderAdmissionTimeout):
+        return True
     if _is_request_too_large_error(exc):
         return True
     current: BaseException | None = exc
