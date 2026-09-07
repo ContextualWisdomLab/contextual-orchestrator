@@ -433,3 +433,108 @@ def test_http_virtual_free_speech_reselects_worker() -> None:
     assert content_type.startswith("audio/")
     assert raw == b"fallback-audio"
     assert client.calls == ["primary_speech", "fallback_speech"]
+
+
+class _ToolCallClient:
+    """Selected worker returns a Chat Completions tool call, not assistant text."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self._settings: dict[str, Any] = {}
+        self._extras: dict[str, Any] | None = None
+
+    def request_settings_snapshot(self) -> dict[str, Any]:
+        return {
+            "temperature": None,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_output_tokens": 256,
+            **self._settings,
+        }
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        previous = dict(self._settings)
+        self._settings.update(
+            {key: value for key, value in overrides.items() if value is not None}
+        )
+        try:
+            yield
+        finally:
+            self._settings = previous
+
+    def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
+        del messages, kwargs
+        self.calls.append(agent.id)
+        self._extras = {
+            "tool_calls": [
+                {
+                    "id": "call_inspect",
+                    "type": "function",
+                    "function": {
+                        "name": "inspect_repository",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+            "finish_reason": "tool_calls",
+        }
+        return ""
+
+    def take_usage(self) -> None:
+        return None
+
+    def take_assistant_message(self) -> dict[str, Any] | None:
+        extras = self._extras
+        self._extras = None
+        return extras
+
+
+def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
+    """Virtual + tools stays on route and returns the worker's tool_calls."""
+    client = _ToolCallClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "scan the trusted workspace"}],
+                "tools": _TOOLS,
+                "tool_choice": "required",
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert isinstance(body, dict)
+    message = body["choices"][0]["message"]
+    assert message["content"] is None
+    assert message["tool_calls"][0]["function"]["name"] == "inspect_repository"
+    assert body["choices"][0]["finish_reason"] == "tool_calls"
+    assert body["orchestration"]["mode"] == "route"
+
+
+def test_conduct_two_argument_progress_callback_still_completes() -> None:
+    """Existing two-argument conduct progress hooks keep working."""
+    seen: list[tuple[str, str]] = []
+
+    def progress(role: str, status: str) -> None:
+        seen.append((role, status))
+
+    orchestrator = TaskOrchestrator(_free_agents())
+    result = orchestrator.conduct(
+        [{"role": "user", "content": "write one short sentence"}],
+        progress=progress,
+    )
+    assert result["answer"]
+    assert seen
+    assert all(len(item) == 2 for item in seen)

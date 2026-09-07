@@ -28,8 +28,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   TRINITY-Conductor conduct. A tools array no longer ejects those calls into
   single-agent passthrough, so a failed worker is re-selected on the control
   plane (incident: ContextualWisdomLab/.github run 34079284863, Strix step 23).
-  Concrete model ids remain a debug pin. Psychometric θ̂/RMSE stays an
-  equal-budget score of those paper paths, not a separate router.
+  A worker `tool_calls` payload is returned as Chat Completions `tool_calls`
+  instead of being treated as missing assistant text. Concrete model ids
+  remain a debug pin. Psychometric θ̂/RMSE stays an equal-budget score of
+  those paper paths, not a separate router.
 - Streamed `/v1/responses` now emits OpenAI `response.reasoning_text.*`
   events for TRINITY thinker/worker/verifier and Conductor step outputs,
   while `response.reasoning_summary_*` stays the paper-role stage summary.

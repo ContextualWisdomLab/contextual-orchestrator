@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import wraps
 import http.client
+import inspect
 import io
 import ipaddress
 import json
@@ -1688,6 +1689,44 @@ def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
     return False
 
 
+def _assistant_message_extras(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep provider tool_calls/finish_reason beside the text-only chat() result."""
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        return None
+    extras: dict[str, Any] = {}
+    message = choice.get("message")
+    if isinstance(message, dict) and message.get("tool_calls"):
+        extras["tool_calls"] = message["tool_calls"]
+    finish_reason = choice.get("finish_reason")
+    if isinstance(finish_reason, str) and finish_reason:
+        extras["finish_reason"] = finish_reason
+    return extras or None
+
+
+def _notify_progress(
+    progress: Callable[..., Any] | None,
+    role: str,
+    status: str,
+    output: str = "",
+) -> None:
+    """Call a conduct progress hook without breaking two-argument callers."""
+    if progress is None:
+        return
+    try:
+        parameters = inspect.signature(progress).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_output = len(parameters) >= 3 or any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters.values()
+    )
+    if accepts_output:
+        progress(role, status, output)
+        return
+    progress(role, status)
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -1778,6 +1817,12 @@ class ModelClient:
         usage = getattr(self._local, "usage", None)
         self._local.usage = None
         return usage
+
+    def take_assistant_message(self) -> dict[str, Any] | None:
+        """Return and clear tool_calls/finish_reason from the most recent chat() on this thread."""
+        extras = getattr(self._local, "assistant_message", None)
+        self._local.assistant_message = None
+        return extras if isinstance(extras, dict) else None
 
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
@@ -1910,6 +1955,7 @@ class ModelClient:
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
+        self._local.assistant_message = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
         effective_temperature = settings["temperature"] if temperature is None else temperature
@@ -2180,6 +2226,9 @@ class ModelClient:
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
+        extras = _assistant_message_extras(data)
+        if extras:
+            self._local.assistant_message = extras
         return self._response_content(agent, data)
 
     @staticmethod
@@ -2207,6 +2256,8 @@ class ModelClient:
         content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, str):
             return content
+        if isinstance(message, dict) and message.get("tool_calls"):
+            return ""
         if isinstance(message, dict) and message.get("reasoning"):
             raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
@@ -5465,6 +5516,10 @@ class TaskOrchestrator:
                 "verification": result.get("verification"),
             }
         )
+        if result.get("tool_calls"):
+            record["tool_calls"] = result["tool_calls"]
+        if result.get("finish_reason"):
+            record["finish_reason"] = result["finish_reason"]
         if owner_id is not None:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
@@ -6397,6 +6452,7 @@ class TaskOrchestrator:
             "judge": "model",
         }
         tried_ids: set[str] = set()
+        extras: dict[str, Any] | None = None
         for attempt_index, candidate in enumerate(ranked_pool):
             if len(tried_ids) >= max_attempts:
                 break
@@ -6409,6 +6465,8 @@ class TaskOrchestrator:
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
             )
+            extras = getattr(self, "_last_assistant_message", None)
+            self._last_assistant_message = None
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -6456,14 +6514,18 @@ class TaskOrchestrator:
             "latency_ms": None,
             "output": "",
         }
-        return self._with_effort_snapshot(
-            {
-                "mode": "route",
-                "answer": answer,
-                "verification": {**verification, "verifier_output": answer},
-                "trace": [final_row],
-            }
-        )
+        result = {
+            "mode": "route",
+            "answer": answer,
+            "verification": {**verification, "verifier_output": answer},
+            "trace": [final_row],
+        }
+        if isinstance(extras, dict):
+            if extras.get("tool_calls"):
+                result["tool_calls"] = extras["tool_calls"]
+            if extras.get("finish_reason"):
+                result["finish_reason"] = extras["finish_reason"]
+        return self._with_effort_snapshot(result)
 
     def _realtime_route_judge(
         self,
@@ -6629,7 +6691,7 @@ class TaskOrchestrator:
                 if capable:
                     agent = capable[0]
             if progress is not None:
-                progress(step.role, "started")
+                _notify_progress(progress, step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
             instruction = f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
             step_messages = [
@@ -6674,7 +6736,7 @@ class TaskOrchestrator:
                 row["failover_from"] = agent.id
             trace.append(row)
             if progress is not None:
-                progress(step.role, "completed", output)
+                _notify_progress(progress, step.role, "completed", output)
 
         if plan_source == "generated":
             # Generated plans have variable shape: locate roles instead of fixed indices.
@@ -7815,6 +7877,7 @@ class TaskOrchestrator:
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
         """
+        self._last_assistant_message = None
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
@@ -7850,7 +7913,9 @@ class TaskOrchestrator:
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
 
-            def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
+            def call(
+                agent: ModelAgent,
+            ) -> tuple[str, str, str, dict[str, Any] | None, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
@@ -7858,7 +7923,12 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                     usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-                return output, agent.id, agent.model, usage
+                    extras = (
+                        self.client.take_assistant_message()
+                        if hasattr(self.client, "take_assistant_message")
+                        else None
+                    )
+                return output, agent.id, agent.model, usage, extras
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
@@ -7872,7 +7942,14 @@ class TaskOrchestrator:
                     )
                     for agent in race_members
                     ],
-                    validate=lambda value: isinstance(value[0], str) and bool(value[0]),
+                    validate=lambda value: isinstance(value[0], str)
+                    and (
+                        bool(value[0])
+                        or (
+                            isinstance(value[4], dict)
+                            and bool(value[4].get("tool_calls"))
+                        )
+                    ),
                     deadline_seconds=self.client.timeout,
                     max_concurrency=len(race_members),
                     on_attempt_complete=attempt_completed,
@@ -7885,7 +7962,8 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
                 self._record_success(outcome.winner_endpoint_id)
-                usage = outcome.value[3]
+                output, served_id, served_model, usage, extras = outcome.value
+                self._last_assistant_message = extras
                 output_tokens = None
                 if isinstance(usage, dict):
                     reported = usage.get("completion_tokens", usage.get("output_tokens"))
@@ -7896,7 +7974,7 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
-                return outcome.value
+                return output, served_id, served_model, usage
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
@@ -8018,6 +8096,12 @@ class TaskOrchestrator:
                 # tokens-per-second EWMA (Jacobson 1988 estimator). Token counts
                 # are never inferred from text length or chunk counts.
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                extras = (
+                    self.client.take_assistant_message()
+                    if hasattr(self.client, "take_assistant_message")
+                    else None
+                )
+                self._last_assistant_message = extras
                 output_tokens = self._usage_completion_tokens(usage)
                 total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
@@ -15851,6 +15935,13 @@ def chat_completion_response(
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
+    message: dict[str, Any] = {"role": "assistant", "content": result["answer"]}
+    tool_calls = result.get("tool_calls")
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+        if not result.get("answer"):
+            message["content"] = None
+    finish_reason = result.get("finish_reason") or ("tool_calls" if tool_calls else "stop")
     return {
         "id": _new_chat_completion_id(),
         "object": "chat.completion",
@@ -15859,8 +15950,8 @@ def chat_completion_response(
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": result["answer"]},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": usage,
@@ -15937,6 +16028,20 @@ def chat_completion_chunks(
                 ],
             }
         )
+    tool_calls = result.get("tool_calls")
+    if tool_calls:
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": tool_calls},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        )
 
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -15946,9 +16051,12 @@ def chat_completion_chunks(
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
 
+    finish_reason = result.get("finish_reason") or (
+        "tool_calls" if tool_calls else "stop"
+    )
     final = {
         **base,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
         "orchestration": {
             key: value for key, value in orchestration.items() if value is not None
         },

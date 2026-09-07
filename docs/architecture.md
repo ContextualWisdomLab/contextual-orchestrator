@@ -92,8 +92,10 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   the same not-found response before backend access. Results require the
   separate trace purpose in addition to inference authorization.
 - Streamed `/v1/responses` emits OpenAI reasoning items: stage summaries on
-  `response.reasoning_summary_*`, and Fugu/TRINITY/Conductor process outputs
-  on `response.reasoning_text.*`. The synthesizer answer is `output_text`.
+  `response.reasoning_summary_*`, and TRINITY thinker/worker/verifier plus
+  Conductor step outputs on `response.reasoning_text.*`. Fugu `route_once`
+  has no separate process stream; its worker answer is `output_text`. The
+  synthesizer answer is also `output_text`.
 - Streamed `/v1/responses` workflow runs preserve optional provider usage on
   each trace step and record one `stream` cost-ledger row per completed step.
   Missing provider counts remain `unavailable`; the gateway never derives
