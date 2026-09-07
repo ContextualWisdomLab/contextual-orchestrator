@@ -267,6 +267,23 @@ def test_production_gate_rejects_junk_and_estimated_status() -> None:
     assert production_default_change_allowed(unlocked) is False
 
 
+@pytest.mark.parametrize("origin", (None, "synthetic_true_theta", "live_provider"))
+@pytest.mark.parametrize("candidate_rmse", (0.0, 0.1))
+def test_declared_report_cannot_authorize_production_defaults(
+    origin: str | None, candidate_rmse: float
+) -> None:
+    """Labels and arbitrarily strong point estimates supply no decision authority."""
+    report = {
+        "single_model_baseline": {"rmse": 1.0},
+        "role_differentiated": {"rmse": candidate_rmse},
+        "measurement_status": "measured",
+        "robustness_passed": True,
+    }
+    if origin is not None:
+        report["usage_source"] = origin
+    assert production_default_change_allowed(report) is False
+
+
 @pytest.mark.parametrize(
     "status_fields",
     (
