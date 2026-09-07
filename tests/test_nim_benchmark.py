@@ -1835,7 +1835,12 @@ def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> 
     assert comparison["end_to_end_latency_ms"]["mean_difference"] == 200.0
     assert all(cell["task_score"] is None for cell in cells)
     evidence = nb._evaluation_evidence_summary(cells, 1)
-    assert evidence["evidence_status"] == "insufficient_evidence"
+    assert evidence["evidence_status"] == "measurement_evidence_only"
+    assert evidence["decision_use"] == "measurement_evidence_only"
+    assert evidence["observed_paired_task_count"] == 0
+    assert evidence["observed_completion_fraction"] == 0.0
+    assert evidence["minimum_paired_task_count"] is None
+    assert evidence["required_completion_fraction"] is None
     assert evidence["routing_recommendation"] is None
 
 
