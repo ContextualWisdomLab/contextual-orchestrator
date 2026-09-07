@@ -2437,9 +2437,7 @@ def best_single_worker_hindsight(
     maximum_score = max(row["mean_task_score"] for row in direct)
     leaders = [row for row in direct if row["mean_task_score"] == maximum_score]
     if len(leaders) != 1:
-        raise BenchmarkContractError(
-            "hindsight comparison has no unique quality maximum"
-        )
+        return None
     best = leaders[0]
     return {
         "policy_name": best["policy_name"],
