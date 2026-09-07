@@ -10,10 +10,9 @@ execution remains deterministic, network-free, and credential-free.
 
 The benchmark is evidence-generating rather than policy-authorizing. It records
 what was discovered, planned, attempted, completed, failed, measured, estimated,
-and unknown. It never changes production routing automatically. A report below the
-explicit evidence floor is labeled `insufficient_evidence`, and every report
-keeps `routing_recommendation` null so a responsible human review remains
-necessary.
+and unknown. It never changes production routing automatically. Every report is
+measurement evidence only and keeps `routing_recommendation` null. Observation
+counts alone do not validate a decision design or confer production authority.
 
 ## Architecture and MSA boundary
 
@@ -152,19 +151,25 @@ support, or per-model production price.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
-tasks outside the decision set. It verifies the integration surface but cannot
-authorize production routing. The governance floor is:
+The bundled thirty-task manifest is an integration fixture with two exploratory
+tasks outside the decision set. The former 30-pair/90-percent floors did not
+validate sampling, scorer quality, uncertainty or deployment transfer. They no
+longer promote a report into production-candidate review. Counts and emitted-cell
+completion remain observations; threshold fields and routing recommendation are
+null, with `measurement_evidence_only` classification. This also applies when a
+caller declares 30,000 tasks but supplies only 30 successful task pairs.
 
-- at least 30 locked paired tasks shared by compared policies; and
-- at least 90% successful cells across the requested comparison matrix.
-
-These values are explicit conservative release-governance thresholds, not a
-claim of universal statistical sufficiency. The artifact reports the observed
-paired-task count, requested thresholds, completion fraction, and whether the
-run is `insufficient_evidence` or `evidence_review_required`. Even when the floor
-is met, production routing remains a human decision and
-`routing_recommendation` stays null.
+This proposed adaptation preserves the decision-authority slice of canonical
+PR #1000 commit `715f24a130416da3a255fa45823910410297845a`. Its separate live
+output-token allocation and removal of three source-fix artifacts are not
+inherited by this slice; this is not complete supersession of that commit or PR.
+No new estimator, threshold or statistical dependency was added. A validated
+decision contract still needs target population and assignment design, expected
+task/policy/attempt identities, scorer/version evidence, missingness treatment,
+precision/error objectives and empirical held-out validation with released
+statistical-owner contracts. Removing an unsupported cutoff does not meet those
+requirements. Child #1074's locked-cohort and failure-inclusive comparisons must
+remain intact when this parent change is integrated.
 
 Paired bootstrap intervals preserve task pairing and expose uncertainty in mean
 delivered-score and terminal-outcome-time differences. Pareto frontiers show quality against latency and reviewed

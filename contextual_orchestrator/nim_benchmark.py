@@ -106,7 +106,7 @@ DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKE
 # benchmark media outputs while preventing a provider from returning an
 # unbounded body to the evidence collector.
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
-# Smoke manifests can exercise plumbing but cannot justify production routing.
+# Historical fixture values; neither authorizes statistical or routing decisions.
 MINIMUM_PAIRED_TASK_COUNT = 30
 REQUIRED_COMPLETION_FRACTION = 0.9
 
@@ -2615,7 +2615,7 @@ def _evaluation_evidence_summary(
     cells: list[dict[str, Any]],
     locked_task_count: int,
 ) -> dict[str, Any]:
-    """Classify whether benchmark evidence can inform production review."""
+    """Report observed quantities without claiming decision-design validity."""
     headline_cells = [
         cell
         for cell in cells
@@ -2636,20 +2636,11 @@ def _evaluation_evidence_summary(
     paired_task_ids = successful_tasks_by_policy.get("route_once", set()) & (
         successful_tasks_by_policy.get("conduct_bounded", set())
     )
-    sufficient = (
-        locked_task_count >= MINIMUM_PAIRED_TASK_COUNT
-        and len(paired_task_ids) >= MINIMUM_PAIRED_TASK_COUNT
-        and completion_fraction >= REQUIRED_COMPLETION_FRACTION
-    )
     return {
-        "evidence_status": (
-            "evidence_review_required" if sufficient else "insufficient_evidence"
-        ),
-        "decision_use": (
-            "production_candidate_review" if sufficient else "benchmark_smoke_only"
-        ),
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "evidence_status": "measurement_evidence_only",
+        "decision_use": "measurement_evidence_only",
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "observed_locked_task_count": locked_task_count,
         "observed_paired_task_count": len(paired_task_ids),
         "observed_completion_fraction": completion_fraction,
@@ -2880,10 +2871,9 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "",
         "## Evidence sufficiency",
         "",
-        f"- jointly successful paired tasks: {report['evaluation']['observed_paired_task_count']} "
-        f"/ {report['evaluation']['minimum_paired_task_count']} required",
-        f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
-        f"/ {report['evaluation']['required_completion_fraction']} required",
+        f"- jointly successful paired tasks: {report['evaluation']['observed_paired_task_count']}",
+        f"- observed completion fraction: {report['evaluation']['observed_completion_fraction']}",
+        "- statistical sufficiency threshold: none; a pre-registered validated evaluation design is required",
         "- production routing recommendation: none"
         if report["evaluation"]["routing_recommendation"] is None
         else f"- production routing recommendation: {report['evaluation']['routing_recommendation']}",
@@ -3294,8 +3284,8 @@ def run_benchmark(
         "max_workflow_depth": MAX_WORKFLOW_DEPTH,
         "policy_total_token_budget": max_output_tokens * MAX_WORKFLOW_DEPTH,
         "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "seed": seed,
         "task_manifest_version": manifest["manifest_version"],
         "pricing_scenario_version": (

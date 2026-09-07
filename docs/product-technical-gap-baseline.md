@@ -1,5 +1,11 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+Parent `ec1c4e66512615ea1f00fa044f3bfba787aab567` is integrated below while
+retaining child `54b2b809` locked filtering and failure-inclusive comparison.
+The measurement-only decision-authority entry supersedes historical statements
+that the 30-pair/completion gates remain active. No historical result transfers
+to this integration without new verification.
+
 ## 2026-09-07 locked evidence isolation
 
 Mixed exploratory and locked observations could change policy summaries and
@@ -171,6 +177,21 @@ and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
 migration. Paired p95 inference and representative buyer observations remain
 open. RankWeave's released retrieval comparison API does not provide the
 needed response-time quantile contract.
+## 2026-09-07 measurement-only decision authority (proposed)
+
+RED `1cc27fca` retained two failures: the same 30 successful policy pairs
+received production-candidate-review classification for declared task counts
+30 and 30,000. Source `31664b7a` adapts only the decision-authority slice of
+PR #1000 commit `715f24a130416da3a255fa45823910410297845a`: counts remain
+observations, classification is measurement-only, and threshold/recommendation
+fields remain null. Markdown and parameter provenance use the same boundary.
+The original token-allocation delta and source-fix removals remain separate;
+neither the original commit nor PR is fully superseded. This is not a validated
+production decision model or an accuracy/latency gain. Population, expected-matrix,
+scorer, uncertainty and held-out validation remain required. Parent-to-child
+integration must preserve #1074 locked isolation and failure-inclusive pairing;
+fresh tests, hosted checks, independent review and protected delivery remain gates.
+
 ## 2026-09-07 exact-head regression and stacked hosted verification
 
 Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)

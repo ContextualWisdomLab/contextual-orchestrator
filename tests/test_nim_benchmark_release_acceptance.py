@@ -364,10 +364,10 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
     )
     evaluation = report["evaluation"]
 
-    assert evaluation["evidence_status"] == "evidence_review_required"
-    assert evaluation["decision_use"] == "production_candidate_review"
-    assert evaluation["minimum_paired_task_count"] == 30
-    assert evaluation["required_completion_fraction"] == 0.9
+    assert evaluation["evidence_status"] == "measurement_evidence_only"
+    assert evaluation["decision_use"] == "measurement_evidence_only"
+    assert evaluation["minimum_paired_task_count"] is None
+    assert evaluation["required_completion_fraction"] is None
     assert evaluation["routing_recommendation"] is None
     assert report["provenance"]["benchmark_parameters"]["policy_total_token_budget"] == (
         nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
@@ -689,8 +689,8 @@ def test_actual_cost_evidence_validation_and_expiry_paths(
         )
 
 
-def test_sufficient_evidence_is_still_human_review_gated() -> None:
-    """Meeting sample thresholds changes status but never auto-selects a route."""
+def test_observed_evidence_never_auto_selects_a_route() -> None:
+    """Observed successful pairs cannot supply a validated decision design."""
     cells = []
     for task_index in range(nb.MINIMUM_PAIRED_TASK_COUNT):
         task_id = f"paired_task_{task_index}"
@@ -707,8 +707,8 @@ def test_sufficient_evidence_is_still_human_review_gated() -> None:
         cells,
         nb.MINIMUM_PAIRED_TASK_COUNT,
     )
-    assert summary["evidence_status"] == "evidence_review_required"
-    assert summary["decision_use"] == "production_candidate_review"
+    assert summary["evidence_status"] == "measurement_evidence_only"
+    assert summary["decision_use"] == "measurement_evidence_only"
     assert summary["routing_recommendation"] is None
 
 
