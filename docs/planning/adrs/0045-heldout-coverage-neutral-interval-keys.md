@@ -56,5 +56,6 @@ Negative: consumers of the previous JSON keys must read `*_interval`.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Sequential-drift horizon, Wilson coverage, and censored no-alarm delays move
+to ADR 0046. Other repository-authored harness sample sizes stay open. This
+ADR is Proposed until independent review and protected delivery.
