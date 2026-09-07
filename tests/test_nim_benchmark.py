@@ -1681,6 +1681,27 @@ def test_summaries_count_failures_as_zero_quality() -> None:
     assert nb.build_pareto_frontiers(summaries)["quality_vs_hypothetical_cost"] == []
 
 
+@pytest.mark.parametrize("declared_task_count", [30, 30_000])
+def test_observed_counts_do_not_authorize_production_review(
+    declared_task_count: int,
+) -> None:
+    """Counts alone cannot validate a population, scorer, or decision design."""
+    cells = [
+        _synthetic_cell(policy_name, f"task_{task_index}", 1.0)
+        for task_index in range(30)
+        for policy_name in ("route_once", "conduct_bounded")
+    ]
+    summary = nb._evaluation_evidence_summary(cells, declared_task_count)
+    assert summary["observed_locked_task_count"] == declared_task_count
+    assert summary["observed_paired_task_count"] == 30
+    assert summary["observed_completion_fraction"] == 1.0
+    assert summary["evidence_status"] == "measurement_evidence_only"
+    assert summary["decision_use"] == "measurement_evidence_only"
+    assert summary["minimum_paired_task_count"] is None
+    assert summary["required_completion_fraction"] is None
+    assert summary["routing_recommendation"] is None
+
+
 def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
     cells = [
         _synthetic_cell("route_once", "task_one", 1.0),
