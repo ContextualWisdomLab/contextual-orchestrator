@@ -23,6 +23,16 @@ pending clarification of its cover, without denying the article's open license.
 
 ## Product decision that remains open
 
+[Issue #568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568)
+closed when [PR #785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785)
+merged as `4100b325c967bb50ccb23a95f3f79daf1c004ef7`. That PR records profile
+binding and estimated synthetic checks, not a measured buyer improvement.
+The experimental requirement already has an open owner in
+[issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86):
+fair comparisons, paired uncertainty, explicit live evidence and protected
+operational acceptance. Continue there rather than equating the profile issue's
+closure with scientific validation or creating a duplicate evidence issue.
+
 Removing count-only promotion prevents unsupported approval; it does not
 establish an accurate, faster router. Before collecting decision evidence,
 record the target task population, eligibility rules, versioned model/endpoint
