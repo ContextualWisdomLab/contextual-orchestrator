@@ -37,7 +37,7 @@ DECLARED_LATENCY_REPETITIONS_PER_CONTEXT = 200
 DECLARED_ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
-DIF_SAMPLE_SIZE = 4_000
+DECLARED_DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
 JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
@@ -1177,25 +1177,37 @@ def _validate_selection_utility() -> dict[str, object]:
     }
 
 
-def _validate_candidate_group_dif() -> dict[str, object]:
-    """Recover one known candidate-cohort item shift after criterion purification."""
+def _validate_candidate_group_dif(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Recover one known candidate-cohort item shift after criterion purification.
+
+    ``sample_size`` is a required even positive declaration. ``None`` is a
+    fail-closed sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
+    if declared_sample_size % 2:
+        raise ValueError("sample_size must be a declared even positive integer")
     generator = np.random.default_rng(DIF_SEED)
     item_count = 8
-    group = np.repeat((0, 1), DIF_SAMPLE_SIZE // 2)
-    ability = generator.normal(size=DIF_SAMPLE_SIZE)
+    group = np.repeat((0, 1), declared_sample_size // 2)
+    ability = generator.normal(size=declared_sample_size)
     intercept = np.linspace(-1.4, 1.4, item_count)
     logits = ability[:, None] - intercept[None, :]
     logits[:, 0] += 1.4 * group
     probabilities = 1.0 / (1.0 + np.exp(-logits))
-    responses = (generator.random((DIF_SAMPLE_SIZE, item_count)) < probabilities).astype(
-        np.int8
-    )
+    responses = (
+        generator.random((declared_sample_size, item_count)) < probabilities
+    ).astype(np.int8)
     result = fast_mlsirm.logistic_dif_purified(responses, group)
     flagged_items = np.flatnonzero(result["flagged_bh"]).tolist()
     expected_items = [0]
     return {
         "method": "logistic_dif_purified",
-        "sample_size": DIF_SAMPLE_SIZE,
+        "sample_size": declared_sample_size,
         "seed": DIF_SEED,
         "expected_dif_items": expected_items,
         "flagged_items": flagged_items,
@@ -1891,7 +1903,9 @@ def run_benchmark(
     conditional_information = _validate_conditional_information()
     classification_decision = _validate_classification_decision()
     selection_utility = _validate_selection_utility()
-    candidate_group_dif = _validate_candidate_group_dif()
+    candidate_group_dif = _validate_candidate_group_dif(
+        sample_size=DECLARED_DIF_SAMPLE_SIZE
+    )
     judge_effects = _validate_judge_effects()
     item_covariate_effect = _validate_item_covariate_effect()
     parameter_uncertainty = _validate_parameter_uncertainty()
