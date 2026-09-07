@@ -479,18 +479,17 @@ def test_bootstrap_fills_remainder_from_deferred_same_family_models() -> None:
     assert all(m.provider_name == "nvidia_nim" for m in selected[2:])
 
 
-def test_bootstrap_early_return_stops_at_limit_within_loop() -> None:
-    """A limit below the distinct-family count returns without a second pass."""
+def test_bootstrap_selection_fails_closed_at_unpriced_boundary() -> None:
+    """A capacity boundary cannot admit lexically chosen unpriced candidates."""
     book = PriceBook(InMemoryConfigStore())
     models = [
         _chat_model("openai", "openai-model"),
         _chat_model("openrouter", "openrouter-model"),
         _chat_model("bytez", "bytez-model"),
     ]
-    selected = select_bootstrap_discovered_agents(models, book, 2)
-    # Unpriced ties rank by provider name: bytez < openai < openrouter.
-    assert len(selected) == 2
-    assert [m.provider_name for m in selected] == ["bytez", "openai"]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
 
 
 if __name__ == "__main__":  # pragma: no cover

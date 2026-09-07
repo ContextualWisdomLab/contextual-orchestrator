@@ -158,6 +158,17 @@ def test_diverse_selection_prefers_provider_declared_free_over_unknown() -> None
     ) == [free]
 
 
+def test_diverse_selection_fails_closed_at_unpriced_boundary() -> None:
+    """A bounded pool cannot admit one of two equally unsupported candidates."""
+    models = [
+        _model("bytez", "BYTEZ_API_KEY", "bytez-unknown", None),
+        _model("openrouter", "OPENROUTER_API_KEY", "router-unknown", None),
+    ]
+
+    with pytest.raises(provider_bootstrap.ProviderBootstrapError, match="ambiguous"):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=1)
+
+
 def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     """A missing prompt or completion price cannot become an invented zero."""
     partial = replace(
