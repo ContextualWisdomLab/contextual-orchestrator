@@ -6263,6 +6263,15 @@ class TaskOrchestrator:
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
             self.candidates = updated_candidates
             self.agents = updated_agents
+            self._append_audit_event(
+                "model_timeout_policy_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "worker_agent_id": worker_agent_id,
+                    "revision": revision,
+                    "restored_from_revision": restored_from_revision,
+                },
+            )
             return self._agent_to_admin_payload(patched)
         if self._pool_store is not None:
             self._pool_store.save(patched)

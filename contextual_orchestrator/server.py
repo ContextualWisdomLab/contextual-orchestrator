@@ -8038,6 +8038,11 @@ def build_server(
         @staticmethod
         def _admin_purpose(path: str) -> str:
             """Select the least-privileged purpose for an admin GET route."""
+            segments = [part for part in path.split("/") if part]
+            if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                    and segments[4] == "worker_agents"
+                    and segments[6:] == ["timeout_policy", "history"]):
+                return "audit_replay"
             if (
                 path == "/admin/state"
                 or path == "/api/v1/workflow_runs"

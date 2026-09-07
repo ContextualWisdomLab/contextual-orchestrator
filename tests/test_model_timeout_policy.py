@@ -239,6 +239,56 @@ def test_model_timeout_policy_requires_durable_store() -> None:
     assert orchestrator._agent(model_agent.id).model_timeout_seconds is None
 
 
+def test_timeout_history_read_requires_durable_authorization_audit(tmp_path: Path, monkeypatch) -> None:
+    """A real history GET records replay access, and fails closed without audit."""
+    import threading
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    router = TaskOrchestrator([ModelAgent("timeout_agent", "example-model")],
+                              agents_db=str(tmp_path / "pool.db"))
+    recorded = []
+    monkeypatch.setattr(router, "record_authorization_decision", lambda **kwargs: recorded.append(kwargs))
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/api/v1/agent_pools/default/worker_agents/timeout_agent/timeout_policy/history"
+    request = Request(url, headers={"Authorization": "Bearer local_test_only"})
+    try:
+        with urlopen(request, timeout=5) as response:
+            assert response.status == 200
+        assert any(row.get("purpose") == "audit_replay" and row.get("durable") is True
+                   and row["allowed"] is True for row in recorded)
+        def reject_audit(**kwargs):
+            raise RuntimeError("audit unavailable")
+        monkeypatch.setattr(router, "record_authorization_decision", reject_audit)
+        with pytest.raises(HTTPError) as error:
+            urlopen(request, timeout=5)
+        assert error.value.code == 503
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_timeout_changes_are_visible_in_operator_audit(tmp_path: Path) -> None:
+    """Set, clear, and restore expose only committed revision references."""
+    agent = ModelAgent("timeout_agent", "example-model")
+    router = TaskOrchestrator([agent], agents_db=str(tmp_path / "pool.db"))
+    router.patch_agent("default", agent.id, {"model_timeout_seconds": 7200})
+    router.patch_agent("default", agent.id, {"model_timeout_seconds": None})
+    router.restore_model_timeout("default", agent.id, 1, expected_revision=2, actor_id="a" * 64)
+    events = [event for event in reversed(router.list_recent_audit_events())
+              if event["event_type"] == "model_timeout_policy_changed"]
+    assert [event["event_detail"]["revision"] for event in events] == [1, 2, 3]
+    assert events[-1]["event_detail"]["restored_from_revision"] == 1
+    with pytest.raises(ValueError, match="reload"):
+        router.patch_agent("default", agent.id, {"model_timeout_seconds": None},
+                           expected_timeout_revision=1)
+    assert len(router.list_recent_audit_events()) == 3
+
+
 def test_model_timeout_policy_records_atomic_history(tmp_path: Path) -> None:
     """Committed revisions retain their old and new limits in order."""
     model_agent = ModelAgent("timeout_agent", "example-model")

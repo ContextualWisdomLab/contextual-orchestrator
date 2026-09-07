@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 timeout audit visibility repair
+
+On PR #1053 base `1ccc9599415096433214cd9ad0df611eddfc8fbb`, successful
+timeout set, clear, and restore operations had durable policy history but no
+operator audit event. A local regression reproduced the missing events; the
+repair adds committed revision references to the existing audit stream.
+History GET access now uses the existing durable replay-authorization path.
+An authenticated loopback HTTP regression reproduced missing access auditing
+and now checks both successful access and HTTP 503 when audit recording fails.
+
+The timeout-policy and agent-pool suites passed 73 tests in 12.30s before this
+documentation update. No live provider, protected merge, or deployment is
+claimed. The HTTP test spies on the durable audit call; it does not prove
+storage survival after a crash. Policy history remains atomic with the policy
+update; the separate operator event is not a new cross-store transaction.
+Default-null model timeout and explicit administrator control are unchanged.
+
 ## 2026-09-06 model-specific timeout policy: local, not delivered
 
 PR #1053's remote `661ce8db` has a completed 3400-pass/2-skip regression suite
