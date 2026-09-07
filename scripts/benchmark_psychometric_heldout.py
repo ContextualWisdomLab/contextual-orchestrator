@@ -28,8 +28,11 @@ from contextual_orchestrator.psychometric_routing import (  # noqa: E402
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 UNSEEN_MODEL_ID = "model_unseen"
 TRAIN_CONTEXTS = 24
-BOOTSTRAP_SAMPLES = 2_000
-BOOTSTRAP_SEED = 568
+# Script-entry run declarations. Functions take these as required arguments;
+# they are not hidden statistical defaults.
+DECLARED_BOOTSTRAP_RESAMPLE_COUNT = 2_000
+DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
+DECLARED_BOOTSTRAP_SEED = 568
 LATENCY_REPETITIONS = 200
 ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
@@ -85,19 +88,76 @@ def _vector(angle: float) -> list[float]:
     return [math.cos(angle), math.sin(angle)]
 
 
+def _require_declared_positive_int(value: object, field_name: str) -> int:
+    """Reject missing, boolean, or non-positive integer declarations."""
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{field_name} must be a declared positive integer")
+    return value
+
+
+def _require_declared_confidence_level(value: object) -> float:
+    """Reject missing or non-exclusive-unit-interval coverage declarations."""
+    if type(value) is not float or not math.isfinite(value) or not 0.0 < value < 1.0:
+        raise ValueError(
+            "confidence_level must be a declared finite exclusive unit interval"
+        )
+    return value
+
+
+def _require_declared_seed(value: object) -> int:
+    """Reject missing or boolean bootstrap seeds."""
+    if type(value) is not int:
+        raise ValueError("seed must be a declared integer")
+    return value
+
+
+def _declared_bootstrap(
+    *,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    seed: int | None = None,
+) -> dict[str, int | float]:
+    """Return validated bootstrap declarations. ``None`` is fail-closed."""
+    return {
+        "resample_count": _require_declared_positive_int(
+            resample_count, "resample_count"
+        ),
+        "confidence_level": _require_declared_confidence_level(confidence_level),
+        "seed": _require_declared_seed(seed),
+    }
+
+
 def _paired_bootstrap_mean_ci(
-    candidate: list[float], baseline: list[float]
+    candidate: list[float],
+    baseline: list[float],
+    *,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    seed: int | None = None,
 ) -> list[float]:
-    """Return a deterministic paired 95% interval for candidate-minus-baseline."""
+    """Return a deterministic paired percentile interval for candidate-minus-baseline.
+
+    ``resample_count``, ``confidence_level``, and ``seed`` are required
+    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
+    """
     if not candidate or len(candidate) != len(baseline):
         raise ValueError("paired samples must be non-empty and equal length")
+    iterations = _require_declared_positive_int(resample_count, "resample_count")
+    coverage = _require_declared_confidence_level(confidence_level)
+    declared_seed = _require_declared_seed(seed)
     differences = [left - right for left, right in zip(candidate, baseline)]
-    generator = random.Random(BOOTSTRAP_SEED)
+    generator = random.Random(declared_seed)
     means = sorted(
         statistics.fmean(generator.choices(differences, k=len(differences)))
-        for _ in range(BOOTSTRAP_SAMPLES)
+        for _ in range(iterations)
     )
-    return [means[math.floor(0.025 * BOOTSTRAP_SAMPLES)], means[math.ceil(0.975 * BOOTSTRAP_SAMPLES) - 1]]
+    lower_quantile = (1.0 - coverage) / 2.0
+    upper_quantile = 1.0 - lower_quantile
+    lower_index = math.floor(lower_quantile * iterations)
+    upper_index = math.ceil(upper_quantile * iterations) - 1
+    if not 0 <= lower_index < upper_index < iterations:
+        raise ValueError("declared coverage cannot be represented with the resample count")
+    return [means[lower_index], means[upper_index]]
 
 
 def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
@@ -1192,8 +1252,18 @@ def _validate_parameter_uncertainty() -> dict[str, object]:
     }
 
 
-def _validate_adaptive_candidate_calibration() -> dict[str, object]:
+def _validate_adaptive_candidate_calibration(
+    *,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    seed: int | None = None,
+) -> dict[str, object]:
     """Compare information-selected and random onboarding queries on known truth."""
+    bootstrap = _declared_bootstrap(
+        resample_count=resample_count,
+        confidence_level=confidence_level,
+        seed=seed,
+    )
     from fast_mlsirm import cat_next_item
 
     candidate_thetas = tuple(
@@ -1307,7 +1377,7 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     }
     paired_delta_ci95 = {
         metric: _paired_bootstrap_mean_ci(
-            adaptive_samples[metric], random_samples[metric]
+            adaptive_samples[metric], random_samples[metric], **bootstrap
         )
         for metric in adaptive_samples
     }
@@ -1400,9 +1470,10 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
             sequential_queries,
             [float(ADAPTIVE_CALIBRATION_MAX_ITEMS)]
             * ADAPTIVE_CALIBRATION_CANDIDATES,
+            **bootstrap,
         ),
         "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
-            sequential_correct, fixed_correct
+            sequential_correct, fixed_correct, **bootstrap
         ),
         "confidence_resolved_rate": statistics.fmean(
             row[4] for row in classification_rows
@@ -1559,10 +1630,14 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
         },
         "heldout_paired_delta_ci95": {
             "coverage": _paired_bootstrap_mean_ci(
-                heldout_samples["resolved"], heldout_baseline_samples["resolved"]
+                heldout_samples["resolved"],
+                heldout_baseline_samples["resolved"],
+                **bootstrap,
             ),
             "all_candidate_queries": _paired_bootstrap_mean_ci(
-                heldout_samples["queries"], heldout_baseline_samples["queries"]
+                heldout_samples["queries"],
+                heldout_baseline_samples["queries"],
+                **bootstrap,
             ),
         },
         "replication_audit": {
@@ -1634,13 +1709,29 @@ def _validate_adaptive_candidate_calibration() -> dict[str, object]:
     }
 
 
-def run_benchmark() -> dict[str, object]:
-    """Return paired held-out accuracy uncertainty and decision latency."""
+def run_benchmark(
+    *,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    seed: int | None = None,
+) -> dict[str, object]:
+    """Return paired held-out accuracy uncertainty and decision latency.
+
+    Bootstrap resample count, percentile coverage, and seed are required
+    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
+    """
+    bootstrap = _declared_bootstrap(
+        resample_count=resample_count,
+        confidence_level=confidence_level,
+        seed=seed,
+    )
     baseline_evidence = _build_evidence(two_neighbor=False)
     candidate_evidence = _build_evidence(two_neighbor=True)
     baseline, baseline_samples = _evaluate_quality(baseline_evidence)
     candidate, candidate_samples = _evaluate_quality(candidate_evidence)
-    adaptive_candidate_calibration = _validate_adaptive_candidate_calibration()
+    adaptive_candidate_calibration = _validate_adaptive_candidate_calibration(
+        **bootstrap
+    )
     unseen_predictions = sum(
         bool(
             candidate_evidence.ranked_evidence(
@@ -1706,7 +1797,7 @@ def run_benchmark() -> dict[str, object]:
     }
     delta_ci95 = {
         metric: _paired_bootstrap_mean_ci(
-            candidate_samples[metric], baseline_samples[metric]
+            candidate_samples[metric], baseline_samples[metric], **bootstrap
         )
         for metric in candidate_samples
     }
@@ -1954,7 +2045,9 @@ def run_benchmark() -> dict[str, object]:
     result: dict[str, object] = {
         **candidate,
         "baseline": baseline,
-        "bootstrap_samples": BOOTSTRAP_SAMPLES,
+        "bootstrap_samples": bootstrap["resample_count"],
+        "bootstrap_confidence_level": bootstrap["confidence_level"],
+        "bootstrap_seed": bootstrap["seed"],
         "contexts_held_out": TRAIN_CONTEXTS,
         "contexts_train": TRAIN_CONTEXTS,
         "delta": delta,
@@ -2004,7 +2097,11 @@ def run_benchmark() -> dict[str, object]:
 
 def main() -> None:
     """Print the held-out benchmark report as stable JSON."""
-    result = run_benchmark()
+    result = run_benchmark(
+        resample_count=DECLARED_BOOTSTRAP_RESAMPLE_COUNT,
+        confidence_level=DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL,
+        seed=DECLARED_BOOTSTRAP_SEED,
+    )
     print(json.dumps(result, sort_keys=True))
 
 

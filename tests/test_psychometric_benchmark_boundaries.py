@@ -11,6 +11,12 @@ import pytest
 from scripts import benchmark_psychometric_heldout as heldout
 from scripts import benchmark_psychometric_routing as routing
 
+SMALL_HELDOUT_BOOTSTRAP = {
+    "resample_count": 20,
+    "confidence_level": 0.95,
+    "seed": 568,
+}
+
 
 @pytest.mark.parametrize(
     "candidate_count, unresolved_scope",
@@ -28,7 +34,6 @@ def test_selective_coverage_uses_actual_odd_sized_strata(
 ):
     """An oracle resolving every row must cover each unequal stratum exactly once."""
     monkeypatch.setattr(heldout, "ADAPTIVE_CALIBRATION_CANDIDATES", candidate_count)
-    monkeypatch.setattr(heldout, "BOOTSTRAP_SAMPLES", 20)
     monkeypatch.setattr(heldout, "SELECTIVE_CLASSIFICATION_REPLICATIONS", 2)
     monkeypatch.setattr(heldout, "SELECTIVE_CLASSIFICATION_MAX_ERROR_UPPER", 1.0)
     candidate_index = -1
@@ -52,9 +57,9 @@ def test_selective_coverage_uses_actual_odd_sized_strata(
     monkeypatch.setattr(heldout.fast_mlsirm, "cat_next_item", oracle)
     if unresolved_scope:
         with pytest.raises(ValueError, match="no confidence-resolved candidates"):
-            heldout._validate_adaptive_candidate_calibration()
+            heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
         return
-    report = heldout._validate_adaptive_candidate_calibration()
+    report = heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
     screen = report["classification_stopping"]["risk_coverage_screen"]
     for point in (screen["heldout"], screen["heldout_baseline"]):
         for metric in (
@@ -72,13 +77,12 @@ def test_calibration_rejects_empty_generated_strata(monkeypatch, candidate_count
     """A missing denominator fails explicitly before the native calibration call."""
     monkeypatch.setattr(heldout, "ADAPTIVE_CALIBRATION_CANDIDATES", candidate_count)
     with pytest.raises(ValueError, match="non-empty near-cut and directional strata"):
-        heldout._validate_adaptive_candidate_calibration()
+        heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
 
 
 def test_calibration_rejects_undefined_resolution_summary(monkeypatch):
     """No resolved decisions cannot be reported as zero error or divide by zero."""
     monkeypatch.setattr(heldout, "ADAPTIVE_CALIBRATION_CANDIDATES", 9)
-    monkeypatch.setattr(heldout, "BOOTSTRAP_SAMPLES", 20)
     monkeypatch.setattr(
         heldout.fast_mlsirm,
         "cat_next_item",
@@ -89,7 +93,7 @@ def test_calibration_rejects_undefined_resolution_summary(monkeypatch):
         },
     )
     with pytest.raises(ValueError, match="no confidence-resolved candidates"):
-        heldout._validate_adaptive_candidate_calibration()
+        heldout._validate_adaptive_candidate_calibration(**SMALL_HELDOUT_BOOTSTRAP)
 
 
 @pytest.mark.parametrize("sample_count", [1, 21, 101])

@@ -78,6 +78,6 @@ declarations; schema 3 reports cannot be reused.
 
 ## Remaining work
 
-Token and workflow-depth budgets move to ADR 0043. The psychometric held-out
-harness's 2,000-sample 95% interval stays open. This ADR is Proposed until
-independent review and protected delivery.
+Token and workflow-depth budgets move to ADR 0043. Held-out bootstrap
+coverage moves to ADR 0044. This ADR is Proposed until independent review
+and protected delivery.

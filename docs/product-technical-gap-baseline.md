@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 declared held-out bootstrap coverage (proposed)
+
+Successor of the declared workflow-budget slice removes hidden
+`BOOTSTRAP_SAMPLES = 2_000` and the baked-in 95% percentile from
+`scripts/benchmark_psychometric_heldout.py`. Resample count, exclusive-unit-interval
+coverage, and seed are required declarations. Missing, boolean, non-positive,
+or non-representable declarations fail closed. The script entry and full
+harness tests pass 2,000, 0.95, and seed 568 as this run's choices. ADR 0044
+is Proposed.
+
+Local contract tests on this working tree: 19 related declaration and
+boundary tests passed. This is not buyer-held-out accuracy, p95 latency, or
+protected merge evidence. Production route/conduct defaults stay locked.
+Other harness sample sizes and nested `*_ci95` key names remain later work.
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-07 declared workflow depth and token budgets (proposed)
 
 Successor of the declared paired-bootstrap slice removes hidden
@@ -14,9 +31,8 @@ Proposed.
 Local three-file coverage on this working tree: NIM statements/branches 100%,
 interrogate 100%, 181 related tests passed. This is not buyer-held-out
 accuracy, p95 latency, or protected merge evidence. Production route/conduct
-defaults stay locked. The psychometric held-out harness's 2,000-sample 95%
-interval remains later no-heuristics work. Parent
-[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+defaults stay locked. Held-out bootstrap coverage is the successor slice.
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
 still needs independent review.
 
 ## 2026-09-07 declared paired-bootstrap coverage (proposed)
