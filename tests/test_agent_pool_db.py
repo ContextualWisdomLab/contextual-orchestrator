@@ -453,8 +453,8 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def test_http_stale_policy_rejects_admin_edit_without_overwrite(tmp_path) -> None:
-    """Actual authenticated HTTP edits cannot overwrite another writer's policy."""
+def test_http_unrelated_admin_edit_preserves_newer_timeout_policy(tmp_path) -> None:
+    """Authenticated priority edits preserve policy without relaxing access gates."""
     seeds = _seed()
     database_path = str(tmp_path / "pool.db")
     writer = TaskOrchestrator(seeds, agents_db=database_path)
@@ -468,13 +468,16 @@ def test_http_stale_policy_rejects_admin_edit_without_overwrite(tmp_path) -> Non
         writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
         status, _ = _call(url, "PATCH", "wrong_token", {"priority": 7})
         assert status == 401
-        status, payload = _call(url, "PATCH", "pool_token", {"priority": 7})
-        assert status == 400
-        assert "reload" in json.dumps(payload)
+        assert serving.candidates == before
+        status, _ = _call(url, "PATCH", "pool_token", {"priority": 7})
+        assert status == 200
+        assert serving._agent("general_agent").priority == 7
+        after_priority_edit = list(serving.candidates)
         status, _ = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 3600})
         assert status == 400  # New policy writes stay closed until runtime delivery exists.
-        assert serving.candidates == before
+        assert serving.candidates == after_priority_edit
         restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").priority == 7
         assert restored._agent("general_agent").model_timeout_seconds == 7200
         assert restored._agent("general_agent").model_timeout_revision == 1
     finally:

@@ -42,13 +42,16 @@ def test_pool_change_preserves_concurrent_timeout_policy(
     else:
         stale.delete_model_group("test_group")
     restored = TaskOrchestrator([model_agent, other_agent], agents_db=database_path)
+    persisted = restored._agent(model_agent.id)
+    assert persisted.model_timeout_seconds == 7200
+    assert persisted.model_timeout_revision == 1
     if operation == "remove":
+        assert persisted.disabled is True
+        assert persisted.group_name == ""
+        assert model_agent.id not in {agent.id for agent in restored.agents}
         with pytest.raises(KeyError):
-            restored._agent(model_agent.id)
+            stale._agent(model_agent.id)
     else:
-        persisted = restored._agent(model_agent.id)
-        assert persisted.model_timeout_seconds == 7200
-        assert persisted.model_timeout_revision == 1
         assert persisted.group_name == ("new_group" if operation == "set_group" else "")
 
 
