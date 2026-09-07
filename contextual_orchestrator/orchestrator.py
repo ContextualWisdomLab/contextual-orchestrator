@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -1855,6 +1855,32 @@ class ModelClient:
             else:
                 self._local.request_settings = previous
 
+    @contextmanager
+    def single_attempt_transport(self):
+        """Suppress this thread's own transient-retry-with-backoff in ``chat()``.
+
+        A caller that already runs its own agent-level retry-then-failover
+        decision (``TaskOrchestrator._invoke``'s ``RETRY_SAME_AGENT`` /
+        ``FAILOVER_AGENT`` classification) must not also have
+        ``_send_with_retry`` replay the identical transient failure with its
+        own backoff underneath it: stacking both layers turns one caller-level
+        "give this agent one more try" decision into
+        ``(this agent's own retry budget + 1)`` real network attempts before
+        the caller's own failover ever gets a turn -- exactly the
+        already-known-flaky-route amplification that let one retryable 5xx
+        route consume most of a request's real time budget before a cleanly
+        ready sibling was ever tried (ContextualWisdomLab/.github PR #1912).
+        Scoped to the current thread only, mirroring :meth:`request_settings`,
+        so a concurrent request on another thread sharing this client is
+        unaffected.
+        """
+        previous = getattr(self._local, "allow_transient_retries", True)
+        self._local.allow_transient_retries = False
+        try:
+            yield
+        finally:
+            self._local.allow_transient_retries = previous
+
     #: Deterministic vector dimension for mock-provider embeddings (test fixture
     #: only; production providers always return their own dimensionality).
     MOCK_EMBEDDING_DIMENSION = 8
@@ -2093,9 +2119,19 @@ class ModelClient:
         *,
         timeout: float | None = None,
     ) -> str:
-        """Call the provider, retrying transient failures with exponential backoff + jitter."""
+        """Call the provider, retrying transient failures with exponential backoff + jitter.
+
+        ``single_attempt_transport()`` scopes this thread to exactly one
+        attempt (``retry_limit`` forced to 0) when a caller -- currently only
+        ``TaskOrchestrator._invoke``'s sequential agent failover loop -- already
+        owns its own retry-vs-failover decision for this exact call, so the
+        two retry layers never stack. The final failure is still classified
+        the same way either way; only how many real attempts get spent
+        reaching it changes.
+        """
         last_error: Exception | None = None
-        retry_limit = self._retry_limit(agent)
+        allow_transient_retries = getattr(self._local, "allow_transient_retries", True)
+        retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         attempt = 0
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             _log_provider_attempt(agent, attempt, retry_limit)
@@ -2115,7 +2151,14 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            _log_retry_outcome(agent, attempt, retry_limit, last_error, transient=transient)
+            _log_retry_outcome(
+                agent,
+                attempt,
+                retry_limit,
+                last_error,
+                transient=transient,
+                allow_transient_retries=allow_transient_retries,
+            )
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -7882,11 +7925,24 @@ class TaskOrchestrator:
                 try:
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
-                    output = (
-                        self.client.chat(agent, messages, effort_profile=effort_profile)
-                        if effort_profile is not None
-                        else self.client.chat(agent, messages)
-                    )
+                    # This loop already decides retry-same-agent vs. failover
+                    # per attempt below; single_attempt_transport() keeps
+                    # ModelClient's own transient-retry-with-backoff from
+                    # stacking underneath that decision and multiplying how
+                    # many real attempts one already-failing agent consumes
+                    # before failover ever runs (see its docstring). A plain
+                    # duck-typed ``client`` (any object exposing just
+                    # ``chat()``, e.g. test doubles) has no such method, so
+                    # this degrades to a no-op scope exactly like the
+                    # existing ``take_usage`` duck-typing below.
+                    single_attempt = getattr(self.client, "single_attempt_transport", None)
+                    transport_scope = single_attempt() if callable(single_attempt) else nullcontext()
+                    with transport_scope:
+                        output = (
+                            self.client.chat(agent, messages, effort_profile=effort_profile)
+                            if effort_profile is not None
+                            else self.client.chat(agent, messages)
+                        )
                 except Exception as exc:
                     if _is_request_too_large_error(exc):
                         break
