@@ -939,7 +939,7 @@ ADMIN_HTML = r"""<!doctype html>
           <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
             <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
             <label><span data-i18n="group_name_label">Group name</span>
-              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+" autocomplete="off">
+              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[\-_][A-Za-z0-9]+)+" autocomplete="off">
             </label>
             <label><span data-i18n="group_members_label">Provider model members</span>
               <select id="modelGroupMembers" multiple required size="5"></select>
