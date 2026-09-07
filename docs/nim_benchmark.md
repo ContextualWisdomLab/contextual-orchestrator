@@ -168,16 +168,16 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
-tasks kept outside the decision set. It proves integration behavior but does not
-authorize production routing. A report reaches
-`evidence_review_required` only when it contains at least 30 paired locked tasks
-and at least 90% successful comparison cells. Otherwise it reports
-`insufficient_evidence` and explains the shortfall.
-
-These thresholds are explicit conservative governance floors, not universal
-statistical guarantees. Every report keeps `routing_recommendation` null even
-when the floor is met; a human review remains required.
+The bundled thirty-task manifest is an integration fixture with two exploratory
+tasks kept outside the measurement set. Observed task counts and completion
+fractions cannot establish statistical sufficiency or authorize production
+routing. Reports use `measurement_evidence_only`, retain null threshold fields
+for schema compatibility, and keep `routing_recommendation` null. Consumers must
+not reinterpret the absence of a cutoff as unrestricted production permission.
+A production decision requires an independently justified, pre-registered and
+validated evaluation design appropriate to the estimand and deployment scope.
+The completion fraction describes emitted cells, not a validated response rate
+for a target population or proof of an expected task-by-policy matrix.
 
 - Seeded paired bootstrap intervals preserve task pairing.
 - Pareto frontiers cover quality versus latency and quality versus reviewed
