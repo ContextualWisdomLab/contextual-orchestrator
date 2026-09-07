@@ -2,6 +2,14 @@
 
 ## 2026-09-07 prospective measurement design remains unexecuted
 
+Proposed follow-up removes the reasoning-effort helper's declaration-only
+55% promotion path: its retained Boolean entry point now returns false for all
+reports. Six committed negative regressions at `31ecc698` reproduced the former
+acceptance before the repair. This is withdrawal of unsupported authority, not
+implementation of the real evidence/decision pipeline or a measured KPI gain.
+The synthetic estimator remains a unit fixture. See the
+[repair contract and compatibility limits](doctoring/prospective-routing-measurement-design.md#default-promotion-capability-repair-proposed).
+
 The [research and proposed design record](doctoring/prospective-routing-measurement-design.md)
 connects Lakens (2022) to four distinct claims: delivered quality, routing
 decision speed, user waiting time, and psychometric recovery/transfer. Target
@@ -15,7 +23,8 @@ files' 19 Ruff findings; 157 focused tests and benchmark coverage/public
 docstrings pass at 100%. This is not whole-repository lint/coverage or a new
 head full-suite result. Hosted checks, independent review, protected merge,
 release and real buyer KPIs remain separate. The reasoning-effort helper's
-fixed 55% declaration-only decision check remains an independent open gap.
+former fixed 55% decision path is removed in the proposed follow-up, while the
+validated replacement decision contract remains an open gap.
 
 Parent `ec1c4e66512615ea1f00fa044f3bfba787aab567` is integrated below while
 retaining child `54b2b809` locked filtering and failure-inclusive comparison.

@@ -114,8 +114,9 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   compute profiles (issue #568). Fugu's latency-versus-quality split, TRINITY
   roles, and Conductor steps/access lists become an explicit catalog. Sampling
   temperature is not reasoning effort. Production route/conduct defaults stay
-  locked until `production_default_change_allowed` passes a true-θ RMSE gate.
-  The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
+  unchanged: automatic promotion is unavailable pending a validated decision contract.
+  The ablation emits synthetic θ̂ and RMSE(θ̂, θ) for unit checks only;
+  its deterministic error reduction does not demonstrate buyer improvement.
   The proposed [request-revision contract](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
   binds nested execution and recorded effort to one validated catalog revision
   and effective immutable policy, including conducted provider final synthesis.

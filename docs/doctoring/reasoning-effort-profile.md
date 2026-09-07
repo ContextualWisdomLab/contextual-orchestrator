@@ -4,8 +4,9 @@
 
 Construct `default_role_effort_catalog()` only for an evaluation or an
 explicitly configured deployment, run `run_equal_budget_ablation(true_theta)`,
-and keep production defaults unchanged while
-`production_default_change_allowed(report)` is `false`.
+and keep production defaults unchanged. Automatic promotion is unavailable;
+`production_default_change_allowed(report)` always returns `false` pending the
+[prospective evidence and decision contract](prospective-routing-measurement-design.md).
 
 ## Contract
 

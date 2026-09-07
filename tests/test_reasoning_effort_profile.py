@@ -2,7 +2,7 @@
 
 Buyer next action: load a versioned ``reasoning_effort_profile`` per workflow
 role, compare equal-budget variants against true parameters, and keep the
-production default unchanged until the predeclared RMSE threshold is met.
+production default unchanged while validated promotion remains unavailable.
 Sampling temperature is not reasoning effort.
 """
 
@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     PROFILE_VERSION,
-    PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD,
     WORKFLOW_ROLES,
     EffortProfileError,
     apply_request_profile,
@@ -244,7 +243,6 @@ def test_equal_budget_ablation_keeps_production_default_locked() -> None:
     assert report["route_versus_conduct"]["conduct"]["rmse"] >= 0
     assert report["measurement_status"] == "estimated"
     assert production_default_change_allowed(report) is False
-    assert PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD > 0
     assert report["one_factor_ablations"]["access_list_scope"]["role"] != report[
         "one_factor_ablations"
     ]["access_list_scope"]["workflow"]
@@ -345,20 +343,18 @@ def test_production_gate_rejects_non_object_reports(report: object) -> None:
 
 
 @pytest.mark.parametrize(
-    ("candidate", "expected"),
-    ((0, True), (0.45, True), (math.nextafter(0.45, math.inf), False)),
+    "candidate",
+    (0, 0.45, math.nextafter(0.45, math.inf)),
 )
-def test_production_gate_preserves_zero_and_threshold_boundary(
-    candidate: float, expected: bool
-) -> None:
-    """Zero RMSE is valid, while improvement below the threshold is not."""
+def test_production_gate_rejects_former_threshold_boundary(candidate: float) -> None:
+    """Even zero error or the former boundary cannot authorize deployment."""
     report = {
         "single_model_baseline": {"rmse": 1},
         "role_differentiated": {"rmse": candidate},
         "measurement_status": "measured",
         "robustness_passed": True,
     }
-    assert production_default_change_allowed(report) is expected
+    assert production_default_change_allowed(report) is False
 
 
 def test_profile_validation_covers_numeric_bounds_and_fallbacks() -> None:
@@ -442,7 +438,7 @@ def test_snapshot_rejects_wrong_profile_type_and_release_gate_is_strict() -> Non
     measured["robustness_passed"] = True
     assert production_default_change_allowed(measured) is False
     measured["role_differentiated"] = {"rmse": 0.1}
-    assert production_default_change_allowed(measured) is True
+    assert production_default_change_allowed(measured) is False
     measured["single_model_baseline"] = {"rmse": float("nan")}
     assert production_default_change_allowed(measured) is False
 

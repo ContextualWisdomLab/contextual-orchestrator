@@ -82,8 +82,9 @@ redistribution is unclear.
   Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
   and compare it to known true parameters; a rank constant is not an estimate.
 
-Buyer next action: call `run_equal_budget_ablation` and read
-`production_default_change_allowed` before changing live defaults.
+The deterministic ablation is for unit checks only. Automatic default promotion
+is unavailable pending the [prospective evidence contract](../doctoring/prospective-routing-measurement-design.md);
+neither a lower fixture RMSE nor a measurement label authorizes live changes.
 
 ## Psychometric routing accuracy-time frontier
 

@@ -75,12 +75,35 @@ Its focused 157 tests, benchmark statement/branch coverage and public docstrings
 pass; its new hosted full/security checks were still in progress when recorded.
 Neither predecessor's tests verify a later document or source revision.
 
-The separate reasoning-effort helper still accepts a declared measured report
+At the preceding source revision, the reasoning-effort helper accepts a declared measured report
 with baseline RMSE 1.0, candidate RMSE 0.1 and robustness=true, even with an
 explicit synthetic origin. Changing only the labels on the default synthetic
 ablation did **not** produce acceptance. No production-default mutation by the
-helper was observed. Its fixed 55% threshold and authorization-like name remain
-a separate decision-contract gap; the benchmark repair does not resolve it.
+helper was observed. That fixed 55% threshold was an independent
+decision-contract gap; the benchmark repair did not resolve it.
+
+## Default-promotion capability repair (Proposed)
+
+Test-first commit `31ecc698` adds six cases: omitted, synthetic and claimed-live
+origin, each with candidate RMSE zero or 0.1 against baseline 1. All six failed
+against the old helper (0.68 seconds). These unit reports reproduce declaration
+acceptance, not an actual deployment or a measured model comparison.
+
+The follow-up removes the fixed threshold and retains the Boolean entry point
+with the same report argument, returning false for all reports. The removed
+`PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD` export and formerly true results are
+intentional compatibility changes. Role configuration, provider propagation,
+and route/conduct defaults are unchanged. CLI help and current documentation
+now state that automatic promotion is unavailable.
+
+This closes unsupported authority, not the full experimental requirement.
+The synthetic estimator remains a deterministic unit fixture, not a released
+psychometric estimator or measured effort effect. A decision capable of
+authorizing deployment still needs the prospective evidence contract above,
+the canonical statistical owner and independent operational acceptance.
+No origin-label blacklist, replacement cutoff, new statistical kernel or
+provider call is introduced. Historical numeric-validation receipts remain
+historical; they no longer describe the callable's current decision behavior.
 
 Rejected shortcuts are a different fixed sample cutoff, changing a report's
 measurement label, treating prediction RMSE as latent-parameter recovery,
