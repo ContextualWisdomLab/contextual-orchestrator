@@ -52,6 +52,7 @@ def test_sbom_asset_attachment_is_fail_closed() -> None:
 @pytest.mark.parametrize("scenario,success", [
     ("same", True), ("different", False), ("absent", True),
     ("download_failure", False), ("upload_failure", False),
+    ("download_missing", False), ("download_empty", False),
 ])
 def test_sbom_attachment_checks_remote_bytes(tmp_path: Path, scenario: str, success: bool) -> None:
     """Execute the real attachment step; name equality cannot prove immutability."""
@@ -59,6 +60,8 @@ def test_sbom_attachment_checks_remote_bytes(tmp_path: Path, scenario: str, succ
     script = textwrap.dedent(block.split("        run: |\n", 1)[1])
     evidence_dir = tmp_path / "sbom-download"
     evidence_dir.mkdir()
+    temporary_dir = tmp_path / "temporary"
+    temporary_dir.mkdir()
     (evidence_dir / "cyclonedx-sbom.json").write_text('{"serialNumber":"expected"}')
     stub = tmp_path / "gh"
     stub.write_text('''#!/bin/bash
@@ -75,6 +78,11 @@ case "$2" in
     [ "$SCENARIO" != download_failure ] || exit 1
     while [ "$1" != --dir ]; do shift; done
     mkdir -p "$2"
+    [ "$SCENARIO" != download_missing ] || exit 0
+    if [ "$SCENARIO" = download_empty ]; then
+      touch "$2/cyclonedx-sbom.json"
+      exit 0
+    fi
     if [ "$SCENARIO" = different ]; then
       echo different > "$2/cyclonedx-sbom.json"
     else
@@ -87,6 +95,7 @@ esac
     result = subprocess.run(
         ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
         env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+             "TMPDIR": str(temporary_dir),
              "SCENARIO": scenario, "RELEASE_VERSION": "0.2.0",
              "GITHUB_REPOSITORY": "example/test"},
     )
