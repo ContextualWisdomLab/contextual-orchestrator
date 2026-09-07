@@ -1,5 +1,23 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 benchmark report identity coverage (proposed)
+
+Child [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+hosted job `101628312201` failed after a green full suite
+(`3618 passed, 2 skipped`) because
+`Prove complete benchmark coverage and public docstrings` reported
+`contextual_orchestrator/nim_benchmark.py` at 99% with missing lines
+`2791, 2798, 2809, 2814, 2819, 2827` in `validate_report_schema`.
+Those branches reject empty evaluation identities, invalid identity fields,
+non-positive counts, catalog worker mismatches, and unknown cheapest-worker
+skip reasons. The local repair adds
+`test_report_schema_rejects_invalid_evaluation_contract` and, on this working
+tree, the same three-file coverage command reports
+`169 passed`, `1271 statements / 480 branches, 0 missed`, interrogate 100%.
+This is not buyer-held-out accuracy, paired decision-latency, or protected
+merge evidence. Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+remains the psychometric KPI successor and still needs independent review.
+
 ## 2026-09-07 planned observation completeness repair (local)
 
 Integration follow-up: local coverage commit `e94dd035` preserves remote

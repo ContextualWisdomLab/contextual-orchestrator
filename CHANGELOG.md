@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Benchmark report validation now fails closed on empty evaluation identities,
+  invalid identity fields, non-positive task or worker counts, catalog worker
+  mismatches, and unknown cheapest-worker skip reasons, so incomplete paired
+  evidence cannot be published as a complete plan.
 - Model-effort settings stay consistent across each routing decision record;
   later settings changes remain visible on the next decision.
 - Benchmark documentation now distinguishes simulated accuracy, unresolved

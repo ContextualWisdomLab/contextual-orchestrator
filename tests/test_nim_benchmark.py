@@ -11,6 +11,7 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -1962,6 +1963,55 @@ def test_report_schema_validation_reports_missing_paths() -> None:
     with pytest.raises(nb.BenchmarkContractError) as excinfo:
         nb.validate_report_schema({"provenance": "not-a-dict"})
     assert "provenance.run_mode" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("mutate_report", "message"),
+    [
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "planned_evaluation_cells", []
+            ),
+            "evaluation identities must be a non-empty list",
+        ),
+        (
+            lambda report: report["evaluation"]["evaluation_cells"][0].__setitem__(
+                "policy_name", ""
+            ),
+            "evaluation identity is invalid",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__("locked_task_count", 0),
+            "evaluation counts must be positive integers",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "max_eval_models", 0
+            ),
+            "evaluation model limit must be a positive integer",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "worker_count", report["evaluation"]["worker_count"] + 1
+            ),
+            "planned workers do not match the selected catalog",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "cheapest_worker_skip_reason", "unknown_skip_reason"
+            ),
+            "unknown cheapest worker skip reason",
+        ),
+    ],
+)
+def test_report_schema_rejects_invalid_evaluation_contract(
+    tmp_path: Path, mutate_report, message: str
+) -> None:
+    """Schema validation must fail closed on incomplete evaluation identities."""
+    report = copy.deepcopy(_dry_report(str(tmp_path / "valid_report")))
+    mutate_report(report)
+    with pytest.raises(nb.BenchmarkContractError, match=message):
+        nb.validate_report_schema(report)
 
 
 def _dry_report(output_dir: str) -> dict:
