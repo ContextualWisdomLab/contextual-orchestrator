@@ -798,6 +798,31 @@ def test_unallowlisted_provider_host_is_classified_upstream_error() -> None:
     assert "blocked.example" not in str(excinfo.value)
 
 
+def test_passthrough_allowlist_failure_reports_passthrough_transport() -> None:
+    """Passthrough validation evidence must name the surface that invoked it."""
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent",
+        "blocked-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            client.proxy_send_once(
+                agent,
+                "chat/completions",
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
+    finally:
+        set_backend(None)
+
+    assert excinfo.value.transport == "passthrough"
+
+
 def test_free_model_advances_past_unallowlisted_provider_host() -> None:
     """A host-allowlist miss must skip to the next free candidate, not 500."""
     calls: list[str] = []

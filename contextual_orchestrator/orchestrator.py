@@ -2541,7 +2541,15 @@ class ModelClient:
             )
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, normalized_endpoint, payload)
-        destination = self._validate_provider(agent)  # pragma: no cover
+        try:
+            destination = self._validate_provider(agent)  # pragma: no cover
+        except ProviderUpstreamError as exc:
+            raise classify_provider_failure(
+                exc,
+                agent_id=agent.id,
+                model=agent.model,
+                transport="passthrough",
+            ) from None
         parsed_provider = urlparse(agent.base_url)
         operation_name = {
             "chat/completions": "chat",
