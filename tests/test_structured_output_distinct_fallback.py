@@ -105,10 +105,11 @@ def test_virtual_structured_failure_recovers_on_a_distinct_endpoint_and_keeps_us
     assert [step["usage"]["completion_tokens"] for step in attempts] == [1, 2, 3]
 
 
-def test_virtual_structured_transport_failure_advances_to_next_candidate() -> None:
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_virtual_structured_transport_failure_advances_to_next_candidate(model: str) -> None:
     """A retryable provider 502 cannot strand a virtual request on one candidate."""
-    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group")
-    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group")
+    first = ModelAgent("first_agent", "first-model", "mock://first", group_name="test_group", tags=("cost:free",))
+    second = ModelAgent("second_agent", "second-model", "mock://second", group_name="test_group", tags=("cost:free",))
     orchestrator = TaskOrchestrator([first, second])
     calls: list[str] = []
 
@@ -134,7 +135,7 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate() -> No
         patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
     ):
         result = orchestrator.proxy_completion(
-            _request(TaskOrchestrator.AUTO_MODEL),
+            _request(model),
             single_agent=False,
         )
 

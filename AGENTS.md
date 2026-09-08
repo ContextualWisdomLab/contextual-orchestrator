@@ -90,6 +90,9 @@ push or open a PR.
   malformed output on a later endpoint. Do not reject a review solely because
   an existing guard or successful-sibling test encodes the current behavior;
   verify the requirement and the exhausted-candidate case first.
+- Review-gateway recovery tests must exercise `FREE_MODEL` with admitted free
+  candidates, not only `AUTO_MODEL`. A mocked synthesis test does not prove
+  the preceding conduct stages, HTTP boundary, or deployed Noema review.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
