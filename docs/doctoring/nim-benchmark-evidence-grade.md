@@ -332,6 +332,28 @@ sequenceDiagram
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
+### Declared item-covariate sample size (2026-09-08, proposed)
+
+The multigroup item-covariate screen used a hidden 1,200-row person sample.
+That number chose Monte Carlo precision without an operator declaration.
+`_validate_item_covariate_effect` now requires `sample_size`. The harness
+run writes 1,200 as this run's choice and records `sample_size`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Covariate as Item-side covariate
+    participant Report as Held-out report
+    Operator->>Covariate: Sample size
+    Covariate->>Covariate: Fail closed on missing or non-positive declarations
+    Covariate->>Report: Contrast error and declared sample size
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
 
 The previous paired comparison selected only jointly successful cells even

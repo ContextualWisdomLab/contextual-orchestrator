@@ -1,5 +1,20 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 declared item-covariate sample size (proposed)
+
+Successor of the held-out bootstrap-coverage slice removes hidden
+`ITEM_COVARIATE_SAMPLE_SIZE = 1_200` from
+`scripts/benchmark_psychometric_heldout.py`. Sample size is a required
+positive integer declaration. Missing, boolean, or non-positive values fail
+closed. The harness run still writes 1,200 as this run's choice and records
+`sample_size`. ADR 0053 is Proposed.
+
+Local contract tests on this working tree: item-covariate sample-size
+declaration and population checks plus existing held-out key/report pins.
+This is not buyer-held-out accuracy, p95 latency, or protected merge
+evidence. Production route/conduct defaults stay locked. Other harness
+sample sizes remain later work.
+
 ## 2026-09-13 NIM consumed-response repair — Proposed
 
 Source `dda57de36dcbd9254f2e4215279494fbaccfc03f` closes HTTP errors consumed
