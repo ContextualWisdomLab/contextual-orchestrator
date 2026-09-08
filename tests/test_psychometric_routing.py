@@ -316,7 +316,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assignment = report["assignment_design_validation"]
     assert assignment["assignment_mechanism"] == "epsilon_greedy"
     assert assignment["minimum_assignment_probability"] == pytest.approx(0.05)
-    assert assignment["trials"] == heldout_benchmark.ASSIGNMENT_TRIALS
+    assert assignment["trials"] == heldout_benchmark.DECLARED_ASSIGNMENT_TRIALS
     assert assignment["seed"] == heldout_benchmark.ASSIGNMENT_SEED
     assert all(
         count > 0 for count in assignment["observations_by_candidate"].values()

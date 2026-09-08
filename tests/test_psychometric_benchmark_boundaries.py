@@ -210,6 +210,36 @@ def test_heldout_quality_uses_declared_context_count(monkeypatch) -> None:
     assert calls["count"] == 3
 
 
+def test_assignment_design_requires_declared_trial_count() -> None:
+    """Assignment-design KPIs cannot invent a 24,000-trial default."""
+    parameters = inspect.signature(heldout._validate_assignment_design).parameters
+    assert parameters["trial_count"].default is None
+    evidence = heldout.PsychometricRoutingEvidence()
+    with pytest.raises(ValueError, match="trial_count"):
+        heldout._validate_assignment_design(evidence)
+    with pytest.raises(ValueError, match="trial_count"):
+        heldout._validate_assignment_design(evidence, trial_count=True)
+
+
+def test_assignment_design_uses_declared_trial_count(monkeypatch) -> None:
+    """The declared trial count is the actual logging-design loop."""
+    calls = {"count": 0}
+    evidence = heldout.PsychometricRoutingEvidence()
+    model_ids = list(heldout.MODEL_IDS)
+
+    def ranked(*_args, **_kwargs):
+        """Rotate the top-ranked model so every candidate is observed."""
+        calls["count"] += 1
+        start = (calls["count"] - 1) % len(model_ids)
+        ordered = model_ids[start:] + model_ids[:start]
+        return [(model_id, 0.5) for model_id in ordered]
+
+    monkeypatch.setattr(evidence, "ranked_evidence", ranked)
+    report = heldout._validate_assignment_design(evidence, trial_count=40)
+    assert calls["count"] == 40
+    assert report["trials"] == 40
+
+
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
     """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
     parameters = inspect.signature(heldout._validate_sequential_drift).parameters

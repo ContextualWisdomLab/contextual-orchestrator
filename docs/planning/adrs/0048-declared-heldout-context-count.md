@@ -60,5 +60,6 @@ Negative: library callers of the three helpers must pass the declaration.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. This ADR is
-Proposed until independent review and protected delivery.
+Assignment-design trial count moves to ADR 0049. Other repository-authored
+harness sample sizes stay open. This ADR is Proposed until independent
+review and protected delivery.

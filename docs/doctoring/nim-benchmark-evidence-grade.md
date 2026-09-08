@@ -372,8 +372,8 @@ That number chose the held-out sample without an operator declaration.
 require `context_count`. The harness run writes 24 as this run's choice and
 records `contexts_held_out` / `contexts_train`.
 
-This slice does not change production route/conduct defaults. Other harness
-sample sizes remain later work.
+This slice does not change production route/conduct defaults. Assignment-design
+trial count is the successor slice recorded below.
 
 ```mermaid
 sequenceDiagram
@@ -383,6 +383,28 @@ sequenceDiagram
     Operator->>Quality: Context population
     Quality->>Quality: Fail closed on missing or non-positive declarations
     Quality->>Report: Accuracy, decision latency, and declared context count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared assignment-design trial count (2026-09-08, proposed)
+
+The epsilon-greedy logging screen used a hidden 24,000-trial loop. That
+number chose Monte Carlo precision for inverse-propensity RMSE without an
+operator declaration. `_validate_assignment_design` now requires
+`trial_count`. The harness run writes 24,000 as this run's choice and
+records `trials`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Assignment as Logging-design screen
+    participant Report as Held-out report
+    Operator->>Assignment: Trial count
+    Assignment->>Assignment: Fail closed on missing or non-positive declarations
+    Assignment->>Report: Inverse-propensity RMSE and declared trial count
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
