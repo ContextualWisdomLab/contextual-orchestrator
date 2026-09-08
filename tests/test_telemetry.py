@@ -417,6 +417,40 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     assert "session-secret" not in caplog.text
 
 
+def test_http_error_ids_correlate_over_real_connections(caplog):
+    """Separate HTTP errors carry distinct IDs matching their server warnings."""
+    import http.client
+    import threading
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    request_ids = []
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            for _request_index in range(2):
+                connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+                try:
+                    connection.request("GET", "/v1/models")
+                    response = connection.getresponse()
+                    assert response.status == 401
+                    payload = json.loads(response.read())
+                    request_id = payload["error"]["detail"]["request_id"]
+                    request_ids.append(request_id)
+                    expected_message = (
+                        f"request_failed status=401 code={payload['error']['code']} "
+                        f"request_id={request_id}"
+                    )
+                    assert expected_message in [record.getMessage() for record in caplog.records]
+                finally:
+                    connection.close()
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+    assert len(set(request_ids)) == 2
+
+
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
     """Client cancellation cannot create a second error or leak path identifiers."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
