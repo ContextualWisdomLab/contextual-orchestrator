@@ -384,16 +384,25 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
     handler.path = "/v1/chat/completions"
-    monkeypatch.setattr(handler, "_send", lambda *_args, **_kwargs: None)
+    captured_send = MagicMock()
+    monkeypatch.setattr(handler, "_send", captured_send)
     token = set_session_id("session-secret")
     try:
         with caplog.at_level("WARNING"):
-            handler._send_error(401, "unauthorized", "not authorized")
+            handler._send_error(
+                401, "unauthorized", "not authorized",
+                {"request_id": "untrusted\nlog-injection", "reason": "private-detail"},
+            )
     finally:
         reset_session_id(token)
         server.server_close()
 
     assert "request_failed" in caplog.text
+    response_payload = captured_send.call_args.args[0]
+    assert response_payload["error"]["detail"]["request_id"] in caplog.text
+    assert response_payload["error"]["detail"]["reason"] == "private-detail"
+    assert "untrusted" not in caplog.text
+    assert "private-detail" not in caplog.text
     assert "session-secret" not in caplog.text
 
 
