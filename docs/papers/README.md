@@ -44,6 +44,17 @@ the remaining sources are cited and linked without copying their files.
   ICLR 2024 publication record:
   https://proceedings.iclr.cc/paper_files/paper/2024/hash/b47d93c99fa22ac0b377578af0a1f63a-Abstract-Conference.html.
 
+## Prospective sample design
+
+- Lakens, D. (2022). Sample size justification. *Collabra: Psychology, 8*(1),
+  Article 33267. https://doi.org/10.1525/collabra.33267
+  Grounds choosing sample design against an explicit inferential goal and
+  useful precision/effect targets, not a universal count threshold. The
+  [CO design record](../doctoring/prospective-routing-measurement-design.md)
+  separates delivered quality, decision speed, end-to-end latency and
+  psychometric validity. It also records the actual Figure 5 visual inspection
+  and why the combined university PDF is linked rather than vendored.
+
 ## Role reasoning-effort profiles
 
 Issue #568 needs a provider-neutral `reasoning_effort_profile` so Fugu-style
@@ -71,8 +82,9 @@ redistribution is unclear.
   Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
   and compare it to known true parameters; a rank constant is not an estimate.
 
-Buyer next action: call `run_equal_budget_ablation` and read
-`production_default_change_allowed` before changing live defaults.
+The deterministic ablation is for unit checks only. Automatic default promotion
+is unavailable pending the [prospective evidence contract](../doctoring/prospective-routing-measurement-design.md);
+neither a lower fixture RMSE nor a measurement label authorizes live changes.
 
 ## Psychometric routing accuracy-time frontier
 
@@ -501,6 +513,44 @@ psychometric evidence", never a portable ability rank.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+  Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+  for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2608.06867
+  Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
+  `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
+  A second publisher download was byte-identical. Poppler reads 34 pages but
+  reports PDF dictionary syntax warnings; the original bytes are preserved,
+  and the versioned HTML below is an alternative reading surface.
+  The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
+  citation above. The paper introduces xRouteBench for quality/cost routing.
+  Its paper license does not establish rights to redistribute the dataset.
+  The [public response-time audit](../doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+  records separate data/code revisions and unresolved failure-time provenance.
+  No reported paper result is a measured gain for this gateway.
+
+- Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
+  Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
+  and unified framework for LLM routing. In *Findings of the Association for
+  Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
+  Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
+  [Publisher record and PDF](https://aclanthology.org/2026.findings-acl.1881/).
+  This is not xRouteBench. Section 4.2.2 and Figure 8 estimate latency from tokens and
+  serving statistics; those estimates cannot establish observed request-level
+  p95 or gateway overhead. Citation and summary only; redistribution permission
+  for this PDF was not established in this audit.
+
+- Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
+  *The Annals of Statistics, 7*(1), 1–26.
+  https://doi.org/10.1214/aos/1176344552
+  Grounds resampling observed units for uncertainty. NIM report version 2
+  reuses the existing paired mean-bootstrap routine for delivered-task score
+  and terminal-outcome time on all shared locked tasks, including failures.
+  The score definition is a declared product reward; it does not impute an
+  unobserved psychometric response. Mean intervals do not establish p95
+  performance. Citation and summary only; redistribution was not established.
+
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
   `helm-holistic-evaluation-2211.09110.pdf`
@@ -628,7 +678,9 @@ grants distribution rights to arXiv, not automatically to this repository.
 Permission must cover the exact file/version and intended distribution;
 source-code licenses do not license a paper. Citation alone is not permission.
 
-The six previously bundled PDFs were checked. IRT-Router and HELM remain with
+The six PDFs bundled at parent #1067's `47ae9d65` were checked. The separately
+audited child LLMRouter paper retains its own license record above. Among those
+six parent files, IRT-Router and HELM remain with
 the version-specific sources, CC BY 4.0 notices, attribution, and hashes above.
 Four other copies are removed from the current tree, with their citations,
 source summaries, and original version links retained. The table identifies

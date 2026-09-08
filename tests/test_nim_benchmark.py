@@ -11,28 +11,30 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import os
 import socket
+import sys
 import tempfile
 import threading
 import urllib.error
 from pathlib import Path
-import sys
+from typing import ClassVar
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import nim_benchmark as nb  # noqa: E402
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator import nim_benchmark as nb
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import (  # noqa: E402
+from contextual_orchestrator.orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
@@ -164,8 +166,8 @@ class _FakeDirectResponse:
 class _FakeDirectConnection:
     """Scripted pinned connection that records address and authority evidence."""
 
-    plans: list[object] = []
-    instances: list["_FakeDirectConnection"] = []
+    plans: ClassVar[list[object]] = []
+    instances: ClassVar[list[_FakeDirectConnection]] = []
 
     def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
         self.server_hostname = server_hostname
@@ -658,7 +660,7 @@ def test_probe_supported_chat() -> None:
 
 def test_probe_timeout_and_network_failures() -> None:
     def timeout_transport(method, url, headers, body):
-        raise socket.timeout("slow")
+        raise TimeoutError("slow")
 
     def broken_transport(method, url, headers, body):
         raise ConnectionResetError("reset")
@@ -1274,7 +1276,7 @@ def test_cell_usage_rejects_unknown_agent_as_contract_error() -> None:
 def test_run_error_classification() -> None:
     assert nb._classify_run_error(TimeoutError("slow")) == "timeout"
     wrapped = RuntimeError("provider failed")
-    wrapped.__cause__ = socket.timeout("slow")
+    wrapped.__cause__ = TimeoutError("slow")
     assert nb._classify_run_error(wrapped) == "timeout"
     assert nb._classify_run_error(ValueError("bad")) == "failure"
 
@@ -1714,7 +1716,45 @@ def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
     assert summary["observed_completion_fraction"] == 1.0
 
 
-def test_best_single_worker_hindsight_selection() -> None:
+@pytest.mark.parametrize("locked_success", [True, False])
+def test_exploratory_outcomes_cannot_change_locked_policy_evidence(
+    locked_success: bool,
+) -> None:
+    """Exploratory successes or failures cannot promote or dilute locked evidence."""
+    locked_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"locked_{task_index}",
+            1.0 if locked_success else None,
+            "success" if locked_success else "failure",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    exploratory_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"exploratory_{task_index}",
+            None if locked_success else 1.0,
+            "failure" if locked_success else "success",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(100 * nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    for cell in exploratory_cells:
+        cell["task_split"] = "exploratory"
+    mixed_cells = locked_cells + exploratory_cells
+    expected_evidence = nb._evaluation_evidence_summary(
+        locked_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    )
+    assert nb._evaluation_evidence_summary(
+        mixed_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    ) == expected_evidence
+    assert nb.summarize_policies(mixed_cells) == nb.summarize_policies(locked_cells)
+    assert all(cell["task_split"] == "exploratory" for cell in exploratory_cells)
+
+
+def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
     assert (
         nb.best_single_worker_hindsight(
             [{"policy_name": "route_once", "mean_task_score": 1.0}]
@@ -1731,6 +1771,27 @@ def test_best_single_worker_hindsight_selection() -> None:
     assert best["model_id"] == "vendor/model-b"
     assert best["selection_basis"] == "hindsight_argmax_mean_locked_score"
 
+    tied = nb.summarize_policies(
+        [
+            _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
+            _synthetic_cell("direct_single_worker:vendor/model-b", "task_one", 1.0),
+        ]
+    )
+    assert nb.best_single_worker_hindsight(tied) is None
+    cells = [
+        _synthetic_cell(policy, "task_one", 1.0)
+        for policy in (
+            "direct_single_worker:vendor/model-a",
+            "direct_single_worker:vendor/model-b",
+            "route_once",
+            "conduct_bounded",
+        )
+    ]
+    comparisons = nb.paired_policy_comparisons(cells, seed=3)
+    assert len(comparisons) == 1
+    assert comparisons[0]["policy_a"] == "conduct_bounded"
+    assert comparisons[0]["policy_b"] == "route_once"
+
 
 def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
     disjoint = [
@@ -1742,13 +1803,112 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_one", 0.0),
         _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
-        # Failed cells carry no score and must stay out of the pairing.
+        # A task observed for only one policy cannot form a pair.
         _synthetic_cell("route_once", "task_three", None, outcome="failure"),
     ]
     comparisons = nb.paired_policy_comparisons(cells, seed=3)
     pairs = {(row["policy_a"], row["policy_b"]) for row in comparisons}
     assert ("conduct_bounded", "route_once") in pairs
     assert ("route_once", "direct_single_worker:vendor/model-a") in pairs
+
+
+@pytest.mark.parametrize("failure_outcome", ["failure", "timeout"])
+def test_paired_comparisons_retain_failed_delivery_and_elapsed_time(
+    failure_outcome: str,
+) -> None:
+    """Dropping a failed task must not turn worse delivery into an apparent tie."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+        _synthetic_cell("conduct_bounded", "task_two", None, failure_outcome),
+        _synthetic_cell("route_once", "task_two", 1.0),
+        _synthetic_cell("route_once", "unpaired_task", 1.0),
+    ]
+    for cell, latency in zip(cells, [100.0, 150.0, 2000.0, 50.0, 5.0]):
+        cell["end_to_end_latency_ms"] = latency
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 2
+    assert comparison["mean_difference"] == -0.5
+    assert (comparison["ci_low"], comparison["ci_high"]) == (-1.0, 0.0)
+    assert comparison["policy_a_success_count"] == 1
+    assert comparison["policy_b_success_count"] == 2
+    assert comparison["policy_a_unpaired_task_count"] == 0
+    assert comparison["policy_b_unpaired_task_count"] == 1
+    latency = comparison["end_to_end_latency_ms"]
+    assert latency["pair_count"] == 2
+    assert latency["mean_difference"] == 950.0
+    assert (latency["ci_low"], latency["ci_high"]) == (-50.0, 1950.0)
+    assert cells[2]["task_score"] is None
+
+
+def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> None:
+    """Absent scored answers stay absent even when delivery reward is zero."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", None, "timeout"),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    assert (comparison["ci_low"], comparison["ci_high"]) == (0.0, 0.0)
+    assert comparison["policy_a_success_count"] == 0
+    assert comparison["policy_b_success_count"] == 0
+    assert comparison["end_to_end_latency_ms"]["mean_difference"] == 200.0
+    assert all(cell["task_score"] is None for cell in cells)
+    evidence = nb._evaluation_evidence_summary(cells, 1)
+    assert evidence["evidence_status"] == "measurement_evidence_only"
+    assert evidence["decision_use"] == "measurement_evidence_only"
+    assert evidence["observed_paired_task_count"] == 0
+    assert evidence["observed_completion_fraction"] == 0.0
+    assert evidence["minimum_paired_task_count"] is None
+    assert evidence["required_completion_fraction"] is None
+    assert evidence["routing_recommendation"] is None
+
+
+def test_paired_comparisons_exclude_exploratory_tasks_and_reject_duplicate_cells() -> None:
+    """Neither exploratory outcomes nor silent overwrites may change pairing."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "locked_task", 1.0),
+        _synthetic_cell("route_once", "locked_task", 1.0),
+        _synthetic_cell("conduct_bounded", "exploratory_task", 0.0),
+        _synthetic_cell("route_once", "exploratory_task", 1.0),
+    ]
+    cells[2]["task_split"] = cells[3]["task_split"] = "exploratory"
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    with pytest.raises(nb.BenchmarkContractError, match="duplicate policy/task"):
+        nb.paired_policy_comparisons([*cells, cells[0]], seed=3)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("end_to_end_latency_ms", float("nan")),
+        ("end_to_end_latency_ms", float("inf")),
+        ("end_to_end_latency_ms", -1.0),
+        ("end_to_end_latency_ms", True),
+        ("task_score", None),
+        ("task_score", float("nan")),
+        ("task_score", -0.1),
+        ("task_score", 1.1),
+        ("task_score", True),
+        ("run_outcome", "unobserved"),
+    ],
+)
+def test_paired_comparisons_reject_invalid_observations(
+    field_name: str, invalid_value: object
+) -> None:
+    """Invalid measurements cannot produce numeric-looking comparison evidence."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0][field_name] = invalid_value
+    with pytest.raises(nb.BenchmarkContractError, match=field_name):
+        nb.paired_policy_comparisons(cells, seed=3)
 
 
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
@@ -1805,6 +1965,55 @@ def test_report_schema_validation_reports_missing_paths() -> None:
     assert "provenance.run_mode" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("mutate_report", "message"),
+    [
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "planned_evaluation_cells", []
+            ),
+            "evaluation identities must be a non-empty list",
+        ),
+        (
+            lambda report: report["evaluation"]["evaluation_cells"][0].__setitem__(
+                "policy_name", ""
+            ),
+            "evaluation identity is invalid",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__("locked_task_count", 0),
+            "evaluation counts must be positive integers",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "max_eval_models", 0
+            ),
+            "evaluation model limit must be a positive integer",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "worker_count", report["evaluation"]["worker_count"] + 1
+            ),
+            "planned workers do not match the selected catalog",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "cheapest_worker_skip_reason", "unknown_skip_reason"
+            ),
+            "unknown cheapest worker skip reason",
+        ),
+    ],
+)
+def test_report_schema_rejects_invalid_evaluation_contract(
+    tmp_path: Path, mutate_report, message: str
+) -> None:
+    """Schema validation must fail closed on incomplete evaluation identities."""
+    report = copy.deepcopy(_dry_report(str(tmp_path / "valid_report")))
+    mutate_report(report)
+    with pytest.raises(nb.BenchmarkContractError, match=message):
+        nb.validate_report_schema(report)
+
+
 def _dry_report(output_dir: str) -> dict:
     return nb.run_benchmark(
         "dry_run",
@@ -1813,6 +2022,55 @@ def _dry_report(output_dir: str) -> dict:
         output_dir,
         max_total_requests=900,
     )
+
+
+@pytest.mark.parametrize("mutation", ["omit_task", "duplicate", "unexpected", "split", "omit_both_task", "omit_both_policy"])
+def test_report_rejects_task_omitted_from_every_policy(tmp_path: Path, mutation: str) -> None:
+    """Shared missing observations must not pass as a complete evidence set."""
+    report = _dry_report(str(tmp_path / "complete_report"))
+    cells = report["evaluation"]["evaluation_cells"]
+    if mutation in {"omit_both_task", "omit_both_policy"}:
+        field = "task_id" if mutation == "omit_both_task" else "policy_name"
+        omitted = cells[0][field]
+        for key in ("evaluation_cells", "planned_evaluation_cells"):
+            report["evaluation"][key] = [
+                cell for cell in report["evaluation"][key] if cell[field] != omitted
+            ]
+    elif mutation == "omit_task":
+        omitted_task = cells[0]["task_id"]
+        report["evaluation"]["evaluation_cells"] = [
+            cell for cell in cells if cell["task_id"] != omitted_task
+        ]
+    elif mutation == "duplicate":
+        cells.append(dict(cells[0]))
+    elif mutation == "unexpected":
+        cells[0]["task_id"] = "unexpected_task"
+    else:
+        cells[0]["task_split"] = "exploratory"
+    incomplete_output = tmp_path / "incomplete_report"
+    with pytest.raises(nb.BenchmarkContractError):
+        nb.write_benchmark_artifacts(report, str(incomplete_output))
+    assert not incomplete_output.exists()
+
+
+def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Path) -> None:
+    """Published uncertainty must show the new denominator, time, and schema."""
+    report = _dry_report(str(tmp_path / "current_report"))
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(cells, 3)
+    summary = nb.render_markdown_summary(report)
+    assert "-1.0 [-1.0, -1.0]" in summary
+    assert "200.0 [200.0, 200.0] ms" in summary
+    assert "successful outcomes A/B 0/1 and 1/1" in summary
+    assert report["benchmark_schema_version"] == "3.0.0"
+    report["benchmark_schema_version"] = "1.0.0"
+    with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
+        nb.validate_report_schema(report)
 
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
@@ -2046,8 +2304,14 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
             first["catalog_snapshot"]["invalid_entries"][0]["invalid_reason"]
             == "missing_model_id"
         )
-        # The evaluation compares every required system.
-        assert first["evaluation"]["best_single_worker_hindsight"] is not None
+        # Tied dry-run workers do not invent a unique hindsight selection.
+        direct_scores = [
+            row["mean_task_score"]
+            for row in first["evaluation"]["policy_summaries"]
+            if row["policy_name"].startswith("direct_single_worker:")
+        ]
+        assert direct_scores.count(max(direct_scores)) > 1
+        assert first["evaluation"]["best_single_worker_hindsight"] is None
         assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
         assert first["evaluation"]["paired_comparisons"]
         # Deterministic artifacts: identical reports across runs.
@@ -2090,16 +2354,15 @@ def test_live_run_fails_closed_without_credential(
 ) -> None:
     """Require a credential after isolating the reviewed-cost validity window."""
     _assume_current_cost_evidence(monkeypatch)
-    with tempfile.TemporaryDirectory() as tmp:
-        with pytest.raises(NotConfigured):
-            nb.run_benchmark(
-                "live",
-                TASK_MANIFEST_PATH,
-                None,
-                tmp,
-                git_sha="a" * 40,
-                workflow_run_id="run-1",
-            )
+    with tempfile.TemporaryDirectory() as tmp, pytest.raises(NotConfigured):
+        nb.run_benchmark(
+            "live",
+            TASK_MANIFEST_PATH,
+            None,
+            tmp,
+            git_sha="a" * 40,
+            workflow_run_id="run-1",
+        )
 
 
 def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:

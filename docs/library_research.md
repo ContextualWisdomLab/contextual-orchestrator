@@ -77,15 +77,13 @@ reasoning effort.
 | Doctoring | Sakana Fugu (2026); Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388 | APA 7th citations in `docs/architecture.md` and `docs/papers/README.md`. PDFs are not vendored when redistribution is unclear. | Training a learned coordinator. |
 
 Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_ablation()`
-and keep route/conduct defaults unchanged until `production_default_change_allowed`
-returns true.
+for unit checks; keep route/conduct defaults unchanged. Automatic promotion
+is unavailable pending a validated, released decision contract.
 
-The default-change helper checks declared prerequisites only. It requires an
-explicit `measurement_status="measured"`, `robustness_passed=true`, a positive
-finite baseline RMSE, and a nonnegative finite candidate RMSE meeting the
-existing 55% improvement threshold. Booleans, numeric strings, missing status,
-and unrepresentable numbers fail closed; zero candidate error remains valid.
-The helper neither authenticates the report nor applies a default change.
+The default-change helper now returns false for every supplied report. Its
+former 55% declaration-only threshold is removed, not replaced by another
+constant or a blacklist of synthetic-origin labels. The retained callable does
+not validate evidence or apply a default change.
 The deterministic ablation above remains estimated; relabeling it cannot
 establish measurement validity, buyer accuracy, or protected release approval.
 

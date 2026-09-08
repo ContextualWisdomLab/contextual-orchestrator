@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
-from pathlib import Path
 import subprocess
 import sys
 import threading
 import urllib.parse
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -20,7 +21,6 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import ModelClient
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
@@ -648,6 +648,32 @@ def test_live_pricing_rejects_future_review_and_accepts_current_evidence() -> No
     )
 
 
+@pytest.mark.parametrize("guard", ("pricing", "actual_cost"))
+@pytest.mark.parametrize("explicit_day", (False, True))
+def test_evidence_dates_preserve_local_day_and_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, guard: str, explicit_day: bool
+) -> None:
+    """Aware clock lookup keeps the local day, while explicit dates bypass it."""
+    local_day = nb.datetime_module.date(2040, 1, 2)
+    clock = Mock()
+    clock.now.return_value.date.return_value = nb.datetime_module.date(2040, 1, 1)
+    clock.now.return_value.astimezone.return_value.date.return_value = local_day
+    monkeypatch.setattr(nb.datetime_module, "datetime", clock)
+    dates = {"reviewed_at_date": "2040-01-02", "valid_until_date": "2040-01-02"}
+    today = local_day if explicit_day else None
+    if guard == "pricing":
+        nb.validate_live_pricing_scenario(_reviewed_pricing_scenario(**dates), today)
+    else:
+        for key, value in dates.items():
+            monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, key, value)
+        nb._require_current_actual_cost_evidence(today)
+    if explicit_day:
+        clock.now.assert_not_called()
+    else:
+        clock.now.assert_called_once_with(nb.datetime_module.timezone.utc)
+        clock.now.return_value.astimezone.assert_called_once_with()
+
+
 def test_actual_cost_evidence_validation_and_expiry_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -699,6 +725,7 @@ def test_observed_evidence_never_auto_selects_a_route() -> None:
                 {
                     "policy_name": policy_name,
                     "task_id": task_id,
+                    "task_split": "locked",
                     "run_outcome": "success",
                 }
             )

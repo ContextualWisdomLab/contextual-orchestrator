@@ -1,5 +1,295 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 integrated psychometric evidence repair (proposed)
+
+PR #1074 source `d7e9d9a240854f9b06c891290d5d249bec8833ce` normally integrates
+parent #1067 `84a6052369a7bf8b6faae5db475bb68a5ad54a91`. Both preserve their
+existing deltas. Non-detections remain in fixed-horizon experiment denominators;
+delay summaries are explicitly conditional, and absent candidates remain null.
+Policy/candidate regressions, per-experiment baseline identity and citation-only
+IRT-Router rights handling are included. These are unit-evidence repairs, not
+observed customer accuracy or routing-latency gains.
+
+On that child source, 159 focused tests passed in 19.56 seconds. The separate
+CI-equivalent benchmark gate passed 169 tests in 55.47 seconds: 1271 statements
+and 480 branches, zero misses, plus 100% public-docstring coverage for
+`nim_benchmark.py` only. This does not establish repository-wide coverage or all
+edge cases. Parent full pytest on `84a60523` is a separate ongoing execution;
+no child full-suite, hosted acceptance, independent approval, immutable release
+or deployed-consumer result is claimed. Next acceptance remains current-head
+hosted checks and protected integration, followed by released-owner adoption
+and observed-task evaluation under the declared sampling and timing contracts.
+
+## 2026-09-07 benchmark report identity coverage (proposed)
+
+Child [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+hosted job `101628312201` failed after a green full suite
+(`3618 passed, 2 skipped`) because
+`Prove complete benchmark coverage and public docstrings` reported
+`contextual_orchestrator/nim_benchmark.py` at 99% with missing lines
+`2791, 2798, 2809, 2814, 2819, 2827` in `validate_report_schema`.
+Those branches reject empty evaluation identities, invalid identity fields,
+non-positive counts, catalog worker mismatches, and unknown cheapest-worker
+skip reasons. The local repair adds
+`test_report_schema_rejects_invalid_evaluation_contract` and, on this working
+tree, the same three-file coverage command reports
+`169 passed`, `1271 statements / 480 branches, 0 missed`, interrogate 100%.
+This is not buyer-held-out accuracy, paired decision-latency, or protected
+merge evidence. Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+remains the psychometric KPI successor and still needs independent review.
+
+## 2026-09-07 planned observation completeness repair (local)
+
+Integration follow-up: local coverage commit `e94dd035` preserves remote
+`f1662dcd` / `d217c053` through merge `f0ec6315`. That merge exposed 14
+failures because a tied hindsight maximum aborted all report publication.
+The follow-up retains no winner on ties while preserving observations and
+unrelated policy comparisons. A targeted regression first failed (1.04s).
+The combined benchmark, workflow-contract, and release-acceptance suites then
+passed 163 tests in 79.66s. These results precede this documentation update;
+new-head hosted checks and protected integration remain required.
+
+At PR #1074 base `77545c3a10041d65a7ce12d3d77268a5b7895f8d`, removing
+one task from every policy in a real dry-run report still allowed artifact
+publication. The writer regression failed as expected (one failure, 11.55s).
+The local repair records the task/policy/split identities before evaluation,
+including each direct worker and the eligible optional cheapest policy, and
+requires observed identities to match at assembly and publication. Empty,
+malformed, duplicate, missing, and unexpected identities are rejected.
+The report schema is now 3.0.0; old reports must be regenerated.
+
+Deleting the same task or policy from both plan and observations then exposed
+two additional failures (four controls passed, 2.98s). The repair now checks
+the locked task count and reconstructs the full policy matrix from the selected
+catalog workers, model limit, and optional cheapest-policy skip reason.
+The changed benchmark suite passed 123 tests in 6.61s. This is local dry-run
+contract evidence, not live provider or buyer KPI evidence, protected merge,
+or publication. Missing observations are never imputed as failed deliveries;
+observed completion retains its existing conditional denominator. The plan is
+not independently signed preregistration: coordinated alteration of plan,
+observations and their supporting metadata, stale derived summaries, external manifest verification,
+and research-design validity still need separate controls.
+
+## 2026-09-07 statistical owner adoption remains open
+
+The [canonical-owner readiness record](doctoring/prospective-routing-measurement-design.md#canonical-statistical-owner-readiness-2026-09-07)
+links CO #86 to existing RankWeave PR #41 and issue #45. Released RankWeave
+`v0.18.0` at `61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6` and proposed native
+`v0.19.0` at Draft head `529b915c0f2c282d915172f9f75b17caf7016008` must not be
+treated as interchangeable. CO still needs a released statistical contract,
+immutable artifact provenance, installed-artifact conformance, and the real
+prospective experiment. Native calculation timing is not a routing KPI.
+
+Exact CO `621cf4d9cd47d166bd568cfb07a25692c47df210` completed 3612 local tests
+with two optional-dependency skips; its local wheel's 45 Python files matched
+source. These results do not verify this later documentation revision, a
+published release, or buyer outcomes. Hosted tests/package and fuzzing remained
+in progress when inspected; the security job completed successfully. Independent
+review, protected integration, and release remain unproven.
+
+## 2026-09-07 prospective measurement design remains unexecuted
+
+Proposed follow-up removes the reasoning-effort helper's declaration-only
+55% promotion path: its retained Boolean entry point now returns false for all
+reports. Six committed negative regressions at `31ecc698` reproduced the former
+acceptance before the repair. This is withdrawal of unsupported authority, not
+implementation of the real evidence/decision pipeline or a measured KPI gain.
+The synthetic estimator remains a unit fixture. See the
+[repair contract and compatibility limits](doctoring/prospective-routing-measurement-design.md#default-promotion-capability-repair-proposed).
+
+The [research and proposed design record](doctoring/prospective-routing-measurement-design.md)
+connects Lakens (2022) to four distinct claims: delivered quality, routing
+decision speed, user waiting time, and psychometric recovery/transfer. Target
+population, planned task-policy matrix, scorer provenance, useful precision or
+effect targets, and a valid stopping/analysis contract still need execution.
+Count-only promotion is removed; this is not evidence that those claims pass.
+
+Exact `eccb8328` local full regression completed with 3602 passed and two
+optional-dependency skips. Subsequent `c96be353` clears the three benchmark
+files' 19 Ruff findings; 157 focused tests and benchmark coverage/public
+docstrings pass at 100%. This is not whole-repository lint/coverage or a new
+head full-suite result. Hosted checks, independent review, protected merge,
+release and real buyer KPIs remain separate. The reasoning-effort helper's
+former fixed 55% decision path is removed in the proposed follow-up, while the
+validated replacement decision contract remains an open gap.
+
+Parent `ec1c4e66512615ea1f00fa044f3bfba787aab567` is integrated below while
+retaining child `54b2b809` locked filtering and failure-inclusive comparison.
+The measurement-only decision-authority entry supersedes historical statements
+that the 30-pair/completion gates remain active. No historical result transfers
+to this integration without new verification.
+
+## 2026-09-07 locked evidence isolation
+
+Mixed exploratory and locked observations could change policy summaries and
+promote insufficient evidence even though paired comparisons excluded the
+exploratory observations. RED `5675b942` reproduces two failures. Source
+`4b0fd961` filters the existing shared calculations; fixture correction
+`23bec0fb` explicitly labels locked evidence. **165 related tests pass in
+36.22 seconds**. Raw observations remain in report artifacts, and no threshold,
+estimator, provider call or live default changes. The
+[Proposed decision record](doctoring/nim-benchmark-evidence-grade.md#locked-versus-exploratory-evidence-follow-up-2026-09-07)
+preserves the failed intermediate run, alternatives and acceptance limits.
+This is cohort-isolation correctness, not measured buyer accuracy or latency;
+new-head full/hosted checks, independent approval and release remain required.
+
+## 2026-09-06 availability-boundary parent synchronization
+
+This normal integration retains child `eba36d81` and parent `6ca30364`,
+including both complete baseline/changelog additions. The inherited collector
+repair and its guards remain unchanged; the child NIM comparison, observed-data
+audit, and licensed papers are preserved. Earlier full suites are terminal,
+not verification of this integration. Both PRs retain Draft status and require
+separate exact-head evidence and parent-first protected delivery.
+
+## 2026-09-06 request-policy parent synchronization
+
+This normal integration retains child `a762e433` and parent `7bdc27ea`,
+including both complete baseline and changelog additions. The inherited
+request-policy repair is unchanged; child NIM comparisons, observed-data
+audit, and licensed papers are preserved. The prior child full suite is
+terminal and does not verify this integration. Separate exact-head evidence,
+Draft status, and parent-first protected delivery remain required.
+
+## 2026-09-06 request-effort parent synchronization
+
+This normal integration preserves child `2bf99a82` and parent `f660d71f`,
+including both complete baseline/changelog additions. Parent request-scope
+source, guards, and technical records are inherited unchanged; child NIM
+comparison, observed-data audit, and papers remain unchanged. Its previous
+3,485-pass full result does not verify this new integration. Draft status,
+parent-first protected delivery, and separate exact-head evidence remain.
+
+## 2026-09-06 effort-cache parent synchronization
+
+This normal integration retains child `771fcff4` and parent `79d8d81d`,
+including both complete baseline and changelog additions. The child NIM
+comparison, observed-data audit, and papers are unchanged; the shared cache
+and persistence repair is inherited byte-for-byte from the parent. Parent
+focused results below do not establish this child's full-suite or protected
+delivery. Both PRs remain Draft with separate exact-head verification.
+
+## 2026-09-06 changed-definition parent synchronization
+
+This normal integration retains verified child
+`fa8eef97cd7368e8985a367dc5a7a8e0147fe4d5` and documentation parent
+`21691215d67f37de46d0eef3768dbbe0c04ea493`. Both complete baseline additions
+remain. Parent docstrings describe existing behavior; the child failed-task
+comparison and observed-data/paper evidence are preserved. The earlier clean
+child full suite completed 3,481 tests with two skips; it is not a full-suite
+run on this new integration. Draft and parent-first protected delivery remain.
+
+## 2026-09-06 identity-batch parent synchronization
+
+This normal integration joins verified child `9207412ea8ac529d7d2622ab298989ef7899befb`
+with parent #1067 `d740602fdd8c0e4f7d55e4d3ad37b9f560c09e01`. Both baseline
+additions remain. Child comparison code, tests, observed-data audit, and papers
+are retained; the parent adds operation-local identity snapshots and their
+regressions/profile. The preceding child's 3,476-pass full suite belongs to
+`9207412e`, not this later merge. Both PRs retain their Draft status and require
+their own current-head evidence before parent-first protected delivery.
+
+## 2026-09-06 current-parent synchronization
+
+This normal integration joins existing child `402fd63a4f6a16558e8cb4e4cd8a3378da3827f6`
+with #1067 `bfeb73a6c58add7a23df052110593cdf43c0b0db`. Both baseline additions
+are retained. The child's failed-task comparison, observed-data audit, and
+licensed LLMRouter paper remain; parent measurement-contract documentation,
+cost-evidence dates, and protected-main transport-retry correction are inherited.
+The prior child's full-suite result and the parent checks below are historical
+evidence, not a full-suite result for this combined tree. Both PRs remain Draft
+with parent-first protected delivery and separate exact-head validation.
+
+## 2026-09-05 measurement-boundary parent synchronization
+
+The next normal integration joins existing child
+`e2f3e2af8e6b723c6870fb6c4dcee2b4f7bc31af` with parent #1067
+`ae704491fc24cd4618c709b036cc9353ea9923e5`, retaining both document additions.
+The child NIM comparison, failure-denominator tests, observed-data audit, and
+licensed LLMRouter paper are unchanged. Parent measurement-declaration guards,
+IRT interpretation corrections, and paper distribution corrections are retained.
+The removed paper files stay removed; the child does not restore them.
+
+The previous child `e2f3e2af` passed 3,447 tests with two skips in 677.14 seconds
+on an unchanged clean tree. The parent source `47ae9d65` and later documentation
+`ae704491` have separate verification records below. Neither previous result is
+an integration-head result. Both PRs remain Draft pending their own terminal
+hosted evidence and independent review, with parent-first protected delivery.
+
+## 2026-09-05 paired-evidence parent synchronization
+
+The normal two-parent integration joins child
+`f3b50f3bdc4c2c951463abb6962bebe2949ca04b` with parent #1067
+`cbf1b4c462c46ccd1deb4e239758efbe0657aaa8`. Both independent additions to this
+baseline and the changelog are retained. The child-specific benchmark code,
+failure-denominator tests, observed-data audit, and licensed paper remain
+unchanged from the child source; parent benchmark boundary corrections and
+research qualifications remain unchanged from the parent source.
+
+This is branch integration, not protected release or a new accuracy claim.
+PR #1074 stays Draft and targets the unmerged parent branch; it must not be
+retargeted to `main` or consumed as a released statistical contract. Its
+merged tree needs its own terminal local/hosted evidence and independent
+review. A skipped draft review is not approval. The existing raw-missing
+versus delivered-zero distinction, full failure denominator, and mean-versus-p95
+boundary remain mandatory.
+
+## 2026-09-05 observed-data admission audit
+
+The follow-up [file-level audit](research/xroute-generic-observation-audit.json)
+read all 147,924 generic train/test rows at the pinned dataset revision.
+It found no zero/negative/non-finite durations, 2,068 blank response strings,
+and 18 repeated scored-task/model rows. The repeated rows are not exact copies;
+their attempt identity and dependence need explanation before fitting. Blank
+outputs have positive input/total tokens and time but zero output tokens and
+scores; their terminal cause is unknown. This corrects the suspicion of actual
+zero-time contamination without asserting complete failure observability.
+No data row was changed, dropped, printed, or redistributed. The next gate is
+outcome and repeated-attempt provenance, not a new latency estimator.
+
+The [response-time research audit](doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+distinguishes xRouteBench's advertised observations from LLMRouterBench's
+estimated latency. Three controlled cases confirm that the inspected xRouteBench
+collector preserves returned API-error elapsed time but replaces an escaped
+exception's duration with zero. This is source-contract evidence, not an audited
+failure count in the published dataset. Data-to-code lineage, outcome coverage,
+sampling validity, and dataset redistribution permission remain unresolved.
+
+No buyer accuracy or p95 result is claimed. The admissible next step is the
+declared observed-matrix audit, followed by any missing statistical-owner release;
+no new estimator or production policy is introduced here. The licensed LLMRouter
+paper, citation inventory, and research record travel with draft PR #1074.
+Its preceding exact executable head `1600b1d547ca121f022cb63d622672851ddf1745`
+passed 3,432 local tests with two skips in 664.58 seconds. These documentation
+and paper additions need their own inventory validation and protected review;
+that earlier full-suite result is not a new-head hosted-check claim.
+
+## 2026-09-05 paired outcome and latency evidence repair
+
+The NIM policy summary counted failures in the denominator, but its paired
+comparison dropped every task where either policy failed. Source commit
+`42f774d6` repairs that mismatch and adds mean elapsed-time comparisons using
+the existing paired-bootstrap implementation. The report now preserves failed
+and timed-out pairs, shows success and unmatched-task counts, and leaves raw
+unscored answers null. Report version 2 distinguishes this delivery estimand
+from the success-conditioned version 1 results.
+
+The unit regression changes the known delivered-score difference from an
+incorrect tie to `-0.5` on two paired tasks. It also reports the hand-checked
+`950` ms mean elapsed-time difference with interval `[-50, 1950]`. These are
+calculation-contract checks, not buyer accuracy or latency gains. The focused
+NIM, release-acceptance, and workflow-contract suites passed 149 tests on
+`42f774d6`; subsequent commits must carry their own verification record.
+
+This proposed slice depends on the psychometric integration in PR #1067.
+Protected parent delivery, independent review, and hosted validation remain
+required. Existing 30-jointly-successful-pair and completion gates are unchanged.
+The [technical and research record](doctoring/nim-benchmark-evidence-grade.md)
+contains the product requirement, comparison contract, UML sequence, alternatives,
+and APA 7 reference; the [report guide](nim_benchmark.md) records the schema
+migration. Paired p95 inference and representative buyer observations remain
+open. RankWeave's released retrieval comparison API does not provide the
+needed response-time quantile contract.
 ## 2026-09-07 measurement-only decision authority (proposed)
 
 RED `1cc27fca` retained two failures: the same 30 successful policy pairs

@@ -187,6 +187,45 @@ for a target population or proof of an expected task-by-policy matrix.
 - Only locked tasks enter reported comparisons; exploratory tasks remain outside
   the decision evidence.
 
+### Comparison report version 3
+
+Version 3 preserves a task/policy/split plan made before evaluation, including
+each direct worker and the optional cheapest policy only when eligible.
+Assembly and artifact publication reject missing, duplicate, or unexpected
+observations. Missing observations are not treated as failed deliveries.
+The plan must also match the locked task count and the complete policy matrix
+for the selected catalog workers, model limit, and cheapest-policy skip reason.
+This is an internal completeness check, not independently verified
+preregistration; coordinated changes to the plan, observations, and supporting
+metadata are outside its proof.
+Regenerate older reports because they lack this required plan.
+
+The version 2 comparison semantics are retained: every locked task attempted by both policies, including
+failures and timeouts. The delivered-task score is the scorer's value after a
+successful run and zero when no answer was delivered successfully. The original
+failure record retains `task_score: null`; zero delivery reward is not an
+estimate of an unobserved answer's correctness or a psychometric response.
+
+Each comparison reports A-minus-B mean delivered-score and elapsed-time
+differences with paired 95% bootstrap intervals, successful outcome counts on
+the shared tasks, and unmatched task counts. Elapsed time ends at the recorded
+terminal outcome, including a failure or timeout. A fast failure is therefore
+visible alongside its zero delivery reward; lower elapsed time alone is not an
+improvement in service. The intervals condition on the common task set and the
+selected policies, including the explicitly labelled hindsight worker.
+When direct workers tie for the highest quality, no unique hindsight worker
+is selected and its comparisons are omitted. The observations and other policy
+comparisons remain available; model names never break a quality tie.
+
+Reports using version 1 compared only jointly successful tasks. Their values
+must not be pooled with version 2 or 3, and the validator rejects old schemas.
+Version 2 observations require their independently preserved evaluation plan
+before migration; do not infer a complete plan from surviving observations.
+No task-count or completion-fraction threshold authorizes production promotion.
+The report remains measurement evidence only, with no routing recommendation.
+These mean intervals do not establish p95 performance, population
+representativeness, or uncertainty from choosing the hindsight winner.
+
 ## Fail-closed contract
 
 A run aborts without artifacts when live provenance is absent, the credential is
