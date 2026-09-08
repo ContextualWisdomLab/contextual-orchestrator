@@ -163,6 +163,13 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
+# RFC 9110 section 9.2.2 permits an automatic non-idempotent retry only when
+# the client knows the original request was never applied. These statuses
+# describe a request rejection; generic origin/gateway failures (500/502/504)
+# and the non-standard 529 do not provide that evidence and stay sticky.
+_PASSTHROUGH_REJECTED_STATUS = _PASSTHROUGH_UNAVAILABLE_STATUS | frozenset(
+    {408, 409, 425, 429, 503}
+)
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
@@ -1626,13 +1633,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
             return False
         seen.add(id(current))
         if isinstance(current, ProviderUpstreamError):
-            if current.provider_status in (
-                _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
-            ):
+            if current.provider_status in _PASSTHROUGH_REJECTED_STATUS:
                 return True
         if (
             isinstance(current, urllib.error.HTTPError)
-            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+            and current.code in _PASSTHROUGH_REJECTED_STATUS
         ):
             return True
         if (
