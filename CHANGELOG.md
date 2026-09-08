@@ -23,7 +23,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Passthrough attempt receipts no longer infer public provider labels from
   endpoint hostnames. Ambiguous timeout/connection failures now report the
   neutral `transport` phase and remain sticky even for `orchestrator/free`,
-  preventing duplicate completion and unreported upstream usage.
+  preventing duplicate completion and unreported upstream usage. Generic
+  HTTP 500/502/504 and non-standard 529 responses are sticky as well: an HTTP
+  retry classification alone does not prove that a non-idempotent completion
+  request was never applied.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
