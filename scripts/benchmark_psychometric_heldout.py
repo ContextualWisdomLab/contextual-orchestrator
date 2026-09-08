@@ -4,26 +4,25 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import random
 import statistics
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.benchmark_psychometric_routing import _require_runtime  # noqa: E402
+from scripts.benchmark_psychometric_routing import _require_runtime
 
 _require_runtime(benchmark_script="scripts/benchmark_psychometric_heldout.py")
 
-import fast_mlsirm  # noqa: E402
-import numpy as np  # noqa: E402
+import fast_mlsirm
+import numpy as np
 
-from contextual_orchestrator.psychometric_routing import (  # noqa: E402
+from contextual_orchestrator.psychometric_routing import (
     PsychometricRoutingEvidence,
 )
-
 
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 UNSEEN_MODEL_ID = "model_unseen"
@@ -282,9 +281,9 @@ def _measure_paired_latency(
                 started_ns = time.perf_counter_ns()
                 evidence.ranked_evidence(MODEL_IDS, context, vector)
                 samples[name].append((time.perf_counter_ns() - started_ns) / 1_000_000)
-        for name in samples:
-            all_samples[name].extend(samples[name])
-            context_medians[name].append(statistics.median(samples[name]))
+        for name, timing_samples in samples.items():
+            all_samples[name].extend(timing_samples)
+            context_medians[name].append(statistics.median(timing_samples))
 
     def summary(values: list[float]) -> dict[str, float]:
         """Summarize nonempty timings with the median and nearest-rank p95."""

@@ -3,9 +3,9 @@
 import builtins
 import inspect
 import json
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 
 import pytest
 
