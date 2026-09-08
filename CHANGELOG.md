@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Held-out accuracy and decision-latency now require a declared context
+  population. The hidden 24-context default is removed from evidence
+  construction, quality evaluation, and paired timings. The harness run still
+  writes 24 as this run's choice.
 - Held-out decision-latency timings now require a declared per-context
   repetition count. The hidden 200-repetition default is removed. The harness
   run still writes 200 as this run's choice.

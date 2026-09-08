@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 declared held-out context population (proposed)
+
+Successor of the latency-repetition slice removes hidden `TRAIN_CONTEXTS = 24`
+from evidence construction, quality evaluation, and paired timings in
+`scripts/benchmark_psychometric_heldout.py`. Context count is a required
+positive integer declaration. Missing, boolean, or non-positive values fail
+closed. The harness run still writes 24 as this run's choice and records
+`contexts_held_out` / `contexts_train`. ADR 0048 is Proposed.
+
+Local contract tests on this working tree: context-count declaration and
+loop-count checks plus existing held-out key/report pins. This is not
+buyer-held-out accuracy, p95 latency, or protected merge evidence. Production
+route/conduct defaults stay locked. Other harness sample sizes remain later
+work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-08 declared held-out latency repetitions (proposed)
 
 Successor of the sequential-drift horizon slice removes hidden

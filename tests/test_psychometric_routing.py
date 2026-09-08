@@ -156,8 +156,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         lambda _baseline, _candidate, **_kwargs: (
             {"decision_p50_ms": 1.0, "decision_p95_ms": 1.0},
             {"decision_p50_ms": 2.0, "decision_p95_ms": 2.0},
-            [1.0] * heldout_benchmark.TRAIN_CONTEXTS,
-            [2.0] * heldout_benchmark.TRAIN_CONTEXTS,
+            [1.0] * heldout_benchmark.DECLARED_HELDOUT_CONTEXT_COUNT,
+            [2.0] * heldout_benchmark.DECLARED_HELDOUT_CONTEXT_COUNT,
         ),
     )
 
