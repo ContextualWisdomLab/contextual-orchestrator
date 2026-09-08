@@ -195,13 +195,23 @@ class ProviderUpstreamError(RuntimeError):
     @property
     def detail(self) -> dict[str, Any]:
         """Return the structured evidence attached to API error payloads."""
-        return {
+        detail = {
             "agent_id": self.agent_id,
             "model": self.model,
             "provider_status": self.provider_status,
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        selected_candidate_ids = getattr(self, "selected_candidate_ids", None)
+        if isinstance(selected_candidate_ids, (list, tuple)) and selected_candidate_ids:
+            detail["selected_candidate_ids"] = list(selected_candidate_ids)
+        attempts = getattr(self, "attempts", None)
+        if isinstance(attempts, (list, tuple)) and attempts:
+            detail["attempts"] = [dict(item) for item in attempts if isinstance(item, dict)]
+        terminal_reason = getattr(self, "terminal_reason", None)
+        if isinstance(terminal_reason, str) and terminal_reason:
+            detail["terminal_reason"] = terminal_reason
+        return detail
 
 
 def classify_provider_failure(
