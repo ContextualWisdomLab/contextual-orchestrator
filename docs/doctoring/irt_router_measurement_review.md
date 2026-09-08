@@ -63,10 +63,13 @@ assert_eq!(ability_coordinate_rmse, 1.0);
 Difficulty is unchanged, so equal inner products imply equal logits and
 probabilities. These binary-exact fixture values intentionally permit exact
 assertions; this is not a floating-point tolerance policy for fitted parameters.
-The nonzero ability-coordinate RMSE is a single-family counterexample: it
-shows why an alignment contract is required before interpreting ability
-recovery, even when predictions agree exactly. It does not validate recovery
-for discrimination, difficulty, or any other parameter family.
+The nonzero ability-coordinate RMSE is intentionally a single-family
+counterexample. It shows why an alignment contract is required before
+interpreting ability recovery, even when predictions agree exactly. This
+example does not validate discrimination recovery. A production report must
+apply the same alignment and RMSE calculation independently to
+`discrimination_vector`, `difficulty_vector`, and every other declared family,
+with a family-specific assertion or fixture for each one.
 
 ## CO acceptance implications
 
