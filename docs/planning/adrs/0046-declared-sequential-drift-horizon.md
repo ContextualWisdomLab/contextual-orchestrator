@@ -44,8 +44,14 @@ callers of `_validate_sequential_drift` must pass the run choices.
 keyword-only `replications`, `horizon_observations`,
 `change_after_observations`, and `confidence_level`. `None`, non-positive
 integers, `change_after >= horizon`, or a non-exclusive-unit-interval coverage
-fail closed. Replications that never alarm are counted as censored and enter
-the delay distribution at `horizon - change_after`. The Wilson upper bound
+fail closed. Replications that never alarm are counted as censored; their
+observation limit is `horizon - change_after`, not an observed detection delay.
+Delay quantiles describe post-change detections only and are null when there
+are none. False alarms, detections, and censored counts remain explicit;
+non-detections stay in the conditional detection-rate denominator. All false
+alarms give an undefined (null) conditional detection rate. A threshold with
+censored non-detections is ineligible; no eligible threshold yields a null
+candidate, false acceptance, and all calibration results. The Wilson upper bound
 uses `statistics.NormalDist().inv_cdf` of the declared coverage and is stored
 as `false_alarm_rate_upper_bound`. The harness run writes 500, 250, 100, and
 the declared bootstrap coverage as this run's choices.
@@ -56,8 +62,12 @@ Production route/conduct defaults stay locked.
 
 - Keep the abort and hidden 250/100/500 constants. Rejected: they hide Monte
   Carlo precision and drop missed detections from the delay KPI.
-- Treat censored delays as missing and report p95 among detections only.
-  Rejected: that still censors non-detections from the delay distribution.
+- Report detected-only quantiles with censoring counts, detection rates, and
+  explicit population labels. Selected: preserves observed delay meaning
+  without hiding failed detections or inferring unobserved event times.
+- Insert the censoring horizon as an observed detection. Rejected after
+  reproduction on `74c27e7e`: eight missed detections incorrectly produced
+  a detection-delay median of ten observations.
 - Kaplan-Meier delay estimation. Rejected for this slice: the synthetic
   horizon is declared and finite; a survival estimator would change the
   estimand without buyer time series.
@@ -67,8 +77,9 @@ Production route/conduct defaults stay locked.
 Positive: no-alarm replications remain evidence; coverage is not implied by a
 JSON field name; horizon and change-point are reconstructible.
 
-Negative: a threshold that rarely fires reports a larger delay p95 because
-missed detections sit at the remaining horizon.
+Negative: detected-only quantiles cannot estimate unconditional time to
+detection. Readers must use the reported failure denominator alongside them;
+no survival estimate or buyer-validity claim is made.
 
 ## Remaining work
 
