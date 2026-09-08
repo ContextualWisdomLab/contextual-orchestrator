@@ -7166,10 +7166,10 @@ def build_server(
                     }
                     if tools_list:
                         request_settings["tools"] = tools_list
-                    if body.get("tool_choice") is not None:
-                        request_settings["tool_choice"] = body["tool_choice"]
-                    if body.get("parallel_tool_calls") is not None:
-                        request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
+                        if body.get("tool_choice") is not None:
+                            request_settings["tool_choice"] = body["tool_choice"]
+                        if body.get("parallel_tool_calls") is not None:
+                            request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
                     with model_client.request_settings(**request_settings):
                         if route_stream:
                             self._stream_route_completion(
