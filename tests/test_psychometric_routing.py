@@ -4,28 +4,29 @@ from __future__ import annotations
 
 import inspect
 import math
-import numpy as np
+import threading
 from dataclasses import replace
 from pathlib import Path
-import threading
-import pytest
-from contextual_orchestrator import orchestrator as routing_module
-import scripts.benchmark_psychometric_heldout as heldout_benchmark
 
+import numpy as np
+import pytest
+
+import scripts.benchmark_psychometric_heldout as heldout_benchmark
 from contextual_orchestrator import (
     ModelAgent,
     TaskOrchestrator,
     default_role_effort_catalog,
 )
+from contextual_orchestrator import orchestrator as routing_module
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 from contextual_orchestrator.reasoning_effort_profile import EffortProfileError
-from scripts.benchmark_psychometric_routing import (
-    _last_context_request,
-    _require_runtime,
-)
 from scripts.benchmark_psychometric_heldout import (
     _expected_brier,
     _paired_bootstrap_mean_ci,
+)
+from scripts.benchmark_psychometric_routing import (
+    _last_context_request,
+    _require_runtime,
 )
 
 
@@ -761,7 +762,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert judge["severity_rmse"] == pytest.approx(0.018292059677437307)
     covariate = report["item_language_domain_effect_validation"]
     assert covariate["method"] == "multigroup_item_covariate"
-    assert covariate["sample_size"] == heldout_benchmark.DECLARED_ITEM_COVARIATE_SAMPLE_SIZE
+    assert covariate["sample_size"] == 1_200
     assert covariate["seed"] == heldout_benchmark.ITEM_COVARIATE_SEED
     assert covariate["true_delta"] == -0.8
     assert covariate["estimated_delta"] == pytest.approx(-0.7896498094289646)
@@ -1053,7 +1054,8 @@ def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
         """Capture a worker-thread exception for the joining test to assert."""
         try:
             callable_()
-        except BaseException as error:  # pragma: no cover - surfaced below
+        # Preserve every worker failure for the joining test's assertion.
+        except BaseException as error:  # noqa: BLE001  # pragma: no cover
             errors.append(error)
 
     observe = threading.Thread(

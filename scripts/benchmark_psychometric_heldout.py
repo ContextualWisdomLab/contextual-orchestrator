@@ -1300,12 +1300,14 @@ def _validate_item_covariate_effect(
 ) -> dict[str, object]:
     """Estimate one known item-side context contrast without claiming invariance.
 
-    ``sample_size`` is a required declaration. ``None`` is a fail-closed
-    sentinel, not a statistical default.
+    ``sample_size`` must declare at least two observations for two groups.
+    ``None`` is a fail-closed sentinel, not a statistical default.
     """
     declared_sample_size = _require_declared_positive_int(
         sample_size, "sample_size"
     )
+    if declared_sample_size < 2:
+        raise ValueError("sample_size must be at least 2 for two groups")
     generator = np.random.default_rng(ITEM_COVARIATE_SEED)
     item_count = 12
     group_id = np.arange(declared_sample_size) % 2

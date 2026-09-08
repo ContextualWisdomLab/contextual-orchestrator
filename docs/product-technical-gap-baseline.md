@@ -1,11 +1,26 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 item-covariate two-group boundary repair (proposed)
+
+Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
+identified a mismatch between the positive-count contract and the two-group
+covariate design. One observation reached the native fitter with only group
+zero and a two-row covariate matrix; the new boundary test reproduced its
+matrix-shape error (one failed test, 33 deselected). The caller now rejects
+counts below two before fitting. This structural minimum does not establish
+statistical power or measurement validity. Tests verify both group IDs at
+counts two, three, and forty, reject zero and negative counts, and independently
+pin the harness declaration to 1,200. Boundary and ADR checks passed: 37 tests
+in 17.14 seconds. Expanded routing, full-size synthetic report, boundary,
+and ADR regression passed: 72 tests in 883.69 seconds (exit zero).
+ADR 0053 remains Proposed; production defaults remain unchanged.
+
 ## 2026-09-08 declared item-covariate sample size (proposed)
 
 Successor of the judge-effect sample-size slice removes hidden
 `ITEM_COVARIATE_SAMPLE_SIZE = 1_200` from
 `scripts/benchmark_psychometric_heldout.py`. Sample size is a required
-positive integer declaration. Missing, boolean, or non-positive values fail
+integer declaration of at least two. Missing, boolean, or smaller values fail
 closed. The harness run still writes 1,200 as this run's choice and records
 `sample_size`. ADR 0053 is Proposed.
 

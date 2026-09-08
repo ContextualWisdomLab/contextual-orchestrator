@@ -12,7 +12,7 @@ related:
     relation: extends
 success_criteria:
   - metric: "no hidden item-covariate sample default"
-    target: "omitted or non-positive sample_size fails closed"
+    target: "omitted, boolean, or sample_size below two fails closed"
     source: "tests/test_psychometric_benchmark_boundaries.py::test_item_covariate_requires_declared_sample_size"
   - metric: "declared count is the person population"
     target: "report sample_size equals the declared count"
@@ -32,6 +32,13 @@ reconstructible. A hidden `ITEM_COVARIATE_SAMPLE_SIZE = 1_200` chose Monte
 Carlo precision without an operator declaration.
 
 ## Decision
+
+The two-group contrast requires at least two observations. A declaration of
+one produces only group zero while the covariate matrix contains two groups;
+reject it before fitting rather than exposing a downstream matrix-shape error.
+This is a structural minimum, not evidence of adequate statistical power.
+Boundary tests retain both groups for counts two, three, and forty. The
+full-size report test independently pins this run's declared count to 1,200.
 
 In the context of the held-out multigroup item-covariate screen, facing
 `ITEM_COVARIATE_SAMPLE_SIZE = 1_200`, we chose a required `sample_size`

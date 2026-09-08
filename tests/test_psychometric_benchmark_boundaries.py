@@ -304,15 +304,20 @@ def test_item_covariate_requires_declared_sample_size() -> None:
         heldout._validate_item_covariate_effect()
     with pytest.raises(ValueError, match="sample_size"):
         heldout._validate_item_covariate_effect(sample_size=True)
+    for sample_size in (0, -1, 1):
+        with pytest.raises(ValueError, match="sample_size"):
+            heldout._validate_item_covariate_effect(sample_size=sample_size)
 
 
-def test_item_covariate_uses_declared_sample_size(monkeypatch) -> None:
+@pytest.mark.parametrize("sample_size", [2, 3, 40])
+def test_item_covariate_uses_declared_sample_size(monkeypatch, sample_size) -> None:
     """The declared sample size is the actual item-covariate person population."""
     seen = {}
 
     def fake_fit(responses, *_args, **_kwargs):
         """Record the person count without running the native fit."""
         seen["n"] = responses.shape[0]
+        assert set(_kwargs["group_id"]) == {0, 1}
         return SimpleNamespace(
             population={"delta": -0.8},
             convergence_status="converged",
@@ -320,9 +325,9 @@ def test_item_covariate_uses_declared_sample_size(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(heldout.fast_mlsirm, "fit", fake_fit)
-    report = heldout._validate_item_covariate_effect(sample_size=40)
-    assert report["sample_size"] == 40
-    assert seen["n"] == 40
+    report = heldout._validate_item_covariate_effect(sample_size=sample_size)
+    assert report["sample_size"] == sample_size
+    assert seen["n"] == sample_size
     assert report["items"] == 12
 
 
