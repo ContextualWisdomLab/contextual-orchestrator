@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 Psychometrics evidence boundary: research trace added
+
+PR #1103 head `19448d95` adds APA 7 references and implementation constraints
+from Messick (validity arguments), Embretson and Reise (item information and
+identification), and Reise et al. (fit versus interpretation). These sources
+extend the IRT-Router review without claiming a production accuracy gain:
+buyer accuracy still requires observed outcomes, declared sampling and failure
+denominators, and uncertainty; route latency still requires request/decision
+timestamps and its own denominators. The new head is awaiting hosted checks and
+independent approval.
+
 ## 2026-09-08 IRT interpretation gap: reviewed, not measured improvement
 
 Against source head `c648797dfbec58dbdce60f35ed6dc5b356953387`, the
