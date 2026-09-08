@@ -1217,8 +1217,8 @@ def test_free_virtual_model_keeps_ambiguous_transport_502_sticky() -> None:
 
 
 
-def test_free_virtual_model_fails_over_on_raw_provider_http_500() -> None:
-    """A real upstream HTTP 500 advances to the next eligible free candidate."""
+def test_free_virtual_model_keeps_http_500_sticky() -> None:
+    """HTTP 500 does not prove non-acceptance, so passthrough must not replay."""
     client = SequencedProxyClient(
         {
             "primary_agent": _http_error(500),
@@ -1230,19 +1230,21 @@ def test_free_virtual_model_fails_over_on_raw_provider_http_500() -> None:
         replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
     ]
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": TaskOrchestrator.FREE_MODEL,
-            "messages": [{"role": "user", "content": "use the tool"}],
-            "tools": [{"type": "function", "function": {"name": "inspect"}}],
-        }
-    )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
 
-    assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
-    ]
+    assert caught.value.provider_status == 500
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
+    assert caught.value.detail["attempts"][0]["failover_decision"] == (
+        "sticky_candidate_failure"
+    )
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> None:
     """Exhausted free passthrough keeps typed candidate evidence on the final 502."""
