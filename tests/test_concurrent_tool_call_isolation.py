@@ -106,15 +106,21 @@ def test_concurrent_route_once_keeps_each_caller_tool_calls() -> None:
     # Timing only: no routing, selection, or response logic is changed.
     orchestrator._invoke = types.MethodType(invoke_then_hold, orchestrator)
 
+    failures: list[Exception] = []
     dropped: list[str] = []
     swapped: list[str] = []
     guard = threading.Lock()
 
     def call(tag: str) -> None:
         """Run one virtual-route request and check the tool_calls it got back."""
-        result = orchestrator.route_once(
-            [{"role": "user", "content": tag}], model_name=TaskOrchestrator.FREE_MODEL
-        )
+        try:
+            result = orchestrator.route_once(
+                [{"role": "user", "content": tag}], model_name=TaskOrchestrator.FREE_MODEL
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised by the main-thread assertion
+            with guard:
+                failures.append(exc)
+            return
         calls = result.get("tool_calls")
         with guard:
             if not calls:
@@ -133,9 +139,11 @@ def test_concurrent_route_once_keeps_each_caller_tool_calls() -> None:
                 thread.start()
             for thread in threads:
                 thread.join(timeout=20)
+                assert not thread.is_alive(), "route thread did not terminate"
     finally:
         del orchestrator._invoke
 
+    assert not failures, failures
     assert not swapped, f"tool_calls crossed between concurrent callers: {swapped[:3]}"
     assert not dropped, (
         f"tool_calls silently dropped for {len(dropped)} of {_PAIRS * 2} concurrent callers"

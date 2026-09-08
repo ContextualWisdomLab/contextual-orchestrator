@@ -1718,11 +1718,23 @@ def _notify_progress(
         parameters = inspect.signature(progress).parameters
     except (TypeError, ValueError):
         parameters = {}
-    accepts_output = len(parameters) >= 3 or any(
+    if "output" in parameters and parameters["output"].kind is inspect.Parameter.KEYWORD_ONLY:
+        progress(role, status, output=output)
+        return
+    accepts_output = sum(
+        parameter.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        for parameter in parameters.values()
+    ) >= 3 or any(
         parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters.values()
     )
     if accepts_output:
         progress(role, status, output)
+        return
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        progress(role, status, output=output)
         return
     progress(role, status)
 
@@ -6615,15 +6627,23 @@ class TaskOrchestrator:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
-            verification = self._realtime_route_judge(
-                text=text,
-                answer=answer,
-                served_id=served_id,
-                latency_seconds=latency_seconds,
-                usage=attempt_usage,
-                free_only=free_only,
-                prompt_context=prompt_context,
-            )
+            if isinstance(extras, dict) and extras.get("tool_calls"):
+                verification = {
+                    "accepted": True,
+                    "reason": "tool call requires caller execution",
+                    "verifier_output": answer,
+                    "judge": "tool_call",
+                }
+            else:
+                verification = self._realtime_route_judge(
+                    text=text,
+                    answer=answer,
+                    served_id=served_id,
+                    latency_seconds=latency_seconds,
+                    usage=attempt_usage,
+                    free_only=free_only,
+                    prompt_context=prompt_context,
+                )
             row["realtime_judge"] = {
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
@@ -6777,6 +6797,7 @@ class TaskOrchestrator:
             steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
+        tool_result: dict[str, Any] | None = None
         free_ids = {
             candidate.id
             for candidate in self.agents
@@ -6851,6 +6872,8 @@ class TaskOrchestrator:
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
             )
+            extras = self._last_assistant_message
+            self._last_assistant_message = None
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -6867,8 +6890,19 @@ class TaskOrchestrator:
             trace.append(row)
             if progress is not None:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
+            if step.role == "worker" and isinstance(extras, dict) and extras.get("tool_calls"):
+                tool_result = extras
+                break
 
-        if plan_source == "generated":
+        if tool_result is not None:
+            answer = output
+            verification = {
+                "accepted": True,
+                "reason": "tool call requires caller execution",
+                "verifier_output": answer,
+                "judge": "tool_call",
+            }
+        elif plan_source == "generated":
             # Generated plans have variable shape: locate roles instead of fixed indices.
             def last_output(role: str) -> str:
                 ids = [step.id for step in steps if step.role == role]
@@ -6909,6 +6943,9 @@ class TaskOrchestrator:
             "verification": verification,
             "plan_source": plan_source,
         }
+        if tool_result is not None:
+            result["tool_calls"] = tool_result["tool_calls"]
+            result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
         if workflow_run_id is None:
             return self._with_effort_snapshot(result)
         record = self._with_effort_snapshot(
@@ -16178,7 +16215,12 @@ def chat_completion_chunks(
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"tool_calls": tool_calls},
+                        "delta": {
+                            "tool_calls": [
+                                {"index": index, **call}
+                                for index, call in enumerate(tool_calls)
+                            ]
+                        },
                         "finish_reason": None,
                     }
                 ],

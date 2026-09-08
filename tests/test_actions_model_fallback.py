@@ -767,3 +767,92 @@ def test_conduct_two_argument_progress_callback_still_completes() -> None:
     assert result["answer"]
     assert seen
     assert all(len(item) == 2 for item in seen)
+
+
+def test_route_tool_call_is_terminal_before_answer_judging() -> None:
+    """A tool request is not an empty answer to penalize or regenerate."""
+    client = _ToolCallClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "inspect"}], model_name=TaskOrchestrator.FREE_MODEL
+    )
+    assert len(client.calls) == 1
+    assert result["tool_calls"]
+    assert result["verification"]["judge"] == "tool_call"
+
+
+def test_conduct_returns_worker_tool_call_before_later_roles() -> None:
+    """Conduct must hand the worker call to its caller before more inference."""
+
+    class WorkerTools(_ToolCallClient):
+        def chat(self, agent, messages, **kwargs):
+            if messages[0]["content"].startswith("Role: worker"):
+                return super().chat(agent, messages, **kwargs)
+            self.calls.append(agent.id)
+            return "thinker context"
+
+    client = WorkerTools()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    result = orchestrator.conduct(
+        [{"role": "user", "content": "inspect"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+        workflow_run_id="tool-run",
+    )
+    assert result["tool_calls"][0]["id"] == "call_inspect"
+    assert result["finish_reason"] == "tool_calls"
+    assert [row["role"] for row in result["trace"]] == ["thinker", "worker"]
+    assert len(client.calls) == 2
+    assert result["workflow_run_id"] == "tool-run"
+
+
+def test_conduct_keyword_only_progress_output() -> None:
+    """A named keyword-only output hook uses its declared calling convention."""
+    seen = []
+
+    def progress(role, status, *, output=""):
+        seen.append((role, status, output))
+
+    TaskOrchestrator(_free_agents()).conduct(
+        [{"role": "user", "content": "inspect"}], progress=progress
+    )
+    assert any(output for _, status, output in seen if status == "completed")
+
+
+def test_streamed_tool_calls_have_stable_indices_without_mutation() -> None:
+    """Provider non-streaming tool objects become valid indexed stream deltas."""
+    from contextual_orchestrator.orchestrator import chat_completion_chunks
+
+    calls = [
+        {
+            "id": "one",
+            "type": "function",
+            "function": {"name": "inspect", "arguments": "{}"},
+        },
+        {
+            "id": "two",
+            "index": 7,
+            "type": "function",
+            "function": {"name": "inspect", "arguments": "{}"},
+        },
+    ]
+    chunks = chat_completion_chunks({"answer": "", "tool_calls": calls})
+    emitted = next(
+        chunk["choices"][0]["delta"]["tool_calls"]
+        for chunk in chunks
+        if chunk["choices"][0]["delta"].get("tool_calls")
+    )
+    assert [call["index"] for call in emitted] == [0, 7]
+    assert "index" not in calls[0]
+
+
+def test_progress_keyword_rest_receives_output() -> None:
+    """A callback with keyword rest never receives an extra positional value."""
+    from contextual_orchestrator.orchestrator import _notify_progress
+
+    seen = []
+
+    def progress(role, status, **kwargs):
+        seen.append(kwargs.get("output"))
+
+    _notify_progress(progress, "worker", "completed", "observed")
+    assert seen == ["observed"]
