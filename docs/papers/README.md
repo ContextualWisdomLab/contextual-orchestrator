@@ -105,13 +105,16 @@ neither a lower fixture RMSE nor a measurement label authorizes live changes.
   Association for Computational Linguistics (Volume 1: Long Papers)*
   (pp. 15629–15644). Association for Computational Linguistics.
   https://doi.org/10.18653/v1/2025.acl-long.761
-  Vendored unmodified [ACL publication PDF](irt-router-acl-2025.pdf), 16 pages;
-  SHA-256 `0fb8cecd934693b83966c857a0e0757551c738989247b0156ab30688d3868d4e`.
-  Source: https://aclanthology.org/2025.acl-long.761.pdf.
-  Copyright 2025 Association for Computational Linguistics; distributed under
-  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), as specified by the
-  [ACL post-2016 materials policy](https://aclanthology.org/faq/copyright/).
-  No changes were made to the PDF; attribution above identifies the authors.
+  [Publisher PDF](https://aclanthology.org/2025.acl-long.761.pdf), 16 pages.
+  Citation and link only: the previously copied file had SHA-256
+  `0fb8cecd934693b83966c857a0e0757551c738989247b0156ab30688d3868d4e`.
+  The [ACL policy](https://aclanthology.org/faq/copyright/) licenses post-2016
+  ACL material under CC BY 4.0 but excludes third-party material. Embedded
+  font/color-profile redistribution conditions have not been independently
+  cleared here. The copy was removed rather than asserting a blanket license;
+  this is not a finding that the publisher's distribution is unauthorized.
+  Restore a copy only with a component-specific rights record covering embedded
+  resources and any third-party figures, tables, or appendix material.
   Motivates held-out response prediction from candidate-query interactions;
   exact-query and semantic warm-start evidence must be evaluated separately.
   CO classifies this as an IRT-shaped predictive model, not a validated
