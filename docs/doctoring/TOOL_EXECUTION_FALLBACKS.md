@@ -36,7 +36,9 @@ Progress hooks honor positional, keyword-only, and keyword-rest signatures.
 From a checkout with project-local `.venv` and its test dependencies installed:
 
 ```sh
-uv run --no-project .venv/bin/python -m pytest tests/test_actions_model_fallback.py tests/test_concurrent_tool_call_isolation.py -q
+uv run --no-project .venv/bin/python -m pytest \
+  tests/test_actions_model_fallback.py \
+  tests/test_concurrent_tool_call_isolation.py -q
 ```
 
 Five targeted reproductions failed before their fixes. The two-file command
