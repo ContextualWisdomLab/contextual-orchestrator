@@ -30,6 +30,42 @@ routing, nor a claim that the entire paper contains no identification work.
 It is a concrete reason not to equate predictive accuracy with validated
 psychometric interpretation.
 
+### Executable coordinate counterexample
+
+Run `rustdoc --test docs/doctoring/irt_router_measurement_review.md` from the
+repository root. This synthetic unit example exercises an invertible diagonal
+rescaling, not a parameter estimator, empirical model fit, or general proof.
+It uses only the Rust standard library and leaves production code unchanged.
+
+```rust
+let ability_vector = [1.0_f64, 2.0];
+let discrimination_vector = [0.5_f64, 1.5];
+let scale_vector = [2.0_f64, 0.5];
+let transformed_ability = std::array::from_fn::<_, 2, _>(
+    |axis_index| ability_vector[axis_index] * scale_vector[axis_index]);
+let transformed_discrimination = std::array::from_fn::<_, 2, _>(
+    |axis_index| discrimination_vector[axis_index] / scale_vector[axis_index]);
+let original_logit: f64 = ability_vector.iter()
+    .zip(discrimination_vector).map(|(ability_value, item_value)|
+        ability_value * item_value).sum();
+let transformed_logit: f64 = transformed_ability.iter()
+    .zip(transformed_discrimination).map(|(ability_value, item_value)|
+        ability_value * item_value).sum();
+let coordinate_rmse = (ability_vector.iter().zip(transformed_ability)
+    .map(|(original_value, transformed_value)|
+        (original_value - transformed_value).powi(2))
+    .sum::<f64>() / 2.0).sqrt();
+assert_eq!(original_logit, 3.5);
+assert_eq!(transformed_logit, original_logit);
+assert_eq!(coordinate_rmse, 1.0);
+```
+
+Difficulty is unchanged, so equal inner products imply equal logits and
+probabilities. These binary-exact fixture values intentionally permit exact
+assertions; this is not a floating-point tolerance policy for fitted parameters.
+The nonzero coordinate RMSE demonstrates why an alignment contract is required
+before interpreting parameter recovery, even when predictions agree exactly.
+
 ## CO acceptance implications
 
 - Keep parameter-recovery RMSE separate from observed-task prediction error.

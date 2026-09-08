@@ -12,6 +12,14 @@ is delivered by this review. Next acceptance requires released owner diagnostics
 identified parameter-recovery tests, and observed-task evidence under the
 analytics specification; existing matrix-shape validation is insufficient.
 
+The linked review now includes a standalone Rust documentation test. On
+2026-09-08, `rustdoc --test docs/doctoring/irt_router_measurement_review.md`
+with rustdoc 1.97.1 passed one synthetic unit example: original and transformed
+inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
+This demonstrates the identification pitfall, not estimator accuracy or a
+latency improvement. It is a manual documentation check, not yet a hosted
+CI gate or a test of the released fast-mlsirm implementation.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
