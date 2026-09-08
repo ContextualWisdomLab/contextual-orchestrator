@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 sequential-drift integration correction (proposed)
+
+PR #1095 source `74c27e7ea5ef3d34593ae55978df8fa520e82334` treated
+eight censored non-detections as eight ten-observation detections. A focused
+regression reproduced the false median (one failure). The repair separates
+censoring counts and horizon from detected-only quantiles, retains failure
+denominators, and returns null candidates with complete calibration evidence
+when no threshold is eligible. Required horizon/coverage declarations remain.
+Twenty boundary tests passed in 17.22 seconds. This is unit-fixture evidence,
+not a buyer delay estimate, protected merge, or release. ADR 0046 remains
+Proposed; unconditional survival inference and real held-out validity remain open.
+
+## 2026-09-08 declared sequential-drift horizon and censored delays (proposed)
+
+Successor of the coverage-neutral interval-key slice removes the hidden
+CUSUM 500/250/100 screen and the abort-on-no-alarm from
+`scripts/benchmark_psychometric_heldout.py`. Replications, horizon,
+change-point, and exclusive-unit-interval coverage are required
+declarations. A replication that never alarms is right-censored at
+`horizon - change_after` and counted as a missed detection. The Wilson
+upper bound uses the declared coverage and is stored as
+`false_alarm_rate_upper_bound`. The harness run still writes 500, 250, 100,
+and 0.95 as this run's choices. ADR 0046 is Proposed.
+
+Local contract tests on this working tree: sequential-drift declaration and
+censoring checks plus existing held-out key/report pins. This is not
+buyer-held-out accuracy, p95 latency, or protected merge evidence.
+Production route/conduct defaults stay locked. Other harness sample sizes
+remain later work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-07 held-out coverage-neutral interval keys (proposed)
 
 Successor of the declared held-out bootstrap slice renames nested JSON
@@ -3157,9 +3189,12 @@ stepwise method. Buyer recalibrations and preregistered review rules remain
 absent, so the validity gate stays closed.
 Source commit `7c3e6e98` adds temporal drift KPIs motivated by Chen, Lee, and
 Li (2022). Source commit `1b3b7244` selects a threshold on 500 calibration runs
-using a 95% Wilson false-alarm upper bound, then evaluates it on an independent
+using a Wilson false-alarm upper bound, then evaluates it on an independent
 500-run seed. Selected threshold `6.6` records held-out false alarms `2.4%`
-with upper bound `4.15%`, delay p50 10, and p95 20. The tradeoff is a synthetic
+with upper bound `4.15%`, delay p50 10, and p95 20. The successor slice
+declares the 500/250/100 horizon and records no-alarm replications as
+horizon-censored missed detections; the Wilson bound is stored as
+`false_alarm_rate_upper_bound`. The tradeoff is a synthetic
 calculation contract, not the paper's multistream Bayesian compound-risk
 procedure or a buyer-approved threshold.
 `sequential_drift`

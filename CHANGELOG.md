@@ -10,6 +10,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- The held-out CUSUM screen now requires declared replications, horizon,
+  change-point, and coverage. Replications that never alarm are recorded as
+  horizon-censored missed detections instead of aborting. The Wilson upper
+  bound is stored as `false_alarm_rate_upper_bound`.
 - Held-out report interval fields no longer embed 95 in the JSON name.
   Coverage stays in the declared `bootstrap_confidence_level` field.
 - The psychometric held-out harness now requires a declared resample count,

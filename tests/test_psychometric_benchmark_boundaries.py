@@ -1,10 +1,11 @@
 """Diagnostic harness denominators and startup guards, not estimator validation."""
 
 import builtins
+import inspect
 import json
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -143,6 +144,82 @@ def test_observation_p95_tracks_actual_sample_count(monkeypatch, capsys, sample_
     routing.main()
     report = json.loads(capsys.readouterr().out)
     assert report["p95_observe_ms"] == (95 * sample_count + 99) // 100
+
+
+def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
+    """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
+    parameters = inspect.signature(heldout._validate_sequential_drift).parameters
+    assert parameters["replications"].default is None
+    assert parameters["horizon_observations"].default is None
+    assert parameters["change_after_observations"].default is None
+    assert parameters["confidence_level"].default is None
+    with pytest.raises(ValueError, match="replications"):
+        heldout._validate_sequential_drift()
+    with pytest.raises(ValueError, match="horizon_observations"):
+        heldout._validate_sequential_drift(
+            replications=8, change_after_observations=4, confidence_level=0.95
+        )
+    with pytest.raises(ValueError, match="change_after_observations"):
+        heldout._validate_sequential_drift(
+            replications=8,
+            horizon_observations=20,
+            change_after_observations=20,
+            confidence_level=0.95,
+        )
+    with pytest.raises(ValueError, match="confidence_level"):
+        heldout._validate_sequential_drift(
+            replications=8,
+            horizon_observations=20,
+            change_after_observations=4,
+        )
+
+
+def test_sequential_drift_records_horizon_censored_non_detections() -> None:
+    """A threshold that never fires is missed-detection evidence, not an abort."""
+    report = heldout._evaluate_sequential_drift_threshold(
+        seed=1,
+        threshold=1_000.0,
+        replications=8,
+        horizon_observations=20,
+        change_after_observations=10,
+        confidence_level=0.95,
+    )
+    assert report["censored_replications"] == 8
+    assert report["false_alarm_rate"] == 0.0
+    assert report["post_change_detection_rate_among_no_false_alarm"] == 0.0
+    assert report["detection_delay_p50_observations"] is None
+    assert report["detection_delay_p95_observations"] is None
+    assert report["delay_summary_population"] == "post_change_detections_only"
+    assert "false_alarm_rate_upper_95" not in report
+    assert report["false_alarm_rate_upper_bound"] == pytest.approx(
+        0.3244075648838801
+    )
+
+
+@pytest.mark.parametrize("draw_value", [0.0, 1.0])
+def test_sequential_drift_preserves_empty_detection_population(monkeypatch, draw_value):
+    """All censored or premature alarms retain evidence without selecting a policy."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        heldout.random, "Random",
+        lambda _seed: SimpleNamespace(random=lambda: draw_value),
+    )
+    report = heldout._validate_sequential_drift(
+        replications=8, horizon_observations=20,
+        change_after_observations=10, confidence_level=0.95,
+    )
+    baseline = report["baseline"]
+    assert baseline["censored_replications"] == (8 if draw_value == 0.0 else 0)
+    assert baseline["false_alarm_count"] == (0 if draw_value == 0.0 else 8)
+    assert baseline["post_change_detection_count"] == 0
+    assert baseline["detection_delay_p95_observations"] is None
+    assert baseline["post_change_detection_rate_among_no_false_alarm"] == (
+        0.0 if draw_value == 0.0 else None
+    )
+    assert report["candidate"] is None
+    assert report["candidate_meets_synthetic_targets"] is False
+    assert len(report["threshold_search"]["calibration_results"]) == 11
 
 
 def test_heldout_runtime_guard_precedes_optional_dependency_imports(monkeypatch):

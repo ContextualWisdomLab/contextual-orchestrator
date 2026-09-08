@@ -301,12 +301,45 @@ After declared coverage, nested report fields still named `*_ci95` implied
 95% even when the run declared a different interval. Those fields are now
 `*_interval`. Coverage stays in `bootstrap_confidence_level`. IRT diagnostics
 that measure actual 95% coverage of standard-error intervals keep their names.
+Sequential-drift horizon and censored no-alarm delays are the successor
+slice recorded below.
 
 ```mermaid
 flowchart LR
     declaration[Declared coverage] --> interval[Interval values]
     interval --> report["JSON *_interval fields"]
     declaration --> field[bootstrap_confidence_level]
+```
+
+### Declared sequential-drift horizon and censored delays (2026-09-08, proposed)
+
+The held-out CUSUM screen used a hidden 500-replication, 250-observation,
+change-at-100 horizon and aborted when a replication never alarmed. Those
+choices hid Monte Carlo precision and dropped missed detections from the
+delay KPI. Replications, horizon, change-point, and coverage are now
+required declarations. No-alarm replications are right-censored at the
+remaining post-change length, recorded separately from detected-only delay
+quantiles. Empty detection populations yield null quantiles, not horizon-valued
+events. All-false-alarm runs preserve counts with a null conditional detection
+rate; no eligible candidate preserves all calibration results with false
+acceptance. This retains the effective non-detection repair from parent
+`fb12256bb09d101b5f6dbf38d93b18cdfe19a926` without removing the required declarations.
+The Wilson upper bound uses the declared
+coverage and is stored as `false_alarm_rate_upper_bound`.
+
+This slice does not change production route/conduct defaults. Other harness
+sample sizes remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Screen as CUSUM screen
+    participant Report as Held-out report
+    Operator->>Screen: Replications, horizon, change-point, coverage
+    Screen->>Screen: Fail closed on missing or invalid declarations
+    Screen->>Screen: Separate detected events from censored non-detections
+    Screen->>Report: Counts, detection rate, detected-only quantiles or null
+    Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
