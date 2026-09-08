@@ -3,9 +3,9 @@
 import builtins
 import inspect
 import json
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -367,12 +367,39 @@ def test_sequential_drift_records_horizon_censored_non_detections() -> None:
     assert report["censored_replications"] == 8
     assert report["false_alarm_rate"] == 0.0
     assert report["post_change_detection_rate_among_no_false_alarm"] == 0.0
-    assert report["detection_delay_p50_observations"] == 10
-    assert report["detection_delay_p95_observations"] == 10
+    assert report["detection_delay_p50_observations"] is None
+    assert report["detection_delay_p95_observations"] is None
+    assert report["delay_summary_population"] == "post_change_detections_only"
     assert "false_alarm_rate_upper_95" not in report
     assert report["false_alarm_rate_upper_bound"] == pytest.approx(
         0.3244075648838801
     )
+
+
+@pytest.mark.parametrize("draw_value", [0.0, 1.0])
+def test_sequential_drift_preserves_empty_detection_population(monkeypatch, draw_value):
+    """All censored or premature alarms retain evidence without selecting a policy."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        heldout.random, "Random",
+        lambda _seed: SimpleNamespace(random=lambda: draw_value),
+    )
+    report = heldout._validate_sequential_drift(
+        replications=8, horizon_observations=20,
+        change_after_observations=10, confidence_level=0.95,
+    )
+    baseline = report["baseline"]
+    assert baseline["censored_replications"] == (8 if draw_value == 0.0 else 0)
+    assert baseline["false_alarm_count"] == (0 if draw_value == 0.0 else 8)
+    assert baseline["post_change_detection_count"] == 0
+    assert baseline["detection_delay_p95_observations"] is None
+    assert baseline["post_change_detection_rate_among_no_false_alarm"] == (
+        0.0 if draw_value == 0.0 else None
+    )
+    assert report["candidate"] is None
+    assert report["candidate_meets_synthetic_targets"] is False
+    assert len(report["threshold_search"]["calibration_results"]) == 11
 
 
 def test_heldout_runtime_guard_precedes_optional_dependency_imports(monkeypatch):
