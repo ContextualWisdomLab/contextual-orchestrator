@@ -134,3 +134,10 @@ push or open a PR.
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
+
+## Tool-call handoffs
+
+Return worker tool calls before text-answer judging or later workflow roles;
+a handoff does not establish completed tool execution or answer quality.
+Preserve stream indices and request isolation. Reproduction and release-proof
+boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).

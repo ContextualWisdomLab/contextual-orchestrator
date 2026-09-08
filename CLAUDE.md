@@ -119,3 +119,10 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+
+## Tool-call handoffs
+
+Return worker tool calls before text-answer judging or later workflow roles;
+a handoff does not establish completed tool execution or answer quality.
+Preserve stream indices and request isolation. Reproduction and release-proof
+boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
