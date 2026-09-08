@@ -229,6 +229,51 @@ def test_five_field_race_loser_preserves_provider_usage() -> None:
     assert record["measurement_status"] == "measured"
 
 
+def test_batch_five_field_race_loser_reaches_retrieval_cost() -> None:
+    """Local batch keeps fourth-field usage from a completed tool-call race."""
+    coordinator = _coordinator()
+
+    def complete(messages, *, mode, model_name):  # type: ignore[no-untyped-def]
+        del messages, model_name
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            (
+                "",
+                "mock_worker",
+                "mock-a",
+                {"prompt_tokens": 8, "completion_tokens": 3},
+                {"tool_calls": [{"id": "call_batch_race"}]},
+            ),
+        )
+        return {
+            "answer": "winner",
+            "mode": mode,
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.complete = complete  # type: ignore[method-assign]
+    job = coordinator.submit_batch(
+        [BatchRequest(messages=[{"role": "user", "content": "race batch"}])]
+    )
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+    rows = coordinator.ledger.records()
+
+    assert (item["prompt_tokens"], item["completion_tokens"]) == (10, 4)
+    assert {(row["prompt_tokens"], row["completion_tokens"]) for row in rows} == {
+        (8, 3),
+        (2, 1),
+    }
+    assert item["measurement_status"] == "measured"
+    assert item["cost_amount"] == 0.018
+
+
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
     """Race-loser spend uses the same provider identity as winner accounting."""
     agent = ModelAgent(

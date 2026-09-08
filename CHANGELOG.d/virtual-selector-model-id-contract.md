@@ -7,3 +7,7 @@
   matches these ids exactly, so normalizing provider prefixes or case would
   widen it silently and send requests the caller never routed into single-agent
   passthrough, losing worker re-selection.
+- Preserved five-field tool-call race usage through local batch retrieval so
+  completed loser calls remain visible in measured token and cost totals.
+- Canonicalized validated `tool_choice` values before forwarding Chat
+  Completions and Responses requests, while omitting empty no-op controls.

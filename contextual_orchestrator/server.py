@@ -6895,8 +6895,13 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
+                    normalized_tool_choice = None
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_tool_choice
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
@@ -7166,8 +7171,8 @@ def build_server(
                     }
                     if tools_list:
                         request_settings["tools"] = tools_list
-                        if body.get("tool_choice") is not None:
-                            request_settings["tool_choice"] = body["tool_choice"]
+                        if normalized_tool_choice is not None:
+                            request_settings["tool_choice"] = normalized_tool_choice
                         if body.get("parallel_tool_calls") is not None:
                             request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
                     with model_client.request_settings(**request_settings):
@@ -7619,7 +7624,11 @@ def build_server(
                     if "tools" in body:
                         _validate_chat_tools(body)
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_responses_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_responses_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_responses_tool_choice
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "modalities" in body:
