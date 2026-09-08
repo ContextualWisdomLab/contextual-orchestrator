@@ -276,6 +276,23 @@ def test_score_reliability_uses_declared_sample_size() -> None:
     assert report["items"] == 12
 
 
+def test_judge_effects_requires_declared_sample_size() -> None:
+    """Judge-effect evidence cannot invent a 1,000-row default."""
+    parameters = inspect.signature(heldout._validate_judge_effects).parameters
+    assert parameters["sample_size"].default is None
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_judge_effects()
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_judge_effects(sample_size=True)
+
+
+def test_judge_effects_uses_declared_sample_size() -> None:
+    """The declared sample size is the actual fully crossed rater population."""
+    report = heldout._validate_judge_effects(sample_size=40)
+    assert report["sample_size"] == 40
+    assert report["judges"] == 3
+
+
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
     """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
     parameters = inspect.signature(heldout._validate_sequential_drift).parameters

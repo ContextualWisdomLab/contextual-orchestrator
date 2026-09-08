@@ -754,6 +754,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert dif["anchor_items"] == 7
     judge = report["judge_effects_validation"]
     assert judge["method"] == "many_facet_rasch"
+    assert judge["sample_size"] == heldout_benchmark.DECLARED_JUDGE_SAMPLE_SIZE
     assert judge["connected"] is True
     assert judge["converged"] is True
     assert judge["severity_order_recovered"] is True
