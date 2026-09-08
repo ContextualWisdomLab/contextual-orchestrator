@@ -1248,7 +1248,10 @@ def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> 
     agent = ModelAgent("audit_candidate", "model-a")
     orchestrator = TaskOrchestrator([agent])
     try:
-        orchestrator._psychometric_router.observe("audit context", "old_candidate", True, None)
+        candidate_id = orchestrator._psychometric_candidate_id(agent)
+        orchestrator._psychometric_router.observe("audit context", candidate_id, True, None)
+        orchestrator._retain_psychometric_candidates()
+        assert len(orchestrator._psychometric_router.records()) == 1
         orchestrator.candidates = []
         orchestrator.role_effort_catalog = {}
         orchestrator._retain_psychometric_candidates()

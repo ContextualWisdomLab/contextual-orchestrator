@@ -505,13 +505,14 @@ def _validate_sequential_drift() -> dict[str, object]:
     after_probability = 0.3
     change_after = 100
 
-    def evaluate(seed: int, threshold: float) -> dict[str, float | int]:
+    def evaluate(seed: int, threshold: float) -> dict[str, object]:
         """Simulate seeded first alarms for the declared Bernoulli probability shift.
 
-        Delays exclude pre-change alarms. Every replication must alarm within
-        the fixed horizon; this experiment does not estimate censored delays.
+        Delays are conditional on post-change detection. Non-detections remain
+        in the rate denominator; no censored delay is replaced with zero.
         """
         false_alarms = 0
+        non_detections = 0
         detection_delays: list[int] = []
         for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
             generator = random.Random(seed + replication)
@@ -535,8 +536,9 @@ def _validate_sequential_drift() -> dict[str, object]:
                 if statistic >= threshold:
                     alarm_observation = observation_index + 1
                     break
-            assert alarm_observation is not None
-            if alarm_observation <= change_after:
+            if alarm_observation is None:
+                non_detections += 1
+            elif alarm_observation <= change_after:
                 false_alarms += 1
             else:
                 detection_delays.append(alarm_observation - change_after)
@@ -559,14 +561,22 @@ def _validate_sequential_drift() -> dict[str, object]:
             "threshold_log_likelihood_ratio": threshold,
             "false_alarm_rate": false_alarm_rate,
             "false_alarm_rate_upper_95": false_alarm_upper_95,
+            "false_alarm_count": false_alarms,
+            "non_detection_count": non_detections,
+            "post_change_detection_count": len(detection_delays),
+            "observation_horizon": 250,
+            "delay_summary_population": "post_change_detections_only",
             "post_change_detection_rate_among_no_false_alarm": (
                 len(detection_delays)
                 / (SEQUENTIAL_DRIFT_REPLICATIONS - false_alarms)
+                if SEQUENTIAL_DRIFT_REPLICATIONS > false_alarms else None
             ),
-            "detection_delay_p50_observations": statistics.median(detection_delays),
+            "detection_delay_p50_observations": (
+                statistics.median(detection_delays) if detection_delays else None
+            ),
             "detection_delay_p95_observations": ordered_delays[
                 math.ceil(0.95 * len(ordered_delays)) - 1
-            ],
+            ] if ordered_delays else None,
         }
 
     calibration_baseline = evaluate(SEQUENTIAL_DRIFT_SEED, math.log(100.0))
@@ -578,19 +588,24 @@ def _validate_sequential_drift() -> dict[str, object]:
         value
         for value in evaluated_candidates
         if value["false_alarm_rate_upper_95"] <= 0.05
+        and value["non_detection_count"] == 0
+        and value["detection_delay_p95_observations"] is not None
         and value["detection_delay_p95_observations"] <= 25
     ]
     calibration_candidate = min(
         eligible_candidates,
+        default=None,
         key=lambda value: (
             value["detection_delay_p95_observations"],
             value["detection_delay_p50_observations"],
             value["threshold_log_likelihood_ratio"],
         ),
     )
-    selected_threshold = calibration_candidate["threshold_log_likelihood_ratio"]
     baseline = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, math.log(100.0))
-    candidate = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, selected_threshold)
+    candidate = (
+        evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, calibration_candidate["threshold_log_likelihood_ratio"])
+        if calibration_candidate is not None else None
+    )
     return {
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
@@ -608,10 +623,12 @@ def _validate_sequential_drift() -> dict[str, object]:
             "maximum": threshold_candidates[-1],
             "step": 0.1,
             "candidates": len(threshold_candidates),
+            "calibration_results": evaluated_candidates,
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
                 "calibration candidates whose 95% false-alarm upper bound and "
-                "p95 delay meet both synthetic targets"
+                "p95 delay meet both synthetic targets, with no non-detections; "
+                "otherwise no candidate is selected"
             ),
         },
         "synthetic_targets": {
@@ -619,7 +636,10 @@ def _validate_sequential_drift() -> dict[str, object]:
             "maximum_detection_delay_p95_observations": 25,
         },
         "candidate_meets_synthetic_targets": (
-            candidate["false_alarm_rate_upper_95"] <= 0.05
+            candidate is not None
+            and candidate["non_detection_count"] == 0
+            and candidate["detection_delay_p95_observations"] is not None
+            and candidate["false_alarm_rate_upper_95"] <= 0.05
             and candidate["detection_delay_p95_observations"] <= 25
         ),
     }
