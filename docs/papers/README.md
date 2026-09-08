@@ -62,8 +62,14 @@ redistribution is unclear.
   Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
   and compare it to known true parameters; a rank constant is not an estimate.
 
-Buyer next action: call `run_equal_budget_ablation` and read
-`production_default_change_allowed` before changing live defaults.
+`run_equal_budget_ablation` emits estimated, synthetic true-parameter evidence
+for unit-test recovery checks. It does not establish buyer accuracy or authorize
+live routing changes. A Boolean returned by `production_default_change_allowed`
+is not sufficient deployment evidence: caller-declared measurement status and
+robustness do not authenticate observed outcomes. The repair tracked in
+[PR #1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+remains proposed until protected integration. Live defaults require independently
+verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
