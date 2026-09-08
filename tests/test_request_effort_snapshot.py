@@ -354,6 +354,7 @@ def test_no_catalog_request_does_not_adopt_a_late_catalog(monkeypatch):
 def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
     """Reuse validation across key construction, nested execution, identity, and records."""
     orchestrator, _unused_catalog = _orchestrator(cache_ttl=60)
+    starting_policy = orchestrator.policy
     original = runtime_module.snapshot_role_effort_catalog
     calls = []
 
@@ -367,7 +368,7 @@ def test_catalog_is_validated_once_per_completion(monkeypatch, mode):
     try:
         result = orchestrator.complete([{"role": "user", "content": "validation count fixture"}], mode=mode)
         assert len(calls) == 1
-        assert result["policy_snapshot"]["route_p95_seconds"] == 2.5
+        assert result["policy_snapshot"] == starting_policy.as_dict()
         assert orchestrator.policy.route_p95_seconds == 9
     finally:
         orchestrator.close()

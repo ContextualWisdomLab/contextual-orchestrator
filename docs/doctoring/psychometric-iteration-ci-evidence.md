@@ -1,5 +1,22 @@
 # Solver iteration diagnostic versus numerical acceptance
 
+## 2026-09-08 request evidence regression repair
+
+Starting from PR #1067 `ec1c4e66512615ea1f00fa044f3bfba787aab567`, a non-ASCII
+policy fixture reproduced one failure in the independent policy-hash assertion.
+The test used unescaped JSON while the runtime receipt uses escaped JSON.
+The repair matches that serialization contract without changing runtime hashing
+and exercises five request entry points with non-ASCII policy content.
+Two related review repairs compare the complete starting policy rather than a
+hard-coded default and prove a current candidate's observations survive retention
+before the candidate pool is emptied. This prevents a stale invented candidate
+ID from making the deletion regression pass for the wrong reason.
+
+Focused execution: 8 passed, 64 deselected in 34.73 seconds; `git diff --check`
+passed. The separate 72-test execution was still running at this receipt;
+no full-suite, hosted acceptance, parameter-accuracy improvement, or protected
+merge is claimed. These fixtures are unit-only and contact no live provider.
+
 At parent PR #1067 head a4f693c4, hosted run
 [34032452587](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34032452587/job/101484386171)
 reported 1 failed, 3581 passed and 2 skipped in 799.59 seconds. The sole failing
