@@ -171,14 +171,14 @@ def test_availability_does_not_reverse_judged_member_order(monkeypatch):
     ]
     gateway = TaskOrchestrator(agents)
     try:
-        for agent, accepted in zip(agents, (8, 2)):
+        for agent, accepted in zip(agents, (8, 2), strict=True):
             for _ in range(accepted):
                 gateway._quality_router.observe_success(agent.id, 1.0)
             for _ in range(10 - accepted):
                 gateway._quality_router.observe_failure(agent.id)
         before = gateway._quality_router.snapshot()
         assert gateway._refine_partition(agents, "worker") == agents
-        for agent, uptime in zip(agents, (0.0, 100.0)):
+        for agent, uptime in zip(agents, (0.0, 100.0), strict=True):
             monkeypatch.setattr(gateway._openrouter_collector, "_fetch_uptime", lambda _model, value=uptime: value)
             for _ in range(50):
                 gateway._openrouter_collector._poll_agent(agent)

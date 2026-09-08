@@ -176,6 +176,6 @@ def test_heldout_runtime_guard_precedes_optional_dependency_imports(monkeypatch)
     monkeypatch.setattr(builtins, "__import__", guarded_import)
     with pytest.raises(
         SystemExit,
-        match="uv run --python 3.12 python scripts/benchmark_psychometric_heldout.py",
+        match=r"uv run --python 3\.12 python scripts/benchmark_psychometric_heldout\.py",
     ):
         runpy.run_path(str(Path(heldout.__file__)), run_name="__main__")
