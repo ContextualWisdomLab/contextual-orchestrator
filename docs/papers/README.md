@@ -92,6 +92,22 @@ non-exclusive license / CC BY as marked on arXiv.
 
 ## Batch execution / load balancing
 
+## Psychometrics beyond orchestration
+
+These sources constrain what a routing score may mean; they are not routing
+algorithms. They add validity, identification, and fair-comparison checks:
+
+- Messick (1995) frames validity as an argument about score interpretation and
+  use. Buyer-facing quality claims therefore need a construct, intended use,
+  observed outcome, and limitation record; a judge label alone is insufficient.
+- Embretson and Reise (2000) describe item information and identifiability in
+  IRT. Select extra items or raters by expected information only after scale
+  alignment and exposure limits are declared; never optimize a raw judge score
+  as if it were theta.
+- Reise, Ainsworth, and Haviland (2005) separate fit, parameter interpretation,
+  and practical measurement. Report family-wise fit and uncertainty separately
+  from route accuracy and latency, and fail closed when identification is absent.
+
 The external `pg-llm-batch` service carries its own grounding papers, including
 PagedAttention / vLLM (2309.06180) and DeepSpeed-FastGen (2401.08671), which
 motivate throughput-oriented **batched** inference and the load-balancing that
@@ -122,3 +138,16 @@ Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
 M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
 data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
+
+Embretson, S. E., & Reise, S. P. (2000). *Item response theory for
+psychologists*. Lawrence Erlbaum Associates.
+
+Messick, S. (1995). Validity of psychological assessment: Validation of
+inferences from persons' responses and performances as scientific inquiry into
+score meaning. *American Psychologist, 50*(9), 741–749.
+https://doi.org/10.1037/0003-066X.50.9.741
+
+Reise, S. P., Ainsworth, A. T., & Haviland, M. G. (2005). Item response theory:
+Fundamentals, applications, and promise in psychological research. *Current
+Opinion in Psychiatry, 18*(5), 611–616.
+https://doi.org/10.1097/01.yco.0000170421.57227.9b
