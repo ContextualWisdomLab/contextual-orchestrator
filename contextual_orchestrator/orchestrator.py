@@ -1690,12 +1690,10 @@ def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
 
 def _passthrough_failure_phase(exc: ProviderUpstreamError) -> str:
     """Map one classified passthrough failure onto a bounded lifecycle phase."""
-    if exc.error_code in {
-        "provider_connection_error",
-        "tls_failure",
-        "tls_verification_failed",
-    }:
+    if exc.error_code in {"tls_failure", "tls_verification_failed"}:
         return "connecting"
+    if exc.error_code == "provider_connection_error":
+        return "transport"
     if exc.error_code == "request_too_large":
         return "request_validation"
     return "provider_response"
@@ -4481,21 +4479,12 @@ class TaskOrchestrator:
                     model=candidate.model,
                     transport="passthrough",
                 )
-                failover_eligible = _is_passthrough_failover_error(exc) or (
-                    requested_model == self.FREE_MODEL
-                    and classified.transport == "passthrough"
-                    and classified.retryable
-                    and classified.client_status == 502
-                    and classified.provider_status is None
-                )
+                failover_eligible = _is_passthrough_failover_error(exc)
                 has_remaining_candidates = index + 1 < len(candidates)
                 attempt_receipts.append(
                     _passthrough_attempt_record(
                         classified,
-                        provider_name=(
-                            candidate.provider_name
-                            or self._infer_provider_name(candidate.base_url)
-                        ),
+                        provider_name=candidate.provider_name.strip() or "unreported",
                         attempt_number=index + 1,
                         failover_decision=(
                             "advance_to_next_candidate"

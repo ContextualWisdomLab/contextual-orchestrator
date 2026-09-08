@@ -553,7 +553,7 @@ def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() ->
         "free_primary",
         "free_backup",
     ]
-    assert body["error"]["detail"]["terminal_reason"] == "eligible_candidates_exhausted"
+    assert body["error"]["detail"]["terminal_reason"] == "terminal_provider_failure"
     assert body["error"]["detail"]["attempts"] == [
         {
             "agent_id": "free_primary",
@@ -565,28 +565,15 @@ def test_http_free_tool_passthrough_exposes_bounded_attempt_evidence_on_502() ->
             "provider_status": None,
             "retryable": True,
             "transport": "passthrough",
-            "phase": "connecting",
-            "failover_decision": "advance_to_next_candidate",
-        },
-        {
-            "agent_id": "free_backup",
-            "model": "free-backup-model",
-            "provider_name": "free-backup",
-            "attempt_number": 2,
-            "error_code": "provider_connection_error",
-            "client_status": 502,
-            "provider_status": None,
-            "retryable": True,
-            "transport": "passthrough",
-            "phase": "connecting",
-            "failover_decision": "eligible_candidates_exhausted",
+            "phase": "transport",
+            "failover_decision": "sticky_candidate_failure",
         },
     ]
     assert "use the tool" not in json.dumps(body)
 
 
-def test_http_free_tool_passthrough_raw_timeout_fails_over_and_reports_attempts() -> None:
-    """HTTP passthrough preserves attempt evidence for raw transport failures."""
+def test_http_free_tool_passthrough_raw_timeout_does_not_replay() -> None:
+    """HTTP passthrough keeps an ambiguous timeout on its selected candidate."""
 
     class TimeoutFreePool(ModelClient):
         def proxy_send_once(self, agent, endpoint, payload):
@@ -635,8 +622,24 @@ def test_http_free_tool_passthrough_raw_timeout_fails_over_and_reports_attempts(
         server.shutdown()
         server.server_close()
 
-    assert status == 200
-    assert body["model"] == "free-backup-model"
+    assert status == 502
+    assert body["error"]["code"] == "provider_connection_error"
+    assert body["error"]["detail"]["terminal_reason"] == "terminal_provider_failure"
+    assert body["error"]["detail"]["attempts"] == [
+        {
+            "agent_id": "free_primary",
+            "model": "free-primary-model",
+            "provider_name": "free-primary",
+            "attempt_number": 1,
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "transport",
+            "failover_decision": "sticky_candidate_failure",
+        }
+    ]
 
 
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:

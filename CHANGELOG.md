@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Passthrough attempt receipts no longer infer public provider labels from
+  endpoint hostnames. Ambiguous timeout/connection failures now report the
+  neutral `transport` phase and remain sticky even for `orchestrator/free`,
+  preventing duplicate completion and unreported upstream usage.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

@@ -260,8 +260,8 @@ def test_virtual_passthrough_all_oversized_tool_errors_preserve_size_contract() 
     assert orchestrator._circuit == {}
 
 
-def test_free_passthrough_transport_errors_fail_over_from_raw_timeout() -> None:
-    """Retryable raw transport failures stay on the free-model failover path."""
+def test_free_passthrough_raw_timeout_remains_sticky() -> None:
+    """An ambiguous timeout must not replay a free-model completion."""
     client = SequencedProxyClient(
         {
             "primary_agent": TimeoutError("provider timed out"),
@@ -273,19 +273,20 @@ def test_free_passthrough_transport_errors_fail_over_from_raw_timeout() -> None:
         replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
     ]
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": TaskOrchestrator.FREE_MODEL,
-            "messages": [{"role": "user", "content": "use the tool"}],
-            "tools": [{"type": "function", "function": {"name": "inspect"}}],
-        }
-    )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
 
-    assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
-    ]
+    assert caught.value.detail["attempts"][0]["phase"] == "transport"
+    assert caught.value.detail["attempts"][0]["failover_decision"] == (
+        "sticky_candidate_failure"
+    )
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
@@ -1179,8 +1180,8 @@ def test_classified_ambiguous_connection_error_does_not_fail_over() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_free_virtual_model_fails_over_on_classified_retryable_transport_502() -> None:
-    """A free virtual-model request may advance after one retryable 502 transport failure."""
+def test_free_virtual_model_keeps_ambiguous_transport_502_sticky() -> None:
+    """A classified ambiguous transport failure must not replay a free request."""
     failure = ProviderUpstreamError(
         agent_id="primary_agent",
         model="primary-model",
@@ -1202,16 +1203,17 @@ def test_free_virtual_model_fails_over_on_classified_retryable_transport_502() -
         replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
     ]
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": TaskOrchestrator.FREE_MODEL,
-            "messages": [{"role": "user", "content": "use the tool"}],
-            "tools": [{"type": "function", "function": {"name": "inspect"}}],
-        }
-    )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
 
-    assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert caught.value.detail["attempts"][0]["phase"] == "transport"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 
@@ -1244,28 +1246,8 @@ def test_free_virtual_model_fails_over_on_raw_provider_http_500() -> None:
 
 def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> None:
     """Exhausted free passthrough keeps typed candidate evidence on the final 502."""
-    primary = ProviderUpstreamError(
-        agent_id="primary_agent",
-        model="primary-model",
-        error_code="provider_connection_error",
-        message="the provider primary_agent connection failed or did not finish in time",
-        client_status=502,
-        provider_status=None,
-        retryable=True,
-        transport="passthrough",
-    )
-    fallback = ProviderUpstreamError(
-        agent_id="fallback_agent",
-        model="fallback-model",
-        error_code="provider_connection_error",
-        message="the provider fallback_agent connection failed or did not finish in time",
-        client_status=502,
-        provider_status=None,
-        retryable=True,
-        transport="passthrough",
-    )
     client = SequencedProxyClient(
-        {"primary_agent": primary, "fallback_agent": fallback}
+        {"primary_agent": _http_error(500), "fallback_agent": _http_error(500)}
     )
     orchestrator = _build(client)
     orchestrator.agents = [
@@ -1297,27 +1279,27 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         {
             "agent_id": "primary_agent",
             "model": "primary-model",
-            "provider_name": "mock-primary_agent",
+            "provider_name": "unreported",
             "attempt_number": 1,
-            "error_code": "provider_connection_error",
+            "error_code": "api_error",
             "client_status": 502,
-            "provider_status": None,
+            "provider_status": 500,
             "retryable": True,
             "transport": "passthrough",
-            "phase": "connecting",
+            "phase": "provider_response",
             "failover_decision": "advance_to_next_candidate",
         },
         {
             "agent_id": "fallback_agent",
             "model": "fallback-model",
-            "provider_name": "mock-fallback_agent",
+            "provider_name": "unreported",
             "attempt_number": 2,
-            "error_code": "provider_connection_error",
+            "error_code": "api_error",
             "client_status": 502,
-            "provider_status": None,
+            "provider_status": 500,
             "retryable": True,
             "transport": "passthrough",
-            "phase": "connecting",
+            "phase": "provider_response",
             "failover_decision": "eligible_candidates_exhausted",
         },
     ]
@@ -1515,7 +1497,7 @@ def test_only_temporary_dns_failures_advance(
                 "provider_status": None,
                 "retryable": False,
                 "transport": "passthrough",
-                "phase": "connecting",
+                "phase": "transport",
                 "failover_decision": "sticky_candidate_failure",
             }
         ]
@@ -1548,7 +1530,7 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
             "provider_status": None,
             "retryable": True,
             "transport": "passthrough",
-            "phase": "connecting",
+            "phase": "transport",
             "failover_decision": "sticky_candidate_failure",
         }
     ]

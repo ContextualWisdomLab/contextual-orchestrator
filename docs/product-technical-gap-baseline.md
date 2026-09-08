@@ -34,10 +34,10 @@ Current-head RCA:
 - `classify_provider_failure()` already mapped those raw exceptions to bounded
   typed 502 surfaces, but `proxy_completion()` only invoked the classifier for
   `HTTPError` and already-classified `ProviderUpstreamError` instances;
-- for `orchestrator/free`, retryable raw transport failures therefore stopped
-  at the first selected candidate instead of advancing to the next eligible
-  free provider, and sticky raw failures had no request-scoped attempt receipt
-  explaining why the gateway did not retry.
+- raw transport failures had no request-scoped attempt receipt explaining why
+  the gateway stopped. They remain non-replayable because a timeout or generic
+  connection failure does not prove that the provider rejected the request
+  before accepting work or usage.
 
 ### Local fix completed
 
@@ -45,29 +45,39 @@ The worktree change makes one surgical contract extension:
 
 - `proxy_completion()` now classifies every caught passthrough provider
   exception before deciding whether failover is permitted;
-- `orchestrator/free` virtual passthrough now advances to the next distinct
-  eligible candidate when a provider raises a raw retryable transport failure
-  that classifies to a passthrough 502 with no upstream provider status;
+- `orchestrator/free` virtual passthrough advances only after evidence that
+  proves non-acceptance, such as an explicit retryable upstream HTTP response
+  or temporary pre-request DNS failure. Raw timeout and generic transport 502
+  outcomes remain sticky to prevent duplicate completion and unreported usage;
 - sticky failures now record the distinct failover decision
   `sticky_candidate_failure` instead of incorrectly reusing
   `eligible_candidates_exhausted`, while explicit concrete-model requests
   remain single-provider sticky.
 
 The public error detail remains bounded and secret-safe: no credentials, raw
-provider bodies, or prompt text are emitted. The new lifecycle phase is
-`connecting` for pre-provider transport/TLS failures, which distinguishes them
-from provider-response failures without inventing provider acceptance.
+provider bodies, prompt text, or inferred endpoint hostnames are emitted.
+Unclassified connection/timeout outcomes use lifecycle phase `transport`;
+only explicit TLS failures use `connecting`.
 
 ### Exact local verification
 
-- Added focused regressions for raw timeout failover in the in-process
-  free-model passthrough loop, raw timeout failover through the real
-  `/v1/chat/completions` HTTP path, and bounded sticky attempt evidence for
-  non-failover raw wrapper, permanent DNS, and ambiguous timeout cases.
-- `uv run pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
-  -> `97 passed in 12.75s`
-- `uv run pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
-  -> `118 passed in 14.68s`
+The 2026-09-08 current-head review repair added three explicit acceptance
+boundaries: no replay after an ambiguous transport outcome, no inferred
+endpoint hostname in public attempt evidence, and no invented `connecting`
+phase for an outcome whose lifecycle stage is unknown. The revised tests first
+failed as expected (`3 failed, 61 passed`) and then passed after the minimal
+owner fix.
+
+- Added focused regressions proving ambiguous raw/classified transport errors
+  remain sticky in both the in-process free-model loop and real
+  `/v1/chat/completions` HTTP path, while explicit retryable HTTP 500 and
+  temporary pre-request DNS evidence retain bounded failover.
+- `.venv/bin/python -m pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `98 passed in 10.64s`
+- `.venv/bin/python -m pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
+  -> `119 passed in 11.61s`
+- `uvx ruff check --select E4,E7,E9,F contextual_orchestrator/orchestrator.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py`
+  and `git diff --check` -> success.
 
 ### Branch-local quality note
 
