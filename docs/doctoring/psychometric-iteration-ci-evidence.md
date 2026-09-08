@@ -1,5 +1,22 @@
 # Solver iteration diagnostic versus numerical acceptance
 
+## 2026-09-08 fixed-horizon drift non-detections
+
+On `6765929f`, a unit-only stream with no alarm reproduced an AssertionError
+that discarded valid non-detection outcomes. The harness now records false
+alarms, post-change detections, and non-detections with the 250-observation
+horizon. Delay quantiles describe detected cases only and are null when none
+detect; the conditional detection rate is null when every trial false-alarms.
+All calibration results survive even when no threshold is eligible, in which
+case candidate fields are null and synthetic acceptance is false.
+
+The former requirement that every trial alarm is preserved as a conservative
+candidate-eligibility condition, not an abort. It is not a new validated
+operational detection target or a survival-analysis estimate. Four focused
+tests passed in 17.76 seconds, covering all non-detections, all false alarms,
+mixed detections, and unchanged seeded reference results. Numerical estimation
+ownership and live routing defaults are unchanged.
+
 ## 2026-09-08 request evidence regression repair
 
 Starting from PR #1067 `ec1c4e66512615ea1f00fa044f3bfba787aab567`, a non-ASCII
