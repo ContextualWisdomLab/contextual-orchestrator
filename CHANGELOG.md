@@ -20,6 +20,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Review-sidecar `orchestrator/free` admission now treats a CI-seeded
+  `OPENCODE_ZEN_API_KEY` as an authorized free-pool source. Honest-free
+  OpenCode Zen and OpenCode Go rows can enter `G ∩ P ∩ R`; `OPENAI_API_KEY`
+  remains registered for global discovery and is still excluded from the
+  review free pool (Noema 429 on `google/gemma-4-31b-it:free` in PR #1094
+  while Zen/Go evidence was dropped before routing).
 - `OPENCODE_ZEN_API_KEY` is documented as the shared KV credential for both
   OpenCode Zen and OpenCode Go catalogs; registering it once discovers both
   accounts.

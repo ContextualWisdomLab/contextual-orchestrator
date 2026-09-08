@@ -7,10 +7,10 @@ registry path. This keeps the review sidecar useful without pretending that a
 short-lived runner has a durable production credential store.
 
 Credential registration and ``orchestrator/free`` candidate admission are
-separate contracts. A deployment may register every configured provider,
-including OpenAI, while the free review pool admits only the provider-account
-sources explicitly authorized for that pool and explicitly supplied for the
-current sidecar bootstrap.
+separate contracts. A deployment may register every accepted provider,
+including OpenAI and a CI-seeded ``OPENCODE_ZEN_API_KEY``, while the free
+review pool admits only the provider-account sources explicitly authorized
+for that pool and explicitly supplied for the current sidecar bootstrap.
 """
 
 from __future__ import annotations
@@ -28,24 +28,27 @@ from .model_discovery import (
     general_free_serving_candidates,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
-from .provider_bootstrap import (
-    PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
-    PROVIDER_CREDENTIAL_NAMES,
-)
+from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 
-REVIEW_CREDENTIAL_NAMES = PROVIDER_CREDENTIAL_NAMES
+REVIEW_CREDENTIAL_NAMES = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
     "BYTEZ_API_KEY",
     "NVIDIA_NIM_API_KEY",
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
 )
 """Provider-account sources authorized to contribute to ``orchestrator/free``.
 
 This is a pool-admission policy, not the bootstrap credential inventory.
-``OPENAI_API_KEY`` may be registered and globally discovered, but a model whose
-credential source is OpenAI is never admitted to this free review pool.
+Default bootstrap registers every accepted provider credential that is present,
+including optional ``OPENCODE_ZEN_API_KEY``, so a CI-seeded OpenCode key is not
+dropped before admission. ``OPENAI_API_KEY`` may be registered and globally
+discovered, but a model whose credential source is OpenAI is never admitted to
+this free review pool. ``OPENCODE_ZEN_API_KEY`` is the shared source for
+OpenCode Zen and OpenCode Go; only rows that already satisfy the shared
+general-free serving contract enter the pool.
 """
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -184,7 +187,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
         help=(
             "Provider credential name to bootstrap; repeat to supply an ordered "
-            "credential array. Defaults to the repository provider inventory."
+            "credential array. Defaults to every accepted provider credential."
         ),
     )
     parser.add_argument(
