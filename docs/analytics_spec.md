@@ -108,7 +108,7 @@ Primary owners:
 | Compatible API adoption | Count of successful `/v1/chat/completions` requests by application or token scope over a completed review window. | Shows whether the single API wedge is being used without client rewrites. | HTTP request logs with endpoint, status, auth scope, and timestamp. |
 | Trace-complete workflow rate | Share of conducted workflow runs that include role, worker, subtask, access list, verifier result, and final synthesis fields. | Verifies that enterprise evidence is present when deep orchestration is used. | `workflow_runs` records plus trace schema validation. |
 | Policy-safe routing rate | Share of runs where selected mode, provider exclusions, and verifier requirement match the active orchestration policy. | Detects routing or policy regressions before rollout. | Policy snapshot joined to each run decision. |
-| Psychometric parameter RMSE | Root mean square error between estimated item/person parameters and known true parameters in a synthetic or held-out calibration set; rank scores are not a substitute for parameter error. | Prevents a routing policy from being promoted on classifier accuracy alone when interpretability or calibration is the buyer requirement. | Versioned evaluation replay with true-parameter fixtures, estimated parameters, model/policy version, and split identifier. |
+| Psychometric parameter RMSE | Root mean square error between estimated and known true parameters in unit-test fixtures, reported per parameter family on an identified, aligned scale. | Checks parameter recovery; observed buyer accuracy requires separate outcome evidence. | Versioned true-parameter fixtures, estimates, identification constraints, alignment method, and model version. |
 | Routing decision latency p95 | 95th percentile elapsed time from an accepted request to the persisted route decision, excluding upstream generation time. | Detects orchestration overhead and provides the latency guardrail for accuracy-improving policy changes. | Monotonic decision timestamps in the request/decision trace, segmented by policy version and route mode. |
 
 The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
@@ -122,6 +122,20 @@ observed responses do not by themselves provide known latent parameters.
 Report parameter recovery separately for each parameter family on an identified,
 aligned scale. Buyer accuracy and latency claims require observed task outcomes,
 declared sampling and failure denominators, and uncertainty estimates.
+
+For decision latency, record acceptance after authentication and request
+validation, selection completion, and durable decision-write acknowledgement.
+Measure elapsed time within one monotonic clock domain; timestamps from separate
+hosts cannot be subtracted without a validated clock contract. Include queueing,
+selection, and decision persistence in the declared interval. Existing worker
+invocation durations include response generation and cannot supply this metric.
+
+Report accepted-request count, persisted-decision count, selection failures,
+write failures, cancellations, and unfinished observations alongside the p95.
+Label a p95 calculated only from persisted decisions as conditional on success;
+never present it as an all-request guarantee or encode missing durations as zero.
+Declare the observation window, quantile method, uncertainty method, and workload
+before comparing policies. A faster failed decision is not a quality improvement.
 
 ## Commercial Due-Diligence KPIs
 
