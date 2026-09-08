@@ -51,26 +51,31 @@ let original_logit: f64 = ability_vector.iter()
 let transformed_logit: f64 = transformed_ability.iter()
     .zip(transformed_discrimination).map(|(ability_value, item_value)|
         ability_value * item_value).sum();
-let coordinate_rmse = (ability_vector.iter().zip(transformed_ability)
+let ability_coordinate_rmse = (ability_vector.iter().zip(transformed_ability)
     .map(|(original_value, transformed_value)|
         (original_value - transformed_value).powi(2))
     .sum::<f64>() / 2.0).sqrt();
 assert_eq!(original_logit, 3.5);
 assert_eq!(transformed_logit, original_logit);
-assert_eq!(coordinate_rmse, 1.0);
+assert_eq!(ability_coordinate_rmse, 1.0);
 ```
 
 Difficulty is unchanged, so equal inner products imply equal logits and
 probabilities. These binary-exact fixture values intentionally permit exact
 assertions; this is not a floating-point tolerance policy for fitted parameters.
-The nonzero coordinate RMSE demonstrates why an alignment contract is required
-before interpreting parameter recovery, even when predictions agree exactly.
+The nonzero ability-coordinate RMSE is a single-family counterexample: it
+shows why an alignment contract is required before interpreting ability
+recovery, even when predictions agree exactly. It does not validate recovery
+for discrimination, difficulty, or any other parameter family.
 
 ## CO acceptance implications
 
 - Keep parameter-recovery RMSE separate from observed-task prediction error.
-  Recovery requires known parameters and a declared identification/alignment
-  contract; arbitrary coordinate RMSE can penalize equivalent predictions.
+  Every recovered parameter family requires its own declared identification
+  map into a common reference coordinate. Compute family-wise RMSE only after
+  applying that map to both truth and estimates; if a family's map is not
+  identified, its recovery result is undefined and must not enter an aggregate.
+  Arbitrary coordinate RMSE can penalize equivalent predictions.
 - Before interpreting ability labels, require evidence for the proposed
   construct anchors, dimensional structure, residual dependence, and stability
   across language, task, model family, and time. These are review requirements,
