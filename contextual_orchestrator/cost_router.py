@@ -472,8 +472,11 @@ class CostRoutingCoordinator:
             context["pending_usage"].append((endpoint_id, value))
             return
         usage = None
-        if isinstance(value, tuple) and len(value) == 3:
-            usage = value[2]
+        if isinstance(value, tuple):
+            if len(value) == 3:
+                usage = value[2]
+            elif len(value) == 5:
+                usage = value[3]
         elif isinstance(value, dict):
             usage = value.get("usage")
         agent = next(

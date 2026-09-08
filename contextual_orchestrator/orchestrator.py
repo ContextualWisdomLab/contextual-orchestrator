@@ -4947,6 +4947,8 @@ class TaskOrchestrator:
                             )
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                    if isinstance(exc, ToolFallbackStoppedError):
+                        raise
                     request_too_large = _is_request_too_large_error(exc)
                     saw_request_too_large = saw_request_too_large or request_too_large
                     classified = (
@@ -7799,8 +7801,11 @@ class TaskOrchestrator:
     ) -> None:
         """Record reported duplicate usage without treating missing usage as free."""
         usage = None
-        if isinstance(value, tuple) and len(value) == 3 and isinstance(value[2], dict):
-            usage = value[2]
+        if isinstance(value, tuple):
+            if len(value) == 3 and isinstance(value[2], dict):
+                usage = value[2]
+            elif len(value) == 5 and isinstance(value[3], dict):
+                usage = value[3]
         elif isinstance(value, dict) and isinstance(value.get("usage"), dict):
             usage = value["usage"]
         self._append_audit_event(
@@ -8004,8 +8009,10 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
+                self._record_success(agent.id)
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            self._record_success(agent.id)
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(

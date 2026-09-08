@@ -20,7 +20,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    ModelAgent,
+    TaskOrchestrator,
+    ToolExecutionError,
+    ToolFallbackStoppedError,
+    ToolFailureKind,
+    classify_tool_failure,
+)
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
 
@@ -528,6 +535,54 @@ class _StructuredFailThenServeClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return self.proxy_send(agent, endpoint, payload)
+
+
+class _StructuredToolStopClient(_StructuredFailThenServeClient):
+    """Return a terminal provider tool-stop from structured synthesis."""
+
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        del endpoint, payload
+        self.proxy_calls.append(agent.id)
+        decision = classify_tool_failure(
+            ToolExecutionError(
+                "request may have completed token=must-not-leak",
+                tool_name="send_message",
+                kind=ToolFailureKind.TRANSPORT_ERROR,
+                outcome_unknown=True,
+            )
+        )
+        raise ToolFallbackStoppedError(agent.id, decision)
+
+
+def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
+    """Structured synthesis must not classify a terminal tool stop as failover."""
+    client = _StructuredToolStopClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return a json verdict"}],
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 409, body
+    assert isinstance(body, dict)
+    assert body["error"]["code"] == "tool_execution_stopped"
+    assert "must-not-leak" not in json.dumps(body)
+    assert client.proxy_calls == ["primary_free_agent"]
 
 
 def test_http_virtual_free_response_format_reselects_after_retryable_502() -> None:

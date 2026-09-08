@@ -196,6 +196,39 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["workflow_run_id"] == "run_race"
 
 
+def test_five_field_race_loser_preserves_provider_usage() -> None:
+    """Tool-call race outcomes carry usage in their fourth tuple field."""
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": None,
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_tool_call_race",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            (
+                "",
+                "mock_worker",
+                "mock-a",
+                {"prompt_tokens": 8, "completion_tokens": 3},
+                {"tool_calls": [{"id": "call_1"}]},
+            ),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+
+    record = coordinator.ledger.records()[0]
+    assert record["prompt_tokens"] == 8
+    assert record["completion_tokens"] == 3
+    assert record["measurement_status"] == "measured"
+
+
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
     """Race-loser spend uses the same provider identity as winner accounting."""
     agent = ModelAgent(
