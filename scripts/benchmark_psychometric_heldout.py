@@ -32,7 +32,7 @@ TRAIN_CONTEXTS = 24
 DECLARED_BOOTSTRAP_RESAMPLE_COUNT = 2_000
 DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 DECLARED_BOOTSTRAP_SEED = 568
-LATENCY_REPETITIONS = 200
+DECLARED_LATENCY_REPETITIONS_PER_CONTEXT = 200
 ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
@@ -259,19 +259,26 @@ def _evaluate_quality(
 def _measure_paired_latency(
     baseline: PsychometricRoutingEvidence,
     candidate: PsychometricRoutingEvidence,
+    *,
+    repetitions_per_context: int | None = None,
 ) -> tuple[dict[str, float], dict[str, float], list[float], list[float]]:
     """Time ranking calls in milliseconds, alternating policy order per context.
 
     Keep every repetition, including the first. Return pooled timing summaries
     and each policy's context medians; neither measures end-to-end model calls.
+    ``repetitions_per_context`` is a required declaration. ``None`` is a
+    fail-closed sentinel, not a statistical default.
     """
+    declared_repetitions = _require_declared_positive_int(
+        repetitions_per_context, "repetitions_per_context"
+    )
     all_samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
     context_medians: dict[str, list[float]] = {"baseline": [], "candidate": []}
     for context_index in range(TRAIN_CONTEXTS):
         context = f"held_out_{context_index}"
         vector = _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS)
         samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
-        for repetition in range(LATENCY_REPETITIONS):
+        for repetition in range(declared_repetitions):
             ordered = (
                 (("baseline", baseline), ("candidate", candidate))
                 if (context_index + repetition) % 2 == 0
@@ -1860,7 +1867,11 @@ def run_benchmark(
     item_covariate_effect = _validate_item_covariate_effect()
     parameter_uncertainty = _validate_parameter_uncertainty()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
-        _measure_paired_latency(baseline_evidence, candidate_evidence)
+        _measure_paired_latency(
+            baseline_evidence,
+            candidate_evidence,
+            repetitions_per_context=DECLARED_LATENCY_REPETITIONS_PER_CONTEXT,
+        )
     )
     baseline.update(baseline_latency)
     candidate.update(candidate_latency)
@@ -2129,7 +2140,7 @@ def run_benchmark(
         "delta": delta,
         "delta_interval": delta_interval,
         "models": len(MODEL_IDS),
-        "latency_repetitions_per_context": LATENCY_REPETITIONS,
+        "latency_repetitions_per_context": DECLARED_LATENCY_REPETITIONS_PER_CONTEXT,
         "production_default_change_allowed": all(gates.values()),
         "production_gate_status": gate_status,
         "production_gates": gates,

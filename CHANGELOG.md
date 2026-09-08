@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Held-out decision-latency timings now require a declared per-context
+  repetition count. The hidden 200-repetition default is removed. The harness
+  run still writes 200 as this run's choice.
 - The held-out CUSUM screen now requires declared replications, horizon,
   change-point, and coverage. Replications that never alarm are recorded as
   horizon-censored missed detections instead of aborting. The Wilson upper
