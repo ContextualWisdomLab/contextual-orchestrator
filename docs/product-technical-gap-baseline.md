@@ -2193,6 +2193,17 @@ live work item.
 
 ## 7. Delivery gates
 
+### Current KPI-contract delivery
+
+The buyer-facing accuracy and decision-latency contract is proposed in
+[PR #1103](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1103)
+at exact head `e14ee3170a4802e199316064b9ee0d3bfcc28d95`. The one-file change
+adds true-parameter psychometric RMSE and p95 route-decision latency to the
+analytics specification; it does not change production routing defaults.
+Hosted evidence at this snapshot has CodeQL compatibility green, but OpenCode
+Review failed and independent approval is absent, so the contract is not yet
+protected-main evidence.
+
 For each PR, perform the following loop on the current head: inspect changed
 files and review threads, reproduce the claimed behavior, fix root causes in
 the shared path, run focused and full tests, run compile/diff/security checks,
