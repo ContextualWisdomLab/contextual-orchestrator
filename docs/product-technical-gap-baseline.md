@@ -1,5 +1,17 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 sequential-drift integration correction (proposed)
+
+PR #1095 source `74c27e7ea5ef3d34593ae55978df8fa520e82334` treated
+eight censored non-detections as eight ten-observation detections. A focused
+regression reproduced the false median (one failure). The repair separates
+censoring counts and horizon from detected-only quantiles, retains failure
+denominators, and returns null candidates with complete calibration evidence
+when no threshold is eligible. Required horizon/coverage declarations remain.
+Twenty boundary tests passed in 17.22 seconds. This is unit-fixture evidence,
+not a buyer delay estimate, protected merge, or release. ADR 0046 remains
+Proposed; unconditional survival inference and real held-out validity remain open.
+
 ## 2026-09-08 declared sequential-drift horizon and censored delays (proposed)
 
 Successor of the coverage-neutral interval-key slice removes the hidden
