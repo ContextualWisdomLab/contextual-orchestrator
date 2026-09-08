@@ -2206,8 +2206,9 @@ protected-main evidence. These check results describe only that historical
 snapshot. The proposed KPI fields are not emitted by the runtime snapshot;
 implementation, observed buyer measurements, and consumer acceptance remain
 open. True-parameter recovery is a unit-test contract on an identified scale,
-not evidence of observed buyer accuracy. Later PR revisions require their own
-verification.
+not evidence of observed buyer accuracy. Accuracy claims require observed
+task outcomes; latency claims require request and decision traces rather
+than outcome labels. Later PR revisions require their own verification.
 
 For each PR, perform the following loop on the current head: inspect changed
 files and review threads, reproduce the claimed behavior, fix root causes in

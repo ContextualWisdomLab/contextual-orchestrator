@@ -120,8 +120,10 @@ Their implementation, reproducible measurements, and consumer acceptance remain
 open. Synthetic true-parameter recovery belongs to unit tests only; held-out
 observed responses do not by themselves provide known latent parameters.
 Report parameter recovery separately for each parameter family on an identified,
-aligned scale. Buyer accuracy and latency claims require observed task outcomes,
-declared sampling and failure denominators, and uncertainty estimates.
+aligned scale. Buyer accuracy claims require observed task outcomes, declared
+sampling and failure denominators, and uncertainty estimates. Latency claims
+require observed request and decision traces, declared sampling and failure
+denominators, and uncertainty estimates.
 
 For decision latency, record acceptance after authentication and request
 validation, selection completion, and durable decision-write acknowledgement.
