@@ -233,8 +233,6 @@ def _require_unambiguous_model_group_boundary(
     selected: Sequence[DiscoveredModel],
 ) -> None:
     """Reject a cutoff decided by identity or unmodeled diversity preference."""
-    if len(selected) >= len(ordered):
-        return
     selected_identities = [
         (model.provider_name, model.credential_name, model.model_id)
         for model in selected
@@ -248,6 +246,8 @@ def _require_unambiguous_model_group_boundary(
             "provider bootstrap diversity would displace lower-cost evidence "
             "without an explicit decision model"
         )
+    if len(selected) >= len(ordered):
+        return
     selected_identity_set = set(selected_identities)
     selected_evidence = {_known_cost_sort_key(model)[:2] for model in selected}
     excluded_evidence = {

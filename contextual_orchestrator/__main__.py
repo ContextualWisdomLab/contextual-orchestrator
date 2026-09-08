@@ -570,7 +570,7 @@ def _discover_models_command(argv: list[str]) -> None:
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="Enable a price-evidenced discovered agent pool in --agents-db; bounded diversity displacement fails closed "
+        help="Enable a price-evidenced discovered agent pool in --agents-db; unmodeled diversity reordering fails closed "
         "(requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
     parser.add_argument(

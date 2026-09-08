@@ -57,9 +57,9 @@ only a synthesizer carrying that evidence and fails closed when none exists;
 model names are never used to infer support.
 
 The bootstrap proposes provider/model-group spread while retaining cost order.
-For a bounded pool, a diversity proposal is admitted only when it equals the
-price-evidenced prefix; otherwise it fails closed until an explicit allocation
-model supplies the missing utility evidence. Missing price is `unknown`, not zero.
+Every diversity proposal is admitted only when it preserves the
+price-evidenced candidate sequence; otherwise it fails closed until an explicit
+allocation model supplies the missing utility evidence. Missing price is `unknown`, not zero.
 This avoids both treating a provider such as Bytez, whose public catalog may use a
 non-token billing unit, as a fabricated free route and treating provider labels as
 undocumented outage weights.

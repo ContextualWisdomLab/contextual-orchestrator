@@ -653,13 +653,14 @@ verified against current-head code rather than trusted as stated.
   **2026-09-08 no-heuristics correction (Proposed):** provider identity and
   exact model-group identity are observations, not an outage probability,
   expected utility, or psychometric quality model. The three-pass proposal
-  could therefore displace a lower-cost candidate solely because another
-  candidate had a distinct label. Both bootstrap selectors now compare every
-  bounded diversity proposal with the price-evidenced prefix and fail closed
-  when they differ. Equal or incomplete evidence remains fail-closed as
-  before. New RED-before/GREEN-after fixtures cover both model-group and
-  provider displacement; the two earlier fixtures that required an
-  unmodeled, more-expensive provider were corrected to require rejection.
+  could therefore displace a lower-cost candidate or reorder a complete pool
+  solely because another candidate had a distinct label. Both bootstrap
+  selectors now compare every diversity proposal with the price-evidenced
+  candidate sequence and fail closed when they differ. Equal or incomplete
+  evidence remains fail-closed as before. New RED-before/GREEN-after fixtures
+  cover bounded model-group/provider displacement and complete-pool
+  reordering; the two earlier fixtures that required an unmodeled,
+  more-expensive provider were corrected to require rejection.
   Raw candidates remain available for a future released allocation contract;
   this branch does not invent outage weights, provider quotas, or a fallback
   tie-break.

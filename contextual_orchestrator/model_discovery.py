@@ -2436,8 +2436,6 @@ def _require_unambiguous_bootstrap_boundary(
     price_book: "PriceBook",
 ) -> None:
     """Reject a cutoff decided by identity or unmodeled diversity preference."""
-    if len(selected) >= len(ranked):
-        return
     selected_identities = [_serving_identity(model) for model in selected]
     ranked_prefix = [_serving_identity(model) for model in ranked[: len(selected)]]
     if selected_identities != ranked_prefix:
@@ -2445,6 +2443,8 @@ def _require_unambiguous_bootstrap_boundary(
             "bootstrap diversity would displace lower-cost evidence without an "
             "explicit decision model"
         )
+    if len(selected) >= len(ranked):
+        return
     selected_identity_set = set(selected_identities)
     selected_evidence = {
         _discovery_price_key(model, price_book)[:2] for model in selected

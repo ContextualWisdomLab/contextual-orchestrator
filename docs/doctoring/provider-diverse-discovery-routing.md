@@ -14,8 +14,8 @@ that is negative, non-finite, or a nonzero value that underflows to zero),
 retains eligible candidates that simply have no reported price as an
 explicit unknown-cost fallback, and proposes a provider/model-group-diverse
 bootstrap pool before ordinary chat routing. Provider/model-group labels are
-not outage probabilities or utility evidence. A bounded proposal therefore
-fails closed when it differs from the price-evidenced prefix, or when selected
+not outage probabilities or utility evidence. A proposal therefore fails
+closed when it changes the price-evidenced candidate sequence, or when selected
 and excluded candidates have equal comparable cost or incomplete price
 evidence. Operators must supply a released decision model, comparable price
 evidence, or capacity for the whole competing class. The selector is
@@ -52,8 +52,8 @@ as incidental documentation.
 
 `provider_bootstrap.select_model_group_diverse_models` and
 `model_discovery.select_bootstrap_discovered_agents` may propose exact
-model-group/provider spread, but neither may let that proposal change a
-bounded price-evidenced prefix without an explicit decision model. Consumers
+model-group/provider spread, but neither may let that proposal change the
+price-evidenced candidate sequence without an explicit decision model. Consumers
 that require provider-level redundancy must supply that released allocation
 contract at the approved owner boundary. Neither selector may break an
 equal/incomplete evidence tie or displace lower-cost evidence by provider or
