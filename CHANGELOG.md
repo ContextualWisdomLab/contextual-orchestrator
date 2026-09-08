@@ -10,6 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+- Held-out item-side language/domain evidence now requires a declared sample
+  size. The hidden 1,200-row default is removed. The harness run still writes
+  1,200 as this run's choice.
 - Held-out judge-effect evidence now requires a declared sample size. The
   hidden 1,000-row default is removed. The harness run still writes 1,000 as
   this run's choice.
