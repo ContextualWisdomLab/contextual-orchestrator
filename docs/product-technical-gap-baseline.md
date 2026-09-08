@@ -46,9 +46,12 @@ The worktree change makes one surgical contract extension:
 - `proxy_completion()` now classifies every caught passthrough provider
   exception before deciding whether failover is permitted;
 - `orchestrator/free` virtual passthrough advances only after evidence that
-  proves non-acceptance, such as an explicit retryable upstream HTTP response
-  or temporary pre-request DNS failure. Raw timeout and generic transport 502
-  outcomes remain sticky to prevent duplicate completion and unreported usage;
+  proves non-acceptance, such as an RFC-defined request rejection or temporary
+  pre-request DNS failure. RFC 9110 section 9.2.2 does not authorize automatic
+  replay of a non-idempotent request from retryability alone. Generic
+  500/502/504 responses and the non-standard 529 therefore remain sticky,
+  alongside raw timeout and generic transport failures, to prevent duplicate
+  completion and unreported usage;
 - sticky failures now record the distinct failover decision
   `sticky_candidate_failure` instead of incorrectly reusing
   `eligible_candidates_exhausted`, while explicit concrete-model requests
@@ -70,8 +73,10 @@ owner fix.
 
 - Added focused regressions proving ambiguous raw/classified transport errors
   remain sticky in both the in-process free-model loop and real
-  `/v1/chat/completions` HTTP path, while explicit retryable HTTP 500 and
-  temporary pre-request DNS evidence retain bounded failover.
+  `/v1/chat/completions` HTTP path. A follow-up RED contract found that HTTP
+  500 still replayed; the repair also keeps 502, 504, and 529 sticky while
+  retaining bounded failover for explicit rejection and temporary pre-request
+  DNS evidence.
 - `.venv/bin/python -m pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
   -> `98 passed in 10.64s`
 - `.venv/bin/python -m pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
