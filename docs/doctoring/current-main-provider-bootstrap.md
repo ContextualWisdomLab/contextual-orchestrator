@@ -56,9 +56,13 @@ retained as a structured-output capability tag. The structured auto route uses
 only a synthesizer carrying that evidence and fails closed when none exists;
 model names are never used to infer support.
 
-The bootstrap pool is provider-diverse before it is cost-ordered. Missing price is
-`unknown`, not zero. This avoids treating a provider such as Bytez, whose public
-catalog may use a non-token billing unit, as a fabricated free route.
+The bootstrap proposes provider/model-group spread while retaining cost order.
+For a bounded pool, a diversity proposal is admitted only when it equals the
+price-evidenced prefix; otherwise it fails closed until an explicit allocation
+model supplies the missing utility evidence. Missing price is `unknown`, not zero.
+This avoids both treating a provider such as Bytez, whose public catalog may use a
+non-token billing unit, as a fabricated free route and treating provider labels as
+undocumented outage weights.
 
 Candidate selection and durable serving activation are separate claims:
 
@@ -104,7 +108,8 @@ the emitted report.
 The automatic pool remains a routing input rather than an unsupported claim that a
 single cheapest model is universally best. Quality/performance selection remains in
 the orchestrator's paper-grounded routing and orchestration layer; this bootstrap
-only establishes a compatible candidate set and failure isolation.
+only establishes a compatible candidate set. It does not claim failure isolation
+from provider labels alone.
 
 National Institute of Standards and Technology. (2020). *Security and privacy
 controls for information systems and organizations* (NIST Special Publication

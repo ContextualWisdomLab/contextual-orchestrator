@@ -232,19 +232,29 @@ def _require_unambiguous_model_group_boundary(
     ordered: Sequence[DiscoveredModel],
     selected: Sequence[DiscoveredModel],
 ) -> None:
-    """Reject a capacity cutoff that would use lexical identity as evidence."""
+    """Reject a cutoff decided by identity or unmodeled diversity preference."""
     if len(selected) >= len(ordered):
         return
-    selected_identities = {
+    selected_identities = [
         (model.provider_name, model.credential_name, model.model_id)
         for model in selected
-    }
+    ]
+    ranked_prefix = [
+        (model.provider_name, model.credential_name, model.model_id)
+        for model in ordered[: len(selected)]
+    ]
+    if selected_identities != ranked_prefix:
+        raise ProviderBootstrapError(
+            "provider bootstrap diversity would displace lower-cost evidence "
+            "without an explicit decision model"
+        )
+    selected_identity_set = set(selected_identities)
     selected_evidence = {_known_cost_sort_key(model)[:2] for model in selected}
     excluded_evidence = {
         _known_cost_sort_key(model)[:2]
         for model in ordered
         if (model.provider_name, model.credential_name, model.model_id)
-        not in selected_identities
+        not in selected_identity_set
     }
     if selected_evidence & excluded_evidence:
         raise ProviderBootstrapError(
@@ -257,7 +267,7 @@ def _require_unambiguous_model_group_boundary(
 def select_model_group_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded compatible pool with one first-pass endpoint per model group."""
+    """Choose a bounded pool, rejecting diversity that changes priced admission."""
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}

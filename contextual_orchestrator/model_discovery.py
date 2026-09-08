@@ -2435,17 +2435,24 @@ def _require_unambiguous_bootstrap_boundary(
     selected: list[DiscoveredModel],
     price_book: "PriceBook",
 ) -> None:
-    """Reject a capacity cutoff that would use lexical identity as evidence."""
+    """Reject a cutoff decided by identity or unmodeled diversity preference."""
     if len(selected) >= len(ranked):
         return
-    selected_identities = {_serving_identity(model) for model in selected}
+    selected_identities = [_serving_identity(model) for model in selected]
+    ranked_prefix = [_serving_identity(model) for model in ranked[: len(selected)]]
+    if selected_identities != ranked_prefix:
+        raise ValueError(
+            "bootstrap diversity would displace lower-cost evidence without an "
+            "explicit decision model"
+        )
+    selected_identity_set = set(selected_identities)
     selected_evidence = {
         _discovery_price_key(model, price_book)[:2] for model in selected
     }
     excluded_evidence = {
         _discovery_price_key(model, price_book)[:2]
         for model in ranked
-        if _serving_identity(model) not in selected_identities
+        if _serving_identity(model) not in selected_identity_set
     }
     if selected_evidence & excluded_evidence:
         raise ValueError(
@@ -2465,7 +2472,7 @@ def select_bootstrap_discovered_agents(
     Candidates retain the known-price-first ordering of
     :func:`select_top_n_cheapest_discovered_agents` (queried here with no
     effective cap so it returns the full ranked, deduplicated, routable
-    field). Three ordered passes, each strictly preferred over the next:
+    field). Three ordered passes propose provider/model-group diversity:
 
     1. At most one endpoint per *provider* and per model group. This is the
        pass that actually delivers "provider-diverse" (not only
@@ -2484,11 +2491,14 @@ def select_bootstrap_discovered_agents(
        filled from the remaining deterministic cost order, duplicate
        endpoints included, exactly as before this pass existed.
 
-    No vendor or endpoint name is used to infer a shared family or collapse
-    credential state -- provider identity is `DiscoveredModel.provider_name`
-    exactly as reported by discovery (e.g. `nvidia_nim` and `nvidia_nim_sub`
-    remain independent). Duplicate serving identities never consume
-    capacity twice.
+    A bounded proposal is accepted only when it is identical to the
+    price-evidenced prefix. Otherwise provider/model labels would become an
+    undocumented utility function, so admission fails closed until an explicit
+    decision model supplies that evidence. No vendor or endpoint name is used
+    to infer a shared family or collapse credential state -- provider identity
+    is `DiscoveredModel.provider_name` exactly as reported by discovery (e.g.
+    `nvidia_nim` and `nvidia_nim_sub` remain independent). Duplicate serving
+    identities never consume capacity twice.
     """
     if limit <= 0:
         return []
@@ -2530,4 +2540,3 @@ def select_bootstrap_discovered_agents(
     selected.extend(still_deferred[: limit - len(selected)])
     _require_unambiguous_bootstrap_boundary(ranked, selected, price_book)
     return selected
-

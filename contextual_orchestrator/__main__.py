@@ -570,8 +570,8 @@ def _discover_models_command(argv: list[str]) -> None:
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="Enable a price-honest, provider-diverse discovered agent pool in --agents-db (auto-optimization bootstrap; "
-        "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
+        help="Enable a price-evidenced discovered agent pool in --agents-db; bounded diversity displacement fails closed "
+        "(requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
     parser.add_argument(
         "--free-only",

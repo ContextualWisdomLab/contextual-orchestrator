@@ -1,6 +1,6 @@
 ---
 title: "Provider-diverse discovery and cost-honest failover routing"
-status: "implemented"
+status: "proposed"
 date: "2026-08-21"
 scope: "PR #770"
 ---
@@ -12,15 +12,16 @@ scope: "PR #770"
 PR #770 makes model discovery fail closed for invalid catalog rows (a price
 that is negative, non-finite, or a nonzero value that underflows to zero),
 retains eligible candidates that simply have no reported price as an
-explicit unknown-cost fallback, and selects a provider-diverse bootstrap
-pool before ordinary chat routing. Provider/model-group spread is an explicit
-availability constraint, not a weighted score and not evidence that one tied
-candidate is better than another. A capacity cutoff therefore fails closed
-when selected and excluded candidates have equal comparable cost or incomplete
-price evidence; operators must supply comparable price evidence or include the
-whole tied class. The selector is deterministic eligibility and cost
-accounting; it is not a learned answer-quality judge and does not claim to
-reproduce the learning systems in the cited work.
+explicit unknown-cost fallback, and proposes a provider/model-group-diverse
+bootstrap pool before ordinary chat routing. Provider/model-group labels are
+not outage probabilities or utility evidence. A bounded proposal therefore
+fails closed when it differs from the price-evidenced prefix, or when selected
+and excluded candidates have equal comparable cost or incomplete price
+evidence. Operators must supply a released decision model, comparable price
+evidence, or capacity for the whole competing class. The selector is
+deterministic eligibility and cost accounting; it is not a learned
+answer-quality or availability judge and does not claim to reproduce the
+learning systems in the cited work.
 
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
@@ -35,7 +36,7 @@ DNS failure can advance without changing an explicitly requested concrete model.
 | --- | --- | --- |
 | Reject malformed, negative, or non-finite price rows | A cost-aware router must not treat missing or invalid evidence as zero cost. | Discovery and persisted-price tests reject the row before selection. |
 | Keep unknown-price candidates only as an explicit fallback | Cost optimization must remain honest when price evidence is incomplete. | Selection tests never rank an unknown price above a valid priced candidate. |
-| Prefer distinct providers in the discovery CLI bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Discovery-selector tests assert the configured pool spans available providers. |
+| Propose distinct providers without treating labels as utility | A gateway may benefit from independently failing upstreams, but provider names alone do not quantify that benefit. | Discovery-selector tests reject a more-expensive diversity proposal until an explicit decision model supplies the missing evidence. |
 | Reject an evidence-tied capacity cutoff | Lexical provider/model identity is deterministic ordering metadata, not price, quality, or availability evidence. | Both selectors raise when a selected and excluded candidate share the same comparable-cost/unknown state. |
 | Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
@@ -49,14 +50,14 @@ as incidental documentation.
 
 ## Consumer migration boundary
 
-`provider_bootstrap.select_model_group_diverse_models` guarantees exact
-model-group spread and cost honesty; it does not promise one endpoint per
-provider. `model_discovery.select_bootstrap_discovered_agents`, used by the
-discovery CLI's `--enable-cheapest` path, adds provider spread as an explicit
-availability constraint. Consumers that relied on provider-level redundancy
-must call the discovery selector or express that requirement at their own
-approved contract boundary. Neither selector may break an equal/incomplete
-evidence tie by provider or model name.
+`provider_bootstrap.select_model_group_diverse_models` and
+`model_discovery.select_bootstrap_discovered_agents` may propose exact
+model-group/provider spread, but neither may let that proposal change a
+bounded price-evidenced prefix without an explicit decision model. Consumers
+that require provider-level redundancy must supply that released allocation
+contract at the approved owner boundary. Neither selector may break an
+equal/incomplete evidence tie or displace lower-cost evidence by provider or
+model name.
 
 ## APA 7 references
 

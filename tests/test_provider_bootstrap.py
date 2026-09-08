@@ -180,6 +180,21 @@ def test_diverse_selection_fails_closed_at_equal_known_price_boundary() -> None:
         provider_bootstrap.select_model_group_diverse_models(models, limit=1)
 
 
+def test_diverse_selection_rejects_unmodeled_cost_displacement() -> None:
+    """Model-group diversity cannot displace cheaper evidence without a utility model."""
+    models = [
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "shared-model", 1.0),
+        _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "shared-model", 1.5),
+        _model("openrouter", "OPENROUTER_API_KEY", "distinct-model", 2.0),
+    ]
+
+    with pytest.raises(
+        provider_bootstrap.ProviderBootstrapError,
+        match="decision model",
+    ):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=2)
+
+
 def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     """A missing prompt or completion price cannot become an invented zero."""
     partial = replace(

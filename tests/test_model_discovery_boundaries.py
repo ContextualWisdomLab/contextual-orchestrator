@@ -509,5 +509,33 @@ def test_bootstrap_selection_fails_closed_at_equal_known_price_boundary() -> Non
         select_bootstrap_discovered_agents(models, book, 2)
 
 
+def test_bootstrap_selection_rejects_unmodeled_cost_displacement() -> None:
+    """Provider diversity cannot displace cheaper evidence without a utility model."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model("openrouter", "cheap-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("openrouter", "next-cheapest-model"),
+            prompt_price_per_1k=0.75,
+            completion_price_per_1k=0.75,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("bytez", "expensive-model"),
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="USD",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="decision model"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
