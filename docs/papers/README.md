@@ -18,6 +18,12 @@ redistribution; each is cited below with its arXiv identifier.
 
 ## Query routing (which upstream / which tier)
 
+- Song et al. (2025), *IRT-Router: Effective and interpretable multi-LLM routing
+  via item response theory*, https://doi.org/10.18653/v1/2025.acl-long.761.
+  See the [measurement review](../doctoring/irt_router_measurement_review.md)
+  for page-level visual inspection and the distinction between prediction fit
+  and identified psychometric interpretation. Citation only; no PDF vendored.
+
 - **RouteLLM: Learning to Route LLMs with Preference Data** — Isaac Ong, Amjad
   Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M.
   Waleed Kadous, Ion Stoica. arXiv:2406.18665, 2024.

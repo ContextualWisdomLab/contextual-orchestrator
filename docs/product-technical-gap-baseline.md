@@ -1,5 +1,17 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 IRT interpretation gap: reviewed, not measured improvement
+
+Against source head `c648797dfbec58dbdce60f35ed6dc5b356953387`, the
+[IRT-Router measurement review](doctoring/irt_router_measurement_review.md)
+records publisher-page visual inspection and a coordinate-identification
+constraint relevant to the proposed parameter RMSE KPI in PR #1103.
+Prediction fit, parameter recovery, and observed buyer accuracy remain separate
+claims. No new estimator, production policy, or measured accuracy/latency gain
+is delivered by this review. Next acceptance requires released owner diagnostics,
+identified parameter-recovery tests, and observed-task evidence under the
+analytics specification; existing matrix-shape validation is insufficient.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
