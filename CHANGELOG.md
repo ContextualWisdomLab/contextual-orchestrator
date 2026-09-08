@@ -20,6 +20,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual `orchestrator/free` structured completions (`response_format`, no
+  tools/stream) fail over a retryable synthesizer 502/429 onto the next
+  eligible free worker and attach request-scoped eligible/attempted
+  receipts. Concrete model pins stay sticky. Default model timeout remains
+  null (issue #1045; Inkspan Noema job 101628090366 on base `414f2297`).
 - Review-sidecar `orchestrator/free` admission now treats a CI-seeded
   `OPENCODE_ZEN_API_KEY` as an authorized free-pool source. Honest-free
   OpenCode Zen and OpenCode Go rows can enter `G ∩ P ∩ R`; `OPENAI_API_KEY`

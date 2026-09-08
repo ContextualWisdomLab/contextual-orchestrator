@@ -445,6 +445,200 @@ def test_http_virtual_free_speech_reselects_worker() -> None:
     assert client.calls == ["primary_speech", "fallback_speech"]
 
 
+_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "review_verdict",
+        "schema": {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        },
+        "strict": True,
+    },
+}
+
+
+class _StructuredFailThenServeClient:
+    """Conduct chat succeeds; first synthesizer 502, second serves JSON."""
+
+    def __init__(self, *, fail_all: bool = False) -> None:
+        self.proxy_calls: list[str] = []
+        self._settings: dict[str, Any] = {}
+        self._fail_all = fail_all
+
+    def request_settings_snapshot(self) -> dict[str, Any]:
+        return {
+            "temperature": None,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_output_tokens": 256,
+            **self._settings,
+        }
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        previous = dict(self._settings)
+        self._settings.update(
+            {key: value for key, value in overrides.items() if value is not None}
+        )
+        try:
+            yield
+        finally:
+            self._settings = previous
+
+    def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
+        del agent, messages, kwargs
+        return "paper-role-output"
+
+    def take_usage(self) -> None:
+        return None
+
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        del endpoint, payload
+        self.proxy_calls.append(agent.id)
+        if self._fail_all or agent.id.startswith("primary_"):
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error",
+                message="provider rejected the request with HTTP 502",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+        return {
+            "id": "chatcmpl-fallback",
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": '{"ok": true}'},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self.proxy_send(agent, endpoint, payload)
+
+
+def test_http_virtual_free_response_format_reselects_after_retryable_502() -> None:
+    """Noema-shaped virtual+response_format walks off a 502 synthesizer."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [
+                    {"role": "user", "content": "return a json verdict"}
+                ],
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert isinstance(body, dict)
+    assert client.proxy_calls[0] == "primary_free_agent"
+    assert client.proxy_calls[-1] == "fallback_free_agent"
+    route = (body.get("orchestration") or {}).get("route") or {}
+    assert "primary_free_agent" in route.get("eligible_agent_ids", [])
+    assert "fallback_free_agent" in route.get("eligible_agent_ids", [])
+    outcomes = [item.get("outcome") for item in route.get("attempted", [])]
+    assert "retryable_transport" in outcomes
+    assert outcomes[-1] == "served"
+    assert route.get("terminal_reason") == "served"
+
+
+def test_http_named_model_response_format_stays_sticky_on_502() -> None:
+    """A concrete model pin does not switch after a synthesizer 502."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": "primary-free-model",
+                "messages": [
+                    {"role": "user", "content": "return a json verdict"}
+                ],
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 502, body
+    assert isinstance(body, dict)
+    assert client.proxy_calls == ["primary_free_agent"]
+    assert body["error_code"] == "api_error"
+    route = (body.get("error_detail") or {}).get("route") or {}
+    assert route.get("terminal_reason") == "fail_closed"
+    assert [item.get("agent_id") for item in route.get("attempted", [])] == [
+        "primary_free_agent"
+    ]
+    assert route.get("attempted", [])[0].get("outcome") == "retryable_transport"
+
+
+def test_http_virtual_free_response_format_exhausts_retryable_502() -> None:
+    """Typed exhaustion after every eligible synthesizer returns retryable 502."""
+    client = _StructuredFailThenServeClient(fail_all=True)
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [
+                    {"role": "user", "content": "return a json verdict"}
+                ],
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 502, body
+    assert isinstance(body, dict)
+    assert body["error_code"] == "api_error"
+    assert "primary_free_agent" in client.proxy_calls
+    assert "fallback_free_agent" in client.proxy_calls
+    route = (body.get("error_detail") or {}).get("route") or {}
+    assert route.get("terminal_reason") == "eligible_set_exhausted"
+    outcomes = [item.get("outcome") for item in route.get("attempted", [])]
+    assert outcomes
+    assert set(outcomes) == {"retryable_transport"}
+
+
 class _ToolCallClient:
     """Selected worker returns a Chat Completions tool call, not assistant text."""
 

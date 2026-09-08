@@ -4545,9 +4545,10 @@ class TaskOrchestrator:
         """Conduct evidence work, then preserve the caller's provider contract.
 
         The final provider-shaped response is produced by one synthesizer. A
-        virtual selector may advance to another eligible provider only after an
-        HTTP 413 proves that the prior provider rejected the request before
-        generation; other synthesis failures remain single-shot and fail closed.
+        virtual selector may advance to another eligible provider after a
+        retryable transport failure (502/429/timeout) or an HTTP 413 that
+        proves the prior provider rejected the request before generation.
+        Concrete model ids stay sticky. Default model timeout remains null.
         """
         response_request = endpoint == "responses"
         api_surface = "responses" if response_request else "chat.completions"
@@ -4840,12 +4841,13 @@ class TaskOrchestrator:
         def send_synthesis(
             payload: dict[str, Any],
         ) -> tuple[dict[str, Any], ModelAgent]:
-            """Retry 413 broadly and stale virtual models only within one endpoint."""
+            """Walk virtual synthesizer candidates on 413 and retryable transport."""
             nonlocal final_agent, synthesis_failure_recorded
             seen_providers: set[str] = set()
             preferred = final_agent
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
+            last_retryable: ProviderUpstreamError | None = None
             saw_request_too_large = False
             ordered_candidates = [
                 *([preferred] if preferred.id not in request_exclusions else []),
@@ -4856,6 +4858,33 @@ class TaskOrchestrator:
                     and candidate.id not in request_exclusions
                 ),
             ]
+            attempts: list[dict[str, Any]] = []
+            eligible_agent_ids = [candidate.id for candidate in ordered_candidates]
+
+            def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
+                return {
+                    "eligible_agent_ids": eligible_agent_ids,
+                    "attempted": list(attempts),
+                    "terminal_reason": terminal_reason,
+                }
+
+            def attach_route(
+                error: ProviderUpstreamError, *, terminal_reason: str
+            ) -> ProviderUpstreamError:
+                extra_detail = dict(error.extra_detail)
+                extra_detail["route"] = route_evidence(terminal_reason=terminal_reason)
+                return ProviderUpstreamError(
+                    agent_id=error.agent_id,
+                    model=error.model,
+                    error_code=error.error_code,
+                    message=str(error),
+                    client_status=error.client_status,
+                    provider_status=error.provider_status,
+                    retryable=error.retryable,
+                    transport=error.transport,
+                    extra_detail=extra_detail,
+                )
+
             for candidate in ordered_candidates:
                 candidate_endpoint = candidate.base_url.rstrip("/").casefold()
                 if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
@@ -4891,10 +4920,57 @@ class TaskOrchestrator:
                             send = send_once
                     response = send(candidate, endpoint, candidate_payload)
                     provider_output(candidate, response)
+                    attempts.append(
+                        {
+                            "agent_id": candidate.id,
+                            "model": candidate.model,
+                            "outcome": "served",
+                        }
+                    )
+                    if isinstance(response, dict):
+                        orchestration = response.setdefault("orchestration", {})
+                        if isinstance(orchestration, dict):
+                            orchestration["route"] = route_evidence(
+                                terminal_reason="served"
+                            )
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
                     saw_request_too_large = saw_request_too_large or request_too_large
+                    classified = (
+                        exc
+                        if isinstance(exc, ProviderUpstreamError)
+                        else classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="structured_synthesis",
+                        )
+                    )
+                    attempts.append(
+                        {
+                            "agent_id": candidate.id,
+                            "model": candidate.model,
+                            "outcome": (
+                                "request_too_large"
+                                if request_too_large
+                                else "retryable_transport"
+                                if isinstance(classified, ProviderUpstreamError)
+                                and classified.retryable
+                                else "fail_closed"
+                            ),
+                            "error_code": (
+                                classified.error_code
+                                if isinstance(classified, ProviderUpstreamError)
+                                else type(exc).__name__
+                            ),
+                            "provider_status": (
+                                classified.provider_status
+                                if isinstance(classified, ProviderUpstreamError)
+                                else None
+                            ),
+                        }
+                    )
                     if request_too_large and not virtual_model:
                         raise ProviderRequestTooLargeError(
                             "request body exceeds provider limit"
@@ -4909,12 +4985,14 @@ class TaskOrchestrator:
                             self._record_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
-                        classified = classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="structured_synthesis",
-                        )
+                        if not isinstance(classified, ProviderUpstreamError):
+                            raise classified from None
+                        if virtual_model and classified.retryable:
+                            last_retryable = classified
+                            request_exclusions.add(candidate.id)
+                            self._record_failure(candidate.id)
+                            synthesis_failure_recorded = True
+                            continue
                         if (
                             virtual_model
                             and classified.error_code == "model_not_found"
@@ -4925,9 +5003,17 @@ class TaskOrchestrator:
                             self._record_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
-                        raise classified from None
+                        raise attach_route(
+                            classified, terminal_reason="fail_closed"
+                        ) from None
+            if last_retryable is not None:
+                raise attach_route(
+                    last_retryable, terminal_reason="eligible_set_exhausted"
+                )
             if last_model_not_found is not None and not saw_request_too_large:
-                raise last_model_not_found
+                raise attach_route(
+                    last_model_not_found, terminal_reason="eligible_set_exhausted"
+                )
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
@@ -5112,12 +5198,18 @@ class TaskOrchestrator:
                 "trace_complete": self._is_trace_complete(record),
             },
         )
+        route = None
+        existing_orchestration = raw.get("orchestration")
+        if isinstance(existing_orchestration, dict):
+            route = existing_orchestration.get("route")
         raw["orchestration"] = {
             "workflow_run_id": workflow_run_id,
             "mode": "conduct",
             "agent_count": len(trace),
             "plan_source": workflow.get("plan_source"),
         }
+        if isinstance(route, dict):
+            raw["orchestration"]["route"] = route
         return raw
 
     @contextmanager
