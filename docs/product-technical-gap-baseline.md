@@ -1,5 +1,21 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 declared candidate-group DIF sample size (proposed)
+
+Successor of the assignment-trial slice removes hidden `DIF_SAMPLE_SIZE = 4_000`
+from `scripts/benchmark_psychometric_heldout.py`. Sample size is a required
+even positive integer declaration. Missing, boolean, non-positive, or odd
+values fail closed. The harness run still writes 4,000 as this run's choice
+and records `sample_size`. ADR 0050 is Proposed.
+
+Local contract tests on this working tree: DIF sample-size declaration and
+population checks plus existing held-out key/report pins. This is not
+buyer-held-out accuracy, p95 latency, or protected merge evidence. Production
+route/conduct defaults stay locked. Other harness sample sizes remain later
+work. Parent
+[#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-08 declared assignment-design trial count (proposed)
 
 Successor of the held-out context-population slice removes hidden

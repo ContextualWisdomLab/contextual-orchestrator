@@ -745,6 +745,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
+    assert dif["sample_size"] == heldout_benchmark.DECLARED_DIF_SAMPLE_SIZE
     assert dif["expected_dif_items"] == [0]
     assert dif["flagged_items"] == [0]
     assert dif["known_dif_recall"] == 1.0
