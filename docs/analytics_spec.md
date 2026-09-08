@@ -108,9 +108,12 @@ Primary owners:
 | Compatible API adoption | Count of successful `/v1/chat/completions` requests by application or token scope over a completed review window. | Shows whether the single API wedge is being used without client rewrites. | HTTP request logs with endpoint, status, auth scope, and timestamp. |
 | Trace-complete workflow rate | Share of conducted workflow runs that include role, worker, subtask, access list, verifier result, and final synthesis fields. | Verifies that enterprise evidence is present when deep orchestration is used. | `workflow_runs` records plus trace schema validation. |
 | Policy-safe routing rate | Share of runs where selected mode, provider exclusions, and verifier requirement match the active orchestration policy. | Detects routing or policy regressions before rollout. | Policy snapshot joined to each run decision. |
+| Psychometric parameter RMSE | Root mean square error between estimated item/person parameters and known true parameters in a synthetic or held-out calibration set; rank scores are not a substitute for parameter error. | Prevents a routing policy from being promoted on classifier accuracy alone when interpretability or calibration is the buyer requirement. | Versioned evaluation replay with true-parameter fixtures, estimated parameters, model/policy version, and split identifier. |
+| Routing decision latency p95 | 95th percentile elapsed time from an accepted request to the persisted route decision, excluding upstream generation time. | Detects orchestration overhead and provides the latency guardrail for accuracy-improving policy changes. | Monotonic decision timestamps in the request/decision trace, segmented by policy version and route mode. |
 
 The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
-`trace_complete_workflow_rate`, and `policy_safe_routing_rate`.
+`trace_complete_workflow_rate`, `policy_safe_routing_rate`,
+`psychometric_parameter_rmse`, and `routing_decision_latency_p95`.
 
 ## Commercial Due-Diligence KPIs
 
