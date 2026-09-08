@@ -114,6 +114,22 @@ def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
             assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
 
 
+def test_cryptography_pin_matches_every_install_path():
+    """Runtime, security, and both fuzz jobs must install the same release."""
+    lock_versions = [
+        re.search(r"(?m)^cryptography==([^ ;\\]+)", read_text(lock_path)).group(1)
+        for lock_path in (
+            "requirements.lock",
+            "fuzz/requirements-atheris.txt",
+            "fuzz/requirements-property.txt",
+        )
+    ]
+    runtime_version = re.search(
+        r'(?m)^name = "cryptography"\nversion = "([^"]+)"', read_text("uv.lock")
+    ).group(1)
+    assert lock_versions == [runtime_version] * len(lock_versions)
+
+
 def test_review_adr_requires_enforced_exact_head_merge_controls():
     adr_text = read_text("docs/planning/adrs/0004-pr-review-merge-loop.md")
     normalized_adr_text = " ".join(adr_text.split())
@@ -182,7 +198,7 @@ def test_database_design_avoids_plaintext_prompt_output_storage():
 def test_python_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements.lock")
 
-    assert "pip-compile" in lock_text
+    assert "pip-compile" in lock_text or "uv pip compile" in lock_text
     assert "--hash=sha256:" in lock_text
     assert "fastapi==" in lock_text
     assert "uvicorn==" in lock_text
