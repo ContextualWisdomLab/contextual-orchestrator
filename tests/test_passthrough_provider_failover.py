@@ -1217,11 +1217,12 @@ def test_free_virtual_model_keeps_ambiguous_transport_502_sticky() -> None:
 
 
 
-def test_free_virtual_model_keeps_http_500_sticky() -> None:
-    """HTTP 500 does not prove non-acceptance, so passthrough must not replay."""
+@pytest.mark.parametrize("status", [500, 502, 504, 529])
+def test_free_virtual_model_keeps_ambiguous_http_failure_sticky(status: int) -> None:
+    """Ambiguous HTTP failures do not prove non-acceptance and cannot replay."""
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(500),
+            "primary_agent": _http_error(status),
             "fallback_agent": {"model": "fallback-model"},
         }
     )
@@ -1239,17 +1240,18 @@ def test_free_virtual_model_keeps_http_500_sticky() -> None:
             }
         )
 
-    assert caught.value.provider_status == 500
+    assert caught.value.provider_status == status
     assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
     assert caught.value.detail["attempts"][0]["failover_decision"] == (
         "sticky_candidate_failure"
     )
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
-def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> None:
-    """Exhausted free passthrough keeps typed candidate evidence on the final 502."""
+
+def test_free_virtual_model_stops_after_a_rejection_then_ambiguous_failure() -> None:
+    """One proved rejection may advance, but an ambiguous next failure is sticky."""
     client = SequencedProxyClient(
-        {"primary_agent": _http_error(500), "fallback_agent": _http_error(500)}
+        {"primary_agent": _http_error(429), "fallback_agent": _http_error(500)}
     )
     orchestrator = _build(client)
     orchestrator.agents = [
@@ -1272,7 +1274,7 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
         )
 
     assert caught.value.agent_id == "fallback_agent"
-    assert caught.value.detail["terminal_reason"] == "eligible_candidates_exhausted"
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
     assert caught.value.detail["selected_candidate_ids"] == [
         "primary_agent",
         "fallback_agent",
@@ -1283,9 +1285,9 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
             "model": "primary-model",
             "provider_name": "unreported",
             "attempt_number": 1,
-            "error_code": "api_error",
-            "client_status": 502,
-            "provider_status": 500,
+            "error_code": "rate_limit_exceeded",
+            "client_status": 429,
+            "provider_status": 429,
             "retryable": True,
             "transport": "passthrough",
             "phase": "provider_response",
@@ -1302,7 +1304,7 @@ def test_free_virtual_model_exhaustion_reports_bounded_attempt_evidence() -> Non
             "retryable": True,
             "transport": "passthrough",
             "phase": "provider_response",
-            "failover_decision": "eligible_candidates_exhausted",
+            "failover_decision": "sticky_candidate_failure",
         },
     ]
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
