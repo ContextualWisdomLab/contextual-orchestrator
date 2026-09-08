@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -164,7 +166,8 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
         thread.join(timeout=5)
 
 
-def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> None:
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_http_virtual_structured_mixed_failures_preserve_retryable_error(model: str) -> None:
     """A 502 remains retryable only after every eligible endpoint is exhausted."""
     for failure_order in ((502, 404), (404, 502)):
         agents = [
@@ -172,19 +175,19 @@ def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> No
                 "first_agent",
                 "first-model",
                 "mock://catalog",
-                tags=("reasoning", "writing"),
+                tags=("reasoning", "writing", "cost:free"),
             ),
             ModelAgent(
                 "second_agent",
                 "second-model",
                 "mock://catalog",
-                tags=("reasoning", "writing"),
+                tags=("reasoning", "writing", "cost:free"),
             ),
             ModelAgent(
                 "other_agent",
                 "other-model",
                 "mock://other",
-                tags=("reasoning", "writing"),
+                tags=("reasoning", "writing", "cost:free"),
             ),
         ]
         orchestrator = TaskOrchestrator(agents)
@@ -221,7 +224,7 @@ def test_http_virtual_structured_mixed_failures_preserve_retryable_error() -> No
             status, body = _post(
                 server.server_address[1],
                 {
-                    "model": TaskOrchestrator.AUTO_MODEL,
+                    "model": model,
                     "messages": [{"role": "user", "content": "structured"}],
                     "response_format": {"type": "json_object"},
                     "session_id": "synthetic-session",
