@@ -112,8 +112,16 @@ Primary owners:
 | Routing decision latency p95 | 95th percentile elapsed time from an accepted request to the persisted route decision, excluding upstream generation time. | Detects orchestration overhead and provides the latency guardrail for accuracy-improving policy changes. | Monotonic decision timestamps in the request/decision trace, segmented by policy version and route mode. |
 
 The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
-`trace_complete_workflow_rate`, `policy_safe_routing_rate`,
-`psychometric_parameter_rmse`, and `routing_decision_latency_p95`.
+`trace_complete_workflow_rate`, and `policy_safe_routing_rate`.
+
+`psychometric_parameter_rmse` and `routing_decision_latency_p95` are proposed
+measurement contracts, not fields currently emitted by the runtime snapshot.
+Their implementation, reproducible measurements, and consumer acceptance remain
+open. Synthetic true-parameter recovery belongs to unit tests only; held-out
+observed responses do not by themselves provide known latent parameters.
+Report parameter recovery separately for each parameter family on an identified,
+aligned scale. Buyer accuracy and latency claims require observed task outcomes,
+declared sampling and failure denominators, and uncertainty estimates.
 
 ## Commercial Due-Diligence KPIs
 

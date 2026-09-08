@@ -2197,12 +2197,17 @@ live work item.
 
 The buyer-facing accuracy and decision-latency contract is proposed in
 [PR #1103](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1103)
-at exact head `e14ee3170a4802e199316064b9ee0d3bfcc28d95`. The one-file change
+with historical snapshot `e14ee3170a4802e199316064b9ee0d3bfcc28d95`. That initial change
 adds true-parameter psychometric RMSE and p95 route-decision latency to the
 analytics specification; it does not change production routing defaults.
 Hosted evidence at this snapshot has CodeQL compatibility green, but OpenCode
 Review failed and independent approval is absent, so the contract is not yet
-protected-main evidence.
+protected-main evidence. These check results describe only that historical
+snapshot. The proposed KPI fields are not emitted by the runtime snapshot;
+implementation, observed buyer measurements, and consumer acceptance remain
+open. True-parameter recovery is a unit-test contract on an identified scale,
+not evidence of observed buyer accuracy. Later PR revisions require their own
+verification.
 
 For each PR, perform the following loop on the current head: inspect changed
 files and review threads, reproduce the claimed behavior, fix root causes in
