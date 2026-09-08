@@ -4,26 +4,25 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import random
 import statistics
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.benchmark_psychometric_routing import _require_runtime  # noqa: E402
+from scripts.benchmark_psychometric_routing import _require_runtime
 
 _require_runtime(benchmark_script="scripts/benchmark_psychometric_heldout.py")
 
-import fast_mlsirm  # noqa: E402
-import numpy as np  # noqa: E402
+import fast_mlsirm
+import numpy as np
 
-from contextual_orchestrator.psychometric_routing import (  # noqa: E402
+from contextual_orchestrator.psychometric_routing import (
     PsychometricRoutingEvidence,
 )
-
 
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 UNSEEN_MODEL_ID = "model_unseen"
@@ -289,9 +288,9 @@ def _measure_paired_latency(
                 started_ns = time.perf_counter_ns()
                 evidence.ranked_evidence(MODEL_IDS, context, vector)
                 samples[name].append((time.perf_counter_ns() - started_ns) / 1_000_000)
-        for name in samples:
-            all_samples[name].extend(samples[name])
-            context_medians[name].append(statistics.median(samples[name]))
+        for name, timing_samples in samples.items():
+            all_samples[name].extend(timing_samples)
+            context_medians[name].append(statistics.median(timing_samples))
 
     def summary(values: list[float]) -> dict[str, float]:
         """Summarize nonempty timings with the median and nearest-rank p95."""
@@ -578,12 +577,13 @@ def _evaluate_sequential_drift_threshold(
     horizon_observations: int | None = None,
     change_after_observations: int | None = None,
     confidence_level: float | None = None,
-) -> dict[str, float | int]:
+) -> dict[str, object]:
     """Simulate seeded first alarms for the declared Bernoulli probability shift.
 
     Delays exclude pre-change alarms. Replications that never alarm inside the
-    declared horizon are right-censored at the remaining post-change length and
-    counted as missed detections. Coverage is a required declaration.
+    declared horizon are counted as missed detections, not detections at the
+    censoring boundary. Quantiles describe observed post-change detections only.
+    Coverage is a required declaration.
     """
     replication_count = _require_declared_positive_int(replications, "replications")
     horizon = _require_declared_positive_int(
@@ -624,13 +624,10 @@ def _evaluate_sequential_drift_threshold(
                 break
         if alarm_observation is None:
             censored_replications += 1
-            detection_delays.append(horizon - change_after)
         elif alarm_observation <= change_after:
             false_alarms += 1
         else:
             detection_delays.append(alarm_observation - change_after)
-    if not detection_delays:
-        raise ValueError("sequential drift produced no post-change delay observations")
     ordered_delays = sorted(detection_delays)
     false_alarm_rate = false_alarms / replication_count
     z_score = statistics.NormalDist().inv_cdf((1.0 + coverage) / 2.0)
@@ -652,13 +649,20 @@ def _evaluate_sequential_drift_threshold(
         "false_alarm_rate": false_alarm_rate,
         "false_alarm_rate_upper_bound": false_alarm_upper_bound,
         "censored_replications": censored_replications,
+        "censoring_delay_observations": horizon - change_after,
+        "false_alarm_count": false_alarms,
+        "post_change_detection_count": detected,
+        "delay_summary_population": "post_change_detections_only",
         "post_change_detection_rate_among_no_false_alarm": (
             detected / (replication_count - false_alarms)
+            if replication_count > false_alarms else None
         ),
-        "detection_delay_p50_observations": statistics.median(detection_delays),
-        "detection_delay_p95_observations": ordered_delays[
+        "detection_delay_p50_observations": (
+            statistics.median(detection_delays) if detection_delays else None
+        ),
+        "detection_delay_p95_observations": (ordered_delays[
             math.ceil(0.95 * len(ordered_delays)) - 1
-        ],
+        ] if ordered_delays else None),
     }
 
 
@@ -694,19 +698,24 @@ def _validate_sequential_drift(
         value
         for value in evaluated_candidates
         if value["false_alarm_rate_upper_bound"] <= 0.05
+        and value["censored_replications"] == 0
+        and value["detection_delay_p95_observations"] is not None
         and value["detection_delay_p95_observations"] <= 25
     ]
     calibration_candidate = min(
         eligible_candidates,
+        default=None,
         key=lambda value: (
             value["detection_delay_p95_observations"],
             value["detection_delay_p50_observations"],
             value["threshold_log_likelihood_ratio"],
         ),
     )
-    selected_threshold = calibration_candidate["threshold_log_likelihood_ratio"]
     baseline = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, math.log(100.0))
-    candidate = evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, selected_threshold)
+    candidate = (
+        evaluate(SEQUENTIAL_DRIFT_HOLDOUT_SEED, calibration_candidate["threshold_log_likelihood_ratio"])
+        if calibration_candidate is not None else None
+    )
     return {
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
@@ -728,6 +737,7 @@ def _validate_sequential_drift(
         "calibration_baseline": calibration_baseline,
         "calibration_candidate": calibration_candidate,
         "threshold_search": {
+            "calibration_results": evaluated_candidates,
             "minimum": threshold_candidates[0],
             "maximum": threshold_candidates[-1],
             "step": 0.1,
@@ -735,7 +745,8 @@ def _validate_sequential_drift(
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
                 "calibration candidates whose declared-coverage false-alarm "
-                "upper bound and p95 delay meet both synthetic targets"
+                "upper bound and detected-only p95 delay meet both synthetic "
+                "targets, with no censored non-detections"
             ),
         },
         "synthetic_targets": {
@@ -743,7 +754,10 @@ def _validate_sequential_drift(
             "maximum_detection_delay_p95_observations": 25,
         },
         "candidate_meets_synthetic_targets": (
-            candidate["false_alarm_rate_upper_bound"] <= 0.05
+            candidate is not None
+            and candidate["censored_replications"] == 0
+            and candidate["detection_delay_p95_observations"] is not None
+            and candidate["false_alarm_rate_upper_bound"] <= 0.05
             and candidate["detection_delay_p95_observations"] <= 25
         ),
     }
