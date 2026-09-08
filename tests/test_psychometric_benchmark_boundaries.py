@@ -259,6 +259,23 @@ def test_candidate_group_dif_uses_declared_sample_size() -> None:
     assert len(report["expected_dif_items"]) == 1
 
 
+def test_score_reliability_requires_declared_sample_size() -> None:
+    """Reliability evidence cannot invent a 1,200-row default."""
+    parameters = inspect.signature(heldout._validate_score_reliability).parameters
+    assert parameters["sample_size"].default is None
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_score_reliability()
+    with pytest.raises(ValueError, match="sample_size"):
+        heldout._validate_score_reliability(sample_size=True)
+
+
+def test_score_reliability_uses_declared_sample_size() -> None:
+    """The declared sample size is the actual reliability population per case."""
+    report = heldout._validate_score_reliability(sample_size=40)
+    assert report["sample_size_per_case"] == 40
+    assert report["items"] == 12
+
+
 def test_sequential_drift_requires_declared_horizon_and_coverage() -> None:
     """CUSUM delay KPIs cannot invent 500/250/100 or a 95% Wilson default."""
     parameters = inspect.signature(heldout._validate_sequential_drift).parameters

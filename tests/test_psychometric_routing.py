@@ -484,7 +484,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert reliability["method"] == "posterior_variance_empirical_reliability"
     assert (
         reliability["sample_size_per_case"]
-        == heldout_benchmark.RELIABILITY_SAMPLE_SIZE
+        == heldout_benchmark.DECLARED_RELIABILITY_SAMPLE_SIZE
     )
     assert reliability["seed"] == heldout_benchmark.RELIABILITY_SEED
     assert reliability["items"] == 12
