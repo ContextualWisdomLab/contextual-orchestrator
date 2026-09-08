@@ -399,7 +399,18 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
 
     assert "request_failed" in caplog.text
     response_payload = captured_send.call_args.args[0]
-    assert response_payload["error"]["detail"]["request_id"] in caplog.text
+    response_request_id = response_payload["error"]["detail"]["request_id"]
+    warning_messages = [
+        record.getMessage() for record in caplog.records
+        if record.name == "contextual_orchestrator.server"
+        and record.getMessage().startswith("request_failed ")
+    ]
+    assert warning_messages == [
+        f"request_failed status=401 code=unauthorized request_id={response_request_id}"
+    ]
+    assert response_request_id != "untrusted\nlog-injection"
+    assert len(response_request_id) == 32
+    assert all(character in "0123456789abcdef" for character in response_request_id)
     assert response_payload["error"]["detail"]["reason"] == "private-detail"
     assert "untrusted" not in caplog.text
     assert "private-detail" not in caplog.text
