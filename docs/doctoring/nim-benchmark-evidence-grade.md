@@ -318,7 +318,13 @@ change-at-100 horizon and aborted when a replication never alarmed. Those
 choices hid Monte Carlo precision and dropped missed detections from the
 delay KPI. Replications, horizon, change-point, and coverage are now
 required declarations. No-alarm replications are right-censored at the
-remaining post-change length. The Wilson upper bound uses the declared
+remaining post-change length, recorded separately from detected-only delay
+quantiles. Empty detection populations yield null quantiles, not horizon-valued
+events. All-false-alarm runs preserve counts with a null conditional detection
+rate; no eligible candidate preserves all calibration results with false
+acceptance. This retains the effective non-detection repair from parent
+`fb12256bb09d101b5f6dbf38d93b18cdfe19a926` without removing the required declarations.
+The Wilson upper bound uses the declared
 coverage and is stored as `false_alarm_rate_upper_bound`.
 
 This slice does not change production route/conduct defaults. Held-out
@@ -331,8 +337,8 @@ sequenceDiagram
     participant Report as Held-out report
     Operator->>Screen: Replications, horizon, change-point, coverage
     Screen->>Screen: Fail closed on missing or invalid declarations
-    Screen->>Screen: Record no-alarm replications as horizon-censored delays
-    Screen->>Report: False-alarm bound and detection-delay KPIs
+    Screen->>Screen: Separate detected events from censored non-detections
+    Screen->>Report: Counts, detection rate, detected-only quantiles or null
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
