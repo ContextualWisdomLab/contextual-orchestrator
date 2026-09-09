@@ -123,3 +123,17 @@ tests/test_responses_store_http_honesty.py -q` then completed with exit 0:
 4 passed in 20.05s. The interruption did not recur in this run; its signal or
 operating-system trigger remains unproven. No TLS checks were bypassed and no
 retry was added. A clean isolated run does not replace full-suite verification.
+# Typed streaming error correlation
+
+The chat and Responses SSE error adapters must retain the request identity
+observed inside the provider invocation. They previously generated another UUID
+when framing typed failures, breaking correlation despite correct provider logs.
+The repair uses the ordinary HTTP error adapter's trusted identity convention.
+This is an identity mismatch fix, not evidence of upstream detail injection.
+
+Reproduce with `python -m pytest tests/test_stream_error_identity.py -q`.
+Three real HTTP cases cover chat provider errors, Responses provider errors, and
+chat stopped-tool errors. The Responses fixture fixes the routing choice to
+isolate SSE framing; it does not test routing policy. The original cases failed
+identity equality; after repair, these and both debug logging suites passed
+(40 tests, 2.75 seconds). No hosted check or deployment is implied.
