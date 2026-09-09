@@ -40,7 +40,7 @@ uv run ruff check .
 The June 22 report is pinned to author-repository revision
 `1397abb416e4b774003a09b689ea120e0da02262`; PDF SHA-256
 `00a0e5065551c80c12a019018e18d8365cc3da229303f1765aa49fdf22876ce2`.
-Read scope: opening abstract and pages 3–10; page 5/Figure 2 was rendered and
+Read scope: opening abstract, pages 3–10, and Appendix A/page 26; page 5/Figure 2 was rendered and
 directly inspected, with legible labels, arrows, and caption. No full-report
 review or reproduction is claimed; no PDF is vendored.
 Page 8 was also directly inspected as a 1132×1600 render: the two reward
@@ -82,9 +82,20 @@ when routing tool responses. CO ablations must therefore declare memory scope
 and tool-response ownership, not just role labels. Shared history can correlate
 agents' errors; independent-looking agent counts are not independent evidence.
 Section 4.1.1 matches maximum reasoning effort against frontier workers, which
-does not establish equal total tokens, cost, or latency. Appendix A and the
-remaining evaluation sections have not yet been audited. These observations
+does not establish equal total tokens, cost, or latency. The remaining main
+evaluation sections have not yet been audited. These observations
 do not authorize changing CO's memory disclosure or free-pool policy.
+
+Appendix A confirms heterogeneous benchmark protocols and externally reported
+baselines, rather than one common end-to-end experiment. It specifies five
+baseline retries for LiveCodeBench Pro timeout/token exhaustion, pass@4 for
+banking, and benchmark-specific harness/dependency repairs. CO comparison
+receipts must pin these protocol choices, preserve attempts and exhaustion
+counts, and distinguish multi-attempt metrics from single-request correctness.
+The appendix's two-hour limit for one long-context benchmark is an evaluation
+configuration, not evidence for a universal production model timeout. No
+benchmark rerun, retry parity verification, or claimed score gain follows from
+this source reading.
 
 Engineering inference: compare decision-only selection with generative triage
 under the same observed cohort, correctness guardrail, and resource accounting.
