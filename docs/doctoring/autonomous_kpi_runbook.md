@@ -82,8 +82,6 @@ UI acceptance. Viewport dimensions, durable image export, responsive sizes,
 other locales, and error/loading states remain unverified. Do not mark the
 full visual-inspection requirement complete from this receipt.
 
-## Break release cycles without copying implementation
-
 ## State-write atomicity prerequisite (2026-09-09)
 
 At CO `ab8a7caa6c00a49eede17a03d0897865cfdce9f5`, `run()` calls
@@ -110,6 +108,8 @@ This establishes the tested SQLite failure case, not customer KPI improvement,
 full-suite success, protected merge, or production deployment. Next implement
 decision timing before provider invocation with explicit failure denominators;
 do not relabel existing response-generation timings.
+
+## Break release cycles without copying implementation
 
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest
 isolated real integration → protected immutable release → consumer adoption.
