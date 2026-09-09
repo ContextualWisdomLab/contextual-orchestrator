@@ -407,3 +407,20 @@ shows `DISPATCH_OUTCOME: success` with `VERDICT_STATE: pending`, and the
 job's own message states the dispatch workflow will rerun it after
 publishing the terminal verdict. Expected to self-heal; re-observe next
 turn. No push to any owner branch was made from this loop.
+
+## DOI discovery visual receipt, 2026-09-09
+
+Inspected the actual GitHub-rendered `docs/papers/README.md` at
+`ce6e029a63c4126e6c1d0a90f66eef64889a2955`, fragment
+`#doi-discovery-register`, in the in-app browser (tab 9, English,
+1265 × 712 viewport). The screenshot was opened and directly viewed in
+the task, not inferred from the accessibility tree. The heading, limitation
+paragraph, and first fifteen complete DOI links were readable, with no
+overlap or horizontal clipping in that viewport. The next link continues
+below the fold. This receipt does not cover the remaining links, other
+viewport sizes, keyboard focus, translated states, or product UI.
+
+The accompanying discovery contract passed all six tests in 1.36 seconds
+at that source revision. It inventories explicit DOI URLs in tracked text;
+it does not establish complete paper coverage, correct citation metadata,
+full-paper review, reproduction, or customer accuracy improvements.
