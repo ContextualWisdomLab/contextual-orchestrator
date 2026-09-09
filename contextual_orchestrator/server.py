@@ -65,6 +65,8 @@ from .telemetry import (
     attach_trace_context,
     configure_telemetry,
     current_session_id,
+    current_request_id,
+    request_identity,
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
@@ -5627,11 +5629,12 @@ def build_server(
             self.command = None
             self.path = None
             self._request_started = None
-            try:
-                super().handle_one_request()
-            finally:
-                self._log_request_summary(self._request_started)
-                self._reset_session()
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -8193,7 +8196,7 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            request_id = uuid.uuid4().hex
+            request_id = current_request_id() or uuid.uuid4().hex
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id
             )

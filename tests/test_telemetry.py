@@ -451,6 +451,25 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
     assert len(set(request_ids)) == 2
 
 
+def test_request_identity_restores_context_across_threads_and_failure():
+    """Copied work inherits identity; reused workers and failed scopes do not leak it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    assert telemetry_module.current_request_id() is None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with telemetry_module.request_identity() as outer_id:
+            assert executor.submit(copy_context().run, telemetry_module.current_request_id).result() == outer_id
+            assert executor.submit(telemetry_module.current_request_id).result() is None
+            with pytest.raises(RuntimeError):
+                with telemetry_module.request_identity() as inner_id:
+                    assert inner_id != outer_id
+                    raise RuntimeError("controlled failure")
+            assert telemetry_module.current_request_id() == outer_id
+        assert telemetry_module.current_request_id() is None
+        assert executor.submit(telemetry_module.current_request_id).result() is None
+
+
 def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
     """Same-session HTTP requests need distinct identities before provider failure."""
     import http.client

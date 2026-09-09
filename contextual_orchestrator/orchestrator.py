@@ -56,6 +56,7 @@ from .provider_errors import (
 )
 from .telemetry import (
     annotate_current_span,
+    current_request_id,
     inject_trace_context,
     record_provider_usage,
     traced,
@@ -1334,11 +1335,12 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
     """DEBUG-log one provider call attempt before it is made."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt agent_id=%s model=%s attempt=%d/%d",
+            "provider_attempt agent_id=%s model=%s attempt=%d/%d request_id=%s",
             agent.id,
             agent.model,
             attempt + 1,
             retry_limit + 1,
+            current_request_id() or "-",
         )
 
 
@@ -1348,13 +1350,14 @@ def _log_provider_attempt_failed(
     """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s",
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s request_id=%s",
             agent.id,
             agent.model,
             attempt + 1,
             type(exc).__name__,
             transient,
             redact_text(str(exc))[:500],
+            current_request_id() or "-",
         )
 
 
