@@ -2,6 +2,7 @@
 
 import copy
 import threading
+import pytest
 
 from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.batch_routing import PgLlmBatchBackend
@@ -11,7 +12,8 @@ from test_batch_routing import _FakeBatchApiClient
 from test_cost_review_server import _request
 
 
-def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path):
+@pytest.mark.parametrize("write_failure", [False, True])
+def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monkeypatch, write_failure):
     """One submission joins two item outcomes without trusting their custom IDs."""
     class ObservedBatchClient(_FakeBatchApiClient):
         """Reuse the existing offline provider contract with passive identity capture."""
@@ -31,6 +33,15 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path):
     state_path = tmp_path / "state.db"
     agents = [ModelAgent("worker_one", "mock/worker")]
     orchestrator = TaskOrchestrator(agents, state_db=state_path)
+    if write_failure:
+        original_save = orchestrator._store.save
+
+        def reject_link(kind, *args, **kwargs):
+            if kind == "batch_request_link":
+                raise RuntimeError("private-store-secret")
+            return original_save(kind, *args, **kwargs)
+
+        monkeypatch.setattr(orchestrator._store, "save", reject_link)
     batch_client = ObservedBatchClient()
     coordinator = CostRoutingCoordinator(
         orchestrator, batch_backend=PgLlmBatchBackend(batch_client)
@@ -48,6 +59,8 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path):
             for item_id in ("a", "b")
         ]})
         assert status == 201, submitted
+        assert submitted["request_link_status"] == ("write_failed" if write_failure else "durable")
+        assert "private-store-secret" not in str(submitted)
         status, retrieved = _request(
             "POST", f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results",
             "unit-token",
@@ -58,6 +71,8 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path):
         assert batch_client.retrieval_request_id
         assert batch_client.submission_request_id != batch_client.retrieval_request_id
         assert batch_client.submission_request_id not in {"a", "b"}
+        assert batch_client.calls.count("create_batch_job") == 1
+        assert coordinator._batch_jobs[submitted["job_id"]].job_id == submitted["job_id"]
     finally:
         server.shutdown()
         worker_thread.join()
@@ -70,9 +85,12 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path):
         # not a replacement of provider custom_id or one origin per eventual job.
         links = restored._store.load("batch_request_link")
         actual_links = {
-            (row["request_id"], row["batch_job_id"], row["custom_id"])
-            for row in links
+            (row["request_id"], row["batch_job_id"], custom_id)
+            for row in links for custom_id in row["custom_ids"]
         }
+        if write_failure:
+            assert not actual_links
+            return
         assert actual_links == {
             (batch_client.submission_request_id, submitted["job_id"], item["custom_id"])
             for item in retrieved["results"]
