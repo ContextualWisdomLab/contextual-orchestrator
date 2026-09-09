@@ -116,3 +116,40 @@ is evidence of the headline routing-decision p95. Cache hits, non-generation
 operations, auxiliary dispatch, all preselection SSE failures and cancellation
 paths still require complete request-boundary coverage and executable evidence.
 No protected merge, production publication, or customer KPI gain is claimed.
+# Auxiliary and package acceptance checkpoint (2026-09-09)
+
+At `9707a5e1`, focused receipt/persistence tests passed 41 cases in 8.43 s.
+The Rust clock now separates provider-ready diagnostics from initial task-route
+acknowledgement. Structured triage, generated planning, and pre-selection evidence
+embedding remain inside the task-route interval. Evidence embedding after native
+selection is labelled `post_decision_evidence_embedding`, including write-failed
+selection; it is not subtracted or presented as preceding routing work. Answer
+cache reuse has a distinct terminal outcome with absent provider timing values.
+The bounded admission cohort exports auxiliary records with an explicit diagnostic
+cap and truncation indicator. Historical retention remains unresolved.
+
+The initial embedding test asserted inside a best-effort transport callback.
+That assertion was swallowed by the existing best-effort path and prevented cache
+fill, causing a test-induced warm retry. The corrected spy only collects values;
+assertions run after the response. No descriptor invalidation was established.
+
+Native packaging was rebuilt from the repository root with
+`maturin build --locked --release --manifest-path rust/decision_receipt/Cargo.toml
+--interpreter .venv/bin/python --out /tmp/co-decision-receipt-wheels`.
+Rust 1.97.1, maturin 1.15.0, Python 3.14.6, macOS arm64 produced the native wheel
+SHA-256 `e0bf63d790256c6d4eba8598c131d63188a994c899df5124bd9eadf2cc39c568`.
+Its five ZIP entries contain only the receipt extension and distribution metadata;
+the independently built core wheel has no overlapping files. A separate
+noneditable installation outside the checkout passed all 20 receipt tests in
+11.83 s using `python -I`, with both import origins under that environment's
+site-packages. This proves that local artifact matrix only, not Linux/Python 3.12
+hosted acceptance or a released package. The namespace was retained because the
+suspected core-file collision was not observed in either inspected native wheel.
+
+CI now installs locked native build tooling, builds the extension before the full
+suite, validates disjoint wheel ownership before installation, and exercises the
+wheel-installed HTTP receipt tests outside the checkout. The existing benchmark
+import smoke is preserved. These workflow changes remain pending hosted evidence.
+Full endpoint admission validation, cancellation/error-path coverage, deployed
+retention/reconciliation, and customer accuracy/latency measurements remain open;
+none of the unit or mock-provider evidence establishes a customer KPI gain.

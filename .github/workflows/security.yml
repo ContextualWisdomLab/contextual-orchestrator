@@ -44,8 +44,16 @@ jobs:
         with:
           version: "0.12.5"
 
+      - name: Build locked native decision measurement
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          uv sync --locked --extra api --extra db --extra queue --group dev --group native-build
+          uv run --no-sync maturin develop --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml
+          uv run --no-sync maturin build --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml --out "$RUNNER_TEMP/decision-wheels"
+
       - name: Run full test suite
-        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+        run: uv run --no-sync python -m pytest -q
 
       - name: Install hash-locked quality tools
         run: |
@@ -74,12 +82,15 @@ jobs:
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
           python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           python -m pip install --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \
-            dist/contextual_orchestrator-*.whl
+            dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           cd "$RUNNER_TEMP"
           PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
-            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark"
+            python -c "import pathlib, contextual_orchestrator as core, contextual_orchestrator.nim_benchmark, contextual_orchestrator._decision_receipt as native; root = pathlib.Path('nim-wheel-site').resolve(); assert pathlib.Path(core.__file__).is_relative_to(root); assert pathlib.Path(native.__file__).is_relative_to(root)"
+          PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
+            python -m pytest --noconftest --import-mode=importlib "$GITHUB_WORKSPACE/tests/test_decision_receipts.py" -q
 
   fuzz:
     name: Property and coverage-guided fuzzing
