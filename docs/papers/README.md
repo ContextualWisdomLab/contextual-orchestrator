@@ -39,6 +39,17 @@ This checks the declared version-page licenses; byte-level identity and
 release-package inclusion still require verification. Existing files are
 retained during the audit.
 
+At source commit `15b8f52b`, `uv build` produced both package formats and
+archive-member inspection found no `.pdf` members in either:
+
+- `contextual_orchestrator-0.2.0-py3-none-any.whl`, SHA-256
+  `9091060d05ee07fa52e48918195c9e14388d6d9e85182b7919fcdf3f5db6e152`.
+- `contextual_orchestrator-0.2.0.tar.gz`, SHA-256
+  `75747f6a0a841046bdad44f5edc408f81839fa8c53b09efa2c2e5710c4c6d180`.
+
+These are local build artifacts, not published-package evidence. Git source
+archives include tracked PDFs and require a separate redistribution decision.
+
 ## Cost optimisation
 
 - **FrugalGPT: How to Use Large Language Models While Reducing Cost and
