@@ -3360,3 +3360,13 @@ the read scope and proposed applicability conditions for Jin et al. (2022),
 including independent review and direct inspection of PDF page 7. The remaining
 work is an owner-validated observation/estimand contract and dependence-aware
 held-out evaluation, not production adoption based on a literature citation.
+
+Linkage delivery checkpoint: [PR #1113](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1113)
+now stacks frozen `af8d732e6cfc9c0169ac850f875f42f1db7eecd4` on #1112.
+Dedicated noneditable wheel acceptance completed **53 tests in 26.39s**;
+root independently verified disjoint archive members, both installed import
+origins and the original real-HTTP request/outcome join probe. The PR preserves
+artifact hashes and the missing-Setuptools and macOS path-alias probe failures.
+Hosted run [34329594602](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34329594602)
+has three queued jobs, not acceptance. Review, protected delivery and batch
+submission-to-item lineage remain open.
