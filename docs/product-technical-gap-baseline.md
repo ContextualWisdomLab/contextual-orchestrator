@@ -1,5 +1,23 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Optimizer score-domain repair finding
+
+Independent exact-source probing at
+`204e306c046797b812589b9b66062296beaa1c8d` found that the shared
+`_score_config` boundary accepts nonfinite and out-of-range callback scores
+despite its public `[0,1]` contract. In both serial and batch mock paths,
+NaN, infinity, and 1.1 could recommend an invalid candidate over a valid 0.9
+candidate. The 0.44-second probe used AST-extracted functions, not installed
+package or real-provider execution. Public optimize/evolve regression tests
+and the canonical shared validation repair are still pending. Preserve valid
+fractional scores; reject invalid evidence rather than clamping or omitting it.
+This protects recommendation integrity, not a measured customer accuracy gain.
+
+The separate provider-truncation hypothesis was rejected: `batch_route` returns
+the ordered input cardinality or raises, and existing missing/content tests
+preserve incurred spend. Merged PR #961 owns that earlier provider repair;
+a short-list test double alone would not establish an actual provider defect.
+
 ## 2026-09-09 Batch recovery PR delivery
 
 [PR #1115](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1115)
