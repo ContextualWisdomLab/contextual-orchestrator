@@ -10,6 +10,109 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+@pytest.mark.parametrize("invalid_field", [None, "routing", "attribution", "user", "metadata", "implicit_trace", "explicit_trace"])
+def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_field):
+    """Auto stream classification must share the eventual task's admission clock."""
+    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    snapshots = []
+    original_chat = orchestrator.client.chat
+    def observed_chat(agent, messages, **kwargs):
+        current = _CURRENT_DECISION.get()
+        snapshots.append(current.snapshot() if current else None)
+        if messages[0]["content"] == orchestrator.TRIAGE_SYSTEM_PROMPT:
+            return '{"workflow_required": false}'
+        return original_chat(agent, messages, **kwargs)
+    monkeypatch.setattr(orchestrator.client, "chat", observed_chat)
+    security = SecurityConfig(auth_token="test-token")
+    if invalid_field in ("implicit_trace", "explicit_trace"):
+        security = SecurityConfig(bearer_verifier=lambda token, scope: token == "test-token" and scope == "inference",
+                                  expose_trace_by_default=True)
+    server = build_server(orchestrator, port=0, decision_receipts=True, security=security)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        request_body = {
+            "model": "orchestrator/auto", "mode": "auto", "stream": True,
+            "messages": [{"role": "user", "content": "streamed question"}],
+        }
+        if invalid_field in ("routing", "attribution", "user", "metadata"):
+            request_body[invalid_field] = "" if invalid_field == "user" else []
+        if invalid_field == "explicit_trace":
+            request_body["include_orchestration_trace"] = True
+        connection.request("POST", "/v1/chat/completions", json.dumps(request_body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        expected_status = 401 if invalid_field == "explicit_trace" else (400 if invalid_field in ("routing", "attribution", "user", "metadata") else 200)
+        assert response.status == expected_status
+        connection.close()
+        server.shutdown()
+        if expected_status != 200:
+            assert snapshots == []
+            assert orchestrator._store.load("accepted_request") == []
+            return
+        assert snapshots and all(snapshot is not None for snapshot in snapshots)
+        observation, = export_decision_receipts(orchestrator._store)["observations"]
+        assert observation["first_provider_phase"] == "structured_triage"
+        assert observation["durable_ack_elapsed_ns"] is not None
+        assert snapshots[0]["request_id"] == observation["request_id"]
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_http_typed_stream_failure_before_selection_is_retained(tmp_path, monkeypatch, endpoint):
+    """Handled provider failures before task selection retain a failure denominator."""
+    from contextual_orchestrator.provider_errors import ProviderUpstreamError
+    from contextual_orchestrator.decision_receipts import export_decision_receipts
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    def rejected(*args, **kwargs):
+        raise ProviderUpstreamError(agent_id="worker_one", model="mock/worker",
+                                    error_code="rate_limit_exceeded", message="unit rejection",
+                                    client_status=429, provider_status=429, retryable=True)
+    monkeypatch.setattr(orchestrator, "stream_route", rejected)
+    monkeypatch.setattr(orchestrator, "conduct", rejected)
+    if endpoint == "/v1/responses":
+        monkeypatch.setattr(orchestrator, "would_route", lambda *args, **kwargs: False)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        request_body = {"model": "orchestrator/auto", "mode": "route", "stream": True}
+        if endpoint == "/v1/responses":
+            request_body["input"] = "question"
+            request_body.pop("mode")
+        else:
+            request_body["messages"] = [{"role": "user", "content": "question"}]
+        connection.request("POST", endpoint, json.dumps(request_body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        payload = response.read()
+        assert response.status == 200
+        assert b"rate_limit_exceeded" in payload
+        connection.close()
+        server.shutdown()
+        observation, = export_decision_receipts(orchestrator._store)["observations"]
+        assert observation["status"] == "selection_failed"
+        assert observation["durable_ack_elapsed_ns"] is None
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monkeypatch):
     """Routing evidence calls occur only cold and remain before task acknowledgement."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts

@@ -7120,19 +7120,6 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
-                    )
-                    if route_stream:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use Responses streaming",
-                            )
-                        include_trace = False
-                    elif include_trace:
-                        self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(
@@ -7156,6 +7143,22 @@ def build_server(
                     # sampling/controls already validated before passthrough branch.
                     if "metadata" in body:
                         _validate_openai_metadata(body)
+                    if explicit_trace:
+                        self._authorize_trace_access()
+                    self._ensure_decision_measurement("validated_endpoint")
+                    route_stream = bool(
+                        stream and orchestrator.would_route(messages, mode, model_name)
+                    )
+                    if route_stream:
+                        if explicit_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use Responses streaming",
+                            )
+                        include_trace = False
+                    elif include_trace and not explicit_trace:
+                        self._authorize_trace_access()
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
                     with model_client.request_settings(
@@ -8564,6 +8567,7 @@ def build_server(
                     self._decision_failure_reason = "cancelled"
                     raise
                 except ProviderUpstreamError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     failed = {
                         **created_response,
                         "status": "failed",
@@ -8754,6 +8758,7 @@ def build_server(
                     ):
                         return
                 except ToolFallbackStoppedError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     detail = {
                         "request_id": uuid.uuid4().hex,
                         **_tool_fallback_error_detail(exc),
@@ -8770,6 +8775,7 @@ def build_server(
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 except ProviderUpstreamError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
