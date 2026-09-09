@@ -3234,3 +3234,23 @@ names are `PIPY_TOKEN` and `CARGO_REGISTRY_TOKEN`, both visible to all repositor
 Registration is not credential-validity or registry-ownership proof. Complete
 the minimal owner contract and CO adapter independently, then integrate exact
 revisions; do not require the whole foundation or publish an unmerged candidate.
+
+### Streaming admission reproduction, 2026-09-09
+
+An independent installed-package HTTP probe revises the initial source-only
+hypothesis: invalid empty `user` and array-valued `routing` each returned 400,
+with zero provider calls and zero accepted records. Earlier shared validation
+already rejects these inputs; later duplicate validators do not prove unsafe
+spend. Retain these cases as guards, not failing regressions.
+
+The valid auto-streaming control returned 200, invoked the observed chat client
+once, and retained one admission. That provider call had no active measurement
+scope, proving its triage work preceded the acceptance clock. Installed
+`server.py` SHA-256
+`a28fd4aaafb3852315d0b69541ab12235c6cdcd6c75b5ceff7d8f1c5ff08e08a`
+matches candidate `bbe7eae1a24a95e17b5933ca75cc6b2598f896e4`.
+The spy only recorded state, with assertions after the response. This is a
+mock-provider unit reproduction over real HTTP, not customer latency evidence.
+Repair the valid-stream timing boundary without bypassing existing validation;
+see [the reproduction receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597865731).
+The full-suite checkout remained unchanged during this independent probe.
