@@ -59,6 +59,10 @@ contract rather than an inferred ranking:
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
+  Integrate single-writer deltas, never discard them; restack or retarget with
+  normal merges only, never force-push, and never flip another session's Draft
+  readiness. Fix stacked-PR review gaps in `.github`, coordinating through
+  agent dialogue or spawn. Preserve PRD and TRD naming case exactly.
 - Delete existing code, tests, or documentation only with a clear redundancy or
   root-cause rationale and after verifying that no supported consumer needs it.
 - Never expose internal implementation boundaries in customer-facing copy. Every

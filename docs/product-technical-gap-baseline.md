@@ -2901,9 +2901,36 @@ delta, malicious change, or verified complete inheritance.
   `opencode-hourly-loop` group with `cancel-in-progress: false` and never
   cancels merge/release/deploy/migration. Renaming groups without an ADR
   would churn CI for no functional gain; left as is.
-- **Hourly prompt:** `.github/opencode/hourly-loop-prompt.md` now records
+- **Hourly prompt:** `.github/opencode/  hourly-loop-prompt.md` now records
   the shared-checkout, live-handle, synthetic-vs-observed, and PR-0
   rules so the next scheduled pass inherits them without re-derivation.
   Follow-up: keep #1079 (main-protection stale job names) with the
   owner; keep #1075 closure with the owner; re-observe #1108 after its
   restack and hosted checks.
+
+## 2026-09-09 Autoresearch loop: PR #1109 atomicity review, no merge, prompt stacking rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is a new draft on the psychometric stack
+(`codex/psychometric-kpi-successor` base); #1108 is still `dirty`
+against the loop branch; #1094 is still protection-blocked. No PR met
+the merge bar this turn (terminal-success checks plus resolved threads
+plus independent exact-head approvals), so no merge, readiness flip, or
+cross-session push was attempted.
+
+- **PR #1109 (fix(psychometrics): preserve evidence when observations
+  are rejected):** read-only review plus isolated verification. The
+  reorder validates before mutating retained vectors, order, and
+  revision under the existing lock; valid-input behavior is preserved
+  and no new Python-side numerical arithmetic is added. Isolated
+  evidence at head `4cc0bf2c`:
+  `tests/test_psychometric_observation_atomicity.py` 6 passed in
+  52.15s, exit 0. Hosted checks: CodeQL success; tests and fuzzing still
+  in progress at observation time. Unit evidence only; full regression,
+  independent review, protected merge, and release remain pending.
+  Action: leave the draft with its owner stack; re-observe after hosted
+  checks complete.
+- **Hourly prompt (this hour):** added the single-writer stacking rule
+  (integrate deltas, normal-merge restack only, never flip another
+  session's Draft) and the PRD/TRD case-preservation rule alongside the
+  existing fail-closed ordering guidance.

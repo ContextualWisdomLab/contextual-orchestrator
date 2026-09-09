@@ -214,3 +214,28 @@ PR #1108 auto-merged code but conflicted in
 `docs/product-technical-gap-baseline.md` (both sides append); restack is
 a normal merge with manual docs resolution by the PR owner, never a
 force-push. Worktrees removed after verification.
+
+## Isolated verification evidence, 2026-09-09 (PR #1109)
+
+Loop HEAD `8839bfc5f3e6608e11faf3c8a2b237d5bd4050a5` is in sync with
+`origin/autoresearch/20260909-kpi-loop`; code diff since
+`origin/main` remains `benchmark_priors.py` only, while `tests/`
+additionally carries the concurrent session's `test_paper_contracts.py`
+guard (+24), which this turn does not claim as its evidence. Open-PR recount is 88
+(baseline 85; +1 new draft #1109 on the psychometric stack).
+
+PR #1109 head `4cc0bf2c` verified in isolated worktree
+`/tmp/co-verify-1109` (primary checkout untouched):
+`tests/test_psychometric_observation_atomicity.py` 6 passed in 52.15s,
+exit 0. The `observe_context_id` change validates the copied vector and
+complete dichotomous response row before any retained-state mutation
+under the existing lock; no new numerical arithmetic is introduced, so
+the Rust-authoritative computation rule is unaffected. Hosted checks at
+observation time: CodeQL success; `Tests and package quality` and
+`Property and coverage-guided fuzzing` still in progress. PR #1108 head
+reports no check runs while `dirty` against the loop branch; PR #1094
+remains `mergeable: true` but `mergeStateStatus: blocked` on main
+protection. No merge, readiness flip, or push to another session's
+branch was attempted. Unit evidence only; full regression, independent
+review, protected merge, and release remain pending. Worktree removal
+follows the docs commit.
