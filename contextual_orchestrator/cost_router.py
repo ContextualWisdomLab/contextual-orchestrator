@@ -1345,6 +1345,7 @@ class CostRoutingCoordinator:
                     if (type(recovered.request_count) is not int or recovered.request_count < 1
                             or not isinstance(custom_ids, list)
                             or any(not isinstance(item, str) or not item for item in custom_ids)
+                            or len(custom_ids) != recovered.request_count
                             or len(set(custom_ids)) != recovered.request_count):
                         raise ValueError("invalid recovery item identities")
                     estimates = recovered.prompt_token_estimates
