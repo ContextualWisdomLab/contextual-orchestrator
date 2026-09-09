@@ -50,6 +50,17 @@ formula changes in this correction. Current calibration, sampling design, and
 group/time validity must be measured before interpreting ledger scores as
 psychometric accuracy.
 
+### Hybrid LLM attribution correction, 2026-09-09
+
+Reviewed the authors' [version-one text](https://arxiv.org/html/2404.14618v1),
+especially Sections 2–3. Model choice based on predicted quality gaps does not
+establish sync/batch transport choice. Removed that attribution from the paper
+index; no runtime policy changed. In psychometric work, request urgency and
+batchability must not become unvalidated proxies for item difficulty. A policy
+combining these signals needs separately identified constructs and observed
+outcome validation. Existing `test_paper_contracts.py` checks role/trace behavior
+and citation strings, not faithful paper reproduction or empirical validity.
+
 ## APA 7 references
 
 ### Multilevel follow-up source (2026-09-09)
@@ -81,6 +92,11 @@ Rubin, D. B. (2013). *Bayesian data analysis* (3rd ed.). CRC Press.
 Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
 Computer Communication Review, 18*(4), 314–329.
 https://doi.org/10.1145/52325.52356
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Ruhle, V.,
+Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient
+and quality-aware query routing*. arXiv.
+https://doi.org/10.48550/arXiv.2404.14618
 
 Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping unobserved
 item–respondent interactions: A latent space item response model with interaction

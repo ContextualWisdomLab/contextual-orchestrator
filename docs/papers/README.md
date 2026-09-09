@@ -83,9 +83,11 @@ archives include tracked PDFs and require a separate redistribution decision.
   Ankur Mallick, Chi Wang, Robert Sim, Subhabrata Mukherjee, Victor Rühle,
   Laks V. S. Lakshmanan, Ahmed Hassan Awadallah. arXiv:2404.14618 (ICLR 2024).
   `hybrid-llm-query-routing-2404.14618.pdf`
-  Grounds **latency-tolerant vs interactive routing** and the sync/batch split:
-  route easy/bulk queries to the cheaper path, keep hard/interactive queries on
-  the responsive path. Version-page license: CC BY-NC-ND 4.0;
+  Supports selecting between small and large models using predicted response
+  quality differences and a configurable quality target. It does not establish
+  this repository's sync/batch transport policy or equate bulk requests with
+  easy items. Those are separate product decisions requiring their own evidence.
+  Version-page license: CC BY-NC-ND 4.0;
   source: https://arxiv.org/abs/2404.14618.
 
 ## Role reasoning-effort profiles
