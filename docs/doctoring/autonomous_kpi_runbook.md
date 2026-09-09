@@ -289,3 +289,17 @@ PR. Hosted checks on the new head: both CodeQL jobs success; `Tests and
 package quality` and `Property and coverage-guided fuzzing` still in
 progress; no reviews posted. No merge, readiness change, or push to the
 owner stack was attempted. Unit evidence only.
+
+## Re-observation, 2026-09-09 (PR #1109 same head, PR #1108 unknown)
+
+Loop HEAD `9e08f1448f23a22d10c99f3899021d241910f636` is in sync with
+`origin/autoresearch/20260909-kpi-loop`. PR #1109 head is unchanged
+(`b8d2651d`), so the 19-pass isolated verification stands without
+rerun. Hosted movement since last observation: `Property and
+coverage-guided fuzzing` moved from in-progress to success; `Tests and
+package quality` remains in progress; still no reviews; state remains
+`unstable`, so the merge bar is still unmet and nothing was merged,
+flipped, or pushed across branches. PR #1108 reports
+`mergeable: null` / `mergeable_state: unknown` (GitHub recomputing the
+dirty computation); still not actionable from this loop. Open-PR
+recount 88 (baseline 85).

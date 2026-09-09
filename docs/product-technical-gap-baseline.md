@@ -2971,3 +2971,17 @@ no merge, readiness change, or cross-session push was attempted.
   explicitly names gap development plus ContextualWisdomLab repository
   and connector linkage under responsibility boundaries, so scheduled
   passes do not idle after the PR list drains.
+
+## 2026-09-09 Autoresearch loop: PR #1109 fuzzing green, tests pending, failure-never-idles rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 head unchanged (`b8d2651d`): fuzzing success is
+new since last turn, tests still in progress, no reviews, still
+`unstable` — the prior 19-pass isolated verification stands and no
+merge was attempted. #1108 mergeability is `unknown` (recomputing);
+#1094 remains protection-blocked.
+
+- **Hourly prompt (this hour):** a failing check never idles the loop —
+  fix and rerun owned failures immediately while continuing safe
+  independent work, and codify manual workarounds with log-grounded RCA
+  for PYTHONPATH, Actions, and execution errors.

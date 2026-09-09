@@ -58,7 +58,10 @@ contract rather than an inferred ranking:
    PR that updates the baseline file. When the PR queue is exhausted, continue
    with gap development and merges plus ContextualWisdomLab repository and
    connector linkage under responsibility boundaries, without waiting on
-   review or Checks for unrelated work.
+   review or Checks for unrelated work. A failing check never idles the
+   loop: fix and rerun what you own immediately while continuing safe
+   independent work; codify manual workarounds into code or config and
+   root-cause PYTHONPATH, Actions, and execution errors from logs.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
