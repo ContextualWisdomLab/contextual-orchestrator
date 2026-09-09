@@ -1,5 +1,14 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Request-to-provider diagnostic correlation
+
+PR #1105 candidate `8b82235e2b6db19682b0a255758c6796c41b3f55` connects HTTP
+error identity to seven provider diagnostic events (68 focused tests passed).
+The [runbook](doctoring/provider_request_correlation.md) records RED evidence,
+cleanup tests, limitations, and the central collector compatibility prerequisite.
+Not yet established: simultaneous HTTP isolation, full-suite/security gates,
+protected release, actual collector adoption, or customer KPI improvement.
+
 ## 2026-09-08 error-response correlation repair
 
 ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
