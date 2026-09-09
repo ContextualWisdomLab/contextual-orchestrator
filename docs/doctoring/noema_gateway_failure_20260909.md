@@ -44,6 +44,23 @@ accuracy evidence. Preserve the failed request in the operational denominator.
 
 ## Existing repair ownership
 
+### Stack-validation owner dependency
+
+At inspection, PR #1066 (`ci(security): materialize stacked-PR validation on
+trusted branch`) remains open at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad`.
+Its [Noema job 101609961568](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34073907313/job/101609961568)
+reports HTTP 502 after 1806.8s at 2026-09-07T05:06:50Z, with one caller
+attempt and a reported served model. This does not count internal provider
+attempts or establish a particular timeout mechanism.
+Its [Strix job 101610071110](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34073907351/job/101610071110)
+reports failure after 6819s using `orchestrator/free`, explicitly saying that
+authoritative vulnerability analysis could not complete. The message lists
+several possible backend causes; it does not distinguish them. Neither failed
+review is a vulnerability-free verdict, and neither duration is decision p95.
+Keep this owner dependency open while diagnosing the gateway and verdict paths;
+do not bypass stacked-PR review or interpret ordinary security-job success as
+completion of these model-backed reviews. No rerun was dispatched in this audit.
+
 PR [#1053](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1053)
 already owns removal of the implicit model timeout. On inspection its head is
 `76c047585f54fcbe940fe168412f51627d3f79dd`, base `main`, and it remains Draft.
