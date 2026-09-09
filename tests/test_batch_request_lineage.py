@@ -180,6 +180,10 @@ def test_library_batch_without_state_store_keeps_legacy_submission():
         )])
         assert job.request_link_status == "unavailable"
         assert job.job_id == "batch-789"
+        # Legacy metadata without a deployment binding remains usable only
+        # while the injected backend also has no recovery identity configured.
+        coordinator.batch_backend._jobs[job.job_id].pop("recovery_identity")
+        assert coordinator.poll_batch(job.job_id)["is_complete"] is True
     finally:
         orchestrator.close()
 
