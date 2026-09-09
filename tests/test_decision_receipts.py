@@ -10,6 +10,34 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+@pytest.mark.parametrize("diagnostic_count", [16, 17])
+def test_diagnostic_window_cap_preserves_shared_admissions(tmp_path, diagnostic_count):
+    """One noisy request cannot remove another admitted request from the export."""
+    from contextual_orchestrator.orchestrator import _StateStore
+    from contextual_orchestrator.decision_receipts import export_decision_receipts
+    store = _StateStore(tmp_path / "state.db")
+    try:
+        for request_id in ("outside_cohort", "quiet_request", "noisy_request"):
+            store.save("accepted_request", None, {"request_id": request_id}, durable=True)
+        store.save("auxiliary_dispatch", "outside_cohort",
+                   {"request_id": "outside_cohort"}, durable=True)
+        for index in range(diagnostic_count):
+            store.save("auxiliary_dispatch", "noisy_request",
+                       {"request_id": "noisy_request", "test_index": index}, durable=True)
+        exported = export_decision_receipts(store, limit=2)
+        assert exported["window"]["diagnostic_limit"] == 16
+        assert exported["window"]["diagnostic_truncated"] is (diagnostic_count > 16)
+        quiet, noisy = exported["observations"]
+        assert quiet["request_id"] == "quiet_request"
+        assert quiet["status"] == "unfinished"
+        assert quiet["auxiliary_dispatches"] == []
+        assert noisy["request_id"] == "noisy_request"
+        assert len(noisy["auxiliary_dispatches"]) == 16
+        assert all(row["request_id"] == "noisy_request" for row in noisy["auxiliary_dispatches"])
+    finally:
+        store.close()
+
+
 def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path):
     """Answer reuse has its own terminal outcome, never a copied provider timing."""
     from contextual_orchestrator.decision_receipts import export_decision_receipts
