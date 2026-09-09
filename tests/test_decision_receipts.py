@@ -430,6 +430,16 @@ def test_http_cold_and_cached_triage_keep_task_ack_after_auxiliary_work(tmp_path
         assert cold["first_provider_elapsed_ns"] < cold["selection_elapsed_ns"] <= cold["durable_ack_elapsed_ns"]
         assert warm["first_provider_phase"] != "structured_triage"
         assert warm["durable_ack_elapsed_ns"] is not None
+        from contextual_orchestrator.decision_receipts import export_decision_receipts
+        exported = export_decision_receipts(orchestrator._store)
+        cold_export, warm_export = exported["observations"]
+        assert cold_export["first_provider_boundary"] == "provider_ready_before_diagnostic_commit"
+        assert len(cold_export["auxiliary_dispatches"]) == 1
+        auxiliary = cold_export["auxiliary_dispatches"][0]
+        assert auxiliary["phase"] == "structured_triage"
+        assert auxiliary["outcome"] == "completed"
+        assert auxiliary["finished_elapsed_ns"] <= cold_export["selection_elapsed_ns"]
+        assert warm_export["auxiliary_dispatches"] == []
     finally:
         auxiliary_release.set()
         server.shutdown()

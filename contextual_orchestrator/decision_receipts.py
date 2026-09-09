@@ -66,6 +66,7 @@ class DecisionMeasurement:
             "durable_ack_elapsed_ns": self.receipt.durable_ack_elapsed_ns,
             "first_provider_elapsed_ns": self.receipt.first_provider_elapsed_ns,
             "first_provider_phase": self.first_provider_phase,
+            "first_provider_boundary": "provider_ready_before_diagnostic_commit",
             "metric_scope": "initial_task_route_decision",
         }
 
@@ -183,6 +184,9 @@ def export_decision_receipts(store, limit=256):
     accepted = cohort["accepted"]
     decisions = {row["request_id"]: row for row in cohort["decisions"]}
     receipts = {row["request_id"]: row for row in cohort["receipts"]}
+    diagnostics = {}
+    for diagnostic in cohort["diagnostics"]:
+        diagnostics.setdefault(diagnostic["request_id"], []).append(diagnostic)
     observations = []
     for admission in accepted:
         request_id = admission["request_id"]
@@ -193,6 +197,11 @@ def export_decision_receipts(store, limit=256):
             row["status"] = "acknowledgement_unobserved"
         if request_id in receipts:
             row.update(receipts[request_id])
+        request_diagnostics = diagnostics.get(request_id, [])
+        row["auxiliary_dispatches"] = [entry for entry in request_diagnostics
+                                      if entry["record_kind"] == "auxiliary_dispatch"]
+        row["provider_diagnostics"] = [entry for entry in request_diagnostics
+                                      if entry["record_kind"] == "provider_dispatch"]
         observations.append(row)
     return {
         "schema_version": 1,

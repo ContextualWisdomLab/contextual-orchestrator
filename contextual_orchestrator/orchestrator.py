@@ -3761,6 +3761,7 @@ class _StateStore:
                 raise ValueError("measurement admission identity mismatch")
             request_ids = [row["request_id"] for row in accepted]
             phases = []
+            diagnostics = []
             if request_ids:
                 placeholders = ",".join("?" for _ in request_ids)
                 phases = self._conn.execute(
@@ -3770,6 +3771,16 @@ class _StateStore:
                     "ORDER BY seq DESC LIMIT ?",
                     (*request_ids, 2 * limit + 1),
                 ).fetchall()
+                diagnostics = self._conn.execute(
+                    "SELECT kind, key, payload FROM orchestration_records "
+                    "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
+                    "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
+                    (*request_ids, 8 * limit + 1),
+                ).fetchall()
+            diagnostic_truncated = len(diagnostics) > 8 * limit
+            diagnostics = list(reversed(diagnostics[:8 * limit]))
+            if any(key != json.loads(payload).get("request_id") for _, key, payload in diagnostics):
+                raise ValueError("measurement diagnostic identity mismatch")
             phase_truncated = len(phases) > 2 * limit
             phases = list(reversed(phases[:2 * limit]))
             if any(key != json.loads(payload).get("request_id") for _, key, payload in phases):
@@ -3782,7 +3793,9 @@ class _StateStore:
             "accepted": accepted,
             "decisions": [json.loads(payload) for kind, _, payload in phases if kind == "initial_decision"],
             "receipts": [json.loads(payload) for kind, _, payload in phases if kind == "decision_receipt"],
+            "diagnostics": [{"record_kind": kind, **json.loads(payload)} for kind, _, payload in diagnostics],
             "window": {"limit": limit, "truncated": truncated, "phase_truncated": phase_truncated,
+                       "diagnostic_limit": 8 * limit, "diagnostic_truncated": diagnostic_truncated,
                        "unresolved_legacy_identity": unresolved_legacy,
                        "first_admission_seq": admissions[0][0] if admissions else None,
                        "last_admission_seq": admissions[-1][0] if admissions else None},
