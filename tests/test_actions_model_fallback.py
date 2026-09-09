@@ -68,7 +68,7 @@ def _post(port: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | str
         return exc.code, json.loads(exc.read().decode("utf-8")), "application/json"
 
 
-def _free_agents() -> list[ModelAgent]:
+def _free_agents(group_name: str = "") -> list[ModelAgent]:
     return [
         ModelAgent(
             "primary_free_agent",
@@ -76,6 +76,7 @@ def _free_agents() -> list[ModelAgent]:
             priority=10,
             provider_name="primary",
             tags=("cost:free", "reasoning", "coding"),
+            group_name=group_name,
         ),
         ModelAgent(
             "fallback_free_agent",
@@ -83,6 +84,7 @@ def _free_agents() -> list[ModelAgent]:
             priority=1,
             provider_name="fallback",
             tags=("cost:free", "reasoning", "coding"),
+            group_name=group_name,
         ),
     ]
 
@@ -588,7 +590,9 @@ def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
 def test_http_virtual_free_response_format_reselects_after_retryable_502() -> None:
     """Noema-shaped virtual+response_format walks off a 502 synthesizer."""
     client = _StructuredFailThenServeClient()
-    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    orchestrator = TaskOrchestrator(
+        _free_agents("free_replica_group"), client=client
+    )
     server = build_server(
         orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
     )
@@ -620,6 +624,18 @@ def test_http_virtual_free_response_format_reselects_after_retryable_502() -> No
     assert "retryable_transport" in outcomes
     assert outcomes[-1] == "served"
     assert route.get("terminal_reason") == "served"
+    assert (
+        orchestrator._group_router.member_report("primary_free_agent")[
+            "failure_count"
+        ]
+        == 1
+    )
+    assert (
+        orchestrator._group_router.member_report("fallback_free_agent")[
+            "success_count"
+        ]
+        == 1
+    )
 
 
 def test_http_named_model_response_format_stays_sticky_on_502() -> None:
@@ -780,6 +796,38 @@ def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
     assert message["tool_calls"][0]["function"]["name"] == "inspect_repository"
     assert body["choices"][0]["finish_reason"] == "tool_calls"
     assert body["orchestration"]["mode"] == "route"
+
+
+def test_http_tools_reject_deferred_batch_routing() -> None:
+    """Tool calls cannot enter a batch contract that omits tool controls/results."""
+    orchestrator = TaskOrchestrator(_free_agents())
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        responses = [
+            _post(
+                server.server_address[1],
+                {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": "scan later"}],
+                    "tools": _TOOLS,
+                    "tool_choice": "required",
+                    "routing": {"channel": "batch"},
+                },
+            )
+            for model_name in (TaskOrchestrator.FREE_MODEL, "primary-free-model")
+        ]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    for status, body, _content_type in responses:
+        assert status == 400, body
+        assert isinstance(body, dict)
+        assert body["error"]["code"] == "invalid_routing"
 
 
 def test_conduct_does_not_forward_tools_to_non_worker_roles() -> None:

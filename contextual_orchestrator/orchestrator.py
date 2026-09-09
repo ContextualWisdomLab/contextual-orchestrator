@@ -4997,6 +4997,8 @@ class TaskOrchestrator:
                         ):
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
+                            if candidate.group_name:
+                                self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
                         if not isinstance(classified, ProviderUpstreamError):
@@ -5005,6 +5007,8 @@ class TaskOrchestrator:
                             last_retryable = classified
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
+                            if candidate.group_name:
+                                self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
                         if (
@@ -5015,6 +5019,8 @@ class TaskOrchestrator:
                             last_model_not_found = classified
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
+                            if candidate.group_name:
+                                self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
                         raise attach_route(
@@ -5049,6 +5055,7 @@ class TaskOrchestrator:
                     final_agent.group_name
                     and not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
+                    and not synthesis_failure_recorded
                 ):
                     self._group_router.observe_failure(final_agent.id)
                 raise
@@ -6788,7 +6795,8 @@ class TaskOrchestrator:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
-                steps = self._plan_generated(task)
+                with self.client.suppress_request_tools():
+                    steps = self._plan_generated(task)
                 plan_source = "generated"
             except BudgetExceededError:
                 raise

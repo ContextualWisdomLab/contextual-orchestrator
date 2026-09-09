@@ -83,6 +83,18 @@ push or open a PR.
   use them. One OpenCode Zen credential discovers the separate Zen and Go
   catalogs; only explicit zero-cost capability evidence admits either source
   to `orchestrator/free`.
+- Tool-bearing chat requests stay synchronous. Reject explicit deferred/batch
+  routing before dispatch because the batch contract does not carry tool
+  controls or returned tool calls. Generated planners, verifiers, and
+  synthesizers suppress caller tools; only worker calls receive them. Every
+  grouped structured-synthesis failure updates both the circuit breaker and
+  group stability exactly once, including failure followed by successful
+  failover.
+- A live 2026-09-09 Bytez catalog check with a configured credential returned
+  zero `task=chat` rows, while unfiltered and `text-generation` requests
+  returned HTTP 500. Treat this as provider/runtime evidence, not proof of an
+  endpoint or credential defect; keep Bytez absent from the active catalog
+  until a non-empty authenticated listing succeeds.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
   three-stage CI review pipeline defined in `ContextualWisdomLab/.github`

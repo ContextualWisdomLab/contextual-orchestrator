@@ -6950,6 +6950,22 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     include_usage = sampling["include_usage"]
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    if tools_list:
+                        deferred_tool_request = routing and (
+                            routing.get("channel") == "batch"
+                            or routing.get("latency_tolerant") is True
+                            or routing.get("priority") == "bulk"
+                        )
+                        if deferred_tool_request:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "tool calls require synchronous routing",
+                            )
+                        routing = {**(routing or {}), "channel": "sync"}
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     # Virtual selectors stay on Fugu route / TRINITY-Conductor
@@ -7031,9 +7047,7 @@ def build_server(
                             )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(
-                                body.get("routing"), allow_endpoint=True
-                            )
+                            structured_routing = routing
                             if structured_routing and (
                                 structured_routing.get("channel") == "batch"
                                 or structured_routing.get("latency_tolerant") is True
@@ -7139,9 +7153,6 @@ def build_server(
                         self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(
-                        body.get("routing"), allow_endpoint=True
-                    )
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough

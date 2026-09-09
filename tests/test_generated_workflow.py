@@ -47,9 +47,11 @@ class _PlannerClient(ModelClient):
         super().__init__()
         self.plan_text = plan_text
         self.calls: list[list[dict]] = []
+        self.tool_settings: list[object] = []
 
     def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
         self.calls.append(messages)
+        self.tool_settings.append(self.request_settings_snapshot().get("tools"))
         if len(self.calls) == 1:
             return self.plan_text
         return f"step-output({len(self.calls) - 1})"
@@ -74,6 +76,19 @@ def test_generated_plan_executes_with_natural_language_subtasks() -> None:
     assert [row["subtask"] for row in result["trace"]] == [s["subtask"] for s in PLAN["steps"]]
     assert result["answer"] == "step-output(2)"  # fail-closed judge leaves the worker answer
     assert len(client.calls) == 5  # 1 planner call + 4 steps; missing fast-mlsirm fails closed
+
+
+def test_generated_planner_does_not_receive_caller_tools() -> None:
+    """Only generated workflow workers may receive caller tool controls."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    tools = [{"type": "function", "function": {"name": "inspect_repo"}}]
+
+    with client.request_settings(tools=tools, tool_choice="required"):
+        orchestrator.conduct([{"role": "user", "content": "solve it"}])
+
+    assert client.tool_settings[0] is None
+    assert client.tool_settings[1:3] == [tools, tools]
+    assert client.tool_settings[3:] == [None, None]
 
 
 def test_access_lists_actually_isolate_context() -> None:
