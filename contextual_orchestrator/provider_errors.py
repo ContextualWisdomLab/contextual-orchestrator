@@ -182,6 +182,7 @@ class ProviderUpstreamError(RuntimeError):
         provider_status: int | None = None,
         retryable: bool = False,
         transport: str = "chat",
+        extra_detail: dict[str, Any] | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.model = model
@@ -190,18 +191,21 @@ class ProviderUpstreamError(RuntimeError):
         self.provider_status = provider_status
         self.retryable = retryable
         self.transport = transport
+        self.extra_detail = dict(extra_detail or {})
         super().__init__(message)
 
     @property
     def detail(self) -> dict[str, Any]:
         """Return the structured evidence attached to API error payloads."""
-        return {
+        payload = {
             "agent_id": self.agent_id,
             "model": self.model,
             "provider_status": self.provider_status,
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        payload.update(self.extra_detail)
+        return payload
 
 
 def classify_provider_failure(
@@ -230,6 +234,7 @@ def classify_provider_failure(
             provider_status=exc.provider_status,
             retryable=exc.retryable,
             transport=transport,
+            extra_detail=exc.extra_detail,
         )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code

@@ -96,7 +96,8 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 - `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the stdlib HTTP/admin surface remains sufficient).
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
 - `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
-- `model_discovery.py` — auto-discovers models per KV-registered provider credential (OpenAI, OpenRouter, NVIDIA NIM + its `_SUB` sibling, Bytez) via `discover_all_models`, then ranks discovered models by honest price (`select_top_n_cheapest_discovered_agents`, which `select_bootstrap_discovered_agents` layers provider-diverse selection on top of) for first-boot pool bootstrapping.
+- `model_discovery.py` — auto-discovers models per KV-registered provider credential (OpenAI, OpenRouter, OpenCode Zen and Go, NVIDIA NIM + its `_SUB` sibling, Bytez) via `discover_all_models`, then ranks discovered models by honest price (`select_top_n_cheapest_discovered_agents`, which `select_bootstrap_discovered_agents` layers provider-diverse selection on top of) for first-boot pool bootstrapping. `OPENCODE_ZEN_API_KEY` is one credential for two independently discovered OpenCode catalogs; review bootstrap must register it explicitly or use the accepted-provider default.
+- Tool-bearing chat requests are rejected before dispatch when effective `RoutingPolicy` precedence resolves to batch. Generated planning and non-worker conduct roles suppress caller tools when the client supports that optional scope; structured virtual workers keep them while final synthesis strips them. Grouped and `free_only` structured synthesis records each attempted member once across failure and success. Streaming preserves every pre-byte failed attempt as a trace and usage row, marks unreported usage unavailable, and excludes HTTP 413 from member-health failures. Live Bytez catalog evidence from 2026-09-09 remains degraded: `task=chat` returned zero rows and the other tested list shapes returned HTTP 500.
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
 - `__main__.py` — the single entry point: CLI completion, `--serve`, `--eval`, and the `register-credential` bootstrap subcommand.
 
@@ -119,3 +120,10 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+
+## Tool-call handoffs
+
+Return worker tool calls before text-answer judging or later workflow roles;
+a handoff does not establish completed tool execution or answer quality.
+Preserve stream indices and request isolation. Reproduction and release-proof
+boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).

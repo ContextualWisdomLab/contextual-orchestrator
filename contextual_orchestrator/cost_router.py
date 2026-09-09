@@ -191,12 +191,7 @@ class CostRoutingCoordinator:
             self._race_usage_context.reset(token)
         race_usage = []
         for endpoint_id, value in context["pending_usage"]:
-            if isinstance(value, tuple) and len(value) == 3:
-                usage = value[2]
-            elif isinstance(value, dict):
-                usage = value.get("usage")
-            else:
-                usage = None
+            usage = self._race_result_usage(value)
             counts = self._provider_usage(usage)
             if counts is not None:
                 race_usage.append({
@@ -449,6 +444,18 @@ class CostRoutingCoordinator:
             return None
         return prompt, completion
 
+    @staticmethod
+    def _race_result_usage(value: Any) -> Any:
+        """Extract usage from ordinary and tool-call endpoint-race results."""
+        if isinstance(value, tuple):
+            if len(value) == 3:
+                return value[2]
+            if len(value) == 5:
+                return value[3]
+        if isinstance(value, dict):
+            return value.get("usage")
+        return None
+
     def record_async_video_usage(self, *, agent: Any, usage: Any, gateway_job_id: str):
         """Idempotently ledger concrete async-video counts reported by a provider."""
         counts = self._provider_usage(usage)
@@ -471,11 +478,7 @@ class CostRoutingCoordinator:
         if not context["workflow_ready"]:
             context["pending_usage"].append((endpoint_id, value))
             return
-        usage = None
-        if isinstance(value, tuple) and len(value) == 3:
-            usage = value[2]
-        elif isinstance(value, dict):
-            usage = value.get("usage")
+        usage = self._race_result_usage(value)
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
