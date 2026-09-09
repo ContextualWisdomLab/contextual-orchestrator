@@ -2,6 +2,18 @@
 
 ## Stacked quality-trigger repair
 
+Lineage correction: existing PR #1066 at
+`59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already owns the complete trigger
+repair, including Ready/closed admission and PR-only cancellation. The partial
+repair below duplicated its base-filter change. Integrate that branch normally,
+retain its complete workflow and tests, and consolidate the extra path-filter
+and event-permission assertions into `tests/test_repository_security_metadata.py`.
+The duplicate `tests/test_stacked_quality_workflow.py` is removed only after those
+assertions are preserved. Run the canonical metadata tests plus the NIM workflow
+contracts and actionlint. Neither #1066 nor its predecessor #1060 is closed by
+this integration; protected delivery is still required. Historical commands and
+results below remain attached to their original revisions.
+
 On 2026-09-09, PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c`
 had zero GitHub check runs despite a completed local suite (3,399 passed,
 2 skipped). Its base was `autoresearch/20260909-kpi-loop`, excluded by the

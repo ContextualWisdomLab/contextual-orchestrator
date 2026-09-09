@@ -148,6 +148,6 @@ push or open a PR.
 
 Zero check runs on a stacked PR can mean its base was excluded by
 `pull_request.branches: [main]`, not that checks passed. Keep the repository
-quality trigger unfiltered and validate `tests/test_stacked_quality_workflow.py`
+quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
 plus actionlint. After a new head, verify actual hosted execution; previous-head
 results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).

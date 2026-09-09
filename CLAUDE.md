@@ -118,7 +118,7 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 - **Stacked quality checks**: zero check runs can result from the former
   `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
-  trigger unfiltered, run `tests/test_stacked_quality_workflow.py` and actionlint,
+  trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
   and verify hosted execution after each new head. Earlier-head results are
   historical, not current approval. Reproduction and limits:
   [owner runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).

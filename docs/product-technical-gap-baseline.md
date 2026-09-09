@@ -2,6 +2,15 @@
 
 ## 2026-09-09 Stacked quality-trigger repair
 
+Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
+owns this repair and its Ready/closed admission checks. The partial local repair
+described below missed that lineage. Its full branch is now being integrated
+without force, with the extra filter/permission assertions consolidated into
+the owner's `tests/test_repository_security_metadata.py`. The duplicate test
+file is removed after preserving those assertions. #1066 and #1060 stay open;
+integration is not protected delivery. The current #1108 hosted run is preserved
+at `c11df645` and does not validate this later consolidation.
+
 At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
 Security and Quality workflow filters pull requests to `main`. PR #1108 targets
 another PR branch, so its zero check-run count is consistent with this trigger
