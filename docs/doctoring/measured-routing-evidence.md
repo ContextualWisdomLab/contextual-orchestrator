@@ -131,6 +131,26 @@ Local inspection artifacts: `/tmp/lsirm-10229440.pdf` and
 
 ### Existing references
 
+Kang, I., & Jeon, M. (2025). Multidimensional latent space item response models:
+A note on the relativity of conditional dependence. *Psychometrika, 90*(2),
+799–826. https://doi.org/10.1017/psy.2025.5
+
+Read receipt (2026-09-09): publisher abstract and model introduction, plus
+[supplement S1, pages 1–3](https://static.cambridge.org/content/id/urn%3Acambridge.org%3Aid%3Aarticle%3AS0033312325000055/resource/name/S0033312325000055sup001.pdf).
+The paper extends Rasch-based latent-space models with between-item dimensions
+and discrimination. Conditional dependence is relative to what the base model
+explains. Engineering inference: CO comparison evidence should retain base
+formulation and dimensional structure; residual-dependence values from different
+models are not automatically interchangeable quality scores.
+
+Direct visual inspection of supplement page 2 (1082 × 1400) confirmed a
+declaration of `log_gamma` followed by `lambda = exp(log_lambda)`; S1's extracted
+pages 1–3 contain no declaration of `log_lambda`. This is a published-example
+name mismatch, not a compiler-run result or evidence against the reported
+empirical findings. No Stan execution or Rust port was performed. Reconcile
+the executable source before reproduction; fast-mlsirm issue #1713 remains
+the candidate-specification owner, not permission to add estimation to CO.
+
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176
