@@ -150,6 +150,40 @@ Separate initial decisions from failover attempts and never substitute a complet
 workflow record written after generation for the initial decision acknowledgement.
 This specifies the required boundary; it does not claim instrumentation exists.
 
+Use one admission identity per validated HTTP request, not per execution-slot
+acquisition, provider retry, or file replica. Declare separate units for batch
+items and non-generation operations. Start the clock before extracting the
+policy snapshot or preparing measurement records. A handled streaming error
+before selection remains a selection failure even when no exception reaches
+the finalizer; a later delivery failure must not rewrite an already acknowledged
+initial decision as if its persistence failed. Outcome and initial-decision
+statuses are separate observations. These requirements follow the concrete
+pre-release review of candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` in
+#1110; verification of the repaired implementation remains open.
+
+### Auxiliary dispatch and task-route decision
+
+The first upstream call is not necessarily the task-route decision. Automatic
+routing can obtain embedding evidence and a model-backed complexity verdict
+before choosing task execution. Record these as separate phases. An
+`initial_provider_dispatch` receipt is diagnostic evidence, not automatically
+`routing_decision_latency_p95`.
+
+For the headline routing interval, stop after durable acknowledgement of the
+initial task-execution route, before its generation starts. Include any earlier
+evidence acquisition and triage required to choose that route; report those
+component durations separately rather than subtracting them from elapsed time.
+Thus “excluding upstream generation” excludes generation after that decision,
+not earlier model work required to make it. Cache hits need explicit evidence
+and the same endpoint definition; changing endpoint or cache mix cannot establish
+a speedup. Later failover decisions remain separate attempts.
+
+This clarification follows the direct auxiliary calls found at candidate
+`07957ee643bf74c5beb13c03827f59331307cc5d` in #1110. Tests must distinguish
+cached and uncached triage, embedding evidence, and task execution. Existing
+first-dispatch tests do not prove this headline interval; its implementation
+and observed-workload baseline remain open.
+
 ### Autonomous experiment targets
 
 These are engineering acceptance targets selected on 2026-09-09, not measured

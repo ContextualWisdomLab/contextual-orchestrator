@@ -256,3 +256,49 @@ use* (Research Memorandum No. RM-19-07). Educational Testing Service.
 https://www.ets.org/Media/Research/pdf/RM-19-07.pdf
 
 The report states all rights reserved. Link and citation only; no PDF vendored.
+## DOI discovery register
+
+The links below are explicit citations found in tracked source and documentation,
+not newly reviewed papers or verified implementation evidence. Some identify
+standards rather than papers. Existing citation discussions remain authoritative;
+this register prevents DOI-only sources from escaping the discovery inventory.
+Case and sentence-final punctuation are normalized by the inventory test.
+
+- [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
+- [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
+- [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
+- [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
+- [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
+- [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
+- [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
+- [DOI 10.1111/rssc.12569](https://doi.org/10.1111/rssc.12569)
+- [DOI 10.1145/2043556.2043566](https://doi.org/10.1145/2043556.2043566)
+- [DOI 10.1145/2080.357392](https://doi.org/10.1145/2080.357392)
+- [DOI 10.1145/2408776.2408794](https://doi.org/10.1145/2408776.2408794)
+- [DOI 10.1145/362384.362685](https://doi.org/10.1145/362384.362685)
+- [DOI 10.1145/38713.38742](https://doi.org/10.1145/38713.38742)
+- [DOI 10.1145/52325.52356](https://doi.org/10.1145/52325.52356)
+- [DOI 10.1287/opre.2016.1582](https://doi.org/10.1287/opre.2016.1582)
+- [RFC 4193](https://doi.org/10.17487/RFC4193)
+- [RFC 6265](https://doi.org/10.17487/RFC6265)
+- [RFC 6598](https://doi.org/10.17487/RFC6598)
+- [RFC 9110](https://doi.org/10.17487/RFC9110)
+- [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
+- [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
+- [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
+- [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
+- [arXiv 2404.14618 DOI](https://doi.org/10.48550/arXiv.2404.14618)
+- [arXiv 2406.18665 DOI](https://doi.org/10.48550/arXiv.2406.18665)
+- [arXiv 2512.04388 DOI](https://doi.org/10.48550/arXiv.2512.04388)
+- [arXiv 2512.04695 DOI](https://doi.org/10.48550/arXiv.2512.04695)
+- [arXiv 2601.17814 DOI](https://doi.org/10.48550/arXiv.2601.17814)
+- [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
+- [NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1)
+- [NIST SP 800-204](https://doi.org/10.6028/NIST.SP.800-204)
+- [NIST SP 800-207](https://doi.org/10.6028/NIST.SP.800-207)
+- [NIST SP 800-53r5](https://doi.org/10.6028/NIST.SP.800-53r5)
+- [NIST SP 800-57pt1r5](https://doi.org/10.6028/NIST.SP.800-57pt1r5)
+- [NIST SP 800-63b](https://doi.org/10.6028/NIST.SP.800-63b)
+- [NIST SP 800-92](https://doi.org/10.6028/NIST.SP.800-92)

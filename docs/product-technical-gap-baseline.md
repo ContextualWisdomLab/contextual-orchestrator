@@ -28,12 +28,22 @@ in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
 
 Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
 owns this repair and its Ready/closed admission checks. The partial local repair
-described below missed that lineage. Its full branch is now being integrated
+described below missed that lineage. Its full branch was integrated at `d721e04b`
 without force, with the extra filter/permission assertions consolidated into
 the owner's `tests/test_repository_security_metadata.py`. The duplicate test
 file is removed after preserving those assertions. #1066 and #1060 stay open;
-integration is not protected delivery. The current #1108 hosted run is preserved
-at `c11df645` and does not validate this later consolidation.
+integration is not protected delivery. The #1108 hosted run
+`34316962950` at `c11df645` completed with **1 failed, 3,399 passed, 2 skipped
+in 737.97 seconds**. The single failure was the existing metadata assertion
+for the old concurrency key, omitted by the partial repair. Fuzz and
+CodeQL/supply-chain/SBOM jobs passed. This was a contract-update omission,
+not a flaky test. Full #1066 inheritance repairs that assertion.
+
+The non-force integrated #1108 head `129a665016ed1acd79ae12915c905b1020856fcc`
+passed **42 metadata, NIM workflow, and persistence tests in 4.19 seconds**;
+actionlint and diff-check also passed. New hosted run `34318012080` was queued
+at the latest observation. Neither the historical full-suite result nor focused
+success proves current-head hosted completion, independent approval, or release.
 
 At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
 Security and Quality workflow filters pull requests to `main`. PR #1108 targets
@@ -3161,3 +3171,58 @@ or cross-session push was attempted.
   official release a precondition — cut owner/consumer cycles with a
   minimal contract, port, or ACL and complete independently verifiable
   functionality first.
+
+### PR #1108 terminal repair evidence, 2026-09-09
+
+At head `129a665016ed1acd79ae12915c905b1020856fcc`, base
+`2996cd3c360444b792d499f3b09a783abdd830c2`, hosted run
+[34318012080](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34318012080)
+completed successfully. Checkout log records merge `9516d1d` of those revisions;
+tests job `102358241912` reports **3400 passed, 2 skipped, 734.73 seconds**, plus
+134 package/docstring checks passed in 10.61 seconds. All four actual check runs
+were successful. This supersedes the earlier metadata-assertion failure for
+current-head CI only; it does not erase that failure or establish a protected
+release. The Ready PR still has no reviews. Next gate: independent review and
+protected stack integration, preserving the canonical #1066 workflow delta.
+
+Research source `7734e89c` adds the bounded Bolsinova–Tijmstra response-time
+follow-up and prohibits outcome leakage in the proposed joint-model comparison.
+The DOI discovery check caught its missing inventory entry (one failing test);
+after linking the source, all six paper contracts passed in 6.23 seconds.
+No observed-task accuracy or decision-latency improvement has been measured.
+
+### Decision-measurement pre-release review, 2026-09-09
+
+Candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` for
+[issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597096146)
+is not release-ready. Read-only call-site review found that server `_run`
+is called inside embedding retry loops and file-replica deletion. Admission
+inside that helper counts attempts as requests and starts some clocks after
+selection. Repair: one validated request-owned admission, explicit endpoint and
+measurement unit, separate attempts, and a first-failure/second-success regression
+that retains exactly one admission. File operations and evaluation batches must
+not silently become individual generation samples.
+
+The automatic proxy also acknowledged selection before file binding and effort
+configuration could reject the request. Move acknowledgement after those checks,
+immediately before transport, and prove rejection produces neither dispatch nor
+a committed decision. The existing persistence store does not bound the three
+new receipt kinds; all-record export is unbounded in memory. Cohort-aware export
+and explicit retention remain required. A successful isolated package test does
+not resolve these semantic findings. The assigned implementation agent is repairing
+them; no routing default or release was changed.
+
+Integration checkpoint `07957ee643bf74c5beb13c03827f59331307cc5d` normally
+merges #1108 head `129a6650` into the measurement branch. The implementation
+agent reports terminal receipt/persistence verification: **34 passed in 5.88
+seconds**; this is focused local evidence, not full CI or package acceptance.
+The checkpoint still needs per-invocation race identity, indexed phase lookup,
+trusted HTTP identity integration, and remaining endpoint coverage.
+
+A root-run in-memory SQLite plan comparison used the checkpoint's table and
+index definitions: the JSON-filtered phase query searches only by `kind`;
+the proposed `(kind, key, seq)` index with `key IN (...)` searches by both
+`kind` and `key`. Both plans use a temporary ordering B-tree. This validates
+the proposed lookup shape only, not a measured customer latency improvement.
+Keep historical records, validate migration identity, and test rollback before
+adopting the index/backfill. The implementation agent owns that change.

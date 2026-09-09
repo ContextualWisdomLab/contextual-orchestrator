@@ -141,3 +141,27 @@ is added here: neither observed training/held-out data nor released joint-model
 support has been verified. The next experiment must establish that baseline
 before claiming improvement, rather than using oracle-score fixtures as buyer
 evidence.
+
+### Conditional-dependence follow-up
+
+Bolsinova, M., & Tijmstra, J. (2019). Modeling differences between response
+times of correct and incorrect responses. *Psychometrika, 84*(4), 1018–1046.
+https://doi.org/10.1007/s11336-019-09682-5
+
+Read scope on 2026-09-09: publisher abstract and bibliographic information,
+not equations, supplementary material, or a reproduced experiment. The
+publisher page displays an online date in 2025, but its volume/issue identifies
+the article as December 2019; the citation uses the issue year.
+
+The abstract describes extensions that permit speed-model item parameters to
+differ for correct and incorrect responses, including separate latent speeds.
+It reports simulation and assessment-data applications, not LLM-routing results.
+This gives a concrete alternative to assuming conditional independence in the
+joint-model proposal above.
+
+Engineering inference: compare the independence baseline with this conditional
+model on the same held-out design. Correctness is unavailable at routing time:
+using the observed outcome to choose a speed component would leak the target.
+Any deployable prediction must marginalize unknown outcomes; oracle-conditioned
+fit is not a routing KPI. The fitting owner remains fast-mlsirm. No new request-path
+estimator or production default is introduced, and full-method review is pending.

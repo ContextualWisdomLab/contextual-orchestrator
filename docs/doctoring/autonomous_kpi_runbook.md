@@ -446,3 +446,39 @@ shows `DISPATCH_OUTCOME: success` with `VERDICT_STATE: pending`, and the
 job's own message states the dispatch workflow will rerun it after
 publishing the terminal verdict. Expected to self-heal; re-observe next
 turn. No push to any owner branch was made from this loop.
+
+## DOI discovery visual receipt, 2026-09-09
+
+Inspected the actual GitHub-rendered `docs/papers/README.md` at
+`ce6e029a63c4126e6c1d0a90f66eef64889a2955`, fragment
+`#doi-discovery-register`, in the in-app browser (tab 9, English,
+1265 × 712 viewport). The screenshot was opened and directly viewed in
+the task, not inferred from the accessibility tree. The heading, limitation
+paragraph, and first fifteen complete DOI links were readable, with no
+overlap or horizontal clipping in that viewport. The next link continues
+below the fold. This receipt does not cover the remaining links, other
+viewport sizes, keyboard focus, translated states, or product UI.
+
+The accompanying discovery contract passed all six tests in 1.36 seconds
+at that source revision. It inventories explicit DOI URLs in tracked text;
+it does not establish complete paper coverage, correct citation metadata,
+full-paper review, reproduction, or customer accuracy improvements.
+
+## Terminal dispatch-pending is not a live run
+
+On 2026-09-09, CO PR #1072 head
+`730801abfc53d46fb377c1be8b48857d89f6588c` still displayed failed CodeQL
+compatibility checks. Direct run API evidence for `33949006276` establishes
+`status=completed`, `conclusion=failure`, `run_attempt=1`, last update
+`2026-09-05T13:48:59Z`. Job `101298528075` logs record successful dispatch
+but `VERDICT_STATE=pending`. That historical pending value does not establish
+an active downstream run or a scheduled retry. Reconcile the exact-head verdict
+with its canonical publisher before deciding whether a repair or rerun is needed.
+
+`gh run view` failed while resolving workflow `348317201` (HTTP 404), but
+`gh api repos/ContextualWisdomLab/contextual-orchestrator/actions/runs/33949006276`
+and `gh api repos/ContextualWisdomLab/contextual-orchestrator/actions/jobs/101298528075/logs`
+both succeeded. Use those direct read-only endpoints when workflow resolution
+fails; do not infer absent logs or an absent run from that error. Central CI
+coordination was notified. No duplicate dispatch, gate weakening, or source fix
+was justified by this observation alone.
