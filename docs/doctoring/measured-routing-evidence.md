@@ -82,8 +82,27 @@ independently confirms the title and author list. The abstract distinguishes
 differences among individual schools from differences between school systems.
 This is a relevant methodological lead for preserving task/model/group levels,
 not evidence that CO's per-member Beta ledger implements a multilevel model.
-Full model review and suitability for gateway data remain open. No participant
+At that checkpoint, full model review and gateway suitability remained open. No participant
 data, attachments, private notes, or new Zotero records were copied or created.
+
+Follow-up at source `8352d155`: read the [version-5 HTML](https://arxiv.org/html/1810.07876v5),
+Sections 2–4.2 and the conclusion; supplements and implementation remain unverified.
+Section 3.2 constructs networks from products of binary responses and explicitly
+rejects treating both derived network families as conditionally independent.
+Section 3.4's displayed posterior uses the item-network family. Translation,
+rotation and reflection require equivalence-aware interpretation; Procrustes
+matching does not identify substantive axis meanings. Section 4.2 evaluates
+in-sample adjacency predictions using posterior means, not held-out request
+correctness or full posterior predictive checks. Section 5 notes potential
+computational advantages of simpler models. The paper does not establish CO's
+accuracy or decision-latency KPI. Dataset reuse requires permission.
+
+Proposed CO applicability check: retain repeated-task and model-revision identity
+before defining groups; do not force crossed observations into school nesting.
+The numerical owner must validate a common outcome estimand, group-held-out
+calibration and uncertainty before publishing a consumer contract. Keep fitting
+outside the request path unless measured latency supports otherwise. No routing
+default or estimator was changed by this reading.
 
 Jin, I. H., Jeon, M., Schweinberger, M., Yun, J., & Lin, L. (2022).
 Multilevel network item response modelling for discovering differences between
