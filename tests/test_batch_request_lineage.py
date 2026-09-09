@@ -245,7 +245,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids", "backend_write_outage", "healthy_expired", "healthy_deployment_mismatch"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids", "backend_write_outage", "healthy_expired", "healthy_deployment_mismatch", "healthy_endpoint_mismatch"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -277,7 +277,9 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
         coordinator = CostRoutingCoordinator(orchestrator,
             batch_backend=PgLlmBatchBackend(client, endpoint_alias=(
                 "changed-endpoint" if restarted and recovery_case == "backend_mismatch"
-                else "original-endpoint"), recovery_identity=(
+                else "original-endpoint"), endpoint=(
+                    "/v1/completions" if restarted and recovery_case == "healthy_endpoint_mismatch"
+                    else "/v1/chat/completions"), recovery_identity=(
                     None if restarted and recovery_case == "missing_identity" else
                     "different-deployment" if restarted and recovery_case in {"deployment_mismatch", "healthy_deployment_mismatch"}
                     else "unit-deployment-account")))
@@ -286,10 +288,10 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                 coordinator.batch_backend._jobs = MissingRegistry()
             else:
                 coordinator._batch_jobs = MissingRegistry()
-        elif recovery_case in {"coordinator_hit", "healthy_expired", "healthy_deployment_mismatch"}:
+        elif recovery_case in {"coordinator_hit", "healthy_expired", "healthy_deployment_mismatch", "healthy_endpoint_mismatch"}:
             from contextual_orchestrator.batch_routing import BatchJob
             coordinator._batch_jobs[submitted["job_id"]] = BatchJob(**record["recovery_descriptor"]["job"])
-            if recovery_case in {"healthy_expired", "healthy_deployment_mismatch"}:
+            if recovery_case in {"healthy_expired", "healthy_deployment_mismatch", "healthy_endpoint_mismatch"}:
                 coordinator.batch_backend._jobs = retained_backend_metadata
         elif recovery_case == "registry_outage":
             class UnavailableRegistry(MissingRegistry):
@@ -340,7 +342,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
             assert denied_status == 404
             assert "download_results" not in client.calls
             status, retrieved = _request("POST", result_url, "owner-one")
-            if recovery_case in {"expired", "malformed", "backend_mismatch", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "duplicate_ids", "healthy_deployment_mismatch"}:
+            if recovery_case in {"expired", "malformed", "backend_mismatch", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "duplicate_ids", "healthy_deployment_mismatch", "healthy_endpoint_mismatch"}:
                 assert status == 404, retrieved
                 assert "download_results" not in client.calls
                 continue
