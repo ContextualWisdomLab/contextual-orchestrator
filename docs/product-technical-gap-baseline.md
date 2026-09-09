@@ -1,5 +1,62 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 PR #971: unmodeled diversity displacement + full-pool ordering (fail-closed)
+
+Scope is the four-commit chain on branch
+`fix/model-group-timeout-openrouter` at exact head `838cbcb7`:
+`575148b9` fail-closed ambiguous bootstrap admission,
+`50b0c869` equal-price admission boundary cover,
+`7206c5f6` reject unmodeled diversity displacement,
+`838cbcb7` reject unmodeled full-pool ordering.
+
+`575148b9` `fix(routing): fail closed on ambiguous bootstrap admission`
+is the GREEN for the RED already recorded in the `2026-09-07 PR #971:
+fail-closed ambiguous bootstrap admission` entry above
+(`eeb9cc1bafe579032ab48778fa08c24e0b3f0aa1` RED, Security and Quality
+run `34071330949`, job `101589111271`, `2 failed, 3490 passed,
+2 skipped`). Referenced here, not re-argued: tied comparable-cost
+candidates fail closed with an operator action instead of letting
+lexical provider/model identity decide admission.
+
+`50b0c869` `test(routing): cover equal-price admission boundary` is
+test-only, no production change. It pins the equal-price tie boundary
+so the `575148b9` fail-closed rule has an executable contract on
+identical comparable-cost admission.
+
+`7206c5f6` `fix(routing): reject unmodeled diversity displacement` is
+the bounded-cutoff fail-closed GREEN. RED: a diversity proposal could
+displace a price-evidenced candidate at the cutoff without a modeled
+rule. GREEN: compare the diversity proposal against the price-evidenced
+sequence and reject unmodeled displacement instead of silently
+substituting. No new ranking, weight, quota, provider preference, or
+learned-quality claim is added.
+
+`838cbcb7` `test(routing): reject unmodeled full-pool ordering` is
+test-only at the exact head, no production change. It pins the
+complete-pool reordering boundary fail-closed: `tests/test_model_discovery_boundaries.py`
+`+28` and `tests/test_provider_bootstrap.py` `+15`. Unmodeled
+full-pool reordering fails closed rather than returning a silently
+re-ranked pool.
+
+Local verification on exact head `838cbcb7`:
+`tests/test_pr971_review_quality_regressions.py` `4 passed`,
+discovery/bootstrap selection `186 passed`,
+`interrogate` `100.0%` (`679/679`). `CodeRabbit` `52.2%` is stale
+(head moved since). Temporary source-fix workflows are already removed;
+only `tests/test_pr971_review_quality_regressions.py` remains. ADR 0032
+stays Proposed while PR #971 remains open.
+
+New gaps recorded, not resolved: issue `#1110` (measure
+accepted-request to durable route-decision latency, `OPEN 2026-09-09`)
+and issue `#1114` (export bounded authorized request-outcome
+associations, `OPEN 2026-09-09`) are absent from this baseline.
+
+Promotion contract still Draft: exact-head hosted `GREEN` is required
+(`Hypothesis`, `Atheris`, `CodeQL`, supply chain, `dependency-review`,
+`OSV`, `Trivy`, `Scorecard`, `coverage-evidence`, `opencode-review`,
+`strix`, `scan-pr-queue`) plus a qualifying review. The `strix`
+cancelled and `CodeQL`-compat failure are central-lane, not local.
+
 ## 2026-09-07 PR #971: fail-closed ambiguous bootstrap admission
 
 External review thread `PRRT_kwDOTB3CTs6eh3BQ` identified that both
