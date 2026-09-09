@@ -5,6 +5,34 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Completed observation-integrity verification
+
+PR #1109 code head `4cc0bf2c92181cb5ea175a1f1e1db1c8a85799bc` completed
+the three-file local psychometric regression command with **57 passed in
+1159.23s**, exit 0 (Python 3.13.14, fast-mlsirm 0.9.1). Process sampling during
+the run found Rust CAT/EAP reduction and thread joins on a heavily loaded host;
+this elapsed time is not routing-decision latency.
+Hosted job [102339210701](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34311594936/job/102339210701)
+completed full pytest with **3595 passed, 2 skipped in 791.75s**. Its tested
+merge `75d08ce905dc3d0c0468420bf4094a4cc7359ab3` has parents
+`84a6052369a7bf8b6faae5db475bb68a5ad54a91` and the code head above.
+These receipts supersede earlier pending-test observations, not the outstanding
+independent GitHub approval, protected-owner integration, or release gates.
+
+### Multimodal cost evidence boundary
+
+At CO `632831de9cc2a510af41981711eedc13e38df479`, inspected MMR-Bench v1's
+abstract, Section 3.1, and Appendix C.2–C.3; this is a partial read.
+The [primary source](https://arxiv.org/html/2601.17814v1) defines a text/image
+routing problem. Its normalized cost compares models within a fixed pool;
+Appendix C.3 also describes disabled reasoning traces for selected models.
+Therefore the reported roughly 33% cost scenario is not a CO invoice saving,
+decision-latency p95, or audio/video validation result. CO's model-group
+specification cites this paper for evaluation design, not achieved performance.
+Any local comparison must fix the candidate and reasoning-policy revisions,
+report real prices and latency separately, and retain failed requests. No
+production routing or reasoning policy was changed from this partial review.
+
 ### Executable reference inventory check
 
 At `9a9f1ab2`, run `python -m pytest tests/test_paper_contracts.py -k
