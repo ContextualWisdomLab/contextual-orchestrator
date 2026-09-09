@@ -35,8 +35,31 @@ uv run ruff check .
 
 ## Research basis (APA 7th)
 
+### Fugu read scope and implementation boundary, 2026-09-09
+
+The June 22 report is pinned to author-repository revision
+`1397abb416e4b774003a09b689ea120e0da02262`; PDF SHA-256
+`00a0e5065551c80c12a019018e18d8365cc3da229303f1765aa49fdf22876ce2`.
+Read scope: opening abstract and pages 3–6; page 5/Figure 2 was rendered and
+directly inspected, with legible labels, arrows, and caption. No full-report
+review or reproduction is claimed; no PDF is vendored.
+
+Section 3.1 uses a trained lightweight head over backbone hidden states for
+worker selection without autoregressive decision text. Unlike TRINITY, this
+Fugu variant does not assign roles. Section 3.1.2 derives soft training targets
+from repeated worker outcomes on tasks with reference solutions. These are
+not CO's deterministic effort-rank fixture or evidence validating its role
+catalog. Figure 1's non-Fugu scores are provider-reported, not a common CO
+evaluation cohort.
+
+Engineering inference: compare decision-only selection with generative triage
+under the same observed cohort, correctness guardrail, and resource accounting.
+Do not claim Fugu's results for a black-box API router without its trained
+representation/head, or treat temperature as reasoning effort. This motivates
+an experiment, not a default change or a new unvalidated estimator.
+
 Sakana AI. (2026). *Sakana Fugu technical report*.
-https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
 
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
 *Trinity: An evolved LLM coordinator* (arXiv:2512.04695).

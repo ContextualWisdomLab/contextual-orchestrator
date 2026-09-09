@@ -116,9 +116,10 @@ one replayable compute snapshot. PDFs are cited rather than vendored when
 redistribution is unclear.
 
 - Sakana AI. (2026). *Sakana Fugu Technical Report*.
-  https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-  Grounds the latency-quality frontier: route is the low-compute path,
-  conduct is the high-quality path. Do not proxy that split with temperature.
+  https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
+  See the [bounded method review](../doctoring/reasoning-effort-profile.md#fugu-read-scope-and-implementation-boundary-2026-09-09).
+  CO's route/conduct analogy is an engineering interpretation, not an
+  implementation or reproduction of the trained Fugu variants.
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
   *Trinity: An evolved LLM coordinator* (arXiv:2512.04695).
   https://arxiv.org/abs/2512.04695
