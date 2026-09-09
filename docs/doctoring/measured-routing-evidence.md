@@ -116,6 +116,19 @@ contract. CO must not copy this threshold, infer axis meanings, or treat
 posterior model selection as held-out customer accuracy. Keep aligned recovery,
 observed prediction, and decision latency as separate acceptance measures.
 
+Follow-up: a direct download of the [NSF repository copy](https://par.nsf.gov/servlets/purl/10229440)
+succeeded after the browser fetch failures. The 26-page PDF identifies Springer
+as creator and carries the journal DOI; SHA-256 is
+`587e6967678a639dec5e9824b75baad92e58a042a017c34a837ead45828960a3`.
+PDF page 12 was rendered at 1188 × 1600 and directly visually inspected.
+The mixture/event discrepancy is also printed there, so it is not solely an
+arXiv HTML conversion artifact. This archived Springer-formatted copy is not
+yet byte-compared with the current publisher version or supplementary code.
+It specifies the spike as N(-3, 1), unlike the generic near-zero description;
+do not implement a prior from that description alone. No PDF is vendored.
+Local inspection artifacts: `/tmp/lsirm-10229440.pdf` and
+`/tmp/lsirm-model-selection.png`; these temporary paths are not release assets.
+
 ### Existing references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large

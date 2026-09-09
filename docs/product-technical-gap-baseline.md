@@ -1,5 +1,18 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 LSIRM model-selection source reconciliation
+
+At source `1b31166024a20b5ab5be6547a0cfd95a7099a7f1`, direct visual inspection
+of the NSF-hosted Springer-formatted LSIRM PDF confirmed the same mixture/event
+description discrepancy previously found in arXiv v2. The
+[version-specific receipt](doctoring/measured-routing-evidence.md#lsirm-identification-and-version-discrepancy-2026-09-09)
+records the PDF hash and inspected page. Before publishing a model-selection
+contract, fast-mlsirm must reconcile the decision event and prior parameterization
+against the current publisher copy and supplementary implementation. CO must
+not copy the ambiguous threshold into routing or count this investigation as
+an accuracy improvement. No current fast-mlsirm implementation defect has been
+demonstrated by this source comparison.
+
 ## 2026-09-09 Expanded-population validity research gap
 
 At source `479bfe7e096832e1711c4d99b59621a66c3a2f59`, the research inventory
