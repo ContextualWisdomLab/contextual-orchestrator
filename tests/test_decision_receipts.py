@@ -274,10 +274,12 @@ def test_race_receipt_retains_candidate_set_not_winner(tmp_path, monkeypatch, in
             assert measurement.receipt.status == "accepted"
             assert not orchestrator._store.load("initial_decision")
         else:
-            orchestrator._invoke(agents[0], [{"role": "user", "content": "hello"}],
-                                 text="hello", role="worker")
+            for _ in range(2):
+                orchestrator._invoke(agents[0], [{"role": "user", "content": "hello"}],
+                                     text="hello", role="worker")
             snapshot = measurement.snapshot()
             assert snapshot["status"] == "acknowledged"
+            assert snapshot["selection_attempt_count"] == 2
             assert set(snapshot["selected_agent_ids"]) == {"worker_0", "worker_1"}
             assert len(orchestrator._store.load("initial_decision")) == 1
     finally:
@@ -336,3 +338,37 @@ def test_embedding_failover_has_one_admission_and_two_selection_attempts(tmp_pat
         worker.join()
         server.server_close()
         orchestrator.close()
+
+
+def test_legacy_identity_backfill_and_indexed_window(tmp_path):
+    """Legacy keys migrate without touching unrelated data or scanning every phase."""
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    database = tmp_path / "state.db"
+    store = _StateStore(database)
+    with store._conn:
+        store._conn.executemany(
+            "INSERT INTO orchestration_records(kind, key, payload) VALUES (?, NULL, ?)",
+            [(kind, json.dumps({"request_id": f"request_{index}", "status": "accepted"}))
+             for index in range(1000) for kind in ("accepted_request", "initial_decision")]
+            + [("unrelated_legacy", "not valid JSON")],
+        )
+    store.close()
+    store = _StateStore(database)
+    traced = []
+    try:
+        assert store._conn.execute("SELECT COUNT(*) FROM orchestration_records").fetchone()[0] == 2001
+        assert store._conn.execute(
+            "SELECT key FROM orchestration_records WHERE kind = 'unrelated_legacy'"
+        ).fetchone()[0] is None
+        store._conn.set_trace_callback(traced.append)
+        cohort = store.load_decision_window(2)
+        store._conn.set_trace_callback(None)
+        assert len(cohort["accepted"]) == len(cohort["decisions"]) == 2
+        phase_query = next(query for query in traced if query.startswith("SELECT kind, key, payload"))
+        plan = store._conn.execute("EXPLAIN QUERY PLAN " + phase_query).fetchall()
+        assert any("orchestration_records_kind_key_seq" in row[3]
+                   and "kind=? AND key=?" in row[3] for row in plan)
+        assert cohort["window"]["truncated"] is True
+    finally:
+        store.close()

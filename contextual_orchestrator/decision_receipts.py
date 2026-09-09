@@ -34,6 +34,7 @@ class DecisionMeasurement:
         self.admission_boundary = admission_boundary
         self.selected_agent_ids = []
         self.selection_attempt_count = 0
+        self._race_attempt_ids = set()
         self._lock = threading.Lock()
         self._token = _CURRENT_DECISION.set(self)
         try:
@@ -64,11 +65,13 @@ class DecisionMeasurement:
             "metric_scope": "initial_provider_dispatch",
         }
 
-    def select(self, agent_ids, route_mode):
+    def select(self, agent_ids, route_mode, *, attempt_id=None):
         """Acknowledge the first decision synchronously before provider dispatch."""
         with self._lock:
-            if route_mode in ("text_race", "capability_race") and self.route_mode == route_mode:
-                return  # Parallel replicas belong to the same selected candidate set.
+            if attempt_id is not None:
+                if attempt_id in self._race_attempt_ids:
+                    return
+                self._race_attempt_ids.add(attempt_id)
             self.selection_attempt_count += 1
             if self.receipt.status != "accepted":
                 try:
@@ -109,11 +112,11 @@ class DecisionMeasurement:
             _CURRENT_DECISION.reset(self._token)
 
 
-def record_initial_selection(agent_ids, route_mode="unclassified"):
+def record_initial_selection(agent_ids, route_mode="unclassified", *, attempt_id=None):
     """Record selection only within an explicitly enabled request measurement."""
     measurement = _CURRENT_DECISION.get()
     if measurement is not None:
-        measurement.select(agent_ids, route_mode)
+        measurement.select(agent_ids, route_mode, attempt_id=attempt_id)
 
 
 def export_decision_receipts(store, limit=256):
