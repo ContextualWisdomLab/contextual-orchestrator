@@ -16,6 +16,8 @@ from unittest.mock import patch
 import threading
 import time
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -119,6 +121,49 @@ def test_store_upserts_keyed_records_and_appends_streams() -> None:
         assert store.load("audit") == [{"a": 1}, {"a": 2}]  # streams append in order
         assert store.load("audit", 1) == [{"a": 2}]  # limit keeps the newest
         store.close()
+
+
+@pytest.mark.parametrize("failure_phase", ["insert", "commit"])
+def test_failed_keyed_save_preserves_previous_committed_record(failure_phase: str) -> None:
+    """A failed replacement must not leak its deletion into the next commit."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            store._conn.execute("PRAGMA foreign_keys = ON")
+            store.save("workflow_run", "run_existing", {"version": 1})
+            if failure_phase == "insert":
+                store._conn.execute(
+                    "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
+                    "WHEN NEW.payload = '{\"version\": 2}' "
+                    "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+                )
+            else:
+                # Both writes succeed; the deferred constraint fails only at commit.
+                store._conn.execute(
+                    "CREATE TABLE linked_record (record_seq INTEGER REFERENCES "
+                    "orchestration_records(seq) DEFERRABLE INITIALLY DEFERRED)"
+                )
+                store._conn.execute(
+                    "INSERT INTO linked_record SELECT seq FROM orchestration_records"
+                )
+            store._conn.commit()
+            try:
+                store.save("workflow_run", "run_existing", {"version": 2})
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise AssertionError("the injected write failure did not occur")
+            assert not store._conn.in_transaction
+            store.save("workflow_run", "run_other", {"version": 3})
+            assert store.load("workflow_run") == [{"version": 1}, {"version": 3}]
+            assert not store._conn.in_transaction
+        finally:
+            store.close()
+        reopened = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            assert reopened.load("workflow_run") == [{"version": 1}, {"version": 3}]
+        finally:
+            reopened.close()
 
 
 def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:

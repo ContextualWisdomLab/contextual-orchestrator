@@ -1,5 +1,57 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 State persistence integrity prerequisite
+
+PR [#1108](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1108)
+repairs a reproduced failed-replacement data-loss case in the common SQLite
+state writer. Code `d7bba88f3d711883a37effe49ab4f503c4fb8e01` rolls back failed
+writes under the existing lock. Test follow-up `f1abe1e3` checks that no
+transaction remains immediately after failure and that both the previous and
+unrelated subsequent records survive reopening the database. The persistence
+suite passed 19 tests in 9.28s; this is not a latency or customer-accuracy result.
+
+Full local suite at `877d5112ed470d851afaa2c746b94393cc768ee7`: 3,396 passed,
+2 skipped, exit 0 (883.03s). Test-only follow-up
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` covers a deferred commit failure
+with real SQLite constraints; persistence, workflow authorization, and governance
+tests pass together (29 passed, 4.89s). Full-suite evidence remains attached to
+the earlier head, not silently reassigned to the new regression.
+
+At the earlier PR head `aa674187b0341c7852f85c27fb696aec21f1a799`, GitHub
+reported zero check runs and two success statuses whose descriptions explicitly
+said reviews were skipped (Draft; expired trial/no credits). Those statuses do
+not establish review approval or security validation. Keep protected merge and
+release pending actual exact-head evidence. The root cause and reproduction are
+in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
+
+## 2026-09-09 Stacked quality-trigger repair
+
+Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
+owns this repair and its Ready/closed admission checks. The partial local repair
+described below missed that lineage. Its full branch is now being integrated
+without force, with the extra filter/permission assertions consolidated into
+the owner's `tests/test_repository_security_metadata.py`. The duplicate test
+file is removed after preserving those assertions. #1066 and #1060 stay open;
+integration is not protected delivery. The current #1108 hosted run is preserved
+at `c11df645` and does not validate this later consolidation.
+
+At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
+Security and Quality workflow filters pull requests to `main`. PR #1108 targets
+another PR branch, so its zero check-run count is consistent with this trigger
+exclusion, not a successful Security run. The repair removes the base filter
+without changing job permissions or switching to privileged `pull_request_target`.
+It also keys cancellation by workflow, repository, and PR number. Central review
+and security ownership is unchanged; this does not repair or replace their gates.
+
+The regression assertion failed on the old filter. After repair, the new contract
+and existing benchmark workflow contracts passed (9 tests), and actionlint emitted
+no findings. An initial test collection failed because PyYAML is not installed;
+the test instead uses the existing stdlib text-contract pattern, with actionlint
+checking YAML syntax. No dependency was added. A new synchronize event must still
+demonstrate hosted execution on the actual stacked merge revision. Trigger syntax
+and local tests alone are not that execution evidence. GitHub documents that PR
+branch filters match the [target branch](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
 ## 2026-09-09 Integrated rollback regression receipt
 
 PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c` includes the
@@ -3034,3 +3086,30 @@ merge was attempted. #1108 mergeability is `unknown` (recomputing);
   fix and rerun owned failures immediately while continuing safe
   independent work, and codify manual workarounds with log-grounded RCA
   for PYTHONPATH, Actions, and execution errors.
+
+## 2026-09-09 Autoresearch loop: stacked-quality merge adopted, #1108 restack verified, #1105 pending-verdict diagnosed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **Loop merge `d721e04b` (adopted, reviewed):** the stacked-quality
+  repair now on this branch is compliant — exact
+  `{workflow}-{repository}-{PR}` concurrency with same-group PR-only
+  cancellation, expanded stacked-PR coverage, Draft/closed-only skips,
+  and test consolidation without dropped assertions (see runbook for
+  the clause-level verdict). Action: none; keep.
+- **PR #1108 restacked head `c11df645`:** isolated evidence 21 passed
+  in 28.10s, exit 0 (prior 20-pass run superseded). Mergeability still
+  recomputing. Action: re-observe; owner restacks with normal merges.
+- **PR #1109 head `b8d2651d`:** all hosted checks green, still no
+  reviews — awaiting independent approval on the owner stack. Action:
+  re-observe.
+- **PR #1105 (Ready, `main` base):** 3 CodeQL-compat failures are
+  pending-verdict fail-closed (`DISPATCH_OUTCOME: success`,
+  `VERDICT_STATE: pending`, self-rerun promised), not code defects.
+  Action: re-observe next turn for self-heal; owner owns any real fix.
+- **Hourly prompt (this hour):** never make a full foundation or mutual
+  official release a precondition — cut owner/consumer cycles with a
+  minimal contract, port, or ACL and complete independently verifiable
+  functionality first.

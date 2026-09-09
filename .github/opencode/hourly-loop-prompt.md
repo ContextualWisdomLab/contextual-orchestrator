@@ -61,7 +61,10 @@ contract rather than an inferred ranking:
    review or Checks for unrelated work. A failing check never idles the
    loop: fix and rerun what you own immediately while continuing safe
    independent work; codify manual workarounds into code or config and
-   root-cause PYTHONPATH, Actions, and execution errors from logs.
+   root-cause PYTHONPATH, Actions, and execution errors from logs. Never make
+   a full foundation or a mutual official release a precondition: cut the
+   owner/consumer cycle with a minimal contract, port, or ACL and complete
+   independently verifiable functionality first.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.

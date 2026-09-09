@@ -3760,14 +3760,13 @@ class _StateStore:
 
     def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
-        with self._lock:
+        with self._lock, self._conn:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
             self._conn.execute(self._INSERT_SQL, (kind, key, blob))
             if kind in self._STREAM_LIMITS:
                 limit = self._STREAM_LIMITS[kind]
                 self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
-            self._conn.commit()
 
     def _drain_stream_queue(self) -> None:
         while True:

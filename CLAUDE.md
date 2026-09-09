@@ -116,6 +116,18 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Key conventions
 
+- **Failure attribution**: one Noema caller attempt is not one internal provider
+  attempt. Verify deployed revision and request identity; do not mix preflight
+  failures with the review request or automatically replay ambiguous timeout/502.
+  See [the incident runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+- **Stacked quality checks**: zero check runs can result from the former
+  `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
+  trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
+  and verify hosted execution after each new head. Earlier-head results are
+  historical, not current approval. Reproduction and limits:
+  [owner runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.

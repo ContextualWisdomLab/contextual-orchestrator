@@ -68,9 +68,15 @@ def test_security_workflow_covers_core_repository_security_process():
     for duplicate_scanner in removed_duplicate_scanners:
         assert duplicate_scanner not in workflow_text
 
-    assert "local-quality-${{ github.repository }}-${{ github.event_name }}-${{" in workflow_text
-    assert "github.event.pull_request.number || github.event.schedule || github.ref" in workflow_text
-    assert "cancel-in-progress: true" in workflow_text
+    assert "${{ github.workflow }}-${{ github.repository }}-${{" in workflow_text
+    assert "github.event.pull_request.number || github.event.schedule || github.run_id" in workflow_text
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow_text
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
+        in workflow_text
+    )
+    assert workflow_text.count("github.event.pull_request.draft == false") == 3
+    assert workflow_text.count("github.event.action != 'closed'") == 3
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
@@ -79,6 +85,19 @@ def test_security_workflow_covers_core_repository_security_process():
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
+
+
+def test_security_workflow_supports_stacked_pull_requests():
+    """Keep stacked validation unfiltered without escalating event permissions."""
+    workflow_text = read_text(".github/workflows/security.yml")
+    pull_request_trigger = workflow_text.split("  pull_request:\n", 1)[1].split(
+        "  schedule:\n", 1
+    )[0]
+
+    for filter_name in ("branches", "branches-ignore", "paths", "paths-ignore"):
+        assert f"{filter_name}:" not in pull_request_trigger
+    assert "permissions:\n  contents: read\n" in workflow_text
+    assert "pull_request_target:" not in workflow_text
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
