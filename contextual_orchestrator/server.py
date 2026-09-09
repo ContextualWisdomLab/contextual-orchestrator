@@ -8263,6 +8263,12 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
+            if decision_receipts and status >= 400:
+                measurement = self._decision_measurement
+                if (measurement is not None
+                    and measurement.receipt.status in ("accepted", "selected")
+                    and self._decision_failure_reason == "unfinished"):
+                    self._decision_failure_reason = "selection_failed"
             request_id = current_request_id() or uuid.uuid4().hex
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id

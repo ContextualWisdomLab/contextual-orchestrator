@@ -10,7 +10,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
-@pytest.mark.parametrize("invalid_field", [None, "routing", "attribution", "user", "metadata", "implicit_trace", "explicit_trace"])
+@pytest.mark.parametrize("invalid_field", [None, "routing", "attribution", "user", "metadata", "implicit_trace", "explicit_trace", "authorized_trace"])
 def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_field):
     """Auto stream classification must share the eventual task's admission clock."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts
@@ -40,16 +40,22 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
         }
         if invalid_field in ("routing", "attribution", "user", "metadata"):
             request_body[invalid_field] = "" if invalid_field == "user" else []
-        if invalid_field == "explicit_trace":
+        if invalid_field in ("explicit_trace", "authorized_trace"):
             request_body["include_orchestration_trace"] = True
         connection.request("POST", "/v1/chat/completions", json.dumps(request_body),
                            {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
         response = connection.getresponse()
         response.read()
-        expected_status = 401 if invalid_field == "explicit_trace" else (400 if invalid_field in ("routing", "attribution", "user", "metadata") else 200)
+        expected_status = 401 if invalid_field == "explicit_trace" else (400 if invalid_field in ("routing", "attribution", "user", "metadata", "authorized_trace") else 200)
         assert response.status == expected_status
         connection.close()
         server.shutdown()
+        if invalid_field == "authorized_trace":
+            observation, = export_decision_receipts(orchestrator._store)["observations"]
+            assert observation["status"] == "selection_failed"
+            assert observation["durable_ack_elapsed_ns"] is None
+            assert snapshots[0]["request_id"] == observation["request_id"]
+            return
         if expected_status != 200:
             assert snapshots == []
             assert orchestrator._store.load("accepted_request") == []
