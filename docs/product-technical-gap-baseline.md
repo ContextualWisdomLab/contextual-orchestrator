@@ -1,5 +1,31 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Decision-latency durable acknowledgement gap
+
+[Issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110)
+tracks the accepted-request-to-durable-decision interval required by
+[the analytics specification](analytics_spec.md). At
+`b2c09930a8d335952e4f4d8de5371460cb14fcd6`, `route_once` still times the upstream
+invocation, not that interval. `conduct` persists a completed workflow after
+generation. Neither is a measured initial-decision receipt.
+
+The existing state store has synchronous `durable=True` writes and best-effort
+queued stream writes. Reuse that owner; a successful queue operation, a later
+flush-on-read, or an audit append without configured storage is not a durable
+acknowledgement. Three retention tests now explicitly exercise the synchronous
+path. An additional test prevents background draining and verifies committed
+records through an independent SQLite connection before any store read.
+All 19 persistence tests passed in 7.19 seconds. An in-memory mutation forcing
+asynchronous writes fails the new assertion. This proves commit visibility in
+the tested SQLite configuration, not power-loss survival or customer latency.
+
+Next implementation must connect validated admission, selection completion and
+successful commit acknowledgement within one monotonic clock domain; distinguish
+initial/failover decisions and retain failed/unfinished requests in accounting.
+PR #1108 owns transaction rollback repair and remains open; its valid delta must
+be retained during integration. No measured p95 or accuracy improvement is yet
+established, and no production routing default changes follow from these tests.
+
 ## 2026-09-09 LSIRM model-selection source reconciliation
 
 At source `1b31166024a20b5ab5be6547a0cfd95a7099a7f1`, direct visual inspection
