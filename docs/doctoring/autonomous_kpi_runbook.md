@@ -1,5 +1,66 @@
 # Autonomous KPI experiment runbook
 
+## Noema terminal failure attribution, 2026-09-09
+
+Two central `.github` runs completed bootstrap but failed their review request:
+
+| Run / job | Caller observation | Interpretation boundary |
+| --- | --- | --- |
+| 34316107754 / 102352588433 | 502 after 128.5 s; llama-3.2-11b-vision-instruct | Server artifact records TimeoutError for the same model at 05:56:14.181, just before caller failure at 05:56:14.183; correlation is not request identity. |
+| 34315965378 / 102352582904 | 429 after 336.7 s; deepseek-v4-flash-0731 | Terminal rejection is verified; internal candidate history and exhaustion are not. |
+
+Both callers report one gateway attempt. That is not a count of CO internal
+attempts. Artifact `10090380702` (`noema-sidecar-evidence`, first run) contains
+stderr and preflight JSON, but no request identifier or source SHA in the
+inspected records. Earlier provider failures occurred during preflight; do not
+attribute them to the review request. Reproduce retrieval with
+`gh run download 34316107754 --repo ContextualWisdomLab/.github --name noema-sidecar-evidence --dir <new-private-directory>`;
+inspect only allowlisted diagnostics, never publish raw credentials or prompts.
+
+Existing owners are issue #1045, PR #1049 (`e2641c16`, replay safety),
+PR #1037 (`4ba6be74`, bounded attempt history), PR #1094 (Noema structured
+conduct), and PR #1105 (request correlation). A bare timeout/502 does not prove
+the non-idempotent operation was never applied; do not widen retry policy from
+this incident. Keep explicit 429 rejection separate. Next verification needs
+the deployed sidecar revision and request-correlated reproduction, followed by
+owner tests and protected release. See [the evidence receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1045#issuecomment-5596669214).
+These are failed deliveries in the accuracy denominator, not measured routing
+decision latencies. Their elapsed times include work beyond initial selection.
+
+## Stacked quality-trigger repair
+
+Lineage correction: existing PR #1066 at
+`59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already owns the complete trigger
+repair, including Ready/closed admission and PR-only cancellation. The partial
+repair below duplicated its base-filter change. Integrate that branch normally,
+retain its complete workflow and tests, and consolidate the extra path-filter
+and event-permission assertions into `tests/test_repository_security_metadata.py`.
+The duplicate `tests/test_stacked_quality_workflow.py` is removed only after those
+assertions are preserved. Run the canonical metadata tests plus the NIM workflow
+contracts and actionlint. Neither #1066 nor its predecessor #1060 is closed by
+this integration; protected delivery is still required. Historical commands and
+results below remain attached to their original revisions.
+
+On 2026-09-09, PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c`
+had zero GitHub check runs despite a completed local suite (3,399 passed,
+2 skipped). Its base was `autoresearch/20260909-kpi-loop`, excluded by the
+repository quality workflow's `pull_request.branches: [main]` filter.
+Commit `1a510faa` removes that filter, preserves permissions, and uses the
+workflow/repository/PR cancellation key. Central required workflows remain
+separate owners; this change cannot provide their approval.
+
+Reproduce with `.venv/bin/python -m pytest tests/test_stacked_quality_workflow.py -q`.
+The old trigger fails its assertion; with the repair, this and the existing NIM
+workflow contracts pass (9 tests). `actionlint .github/workflows/security.yml`
+has no findings. An initial PyYAML-based test failed collection because that
+package is absent; the retained stdlib contract needs no new dependency.
+The integrated rollback head `c11df645865062da6c4d1680a285eb5c21a91594`
+passed 30 persistence/workflow contracts in 8.71 seconds before push.
+Do not assign the earlier full-suite count to this new head. After pushing a
+new synchronize event, inspect the live run's head and checked-out merge parents;
+no run or a queued run is not a pass. Retain both sides of gap-baseline merge
+conflicts so rollback evidence and newer research evidence are not discarded.
+
 Status: measurement preparation; no measured customer gain. Owner: CO for
 request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
@@ -342,3 +403,46 @@ flipped, or pushed across branches. PR #1108 reports
 `mergeable: null` / `mergeable_state: unknown` (GitHub recomputing the
 dirty computation); still not actionable from this loop. Open-PR
 recount 88 (baseline 85).
+
+## Loop-merge review and PR re-observation, 2026-09-09
+
+Concurrent session merged the canonical stacked-quality repair into the
+loop branch (`d721e04b`, merging `59a8f4ea`). Reviewed rather than
+reverted. `security.yml` verdict: compliant, not weakened. The
+concurrency group is now exactly
+`${{ github.workflow }}-${{ github.repository }}-${{
+github.event.pull_request.number || github.event.schedule ||
+github.run_id }}` with `cancel-in-progress` only on `pull_request`
+events — the demanded `{workflow}-{repository}-{PR}` shape; scheduled
+and push runs serialize on schedule/`run_id` and are never cancelled.
+The removed `branches: [main]` PR filter expands coverage to stacked-PR
+bases instead of weakening main (main PRs still always run). New
+`action != 'closed' && draft == false` job guards skip only closed and
+Draft PRs, which can never merge; the `ready_for_review` trigger runs
+checks on every Draft-to-Ready transition. The deleted
+`tests/test_stacked_quality_workflow.py` was consolidated into
+`tests/test_repository_security_metadata.py` (updated group/cancel
+assertions plus new `test_security_workflow_supports_stacked_pull_requests`
+pinning unfiltered triggers, `contents: read`, and no
+`pull_request_target`); no assertion was dropped.
+
+PR #1108 restacked (`4316be85` to `c11df645`, retaining the rollback
+delta and activating the stacked checks). Isolated worktree
+`/tmp/co-verify-1108c`: `tests/test_persistence.py` 21 passed in
+28.10s, exit 0. The `orchestrator.py` fix is unchanged; the delta adds
+`durable=True` stream-retention coverage and a new independent-connection
+commit-visibility test pinning durable-return-means-committed. Prior
+20-pass verification is superseded. Unit evidence only.
+
+PR #1109 head unchanged (`b8d2651d`): all four hosted groups now green
+(both CodeQL jobs, fuzzing, tests) with still no reviews — merge bar
+still unmet (independent exact-head approvals missing), so unmerged.
+Base remains the owner stack branch; no cross-boundary merge attempted.
+
+PR #1105 (Ready, `main` base, error-request correlation) is blocked
+with 3 `CodeQL compatibility analysis` failures that are
+fail-closed pending verdicts, not code defects: job `102342918324` log
+shows `DISPATCH_OUTCOME: success` with `VERDICT_STATE: pending`, and the
+job's own message states the dispatch workflow will rerun it after
+publishing the terminal verdict. Expected to self-heal; re-observe next
+turn. No push to any owner branch was made from this loop.

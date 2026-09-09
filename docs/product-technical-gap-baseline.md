@@ -26,6 +26,15 @@ in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
 
 ## 2026-09-09 Stacked quality-trigger repair
 
+Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
+owns this repair and its Ready/closed admission checks. The partial local repair
+described below missed that lineage. Its full branch is now being integrated
+without force, with the extra filter/permission assertions consolidated into
+the owner's `tests/test_repository_security_metadata.py`. The duplicate test
+file is removed after preserving those assertions. #1066 and #1060 stay open;
+integration is not protected delivery. The current #1108 hosted run is preserved
+at `c11df645` and does not validate this later consolidation.
+
 At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
 Security and Quality workflow filters pull requests to `main`. PR #1108 targets
 another PR branch, so its zero check-run count is consistent with this trigger
@@ -3077,3 +3086,30 @@ merge was attempted. #1108 mergeability is `unknown` (recomputing);
   fix and rerun owned failures immediately while continuing safe
   independent work, and codify manual workarounds with log-grounded RCA
   for PYTHONPATH, Actions, and execution errors.
+
+## 2026-09-09 Autoresearch loop: stacked-quality merge adopted, #1108 restack verified, #1105 pending-verdict diagnosed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **Loop merge `d721e04b` (adopted, reviewed):** the stacked-quality
+  repair now on this branch is compliant — exact
+  `{workflow}-{repository}-{PR}` concurrency with same-group PR-only
+  cancellation, expanded stacked-PR coverage, Draft/closed-only skips,
+  and test consolidation without dropped assertions (see runbook for
+  the clause-level verdict). Action: none; keep.
+- **PR #1108 restacked head `c11df645`:** isolated evidence 21 passed
+  in 28.10s, exit 0 (prior 20-pass run superseded). Mergeability still
+  recomputing. Action: re-observe; owner restacks with normal merges.
+- **PR #1109 head `b8d2651d`:** all hosted checks green, still no
+  reviews — awaiting independent approval on the owner stack. Action:
+  re-observe.
+- **PR #1105 (Ready, `main` base):** 3 CodeQL-compat failures are
+  pending-verdict fail-closed (`DISPATCH_OUTCOME: success`,
+  `VERDICT_STATE: pending`, self-rerun promised), not code defects.
+  Action: re-observe next turn for self-heal; owner owns any real fix.
+- **Hourly prompt (this hour):** never make a full foundation or mutual
+  official release a precondition — cut owner/consumer cycles with a
+  minimal contract, port, or ACL and complete independently verifiable
+  functionality first.

@@ -143,3 +143,17 @@ push or open a PR.
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
+
+## Stacked quality checks
+
+For Noema incidents, `caller attempts=1` does not count internal provider
+attempts. Match request identifiers and deployed revision before attributing
+fallback; preflight failures are not review-request evidence. Keep ambiguous
+timeout/502 replay separate from explicit rejection. See the
+[attribution runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+Zero check runs on a stacked PR can mean its base was excluded by
+`pull_request.branches: [main]`, not that checks passed. Keep the repository
+quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
+plus actionlint. After a new head, verify actual hosted execution; previous-head
+results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
