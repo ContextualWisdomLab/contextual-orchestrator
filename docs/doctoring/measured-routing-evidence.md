@@ -61,6 +61,17 @@ combining these signals needs separately identified constructs and observed
 outcome validation. Existing `test_paper_contracts.py` checks role/trace behavior
 and citation strings, not faithful paper reproduction or empirical validity.
 
+Section 4.4/Table 2 reports router mean latency 0.036 ± 0.002 seconds over
+200 randomly chosen queries; the uncertainty is one standard error, not a
+95% interval or p95. The paper explicitly excludes GPT-3.5 API timing because
+network, queueing, and inference cannot be separated there. This cannot serve
+as CO's 20 ms durable-decision p95 baseline. Section 4.5 selects thresholds on
+500 validation examples and evaluates them on a separate test set: retain that
+selection/evaluation separation, but do not adopt 500 as a universal sample-size
+requirement. CO must choose its sample size from the declared effect, variance,
+power, and clustering design. These are interpretation boundaries, not a new
+measured performance result or a reproduction of the paper.
+
 ## APA 7 references
 
 ### Multilevel follow-up source (2026-09-09)
