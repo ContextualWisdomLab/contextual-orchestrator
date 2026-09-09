@@ -725,6 +725,11 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
     assert "method=GET" in caplog.text
     assert "path=/healthz" in caplog.text
     assert "status=200" in caplog.text
+    import re
+    summary_lines = [row.getMessage() for row in caplog.records
+                     if row.getMessage().startswith("http_request ")]
+    assert len(summary_lines) == 1
+    assert re.search(r" request_id=[0-9a-f]{32}$", summary_lines[0])
 
 
 def test_per_request_info_summary_never_includes_query_string(caplog):

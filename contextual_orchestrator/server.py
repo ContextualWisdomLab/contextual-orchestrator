@@ -5692,13 +5692,15 @@ def build_server(
             if not method and not path and status is None:
                 return
             _LOGGER.info(
+                "%s request_id=%s",
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
                     status=status,
                     latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
-                )
+                ),
+                current_request_id() or "-",
             )
 
         def do_GET(self) -> None:  # noqa: N802
