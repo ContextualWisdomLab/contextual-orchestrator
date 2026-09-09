@@ -1,5 +1,25 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Hosted outcome-link acceptance receipt
+
+PR #1113 head `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`, based on
+`c7345670e08f029ad3aa5dd1133037bb4b451d9b`, completed repository Security
+run **34329594602** successfully. Its tested merge was
+`e127f7a0aef94949a4a8f3eb16371e155f370fb1`, not a protected-main merge.
+Linux CPython **3.12.14** tests/package job **102394807283** reports
+**3,462 passed, 2 skipped in 756.10 seconds**, benchmark/public-docstring
+checks **134 passed in 10.00 seconds**, and installed-wheel checks
+**40 passed in 15.72 seconds**. The built core wheel SHA-256 is
+`e705cec46453123eae92b0c7979b6bde13a479afb5e021978c2defe849e995d8`.
+CodeQL/supply-chain/SBOM job **102394807100** and fuzz job **102394807264**
+also completed successfully. Evidence: [terminal run and job logs](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34329594602).
+
+The current-head review inventory remains empty. These hosted results supplement
+the separately recorded local installed-wheel request/outcome tests; they do not
+replace independent approval, protected merge, publisher acceptance, or measured
+customer accuracy/latency. The unpushed batch recovery successor is a different
+revision and does not inherit this test result.
+
 ## 2026-09-09 Batch restart recovery checkpoint
 
 The isolated batch successor, based on #1113, retains the failed restart
