@@ -65,6 +65,17 @@ customer answer. Repeated runs and turns share a task/harness context and must
 not inflate the independent sample count. This is an evaluation-design inference,
 not a reproduced result or authorization to train on customer transcripts.
 
+CO source mapping at `204e306c046797b812589b9b66062296beaa1c8d`:
+`orchestrator.py::_score_config` averages a caller-supplied quality function;
+`evolve_orchestration` caches each configuration's evaluation once. Neither
+implements Fugu's trained selection head or replicated trajectory fitness.
+The deterministic fixtures in `tests/test_optimizer.py` and
+`tests/test_evolve_optimizer.py` establish ranking/accounting behavior, not
+empirical worker superiority. Existing `tests/test_batch_optimizer.py` covers
+the real `batch_route` rejection of incomplete provider results while retaining
+other items' spend. A suspicious `zip` in the scorer alone therefore does not
+prove that this provider path silently shrinks the evaluation denominator.
+
 Engineering inference: compare decision-only selection with generative triage
 under the same observed cohort, correctness guardrail, and resource accounting.
 Do not claim Fugu's results for a black-box API router without its trained
