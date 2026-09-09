@@ -1,5 +1,23 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Installed batch recovery validation
+
+Frozen `73404f89d7a90f7a6b98caf514af859b02a375dd` produced separately built
+core and native wheels. Isolated installed-package execution `31999` completed
+**69 batch-lineage and decision-receipt tests in 44.46 seconds**, exit 0,
+on macOS arm64/Python 3.14.6. Root independently verified outside-checkout
+imports resolve under `/private/tmp/co-batch-installed-73404f89.cX4GMN/venv`
+for both the core package and native extension. No editable source import is
+used in this receipt. Core SHA-256:
+`d51ea2844064a5f5674791c6ef7789a0a277d1eae43fe49d506f4ccaa120a18c`;
+native SHA-256:
+`fb0a88ff477f422d496720d551f051a06172c848d2a6bc95d7caaa5e95bc87ea`.
+
+The separate full-suite execution `82637` remains live; the frozen checkout
+and its environment are not being modified. Installed focused success does
+not prove full-suite or hosted success, real remote integration, review
+approval, protected merge, publishing, or customer KPI improvement.
+
 ## 2026-09-09 Hosted outcome-link acceptance receipt
 
 PR #1113 head `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`, based on

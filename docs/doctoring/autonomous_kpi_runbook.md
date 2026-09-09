@@ -1,5 +1,28 @@
 # Autonomous KPI experiment runbook
 
+## Baker estimation boundary, 2026-09-09
+
+Baker, F. B. (2001). *The basics of item response theory* (2nd ed.). ERIC
+Clearinghouse on Assessment and Evaluation.
+[Primary PDF](https://files.eric.ed.gov/fulltext/ED458219.pdf).
+
+Root directly inspected rendered PDF pages 99 and 120 (printed 90 and 111).
+Page 90 describes unbounded ability MLEs for all-wrong/all-correct responses
+and conditions invariance on one latent trait and a common item metric.
+Page 111 defines 2PL item information as `a² P(θ) [1−P(θ)]`; information
+depends on ability, not just an item's global ranking. The equations, text,
+and table were legible in the directly opened page images. This is a bounded
+read, not review of the complete book; empty PDF text extraction cannot prove
+that a term is absent. Copyright remains reserved; no PDF is vendored.
+
+Engineering inference: retain extreme-response and estimator-failure counts in
+the numerical recovery denominator. Report recovery RMSE conditional on a valid
+estimate alongside that denominator, never silently discard failures. Any
+information-based item allocation requires an aligned estimand and calibrated
+owner contract before deployment. This does not turn synthetic recovery into
+observed customer accuracy or authorize routing defaults. Numerical estimation
+belongs to fast-mlsirm; CO retains request/outcome provenance and failure counts.
+
 ## Versioned citation discovery repair, 2026-09-09
 
 The citation check at `c226d30d` passed six tests but omitted arXiv HTML URLs

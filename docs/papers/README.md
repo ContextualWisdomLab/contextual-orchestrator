@@ -143,6 +143,8 @@ redistribution is unclear.
   on Assessment and Evaluation, with all rights reserved.
   [ERIC-hosted original](https://files.eric.ed.gov/fulltext/ED458219.pdf)
   is linked only; redistribution permission has not been established.
+  Subsequent bounded inspection of printed pages 90 and 111 is recorded in
+  [the estimation-boundary runbook](../doctoring/autonomous_kpi_runbook.md#baker-estimation-boundary-2026-09-09).
 
 `run_equal_budget_ablation` emits estimated, synthetic true-parameter evidence
 for unit-test recovery checks. It does not establish buyer accuracy or authorize
