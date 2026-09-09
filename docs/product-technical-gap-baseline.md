@@ -3139,3 +3139,18 @@ new receipt kinds; all-record export is unbounded in memory. Cohort-aware export
 and explicit retention remain required. A successful isolated package test does
 not resolve these semantic findings. The assigned implementation agent is repairing
 them; no routing default or release was changed.
+
+Integration checkpoint `07957ee643bf74c5beb13c03827f59331307cc5d` normally
+merges #1108 head `129a6650` into the measurement branch. The implementation
+agent reports terminal receipt/persistence verification: **34 passed in 5.88
+seconds**; this is focused local evidence, not full CI or package acceptance.
+The checkpoint still needs per-invocation race identity, indexed phase lookup,
+trusted HTTP identity integration, and remaining endpoint coverage.
+
+A root-run in-memory SQLite plan comparison used the checkpoint's table and
+index definitions: the JSON-filtered phase query searches only by `kind`;
+the proposed `(kind, key, seq)` index with `key IN (...)` searches by both
+`kind` and `key`. Both plans use a temporary ordering B-tree. This validates
+the proposed lookup shape only, not a measured customer latency improvement.
+Keep historical records, validate migration identity, and test rollback before
+adopting the index/backfill. The implementation agent owns that change.
