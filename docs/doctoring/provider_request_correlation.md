@@ -43,3 +43,18 @@ Never recover an ID from untrusted error text. Preserve old-format inputs and
 verify exact-SHA producer/collector integration before adoption. Do not copy
 collector code into CO or enable unfiltered logs. Timeouts and replay policy
 are unchanged by this patch. Browser rendering remains unverified.
+
+## Independent second incident
+
+Run 34306399309/job 102324739644 used the same trusted workflow and CO pins.
+Artifact 10087151196 again records candidate_count=24, ready_count=1,
+deferred_count=8, rejected_count=7, and account diversity=3. The caller reported
+429 after 125.2s at 2026-09-09 03:31:41 UTC. Unlike the earlier incident,
+the review interval beginning 03:29:35 contains no logged TimeoutError:
+several Llama attempts precede DeepSeek at 03:31:40.995, which fails at
+03:31:41.035 (about 40ms). TimeoutErrors at 03:27:17 and 03:28:47 belong to
+the earlier preflight interval, not this review interval. These logs therefore
+do not support attributing the final 429 to the default 90-second timeout.
+Role/request attribution remains incomplete without correlation; keep the
+timeout repair and this diagnostic repair as separate claims. No rerun or
+provider call was issued during this read-only investigation.
