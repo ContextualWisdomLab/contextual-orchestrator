@@ -521,3 +521,22 @@ The earlier PR #1108 re-observation above is historical: its current-head
 subsequently completed successfully, including 3400 passed and 2 skipped
 tests on merge checkout `9516d1d`. That evidence does not replace independent
 approval or establish a protected merge.
+
+## Re-observation, 2026-09-09 (fetch-ref transient, all PRs static)
+
+Loop HEAD `b5f9a5ac013cc3cd0b0ad443fce6e36d28a51067` is in sync with
+`origin/autoresearch/20260909-kpi-loop`. One `git fetch` reported
+`30b7b3a1..b5f9a5ac` but refused to update the remote-tracking ref
+(transient: a retry updated it, and `merge-base --is-ancestor` plus
+`merge --ff-only` confirmed a clean fast-forward with no history
+rewrite and no force-push). Lesson: treat a refused ref update as
+unresolved sync, never as evidence of a rewrite; retry, verify ancestry,
+and fast-forward only.
+
+PR states all static this turn: #1109 head `b8d2651d`, clean, no
+reviews (prior 19-pass verification stands); #1108 head `129a6650`,
+mergeability `unknown`, no reviews (prior 21-pass verification stands
+on byte-identical fix files); #1105 head `b655fe1b`, still blocked on
+the same 3 pending-verdict CodeQL-compat failures with no self-healing
+rerun observed. Open-PR recount 88 (baseline 85). No merge, readiness
+change, or cross-branch push from this loop.

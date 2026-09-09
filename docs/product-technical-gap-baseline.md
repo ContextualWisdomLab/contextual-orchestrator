@@ -3119,6 +3119,25 @@ or cross-session push was attempted.
   reopen or successor and never left closed (close only on the four
   evidenced conditions).
 
+## 2026-09-09 Autoresearch loop: all PRs static, fetch transient absorbed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **PR #1109 / #1108 / #1105:** all heads unchanged; prior isolated
+  verifications stand (19-pass and 21-pass). #1109 clean without
+  reviews; #1108 mergeability recomputing without reviews; #1105 still
+  blocked on the same 3 pending-verdict failures. Action: re-observe
+  all three next turn.
+- **Sync incident:** one fetch refused the remote-tracking ref update;
+  retry plus ancestry check plus fast-forward-only resolved it with no
+  rewrite. Lesson recorded in the runbook: never infer a rewrite from a
+  refused ref update.
+- **Hourly prompt (this hour):** record merge and delete rationale
+  before committing; remove self-modifying or source-fix workflows
+  whose purpose is done.
+
 ### PR #1108 terminal repair evidence, 2026-09-09
 
 At head `129a665016ed1acd79ae12915c905b1020856fcc`, base

@@ -69,6 +69,8 @@ contract rather than an inferred ranking:
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
+  Record merge and delete rationale before committing; remove
+  self-modifying or source-fix workflows whose purpose is done.
   Integrate single-writer deltas, never discard them; restack or retarget with
   normal merges only, never force-push, and never flip another session's Draft
   readiness. Fix stacked-PR review gaps in `.github`, coordinating through
