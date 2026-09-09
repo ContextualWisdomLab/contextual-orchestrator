@@ -3211,3 +3211,26 @@ it before claiming component reporting. A provider-ready timestamp preceding a
 diagnostic write is not evidence of the actual network-send instant. Generated
 planning, evidence embedding, and answer-cache outcomes remain explicit coverage
 items; no customer KPI gain or release is established by this checkpoint.
+
+### Native packaging and release owner, 2026-09-09
+
+Root independently inspected the native wheel built from candidate `9707a5e1`:
+SHA-256 `e0bf63d790256c6d4eba8598c131d63188a994c899df5124bd9eadf2cc39c568`.
+Its five entries contain only the extension and distribution metadata/SBOM, not
+core Python sources. The hypothesized source-file collision was not observed;
+retain the existing namespace and verify both manifests rather than rename
+without evidence. Clean-checkout CI still needs native build/install and
+outside-checkout core/native acceptance. Local ABI success is not Linux or
+hosted-CI proof.
+
+The existing canonical release owner is
+[organization issue #1552](https://github.com/ContextualWisdomLab/.github/issues/1552),
+verified open. At organization main `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`,
+the inspected `exact-artifact-sbom-attestation.yml` reusable component attests
+artifacts; it does not publish packages. CO owns its build adapter and package
+acceptance; generic release eligibility, immutable tagging, and idempotent
+delivery remain with that owner. The verified organization publishing secret
+names are `PIPY_TOKEN` and `CARGO_REGISTRY_TOKEN`, both visible to all repositories.
+Registration is not credential-validity or registry-ownership proof. Complete
+the minimal owner contract and CO adapter independently, then integrate exact
+revisions; do not require the whole foundation or publish an unmerged candidate.
