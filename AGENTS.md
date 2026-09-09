@@ -3,6 +3,15 @@
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 
+## Autonomous research handoff
+
+Read [the KPI runbook](docs/doctoring/autonomous_kpi_runbook.md) before numerical
+experiments and update its verified evidence before handoff. Choose KPI scope
+autonomously under `docs/analytics_spec.md`. Preserve live execution handles;
+high host load and silent numerical work are not proof of deadlock. Synthetic
+recovery is unit evidence, not customer accuracy. Break owner/consumer release
+cycles with isolated exact-revision contracts, never production source copies.
+
 <!-- BEGIN cwl-agent-guidance -->
 ## Agent guidance (CWL governance)
 

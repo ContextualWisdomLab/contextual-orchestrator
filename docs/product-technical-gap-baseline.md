@@ -1,5 +1,20 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Autonomous KPI targets and verified unit execution
+
+`docs/analytics_spec.md` now sets an observed delivered-correct improvement
+target of at least one percentage point and decision p95 at most 20 ms with
+at least 10% reduction, subject to stated uncertainty and non-regression gates.
+These are selected targets, not results. The
+[single experiment runbook](doctoring/autonomous_kpi_runbook.md) records owner
+boundaries, isolated contract bootstrapping, and reproducible commands.
+AGENTS.md and CLAUDE.md link to it; the existing hourly automation was updated
+without adding a duplicate. PR #1067 exact head
+`84a6052369a7bf8b6faae5db475bb68a5ad54a91` passed all 51 focused routing and
+benchmark-boundary tests in 744.99 seconds on a heavily loaded host. No customer
+accuracy, decision p95, full-suite, protected merge, or deployment follows from
+that unit result.
+
 ## 2026-09-09 Existing research attribution repaired
 
 Audit of `279f7e03` found an incorrect Jeon et al. title/DOI in

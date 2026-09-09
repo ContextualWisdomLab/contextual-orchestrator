@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+For autonomous experiments, also read and maintain
+[the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
+It records commands, environment limits, failed interpretations, and evidence
+boundaries. Do not restart a live numerical test because polling is silent or
+claim customer improvement from synthetic recovery. Use the independently
+verifiable owner/consumer sequence recorded there instead of waiting for all
+foundation releases before developing a port.
+
 Equivalent model-group endpoints may race only through the normalized, explicit
 endpoint-equivalence contract. Preserve modality validation, bounded concurrency,
 deadline, cancellation/drain provenance, and honest duplicate-cost evidence.

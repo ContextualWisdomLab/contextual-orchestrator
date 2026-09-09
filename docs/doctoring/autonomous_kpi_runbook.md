@@ -1,0 +1,60 @@
+# Autonomous KPI experiment runbook
+
+Status: measurement preparation; no measured customer gain. Owner: CO for
+request timing and delivered outcomes; fast-mlsirm for numerical estimators.
+
+## Start and evidence boundaries
+
+Read AGENTS.md, CLAUDE.md, and the targets in `docs/analytics_spec.md`.
+Record head/base, clean or unrelated worktree changes, locked dependencies,
+runtime version, dataset identity and permitted use, workload, observation
+window, sampling design, resource budget, and failure counts before comparison.
+Never replace missing observations with zero or a synthetic oracle score.
+Keep experiment results with the tested commit, command, output artifact,
+baseline/candidate estimates, uncertainty, and keep/discard decision.
+
+The reviewed CO measurement owner is PR #1067. At
+`84a6052369a7bf8b6faae5db475bb68a5ad54a91`, this command runs focused unit
+regressions, not a customer performance benchmark:
+
+```sh
+uv run --frozen pytest tests/test_psychometric_routing.py tests/test_psychometric_benchmark_boundaries.py -q
+```
+
+Its held-out harness uses known synthetic probabilities and numerical fixtures.
+Do not use its output to satisfy the observed-customer accuracy target. A
+production interval measuring accepted request through durable decision is
+required separately. Current observed-data baseline and that interval's measured
+p95 remain unverified; no executable end-to-end customer KPI command is claimed.
+
+## Long-running numerical tests
+
+On 2026-09-09, the command above ran in a clean exact-head worktree using
+Python 3.14 and installed fast-mlsirm 0.9.1. Process sampling found Rust
+`cat_next_item` / EAP CPU reduction, including worker joins. The host reported
+10 logical CPUs and approximately 60 one-minute load average. This is evidence
+of a busy host, not a measured algorithmic regression or proof of deadlock.
+The same execution subsequently completed: **51 passed in 744.99 seconds**,
+exit 0. No restart was needed. This duration is host-contended unit execution,
+not routing-decision p95 or a baseline suitable for claiming a speedup. For
+future runs, reuse the live execution handle, inspect process progress, and do
+not restart merely because an observation call yields without output.
+
+The owner source at `256470c7d1df4910a018841499a74d88b751a774` creates a scoped
+CPU worker even for one person in `score_eap_cpu_reduce`. This is an optimization
+hypothesis only: match installed artifact to source and measure before changing
+it. Do not terminate unrelated host jobs or shrink the fixture to manufacture a
+speedup. Use paired/interleaved baseline and candidate measurements with recorded
+host conditions; retain unfavorable runs and report interference.
+
+## Break release cycles without copying implementation
+
+Minimum contract → owner RED test → owner implementation → exact-SHA/digest
+isolated real integration → protected immutable release → consumer adoption.
+
+CO can implement its timing/outcome port against test doubles while numerical
+owner work proceeds. Doubles prove boundary behavior only. Candidate artifacts
+are allowed in isolated CI, never as production dependencies or release proof.
+Remove the temporary candidate integration after released-contract adoption;
+restore the previous released contract if integration fails. Required reviews,
+security checks, and `orchestrator/free` remain enforced throughout.

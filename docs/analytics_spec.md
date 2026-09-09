@@ -140,6 +140,31 @@ never present it as an all-request guarantee or encode missing durations as zero
 Declare the observation window, quantile method, uncertainty method, and workload
 before comparing policies. A faster failed decision is not a quality improvement.
 
+### Autonomous experiment targets
+
+These are engineering acceptance targets selected on 2026-09-09, not measured
+results or literature-derived constants. Do not ask the user to choose their
+scope. Baseline and candidate must use the same declared population, endpoint
+mix, task rubric, model versions, resource budget, and failure accounting.
+
+| Outcome | Target | Guardrail |
+| --- | --- | --- |
+| Delivered-correct fraction over all accepted requests | At least +1 percentage point versus baseline, with a 95% confidence interval for the difference wholly above zero. | Independently adjudicated observed outcomes; paired or randomized design declared before evaluation; no silent exclusion of failed delivery. |
+| Routing-decision p95 | At most 20 ms and at least 10% lower than baseline, with the 95% interval for the candidate/baseline ratio wholly below 1. | Include selection and durable acknowledgement; preserve workload and failure accounting. This is not the full-page latency SLO. |
+| Numerical parameter recovery | No regression in family-wise aligned RMSE under the declared numerical tolerance. | Known-truth unit tests only; never substitute for observed customer outcomes. |
+
+The end target requires both customer accuracy and decision-latency criteria.
+Intermediate changes may advance one while preserving the other's established
+baseline; they must not be labelled completion of both. If non-regression cannot
+be established, keep the candidate experimental and leave production unchanged.
+Use a fresh holdout for confirmation after adaptive experiment selection, or a
+predeclared sequential inference procedure; repeated inspection of an ordinary
+95% interval is not a stopping rule. Determine sample size from pilot variance,
+the +1-point effect target, and declared power before confirmation, retaining
+task/model/time clustering. Do not reduce sample size after seeing results.
+
+Execution and evidence handoff: [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md).
+
 ## Commercial Due-Diligence KPIs
 
 The active goal uses a USD 20,000,000,000 sale-quality ambition. This is an
