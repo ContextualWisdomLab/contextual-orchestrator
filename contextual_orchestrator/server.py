@@ -7485,6 +7485,7 @@ def build_server(
                                 batch_requests,
                                 metadata=metadata,
                                 owner_id=security.principal_id(self.headers),
+                                request_id=current_request_id(),
                             )
                         )
                     except InvalidBatchModelError as exc:
@@ -7505,6 +7506,10 @@ def build_server(
                         "backend": job.backend,
                         "status": job.status,
                         "request_count": job.request_count,
+                        "request_link_status": job.request_link_status,
+                        "registry_persistence_status": job.registry_persistence_status,
+                        "recovery_status": job.recovery_status,
+                        "backend_registry_persistence_status": job.backend_registry_persistence_status,
                     }, 201)
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):

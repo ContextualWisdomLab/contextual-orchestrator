@@ -199,6 +199,11 @@ class JobRegistryFactory:
         )
         self._local_locks_guard = threading.Lock()
 
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured registry retention for durable recovery expiry."""
+        return self._retention_seconds
+
     def lock(
         self,
         name: str,
