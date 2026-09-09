@@ -40,7 +40,7 @@ uv run ruff check .
 The June 22 report is pinned to author-repository revision
 `1397abb416e4b774003a09b689ea120e0da02262`; PDF SHA-256
 `00a0e5065551c80c12a019018e18d8365cc3da229303f1765aa49fdf22876ce2`.
-Read scope: opening abstract and pages 3–8; page 5/Figure 2 was rendered and
+Read scope: opening abstract and pages 3–10; page 5/Figure 2 was rendered and
 directly inspected, with legible labels, arrows, and caption. No full-report
 review or reproduction is claimed; no PDF is vendored.
 Page 8 was also directly inspected as a 1132×1600 render: the two reward
@@ -75,6 +75,16 @@ empirical worker superiority. Existing `tests/test_batch_optimizer.py` covers
 the real `batch_route` rejection of incomplete provider results while retaining
 other items' spend. A suspicious `zip` in the scorer alone therefore does not
 prove that this provider path silently shrinks the evaluation denominator.
+
+Sections 3.2.2–3.2.3 distinguish current-workflow access-list isolation from
+cross-workflow shared tool history, and retain the emitting agent's identity
+when routing tool responses. CO ablations must therefore declare memory scope
+and tool-response ownership, not just role labels. Shared history can correlate
+agents' errors; independent-looking agent counts are not independent evidence.
+Section 4.1.1 matches maximum reasoning effort against frontier workers, which
+does not establish equal total tokens, cost, or latency. Appendix A and the
+remaining evaluation sections have not yet been audited. These observations
+do not authorize changing CO's memory disclosure or free-pool policy.
 
 Engineering inference: compare decision-only selection with generative triage
 under the same observed cohort, correctness guardrail, and resource accounting.
