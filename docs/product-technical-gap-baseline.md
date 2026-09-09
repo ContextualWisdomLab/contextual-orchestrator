@@ -66,6 +66,20 @@ authorized, complete registry state. Expired recovery with missing registry
 state must remain denied. These findings supersede any bounded recommendation
 to freeze the candidate for full-suite verification.
 
+Those paths were reproduced independently: backend submission checkpoint
+`17cfa611` failed once in **0.95 seconds**, and its `8ddfeb9f` repair passed
+the focused case in **1.79 seconds**. Healthy-expired checkpoint `df638d6c`
+failed once in **1.51 seconds**; `a6b94855` then passed **84 tests in 32.63
+seconds**. Review found its healthy fast path skipped the new deployment
+binding. Checkpoint `08a660dc` reproduced that regression (**1 failed in 1.41
+seconds**); `cd38d9c4811deb6e9fde9c0c11a78869d9f39dcf` passed **85 tests in
+34.48 seconds** after persisting and checking the binding. Full-suite acceptance
+is still deferred: healthy metadata must also preserve the endpoint comparison
+already required by descriptor recovery. This is a demonstrated contract
+inconsistency, not demonstrated cross-service data disclosure. Legacy unbound
+jobs must have an explicit compatibility test; they cannot count as validated
+deployment-bound recovery.
+
 Visual receipt: the GitHub-rendered document at
 `aee00ac9da1e7f17ddfaec4ad3ebbafc06dee01f` was opened in the actual browser,
 and its screenshot directly inspected at **1265 × 712**, English. The title,
