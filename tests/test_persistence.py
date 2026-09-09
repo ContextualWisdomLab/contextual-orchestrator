@@ -326,6 +326,25 @@ def test_durable_analytics_retention_is_bounded() -> None:
         store.close()
 
 
+def test_durable_stream_return_is_visible_to_an_independent_connection() -> None:
+    """A durable return must acknowledge commit, not enqueue or flush-on-read."""
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "s.db")
+        store = _StateStore(database_path)
+        try:
+            # Prevent the asynchronous worker from making a queued write look durable.
+            with store._stream_condition, sqlite3.connect(database_path) as reader:
+                for stream_kind in store._STREAM_LIMITS:
+                    store.save(stream_kind, None, {"committed": True}, durable=True)
+                    rows = reader.execute(
+                        "SELECT payload FROM orchestration_records WHERE kind = ?",
+                        (stream_kind,),
+                    ).fetchall()
+                    assert rows == [('{"committed": true}',)]
+        finally:
+            store.close()
+
+
 def test_authorization_stream_persists_separately_from_audit() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")
