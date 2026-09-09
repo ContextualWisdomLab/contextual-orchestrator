@@ -491,6 +491,8 @@ class PgLlmBatchBackend:
         return (isinstance(document, dict)
                 and document.get("endpoint_alias") == self._endpoint_alias
                 and document.get("recovery_identity") == self._recovery_identity
+                and (document.get("endpoint") == self._endpoint
+                     or ("endpoint" not in document and self._recovery_identity is None))
                 and isinstance(document.get("requests"), dict)
                 and len(document["requests"]) == job.request_count)
 
@@ -566,6 +568,7 @@ class PgLlmBatchBackend:
             self._jobs[batch_id] = {
                 "endpoint_alias": self._endpoint_alias,
                 "recovery_identity": self._recovery_identity,
+                "endpoint": self._endpoint,
                 "requests": {
                     request.custom_id: dataclasses.asdict(request) for request in requests
                 },
