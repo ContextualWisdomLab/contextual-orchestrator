@@ -3099,3 +3099,22 @@ or cross-session push was attempted.
   official release a precondition — cut owner/consumer cycles with a
   minimal contract, port, or ACL and complete independently verifiable
   functionality first.
+
+### PR #1108 terminal repair evidence, 2026-09-09
+
+At head `129a665016ed1acd79ae12915c905b1020856fcc`, base
+`2996cd3c360444b792d499f3b09a783abdd830c2`, hosted run
+[34318012080](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34318012080)
+completed successfully. Checkout log records merge `9516d1d` of those revisions;
+tests job `102358241912` reports **3400 passed, 2 skipped, 734.73 seconds**, plus
+134 package/docstring checks passed in 10.61 seconds. All four actual check runs
+were successful. This supersedes the earlier metadata-assertion failure for
+current-head CI only; it does not erase that failure or establish a protected
+release. The Ready PR still has no reviews. Next gate: independent review and
+protected stack integration, preserving the canonical #1066 workflow delta.
+
+Research source `7734e89c` adds the bounded Bolsinova–Tijmstra response-time
+follow-up and prohibits outcome leakage in the proposed joint-model comparison.
+The DOI discovery check caught its missing inventory entry (one failing test);
+after linking the source, all six paper contracts passed in 6.23 seconds.
+No observed-task accuracy or decision-latency improvement has been measured.
