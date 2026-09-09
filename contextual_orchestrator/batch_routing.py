@@ -218,6 +218,7 @@ class BatchJob:
     # Prompt-token fallback estimates are safe metadata, stored atomically with
     # the job handle rather than retaining submitted prompt text.
     prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
+    request_link_status: str = "unavailable"
 
 
 @dataclass

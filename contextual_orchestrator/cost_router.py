@@ -973,6 +973,7 @@ class CostRoutingCoordinator:
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
         owner_id: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
@@ -996,6 +997,23 @@ class CostRoutingCoordinator:
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
         job.prompt_token_estimates = prompt_token_estimates
+        self._batch_jobs[job.job_id] = job
+        if request_id is not None and self.orchestrator._store is not None:
+            try:
+                # One append-only submission envelope commits all item links
+                # together. A later retrieval never rewrites this origin.
+                self.orchestrator._store.save("batch_request_link", None, {
+                    "request_id": request_id,
+                    "batch_job_id": job.job_id,
+                    "custom_ids": [request.custom_id for request in prepared_requests],
+                    "owner_id": owner_id,
+                }, durable=True)
+            except Exception:
+                # The upstream submission already happened. Preserve its handle
+                # and report incomplete lineage instead of inviting a resubmit.
+                job.request_link_status = "write_failed"
+            else:
+                job.request_link_status = "durable"
         self._batch_jobs[job.job_id] = job
         return job
 
