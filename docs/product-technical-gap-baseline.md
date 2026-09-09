@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 State persistence integrity prerequisite
+
+PR [#1108](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1108)
+repairs a reproduced failed-replacement data-loss case in the common SQLite
+state writer. Code `d7bba88f3d711883a37effe49ab4f503c4fb8e01` rolls back failed
+writes under the existing lock. Test follow-up `f1abe1e3` checks that no
+transaction remains immediately after failure and that both the previous and
+unrelated subsequent records survive reopening the database. The persistence
+suite passed 19 tests in 9.28s; this is not a latency or customer-accuracy result.
+
+At the earlier PR head `aa674187b0341c7852f85c27fb696aec21f1a799`, GitHub
+reported zero check runs and two success statuses whose descriptions explicitly
+said reviews were skipped (Draft; expired trial/no credits). Those statuses do
+not establish review approval or security validation. Keep protected merge and
+release pending actual exact-head evidence. The root cause and reproduction are
+in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
+
 ## 2026-09-09 Numerical candidate and rendered KPI evidence
 
 The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a
