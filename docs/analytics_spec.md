@@ -150,6 +150,17 @@ Separate initial decisions from failover attempts and never substitute a complet
 workflow record written after generation for the initial decision acknowledgement.
 This specifies the required boundary; it does not claim instrumentation exists.
 
+Use one admission identity per validated HTTP request, not per execution-slot
+acquisition, provider retry, or file replica. Declare separate units for batch
+items and non-generation operations. Start the clock before extracting the
+policy snapshot or preparing measurement records. A handled streaming error
+before selection remains a selection failure even when no exception reaches
+the finalizer; a later delivery failure must not rewrite an already acknowledged
+initial decision as if its persistence failed. Outcome and initial-decision
+statuses are separate observations. These requirements follow the concrete
+pre-release review of candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` in
+#1110; verification of the repaired implementation remains open.
+
 ### Autonomous experiment targets
 
 These are engineering acceptance targets selected on 2026-09-09, not measured
