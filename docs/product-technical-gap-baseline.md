@@ -8,10 +8,24 @@ Independent exact-source probing at
 despite its public `[0,1]` contract. In both serial and batch mock paths,
 NaN, infinity, and 1.1 could recommend an invalid candidate over a valid 0.9
 candidate. The 0.44-second probe used AST-extracted functions, not installed
-package or real-provider execution. Public optimize/evolve regression tests
-and the canonical shared validation repair are still pending. Preserve valid
+package or real-provider execution. Subsequent public optimize/evolve RED
+at `98153df6` produced 20 failed invalid-score cases and 20 passed compatibility
+cases. Shared repair `db700768` rejects each invalid score before aggregation.
+Frozen review checkpoint `22246762e3ce0b7e8624d457d8905835565d6a5a`
+passed 86 focused tests in 3.04 seconds, including invalid observations whose
+mean is valid. Preserve valid
 fractional scores; reject invalid evidence rather than clamping or omitting it.
 This protects recommendation integrity, not a measured customer accuracy gain.
+
+Isolated wheel execution `22123` passed 48 public score-domain tests in
+0.93 seconds outside the checkout, using Python `-I`. Root independently
+confirmed the installed import and wheel SHA-256
+`8dea451f3722dc91b3f4e9c10bfc9b55ab3372e39a2f49aeb5a027d67fce28f3`.
+The installed environment resolves declared dependencies; the separate live
+full suite `78368` uses the frozen project lock. Those environments are not
+claimed identical. Full-suite, hosted acceptance, protected merge, and release
+remain pending. The guard does not claim early provider-call cancellation or
+recovery of spend already incurred before score validation.
 
 The separate provider-truncation hypothesis was rejected: `batch_route` returns
 the ordered input cardinality or raises, and existing missing/content tests
