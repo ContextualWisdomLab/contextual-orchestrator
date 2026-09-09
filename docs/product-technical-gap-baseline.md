@@ -20,6 +20,27 @@ installed-package, hosted, protected-merge, and release evidence remain absent
 for this candidate. Simultaneous durable-store and registry failure cannot be
 reported as recoverable. No observed customer KPI improvement is established.
 
+Follow-up checkpoint `e372bc542f8fbec8d047a9affae15c018698d48a`
+reproduced **3 failures in 3.59 seconds**: continuing registry outage, inconsistent
+submission/item identities, and inconsistent estimate keys. At
+`7fb1a71ce1b4c14d1ba29e12501ba22fb589cca9`, **19 tests passed in 14.94 seconds**
+(terminal execution `37121`). Recovery metadata now travels with the authorized
+request instead of requiring another registry write. Independent source review
+found no additional silent usage/model-attribution defect in this diff: absent
+prompt estimates do not fall through to estimating an empty reconstructed prompt.
+That review does not cover all existing attribution behavior. Remaining checks
+include coordinator-registry hits with missing backend metadata, malformed job
+field types, and a changed deployment using the same backend alias. A backend
+alias or API path alone cannot establish service/account identity.
+
+Visual receipt: the GitHub-rendered document at
+`aee00ac9da1e7f17ddfaec4ad3ebbafc06dee01f` was opened in the actual browser,
+and its screenshot directly inspected at **1265 × 712**, English. The title,
+recovery heading, first paragraph, and full revision strings were readable
+without overlap or horizontal clipping in that viewport. The screenshot is
+inline in the validation task. Lower sections and other viewports/locales were
+not inspected; this does not constitute product UI acceptance.
+
 ## 2026-09-09 Stacked quality-trigger repair
 
 Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
