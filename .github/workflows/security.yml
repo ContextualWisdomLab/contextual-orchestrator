@@ -88,7 +88,7 @@ jobs:
             dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           cd "$RUNNER_TEMP"
           PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
-            python -c "import pathlib, contextual_orchestrator as core, contextual_orchestrator.nim_benchmark, contextual_orchestrator._decision_receipt as native; root = pathlib.Path('nim-wheel-site').resolve(); assert pathlib.Path(core.__file__).is_relative_to(root); assert pathlib.Path(native.__file__).is_relative_to(root)"
+            python -c "import pathlib, contextual_orchestrator as core; import contextual_orchestrator.nim_benchmark; import contextual_orchestrator._decision_receipt as native; root = pathlib.Path('nim-wheel-site').resolve(); assert pathlib.Path(core.__file__).is_relative_to(root); assert pathlib.Path(native.__file__).is_relative_to(root)"
           PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
             python -m pytest --noconftest --import-mode=importlib "$GITHUB_WORKSPACE/tests/test_decision_receipts.py" -q
 

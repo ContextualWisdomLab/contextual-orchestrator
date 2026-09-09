@@ -8190,7 +8190,7 @@ def build_server(
         def _release_measured_slot(self) -> None:
             """Finalize measurement independently of releasing the execution slot."""
             try:
-                measurement = self._decision_measurement
+                measurement = self._decision_measurement if decision_receipts else None
                 if measurement is not None:
                     active_error = sys.exc_info()[1]
                     reason = self._decision_failure_reason
@@ -8313,7 +8313,8 @@ def build_server(
                 writer()
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
-                self._decision_failure_reason = "cancelled"
+                if decision_receipts:
+                    self._decision_failure_reason = "cancelled"
                 _LOGGER.debug("client_disconnected")
                 # `_send*`/`_begin_sse` writers record their *intended*
                 # status in `self._last_status` before calling this method
@@ -8509,7 +8510,10 @@ def build_server(
                         part={"type": "summary_text", "text": text},
                     )
 
-            self._acquire_measured_slot()
+            if decision_receipts:
+                self._acquire_measured_slot()
+            else:
+                security.acquire_run_slot()
             try:
                 if not self._begin_sse():
                     return False
@@ -8671,7 +8675,10 @@ def build_server(
                 self._decision_failure_reason = "cancelled"
                 return False
             finally:
-                self._release_measured_slot()
+                if decision_receipts:
+                    self._release_measured_slot()
+                else:
+                    security.release_run_slot()
 
         def _stream_route_completion(
             self,
@@ -8717,7 +8724,10 @@ def build_server(
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-            self._acquire_measured_slot()
+            if decision_receipts:
+                self._acquire_measured_slot()
+            else:
+                security.acquire_run_slot()
             try:
                 if not self._begin_sse() or not self._write_sse(
                     frame({"role": "assistant"})
@@ -8777,7 +8787,10 @@ def build_server(
                         return
                 self._write_sse("data: [DONE]\n\n")
             finally:
-                self._release_measured_slot()
+                if decision_receipts:
+                    self._release_measured_slot()
+                else:
+                    security.release_run_slot()
 
         def _send_security_headers(self) -> None:
             if getattr(self, "close_connection", False):
