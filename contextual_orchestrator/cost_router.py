@@ -997,7 +997,6 @@ class CostRoutingCoordinator:
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
         job.prompt_token_estimates = prompt_token_estimates
-        self._batch_jobs[job.job_id] = job
         if request_id is not None and self.orchestrator._store is not None:
             try:
                 # One append-only submission envelope commits all item links
@@ -1014,6 +1013,13 @@ class CostRoutingCoordinator:
                 job.request_link_status = "write_failed"
             else:
                 job.request_link_status = "durable"
+        job.registry_persistence_status = "stored"
+        try:
+            self._batch_jobs[job.job_id] = job
+        except Exception:
+            # Submission already applied remotely; an HSET/expiry failure may
+            # itself be partially applied. Return the handle without replay.
+            job.registry_persistence_status = "write_failed"
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:

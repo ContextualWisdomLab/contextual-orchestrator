@@ -7507,6 +7507,7 @@ def build_server(
                         "status": job.status,
                         "request_count": job.request_count,
                         "request_link_status": job.request_link_status,
+                        "registry_persistence_status": job.registry_persistence_status,
                     }, 201)
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):

@@ -218,9 +218,10 @@ class BatchJob:
     # Prompt-token fallback estimates are safe metadata, stored atomically with
     # the job handle rather than retaining submitted prompt text.
     prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
-    # Submission-response diagnostic; durable truth is the append-only link
-    # event, not this snapshot in a separately persisted remote registry.
+    # Finalized before the registry snapshot is written; the append-only event
+    # supplies the durable request association independently of that registry.
     request_link_status: str = "unavailable"
+    registry_persistence_status: str = "unavailable"
 
 
 @dataclass
