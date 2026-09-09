@@ -1,5 +1,25 @@
 # Durable workflow origin identity
 
+## Full-suite environment repair
+
+Full collection at `4cf7feafd554fbbd65dfc3b790f1081623b0d05a` failed with
+exit 2 after 5.41 seconds: the shared wheel-smoke environment lacked Hypothesis.
+No tests completed in that run. The remedy is a separate project-local environment,
+not a runtime change or an installation into the shared historical environment:
+
+```sh
+uv sync --locked --extra api --extra db --extra queue --group dev
+.venv/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-receipt-wheel-install-20260909/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["-q"]))'
+```
+
+Setup completed with CPython 3.14.6 and the existing lock, including Hypothesis
+6.165.10. The reused base-native artifact is `_decision_receipt.abi3.so` under
+that explicitly named site-packages directory, SHA-256
+`ddac17f8c6a25e52a9233bd9e75f5ca3c754eb24641caa58113148df8ef60b4d`.
+Native source is unchanged from `c7345670`; this is source-integration evidence,
+not an installed successor-wheel or release result. Do not modify the shared
+native environment. Full-suite results remain pending until its handle terminates.
+
 The accepted-request ledger and completed workflow records previously had no
 durable join. At base c7345670, real HTTP route, conduct and streamed route
 requests could not match their persisted outcome to the trusted request ID.
