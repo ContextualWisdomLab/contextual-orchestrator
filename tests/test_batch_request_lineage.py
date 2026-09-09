@@ -87,7 +87,7 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         if registry_failure:
             assert submitted["job_id"] == "batch-789"
             assert batch_client.calls.count("create_batch_job") == 1
-            stored_handles = registry_client.hashes.get("jobs", {})
+            stored_handles = registry_client.hashes.get("batch_job_registry:jobs", {})
             assert bool(stored_handles) == (registry_failure == "expire")
             denied_status, _ = _request(
                 "POST", f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results",
