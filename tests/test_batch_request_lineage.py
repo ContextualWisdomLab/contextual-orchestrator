@@ -241,7 +241,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids", "backend_write_outage"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids", "backend_write_outage", "healthy_expired"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -282,9 +282,11 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                 coordinator.batch_backend._jobs = MissingRegistry()
             else:
                 coordinator._batch_jobs = MissingRegistry()
-        elif recovery_case == "coordinator_hit":
+        elif recovery_case in {"coordinator_hit", "healthy_expired"}:
             from contextual_orchestrator.batch_routing import BatchJob
             coordinator._batch_jobs[submitted["job_id"]] = BatchJob(**record["recovery_descriptor"]["job"])
+            if recovery_case == "healthy_expired":
+                coordinator.batch_backend._jobs = retained_backend_metadata
         elif recovery_case == "registry_outage":
             class UnavailableRegistry(MissingRegistry):
                 """All reads and writes remain unavailable during recovery."""
@@ -311,7 +313,8 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                 assert submitted["recovery_status"] == "durable_descriptor"
                 record = orchestrator._store.load("batch_request_link")[0]
                 assert "Never persist this prompt." not in str(record)
-                if recovery_case == "expired":
+                retained_backend_metadata = coordinator.batch_backend._jobs
+                if recovery_case in {"expired", "healthy_expired"}:
                     record["recovery_descriptor"]["expires_at"] = 0
                 if recovery_case == "malformed":
                     record["recovery_descriptor"]["backend"] = []
@@ -325,7 +328,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     record["recovery_descriptor"]["job"]["request_count"] = True
                 if recovery_case == "duplicate_ids":
                     record["custom_ids"] = ["a", "a"]
-                if recovery_case in {"expired", "malformed", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "duplicate_ids"}:
+                if recovery_case in {"expired", "healthy_expired", "malformed", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "duplicate_ids"}:
                     orchestrator._store.save("batch_request_link", submitted["job_id"], record, durable=True)
                 continue
             result_url = f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
