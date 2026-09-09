@@ -221,6 +221,7 @@ class BatchJob:
     # Finalized before the registry snapshot is written; the append-only event
     # supplies the durable request association independently of that registry.
     request_link_status: str = "unavailable"
+    recovery_status: str = "unavailable"
     # Deliberately not a dataclass field: HSET may succeed before expiry fails,
     # so an operation result must never be serialized into its own snapshot.
     registry_persistence_status = "unavailable"
@@ -474,6 +475,11 @@ class PgLlmBatchBackend:
         self._jobs: Dict[str, Dict[str, Any]] = (
             job_registry.mapping("pg_llm_batch_jobs") if job_registry is not None else {}
         )
+
+    @property
+    def recovery_enabled(self) -> bool:
+        """Whether the operator supplied a stable deployment/account binding."""
+        return self._recovery_identity is not None
 
     def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
         """Describe exact target and item metadata without submitted prompt text."""

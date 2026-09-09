@@ -1020,6 +1020,8 @@ class CostRoutingCoordinator:
                 job.request_link_status = "write_failed"
             else:
                 job.request_link_status = "durable"
+                if isinstance(self.batch_backend, PgLlmBatchBackend) and self.batch_backend.recovery_enabled:
+                    job.recovery_status = "durable_descriptor"
         job.registry_persistence_status = "stored"
         try:
             self._batch_jobs[job.job_id] = job
@@ -1321,7 +1323,11 @@ class CostRoutingCoordinator:
             job = self._batch_jobs.get(job_id)
         except Exception:
             job = None
-        if job is None and owner_id is not None and self.orchestrator._store is not None:
+        if job is not None and job.owner_id != owner_id:
+            raise KeyError(f"batch job {job_id!r} not found")
+        if (owner_id is not None and self.orchestrator._store is not None
+                and (job is None or (isinstance(self.batch_backend, PgLlmBatchBackend)
+                                     and self.batch_backend.recovery_enabled))):
             record = self.orchestrator._store.load_latest_key("batch_request_link", job_id)
             if (isinstance(record, dict) and record.get("owner_id") == owner_id
                     and record.get("batch_job_id") == job_id
@@ -1349,6 +1355,7 @@ class CostRoutingCoordinator:
                     if set(recovered.recovered_request_metadata) != set(custom_ids):
                         raise ValueError("mismatched recovery items")
                     recovered.request_link_status = "durable"
+                    recovered.recovery_status = "durable_descriptor"
                     job = recovered
                 except (KeyError, TypeError, ValueError):
                     job = None
