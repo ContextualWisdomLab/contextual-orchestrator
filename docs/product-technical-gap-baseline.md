@@ -3378,3 +3378,19 @@ on Linux/Python 3.12.14: **3452 passed, 2 skipped in 760.25s**, then 134
 benchmark/docstring checks and 40 installed-wheel checks passed. This supplies
 hosted-platform evidence previously pending; it does not establish independent
 approval, protected-main merge, registry publication or customer KPI improvement.
+
+Next batch gap: isolated test `387aa2111142b13b327f7065226c0f22c305b872`
+reproduced successful HTTP submission/retrieval of two items but no durable
+submission-request association after SQLite reopen (one failed in 3.75s).
+Candidate `369ea1e34dd0f4b3da9672ceae068656af6a69a8` passed 65 focused
+checks in 16.51s after repairing association persistence, redundant registry
+writes and response-only registry-write diagnostics. This is not full or
+installed-package acceptance and no batch PR has been submitted.
+
+Independent review still found a recovery gap: a remotely accepted job can
+return its handle after registry-write failure, yet later retrieval is unavailable.
+Recovery must use an owner-bound, expiring backend descriptor and exact item
+identities; a naked remote handle must never bypass ownership. Preserve absent
+usage and distinguish remote acceptance, association commit, registry persistence
+and actual recoverability. A status-only response does not complete this gap.
+The new work remains isolated from the tested #1112/#1113 candidates.
