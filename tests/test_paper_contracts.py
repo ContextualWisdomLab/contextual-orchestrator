@@ -29,7 +29,7 @@ def test_explicit_arxiv_references_have_inventory_entries() -> None:
         ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
     ).split("\0")
     inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
-    inventoried_ids = set(re.findall(r"\b\d{4}\.\d{4,5}\b", inventory))
+    inventoried_ids = set(re.findall(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", inventory, re.I))
     missing_references = {}
     for relative_path in tracked_paths:
         source_path = ROOT_DIR / relative_path
