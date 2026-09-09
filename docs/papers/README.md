@@ -179,6 +179,13 @@ non-psychometric references to avoid hiding cross-cutting dependencies.
 
 ### Interpretation constraints
 
+Additional DOI-only lead: Kang and Jeon (2025),
+[Multidimensional latent space item response models](https://doi.org/10.1017/psy.2025.5).
+The [bounded read and reproduction receipt](../doctoring/measured-routing-evidence.md)
+records the abstract/model scope and a directly viewed supplementary-code name
+mismatch. This extends discovery beyond the arXiv census; it does not establish
+a completed reproduction or a released fast-mlsirm implementation.
+
 These sources constrain what a routing score may mean; they are not routing
 algorithms. They add validity, identification, and fair-comparison checks:
 
