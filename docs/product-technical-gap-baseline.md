@@ -80,6 +80,15 @@ inconsistency, not demonstrated cross-service data disclosure. Legacy unbound
 jobs must have an explicit compatibility test; they cannot count as validated
 deployment-bound recovery.
 
+Endpoint checkpoint `c06615ab` reproduced the healthy-path mismatch (**1 failed
+in 2.09 seconds**). Runtime `450667593285679c92d1d0a698f35eadb2b2c879`
+passed **86 focused tests in 36.58 seconds** (terminal execution `63908`).
+Independent read-only review confirms endpoint equality now applies to new
+bound metadata; missing endpoints remain compatible only for explicitly unbound
+legacy records. Documentation head `73404f89d7a90f7a6b98caf514af859b02a375dd`
+is frozen for full-suite and separate installed-package verification. Neither
+has a completed result yet; this checkpoint is not hosted or released evidence.
+
 Visual receipt: the GitHub-rendered document at
 `aee00ac9da1e7f17ddfaec4ad3ebbafc06dee01f` was opened in the actual browser,
 and its screenshot directly inspected at **1265 × 712**, English. The title,

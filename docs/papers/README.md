@@ -138,7 +138,9 @@ redistribution is unclear.
   constant is not an estimate. That engineering criterion measures synthetic
   parameter recovery, not observed task correctness.
   Read scope on 2026-09-09: ERIC bibliographic record and the directly viewed
-  publisher's note (PDF page 6 of 187), not the full estimation chapters.
+  copyright page and publisher's note (PDF pages 4 and 6 of 187), not the
+  full estimation chapters. Page 4 states copyright 2001, ERIC Clearinghouse
+  on Assessment and Evaluation, with all rights reserved.
   [ERIC-hosted original](https://files.eric.ed.gov/fulltext/ED458219.pdf)
   is linked only; redistribution permission has not been established.
 
