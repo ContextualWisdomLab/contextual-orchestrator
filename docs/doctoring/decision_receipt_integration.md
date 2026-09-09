@@ -118,6 +118,22 @@ paths still require complete request-boundary coverage and executable evidence.
 No protected merge, production publication, or customer KPI gain is claimed.
 # Auxiliary and package acceptance checkpoint (2026-09-09)
 
+The later frozen `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` full suite passed
+3,442 tests with two skips in 771.43 s; its noneditable wheel-only receipt and SSE
+identity matrix passed 33 tests in 14.21 s. Independent saturation inspection then
+found chat streaming could call triage before acquiring capacity, despite a 503
+response. This was present with measurement disabled too; sibling nonstream chat
+and Responses streaming already rejected without a provider call.
+
+The capacity repair holds one explicit chat-classification lease through either
+the direct stream or conducted `_run` path. Request finalization releases the
+lease if classification or trace validation exits early. It does not acquire a
+second slot, release a slot it never acquired, or depend on measurement being
+enabled. Actual HTTP RED covered saturation and early exits (three failures,
+one passing control); the expanded enabled/disabled route/conduct/trace/error
+matrix plus streaming, disconnect, identity, and trace regression tests passed
+93 cases in 33.87 s. Those are local correctness results, not a latency gain.
+
 At `9707a5e1`, focused receipt/persistence tests passed 41 cases in 8.43 s.
 The Rust clock now separates provider-ready diagnostics from initial task-route
 acknowledgement. Structured triage, generated planning, and pre-selection evidence

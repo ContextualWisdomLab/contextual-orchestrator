@@ -5509,6 +5509,7 @@ def build_server(
         """Handle authenticated orchestration, administration, and health routes."""
         _session_token = None
         _trace_token = None
+        _classification_slot_held = False
 
         def _bind_session(self, session_id: str | None) -> None:
             """Bind validated request correlation to this handler context."""
@@ -5640,10 +5641,13 @@ def build_server(
             self._request_started = None
             self._decision_measurement = None
             self._decision_failure_reason = "unfinished"
+            self._classification_slot_held = False
             with request_identity():
                 try:
                     super().handle_one_request()
                 finally:
+                    if self._classification_slot_held:
+                        self._release_measured_slot()
                     if self._decision_measurement is not None:
                         self._decision_measurement.close(self._decision_failure_reason)
                         self._decision_measurement = None
@@ -7146,6 +7150,9 @@ def build_server(
                     if explicit_trace:
                         self._authorize_trace_access()
                     self._ensure_decision_measurement("validated_endpoint")
+                    if stream:
+                        self._acquire_measured_slot()
+                        self._classification_slot_held = True
                     route_stream = bool(
                         stream and orchestrator.would_route(messages, mode, model_name)
                     )
@@ -7175,6 +7182,7 @@ def build_server(
                                 messages,
                                 model_name,
                                 include_usage=include_usage,
+                                slot_acquired=True,
                             )
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -8152,7 +8160,8 @@ def build_server(
             return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:
-            self._acquire_measured_slot()
+            if not self._classification_slot_held:
+                self._acquire_measured_slot()
             try:
                 return callback()
             finally:
@@ -8204,6 +8213,7 @@ def build_server(
                     self._decision_failure_reason = reason
             finally:
                 security.release_run_slot()
+                self._classification_slot_held = False
 
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
             value = default if raw is None else int(raw)
@@ -8698,6 +8708,7 @@ def build_server(
             model_name: str,
             *,
             include_usage: bool = False,
+            slot_acquired: bool = False,
         ) -> None:
             """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
@@ -8734,10 +8745,11 @@ def build_server(
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-            if decision_receipts:
-                self._acquire_measured_slot()
-            else:
-                security.acquire_run_slot()
+            if not slot_acquired:
+                if decision_receipts:
+                    self._acquire_measured_slot()
+                else:
+                    security.acquire_run_slot()
             try:
                 if not self._begin_sse() or not self._write_sse(
                     frame({"role": "assistant"})
@@ -8799,7 +8811,7 @@ def build_server(
                         return
                 self._write_sse("data: [DONE]\n\n")
             finally:
-                if decision_receipts:
+                if slot_acquired or decision_receipts:
                     self._release_measured_slot()
                 else:
                     security.release_run_slot()

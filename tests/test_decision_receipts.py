@@ -10,6 +10,73 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+@pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
+@pytest.mark.parametrize("measurement_enabled", [False, True])
+def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):
+    """Classification and task execution share capacity and release it exactly once."""
+    from contextual_orchestrator.server import RequestError
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    security = SecurityConfig(auth_token="test-token", max_concurrent_runs=1)
+    original_acquire, original_release = security.acquire_run_slot, security.release_run_slot
+    acquired, released, calls = [], [], []
+    def acquire():
+        original_acquire()
+        acquired.append(True)
+    def release():
+        released.append(True)
+        original_release()
+    monkeypatch.setattr(security, "acquire_run_slot", acquire)
+    monkeypatch.setattr(security, "release_run_slot", release)
+    original_chat = orchestrator.client.chat
+    def chat(agent, messages, **kwargs):
+        calls.append(True)
+        if messages[0]["content"] == orchestrator.TRIAGE_SYSTEM_PROMPT:
+            return json.dumps({"workflow_required": scenario == "conduct_success"})
+        return original_chat(agent, messages, **kwargs)
+    monkeypatch.setattr(orchestrator.client, "chat", chat)
+    if scenario == "classifier_error":
+        def reject_classifier(*args, **kwargs):
+            raise ValueError("unit classifier rejection")
+        monkeypatch.setattr(orchestrator, "would_route", reject_classifier)
+    server = build_server(orchestrator, port=0, decision_receipts=measurement_enabled, security=security)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    if scenario == "saturated":
+        original_acquire()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        body = {"model": "orchestrator/auto", "mode": "auto", "stream": True,
+                "messages": [{"role": "user", "content": "capacity question"}]}
+        if scenario == "trace_rejection":
+            body["include_orchestration_trace"] = True
+        connection.request("POST", "/v1/chat/completions", json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == {"saturated": 503, "success": 200, "conduct_success": 200,
+                                   "classifier_error": 400, "trace_rejection": 400}[scenario]
+        connection.close()
+        server.shutdown()
+        if scenario == "saturated":
+            assert calls == []
+            assert acquired == released == []
+        else:
+            assert len(acquired) == len(released) == 1
+            original_acquire()
+            with pytest.raises(RequestError):
+                original_acquire()
+            original_release()
+    finally:
+        if scenario == "saturated":
+            original_release()
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("invalid_field", [None, "routing", "attribution", "user", "metadata", "implicit_trace", "explicit_trace", "authorized_trace"])
 def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_field):
     """Auto stream classification must share the eventual task's admission clock."""
