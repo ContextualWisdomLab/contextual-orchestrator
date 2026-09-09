@@ -4,12 +4,22 @@
 
 Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
 owns this repair and its Ready/closed admission checks. The partial local repair
-described below missed that lineage. Its full branch is now being integrated
+described below missed that lineage. Its full branch was integrated at `d721e04b`
 without force, with the extra filter/permission assertions consolidated into
 the owner's `tests/test_repository_security_metadata.py`. The duplicate test
 file is removed after preserving those assertions. #1066 and #1060 stay open;
-integration is not protected delivery. The current #1108 hosted run is preserved
-at `c11df645` and does not validate this later consolidation.
+integration is not protected delivery. The #1108 hosted run
+`34316962950` at `c11df645` completed with **1 failed, 3,399 passed, 2 skipped
+in 737.97 seconds**. The single failure was the existing metadata assertion
+for the old concurrency key, omitted by the partial repair. Fuzz and
+CodeQL/supply-chain/SBOM jobs passed. This was a contract-update omission,
+not a flaky test. Full #1066 inheritance repairs that assertion.
+
+The non-force integrated #1108 head `129a665016ed1acd79ae12915c905b1020856fcc`
+passed **42 metadata, NIM workflow, and persistence tests in 4.19 seconds**;
+actionlint and diff-check also passed. New hosted run `34318012080` was queued
+at the latest observation. Neither the historical full-suite result nor focused
+success proves current-head hosted completion, independent approval, or release.
 
 At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
 Security and Quality workflow filters pull requests to `main`. PR #1108 targets
