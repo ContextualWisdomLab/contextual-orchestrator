@@ -52,6 +52,25 @@ psychometric accuracy.
 
 ## APA 7 references
 
+### Multilevel follow-up source (2026-09-09)
+
+The local Zotero API returned a matching bibliographic record for Jin et al.
+(2022); the authors' [arXiv version 5](https://arxiv.org/abs/1810.07876v5)
+independently confirms the title and author list. The abstract distinguishes
+differences among individual schools from differences between school systems.
+This is a relevant methodological lead for preserving task/model/group levels,
+not evidence that CO's per-member Beta ledger implements a multilevel model.
+Full model review and suitability for gateway data remain open. No participant
+data, attachments, private notes, or new Zotero records were copied or created.
+
+Jin, I. H., Jeon, M., Schweinberger, M., Yun, J., & Lin, L. (2022).
+Multilevel network item response modelling for discovering differences between
+innovation and regular school systems in Korea. *Journal of the Royal
+Statistical Society: Series C (Applied Statistics), 71*(5), 1225–1244.
+https://doi.org/10.1111/rssc.12569
+
+### Existing references
+
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
 https://arxiv.org/abs/2305.05176
