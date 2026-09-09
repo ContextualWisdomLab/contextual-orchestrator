@@ -53,9 +53,7 @@ archive-member inspection found no `.pdf` members in either:
 These are local build artifacts, not published-package evidence. Git source
 archives include tracked PDFs and require a separate redistribution decision.
 
-## Cost optimisation
-
-### Response-process validity
+## Response-process validity
 
 Bolsinova, M., Tijmstra, J., Molenaar, D., & De Boeck, P. (2017).
 Conditional dependence between response time and accuracy: An overview of its
@@ -70,7 +68,7 @@ publisher copyright statement. No endorsement is implied. SHA-256:
 `3391e166d9c136cec8cdfdcc235e0e06b418a00525aac3005de97940ae9452a5`.
 See the [read scope and proposed experiment](../doctoring/irt_router_measurement_review.md#response-process-identification-follow-up).
 
-### Routing cost sources
+## Cost optimisation
 
 - **FrugalGPT: How to Use Large Language Models While Reducing Cost and
   Improving Performance** — Lingjiao Chen, Matei Zaharia, James Zou. arXiv:2305.05176, 2023.

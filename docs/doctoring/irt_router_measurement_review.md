@@ -196,7 +196,8 @@ predictive checks required before CO adoption. No new estimator is implemented.
 
 This sharpens the existing KPI experiment rather than changing its targets:
 the initial-task decision interval remains distinct from generation duration;
-success and failure denominators remain complete within the declared cohort.
+success and failure denominators must retain every request in the declared
+cohort. Completeness still requires reconciliation with external ingress.
 Candidate #1110 `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` now retains
 admitted semantic rejection as selection failure. Its local focused suite passed
 83 tests; full-suite and production observation evidence remain separate gates.
