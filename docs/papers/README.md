@@ -132,8 +132,15 @@ redistribution is unclear.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
-  Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
-  and compare it to known true parameters; a rank constant is not an estimate.
+  Background for IRT parameter estimation and information, not a verified
+  source for this project's choice of RMSE as its recovery criterion. The
+  ablation must emit θ̂ and compare it to known true parameters; a rank
+  constant is not an estimate. That engineering criterion measures synthetic
+  parameter recovery, not observed task correctness.
+  Read scope on 2026-09-09: ERIC bibliographic record and the directly viewed
+  publisher's note (PDF page 6 of 187), not the full estimation chapters.
+  [ERIC-hosted original](https://files.eric.ed.gov/fulltext/ED458219.pdf)
+  is linked only; redistribution permission has not been established.
 
 `run_equal_budget_ablation` emits estimated, synthetic true-parameter evidence
 for unit-test recovery checks. It does not establish buyer accuracy or authorize
