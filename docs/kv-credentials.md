@@ -316,7 +316,7 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
-| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Bytez               | `BYTEZ_API_KEY`          | `<token>` (no prefix) |
 | Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
@@ -330,7 +330,7 @@ When serving the persisted agents, pass the same host with
 `--allowed-provider-host`; startup discovery reads this injected runtime policy
 and never re-reads or promotes gateway environment values.
 
-Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
+Bytez's prefix-free `Authorization: <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
 doesn't use the OpenAI-compatible default.
 
@@ -367,3 +367,4 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
+

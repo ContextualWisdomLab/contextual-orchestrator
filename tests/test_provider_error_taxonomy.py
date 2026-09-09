@@ -20,8 +20,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
+
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    _REQUEST_ZDR_ONLY,
+    is_transient_error,
+)
 from contextual_orchestrator.provider_errors import (  # noqa: E402
     MAX_PROVIDER_ERROR_BODY_BYTES,
     MAX_SAFE_MESSAGE_CHARS,
@@ -311,6 +317,26 @@ def test_binary_passthrough_classifies_provider_transport_failure() -> None:
             assert raised.transport == "passthrough"
         else:  # pragma: no cover
             raise AssertionError("binary provider failure must be classified")
+
+
+def test_speech_passthrough_rejects_malformed_zdr_provider_routing() -> None:
+    """A non-object ``provider`` on the speech/audio bytes path fails closed.
+
+    Devin review on #953: under ``zdr_only`` scope, ``_pin_openrouter_zdr``
+    used to build ``dict(payload["provider"])`` unconditionally, so a
+    caller-supplied non-mapping ``provider`` (an int, bool, list, or string)
+    raised an uncaught ``TypeError`` from inside ``proxy_send_bytes`` before
+    any provider transport or failure classification ran. It must instead
+    raise the same named validation error the helper raises everywhere else.
+    """
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("audio_agent", "audio-model", provider_name="openrouter")
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        with pytest.raises(ValueError, match="provider must be an object"):
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello", "provider": 5})
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
 
 
 def test_detail_and_transport_are_preserved_for_callers() -> None:

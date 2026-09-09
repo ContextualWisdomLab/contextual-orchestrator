@@ -42,6 +42,11 @@ def _mixed_pool() -> tuple[ModelAgent, ModelAgent]:
         base_url=_SUPPORTED_BASE_URL,
         priority=1,
         reasoning_effort_supported=True,
+        # Tagged "discovered" so the discovery_sync mutation case below is
+        # actually reachable: sync_discovered_agents now protects any
+        # existing candidate that is not tagged "discovered" from being
+        # silently overwritten by a same-id incoming discovery row.
+        tags=("discovered",),
     )
     return unsupported, supported
 

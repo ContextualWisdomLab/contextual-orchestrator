@@ -8,6 +8,7 @@ import pytest
 from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     ProviderEmbeddingBatchBackend,
+    _DaemonWorkerPool,
 )
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator import (
@@ -18,6 +19,7 @@ from contextual_orchestrator import (
     PriceEntry,
     TaskOrchestrator,
 )
+from contextual_orchestrator.cost_router import _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -145,6 +147,31 @@ def test_provider_batch_returns_before_terminal_result() -> None:
     assert backend.wait(job, timeout=1)["status"] == "completed"
     assert backend.retrieve(job)[0].embedding == [15.0]
     assert backend.usage(job) == {"prompt_tokens": 2}
+    backend.close()
+
+
+def test_provider_batch_wait_survives_infinite_deadline() -> None:
+    """A caller with no wall-clock deadline (``timeout=inf``) still completes.
+
+    ``/v1/embeddings`` computes an ``inf`` remaining timeout when the client
+    has no configured deadline (contextual-orchestrator's no-implicit-deadline
+    default since #971). ``threading.Event.wait`` raises ``OverflowError`` for
+    a non-finite timeout on CPython/Linux, so the backend must translate an
+    infinite deadline into an unbounded (``None``) wait instead of passing it
+    straight through.
+    """
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[float(len(request.input_text))] for request in requests], 2
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    request = EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")
+    job = backend.submit([request])
+    release.set()
+    assert backend.wait(job, timeout=float("inf"))["status"] == "completed"
+    assert backend.retrieve(job)[0].embedding == [15.0]
     backend.close()
 
 
@@ -285,6 +312,29 @@ def test_close_waits_for_start_to_submit_work() -> None:
     assert shutdown_called.is_set()
 
 
+def test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work() -> None:
+    """A post-shutdown ``submit`` must fail fast, not enqueue behind sentinels.
+
+    Regression for a Devin Review finding ("Daemon pool accepts
+    post-shutdown work", ContextualWisdomLab/contextual-orchestrator#971):
+    ``_DaemonWorkerPool.shutdown`` used to set no closed state, so a
+    concurrent direct ``submit`` could enqueue real work behind the
+    shutdown sentinels every worker exits on -- work no worker would ever
+    pick up again. Real ``ThreadPoolExecutor.submit`` raises
+    ``RuntimeError`` once ``shutdown()`` has run; ``_DaemonWorkerPool`` now
+    matches that contract instead of silently stranding the job.
+    """
+    pool = _DaemonWorkerPool(2)
+    ran = threading.Event()
+    pool.submit(ran.set)
+    assert ran.wait(timeout=1)
+
+    pool.shutdown()
+
+    with pytest.raises(RuntimeError, match="shutdown"):
+        pool.submit(lambda: None)
+
+
 def test_server_shutdown_closes_embedding_workers() -> None:
     class ClosingBackend:
         name = "closing"
@@ -414,6 +464,106 @@ def test_local_startup_registers_provider_backend_for_recovered_jobs() -> None:
     )
 
 
+class _FakeValkeyClient:
+    """The minimal hash/lock surface ``ValkeyJsonMapping``/``JobRegistryFactory`` use."""
+
+    def hset(self, *_args, **_kwargs):
+        """Accept a hash-field write; no data is actually persisted."""
+        return 1
+
+    def hget(self, *_args, **_kwargs):
+        """Report every field as absent, matching a fresh empty hash."""
+        return None
+
+    def hgetall(self, *_args, **_kwargs):
+        """Report an empty hash for any key."""
+        return {}
+
+    def hdel(self, *_args, **_kwargs):
+        """Accept a hash-field delete; no data is actually persisted."""
+        return 1
+
+    def hkeys(self, *_args, **_kwargs):
+        """Report no fields for any hash."""
+        return []
+
+    def hlen(self, *_args, **_kwargs):
+        """Report an empty hash length."""
+        return 0
+
+    def expire(self, *_args, **_kwargs):
+        """Accept a TTL refresh as a no-op."""
+        return True
+
+    def lock(self, *_args, **_kwargs):
+        """Return a lock object that always acquires immediately."""
+
+        class _Lock:
+            def acquire(self, *_args, **_kwargs):
+                """Always succeed synchronously."""
+                return True
+
+            def release(self):
+                """No-op release."""
+
+        return _Lock()
+
+
+def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() -> None:
+    """A durable job registry must not require ``ModelClient.timeout`` to be set.
+
+    Constructing the coordinator previously raised ``ValueError: durable
+    provider backend claim lease must be positive`` whenever the client had
+    no configured wall-clock timeout (contextual-orchestrator's
+    no-implicit-deadline default since #971) and the job registry was
+    durable (Valkey-backed) -- a startup crash caused by deriving the claim
+    lease, an internal locking heartbeat, from that unrelated optional
+    client attribute. The lease must fall back to a fixed positive default
+    instead.
+    """
+    registry = JobRegistryFactory(client=_FakeValkeyClient())
+    assert registry.durable is True
+    agent = ModelAgent(
+        "remote_embedding",
+        "embed-v1",
+        base_url="https://synthetic.invalid/v1",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    assert orchestrator.client.timeout is None
+
+    coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
+
+    backend = coordinator._embedding_backends["provider"]
+    assert backend._claim_lease_seconds == _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+    backend.close()
+
+
+def test_unbounded_execution_timeout_never_substitutes_registry_retention() -> None:
+    """``execution_timeout_seconds=None`` stays genuinely unbounded.
+
+    It previously fell back to the job registry's storage retention window
+    (7 days by default), silently expiring an intentionally unbounded
+    embedding job once that window elapsed -- contradicting #971's
+    no-implicit-deadline policy. The per-job deadline must be ``+inf``, and
+    a job that outlives the registry's default retention window must still
+    complete rather than being force-failed as expired.
+    """
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[float(len(request.input_text))] for request in requests], 2
+
+    backend = ProviderEmbeddingBatchBackend(runner, execution_timeout_seconds=None)
+    request = EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")
+    job = backend.submit([request])
+    assert backend._execution_deadline(job.job_id) == float("inf")
+    release.set()
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    backend.close()
+
+
 def test_server_closes_provider_backend_added_after_startup() -> None:
     orchestrator = TaskOrchestrator([], allow_empty_agents=True)
     coordinator = CostRoutingCoordinator(
@@ -431,6 +581,40 @@ def test_server_closes_provider_backend_added_after_startup() -> None:
     server.server_close()
 
     assert closed.is_set()
+
+
+def test_recovered_privacy_scoped_embedding_batch_revalidates_current_agent_tags() -> None:
+    """A pinned ``zdr_only`` route must still satisfy ZDR at execution time.
+
+    ``ProviderEmbeddingBatchBackend`` replays a durably-queued job's pinned
+    ``agent_id`` after a process restart recovers it -- an arbitrarily long
+    gap in which an operator could remove the agent's ``privacy:zdr`` tag or
+    repoint it to a non-ZDR route. Executing a request whose stored
+    ``zdr_only=True`` against an agent that no longer carries that tag must
+    fail closed instead of silently sending the batch through an unverified
+    route.
+    """
+    agent = ModelAgent(
+        "reconfigured_embedding",
+        "reconfigured-embedding-model",
+        base_url="https://synthetic.invalid/v1",
+        tags=("embedding",),  # privacy:zdr was revoked since this batch was submitted
+    )
+    client = _SyntheticProviderClient()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+    stale_request = EmbeddingBatchRequest(
+        input_text="synthetic input",
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    with pytest.raises(RuntimeError, match="zdr_only"):
+        coordinator._run_provider_embeddings([stale_request])
+    assert client.embedding_calls == []
 
 
 def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -> None:

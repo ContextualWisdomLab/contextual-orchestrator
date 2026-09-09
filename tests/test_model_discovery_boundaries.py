@@ -479,18 +479,90 @@ def test_bootstrap_fills_remainder_from_deferred_same_family_models() -> None:
     assert all(m.provider_name == "nvidia_nim" for m in selected[2:])
 
 
-def test_bootstrap_early_return_stops_at_limit_within_loop() -> None:
-    """A limit below the distinct-family count returns without a second pass."""
+def test_bootstrap_selection_fails_closed_at_unpriced_boundary() -> None:
+    """A capacity boundary cannot admit lexically chosen unpriced candidates."""
     book = PriceBook(InMemoryConfigStore())
     models = [
         _chat_model("openai", "openai-model"),
         _chat_model("openrouter", "openrouter-model"),
         _chat_model("bytez", "bytez-model"),
     ]
-    selected = select_bootstrap_discovered_agents(models, book, 2)
-    # Unpriced ties rank by provider name: bytez < openai < openrouter.
-    assert len(selected) == 2
-    assert [m.provider_name for m in selected] == ["bytez", "openai"]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_fails_closed_at_equal_known_price_boundary() -> None:
+    """Equal comparable cost cannot be resolved by provider/model names."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model(provider, f"{provider}-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        )
+        for provider in ("openai", "openrouter", "bytez")
+    ]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_rejects_unmodeled_cost_displacement() -> None:
+    """Provider diversity cannot displace cheaper evidence without a utility model."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model("openrouter", "cheap-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("openrouter", "next-cheapest-model"),
+            prompt_price_per_1k=0.75,
+            completion_price_per_1k=0.75,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("bytez", "expensive-model"),
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="USD",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="decision model"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_rejects_unmodeled_full_pool_reordering() -> None:
+    """Admitting every candidate cannot make diversity an implicit route order."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model("openrouter", "cheap-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("openrouter", "next-cheapest-model"),
+            prompt_price_per_1k=0.75,
+            completion_price_per_1k=0.75,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("bytez", "expensive-model"),
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="USD",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="decision model"):
+        select_bootstrap_discovered_agents(models, book, 3)
 
 
 if __name__ == "__main__":  # pragma: no cover

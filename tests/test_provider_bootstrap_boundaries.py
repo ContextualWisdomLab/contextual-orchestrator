@@ -20,7 +20,7 @@ from contextual_orchestrator.provider_bootstrap import (
     ProviderBootstrapError,
     collect_provider_credentials,
     register_provider_credentials_atomically,
-    select_provider_diverse_models,
+    select_model_group_diverse_models,
 )
 
 
@@ -166,12 +166,12 @@ def test_register_requires_atomic_builtin_backend() -> None:
         set_backend(None)
 
 
-# --- select_provider_diverse_models -------------------------------------------------
+# --- select_model_group_diverse_models ---------------------------------------------
 
 
 def test_select_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError, match="must be positive"):
-        select_provider_diverse_models([_model("openai", "OPENAI_API_KEY", "gpt-x")], limit=0)
+        select_model_group_diverse_models([_model("openai", "OPENAI_API_KEY", "gpt-x")], limit=0)
 
 
 def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() -> None:
@@ -179,7 +179,7 @@ def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() 
     unpriced = _model("openrouter", "OPENROUTER_API_KEY", "qwen-free", prompt=None)
     eur = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-eur", prompt=0.01, currency="EUR")
 
-    selected = select_provider_diverse_models(
+    selected = select_model_group_diverse_models(
         [unpriced, eur, priced], limit=3
     )
     # Known USD pricing wins the diversity slot; unknown/incomparable fill after.
@@ -194,7 +194,7 @@ def test_select_keeps_independent_credential_accounts() -> None:
     same_family_sub = _model(
         "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-delta", prompt=4.0
     )
-    selected = select_provider_diverse_models([primary, same_family_sub], limit=2)
+    selected = select_model_group_diverse_models([primary, same_family_sub], limit=2)
     # A shared vendor endpoint does not collapse independent credential accounts.
     assert [m.model_id for m in selected] == ["nim-gamma", "nim-delta"]
 
@@ -202,7 +202,7 @@ def test_select_keeps_independent_credential_accounts() -> None:
 def test_select_skips_non_chat_candidates_entirely() -> None:
     guard = _model("openai", "OPENAI_API_KEY", "llama-guard-4b", prompt=0.1)
     chat = _model("openrouter", "OPENROUTER_API_KEY", "qwen-chat", prompt=9.0)
-    selected = select_provider_diverse_models([guard, chat], limit=5)
+    selected = select_model_group_diverse_models([guard, chat], limit=5)
     assert [m.model_id for m in selected] == ["qwen-chat"]
 
 
@@ -267,7 +267,7 @@ def test_select_returns_partial_pool_when_family_exhausted_below_limit() -> None
     )
     # Only one outage family exists, so diversity yields one slot, the filler
     # adds the second, and the pool legitimately ends below ``limit``.
-    selected = select_provider_diverse_models([primary, sibling], limit=5)
+    selected = select_model_group_diverse_models([primary, sibling], limit=5)
     assert [m.model_id for m in selected] == ["nim-primary", "nim-sibling"]
 
 
@@ -301,8 +301,9 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     ]
 
     enabled = _synchronize_durable_agent_pool(agents_db, selected_models)
+    expected_ids = tuple(sorted(pb.agent_id_for(model) for model in selected_models))
 
-    assert enabled == ("openai_gpt_current", "openrouter_qwen_current")
+    assert enabled == expected_ids
     restarted = TaskOrchestrator([], agents_db=agents_db)
     ids_by_state = {
         agent.id: ("disabled" if agent.disabled else "enabled")
@@ -312,14 +313,144 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     # is neither activated nor deleted.
     assert ids_by_state["manual_operator_agent"] == "enabled"
     assert ids_by_state["openai_retired_model"] == "disabled"
-    assert ids_by_state["openai_gpt_current"] == "enabled"
-    assert ids_by_state["openrouter_qwen_current"] == "enabled"
+    assert all(ids_by_state[agent_id] == "enabled" for agent_id in expected_ids)
+
+
+def test_durable_pool_does_not_activate_manual_legacy_id_collision(tmp_path: Any) -> None:
+    """Discovery must not override an operator-disabled manual endpoint."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "manual_collision.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    manual = replace(
+        generated,
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        priority=77,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    stored = next(agent for agent in restarted.candidates if agent.id == manual.id)
+    assert stored.base_url == manual.base_url
+    assert stored.disabled is True
+    assert stored.priority == 77
+    assert stored.tags == ("manual",)
+    restarted.close()
+
+
+def test_durable_pool_does_not_replace_manual_exact_id_collision(tmp_path: Any) -> None:
+    """The generated discovery id cannot overwrite an operator-owned row."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "manual_exact_collision.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    manual = replace(
+        generated,
+        base_url="https://manual.example/v1",
+        disabled=True,
+        priority=77,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
+def test_durable_pool_collision_preflight_prevents_partial_activation(tmp_path: Any) -> None:
+    """A mixed valid/collision selection must write nothing before failing."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "mixed_collision.db")
+    collision = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
+@pytest.mark.parametrize(
+    ("model_id", "legacy_id", "capabilities"),
+    (
+        ("Straße/Model", "openrouter_stra_e_model", ()),
+        ("模型", "openrouter_model", ("image",)),
+    ),
+)
+def test_unicode_legacy_collision_preflight_leaves_pool_unchanged(
+    tmp_path: Any,
+    model_id: str,
+    legacy_id: str,
+    capabilities: tuple[str, ...],
+) -> None:
+    """Historical Unicode legacy IDs must collide before any selected row is saved."""
+    from dataclasses import replace
+
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "unicode_collision.db")
+    collision = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", model_id),
+        capabilities=capabilities,
+    )
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id=legacy_id,
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
 
 
 def test_durable_pool_sync_closes_temporary_orchestrator(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
-) -> None:
+    ) -> None:
     """A refresh must stop telemetry owned by its temporary orchestrator."""
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.provider_bootstrap import (
@@ -339,5 +470,55 @@ def test_durable_pool_sync_closes_temporary_orchestrator(
         [_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")],
     )
 
-    assert enabled == ("openrouter_qwen_current",)
+    assert enabled == (pb.agent_id_for(_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")),)
     assert closed == [True]
+
+
+def test_durable_pool_migrates_legacy_selected_endpoint_without_duplicate(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    legacy = replace(generated, id="openrouter_vendor_model", disabled=False)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    matching = [
+        agent
+        for agent in restarted.candidates
+        if agent.provider_name == generated.provider_name
+        and agent.credential_name == generated.credential_name
+        and agent.model == generated.model
+    ]
+
+    assert enabled == (legacy.id,)
+    assert [agent.id for agent in matching] == [legacy.id]
+    assert matching[0].disabled is False
+    restarted.close()
+
+
+def test_durable_pool_activates_refreshed_duplicate_legacy_endpoint(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "duplicate_legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(replace(generated, id="legacy_first", priority=1))
+    seeded._pool_store.save(replace(generated, id="legacy_refreshed", priority=2))
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+
+    assert enabled == ("legacy_refreshed",)
+    assert [agent.id for agent in restarted.agents] == ["legacy_refreshed"]
+    assert restarted.agents[0].priority == generated.priority
+    restarted.close()

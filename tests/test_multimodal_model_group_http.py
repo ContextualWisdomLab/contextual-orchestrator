@@ -129,6 +129,21 @@ def test_speech_endpoint_preserves_binary_media_response() -> None:
         server.shutdown()
 
 
+def test_speech_endpoint_rejects_non_object_provider_routing() -> None:
+    agent = ModelAgent("speech_member", "provider/speech", tags=("speech",))
+    server = build_server(TaskOrchestrator([agent]), port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post_error(
+            server.server_address[1],
+            "/v1/audio/speech",
+            {"input": "hello", "voice": "alloy", "provider": 1},
+        )
+        assert status == 400 and body["error"]["code"] == "invalid_provider"
+    finally:
+        server.shutdown()
+
+
 def test_video_poll_and_content_use_the_submission_provider() -> None:
     """Async video follow-ups stay bound to the measured submission winner."""
     first = ModelAgent(

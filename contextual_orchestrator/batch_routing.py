@@ -25,6 +25,8 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
+import queue
 import threading
 import time
 import uuid
@@ -623,6 +625,7 @@ class EmbeddingBatchRequest:
     routing_agent_id: str | None = None
     zdr_only: bool = False
     agent_id: Optional[str] = None
+    provider_routing: Optional[Dict[str, Any]] = None
 
     def wire_custom_id(self) -> str:
         """Return a provider-safe id while retaining the internal request mapping.
@@ -639,14 +642,16 @@ class EmbeddingBatchRequest:
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
+        body: Dict[str, Any] = {"model": self.model, "input": self.input_text}
+        if self.provider_routing is not None:
+            body["provider"] = dict(self.provider_routing)
         return {
             # The provider body stays OpenAI-compatible; the backend's tracked
             # request map carries the immutable route identity separately.
             "custom_id": self.wire_custom_id(),
             "method": "POST",
             "url": endpoint,
-            # ``zdr_only`` is enforced before this provider JSONL is built.
-            "body": {"model": self.model, "input": self.input_text},
+            "body": body,
         }
 
 
@@ -767,6 +772,148 @@ class LocalEmbeddingBatchBackend:
         return self._results.get(job.job_id, [])
 
 
+class _DaemonWorkerPool:
+    """A fixed-size daemon worker pool with a `ThreadPoolExecutor`-shaped surface.
+
+    ``ProviderEmbeddingBatchBackend`` used to hand its long-lived, durable
+    job queue to a real :class:`concurrent.futures.ThreadPoolExecutor`. That
+    executor registers every worker thread it starts with
+    ``concurrent.futures.thread``'s own interpreter-exit ``atexit`` hook,
+    which unconditionally *joins* each still-running worker at shutdown
+    regardless of that worker's own daemon flag (the same verified failure
+    mode as ``endpoint_race.race_first_valid`` and
+    ``model_discovery._openrouter_free_model_endpoints`` elsewhere in this
+    PR). Combined with this org's default no-deadline
+    ``ModelClient.timeout=None`` policy -- and the fact that
+    ``execution_timeout_seconds`` here is only a *cooperative* deadline
+    checked after ``runner()`` returns, never a preemptive cancellation of
+    the in-flight call -- a provider embedding runner that never returns
+    would make that join, and therefore process shutdown, hang forever even
+    though ``close()`` had already been called.
+
+    This pool keeps the concurrency bound (a *fixed* number of persistent
+    daemon workers, not one raw thread per queued job -- durable recovery
+    can replay many pending jobs at once, and one native thread per job
+    would reintroduce the unbounded-thread-count problem the fixed-pool
+    fetch in ``model_discovery`` was written to avoid) while carrying no
+    exit-hook registration at all: an abandoned worker is silently dropped
+    at interpreter exit, exactly like every other raw ``daemon=True``
+    thread in this codebase's timeout-safe call sites.
+
+    ``submit()``/``shutdown()`` intentionally mirror
+    :class:`concurrent.futures.ThreadPoolExecutor`'s method names and
+    ``shutdown(wait=, cancel_futures=)`` signature so every existing
+    ``ProviderEmbeddingBatchBackend`` call site -- and the ``_executor``
+    attribute callers substitute test doubles into -- keeps working
+    unchanged. Workers are also spawned lazily, one per ``submit()`` up to
+    ``max_workers``, exactly like ``ThreadPoolExecutor._adjust_thread_count``:
+    each new worker's first ``queue.get()`` finds its triggering item
+    already queued rather than racing a ``Condition`` wakeup against an
+    already-idle worker, so callers that (like several existing tests)
+    observe a durable job's state immediately after ``submit()`` returns
+    keep the same effectively-synchronous-for-fast-runners timing the
+    ``ThreadPoolExecutor``-backed implementation had.
+
+    ``submit()`` also mirrors ``ThreadPoolExecutor``'s closed-pool contract:
+    once ``shutdown()`` has run, a later ``submit()`` raises ``RuntimeError``
+    instead of silently queuing work behind the shutdown sentinels, where it
+    would never be picked up by any worker (every worker already exits on
+    its own sentinel and none are spawned after shutdown, since
+    ``submit()`` is the only place that spawns them). ``ProviderEmbeddingBatchBackend``
+    itself never races ``submit()`` against ``shutdown()`` this way --
+    ``start()`` and ``close()`` both serialize through the backend's
+    ``_executor_lock`` and ``start()`` checks ``self._closed`` first -- but
+    this pool is a standalone primitive and must not depend on every caller
+    reproducing that locking to avoid stranding a job.
+    """
+
+    def __init__(self, max_workers: int, *, thread_name_prefix: str = "provider_embedding_worker") -> None:
+        self._max_workers = max_workers
+        self._thread_name_prefix = thread_name_prefix
+        self._queue: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...]] | None] = queue.Queue()
+        self._workers: list[threading.Thread] = []
+        self._workers_lock = threading.Lock()
+        self._shutdown = False
+
+    def _drain(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:  # shutdown sentinel
+                return
+            fn, args = item
+            try:
+                fn(*args)
+            except BaseException:  # noqa: BLE001 - a worker task must never kill its worker
+                _LOGGER.exception("provider embedding worker task raised")
+
+    def submit(self, fn: Callable[..., Any], *args: Any) -> None:
+        """Queue ``fn(*args)`` for a pool worker. Fire-and-forget: no Future.
+
+        Raises ``RuntimeError`` if ``shutdown()`` has already run, matching
+        ``ThreadPoolExecutor.submit``'s closed-pool contract, instead of
+        enqueuing work behind the shutdown sentinels where no worker would
+        ever pick it up.
+        """
+        with self._workers_lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new work after shutdown")
+            self._queue.put((fn, args))
+            if len(self._workers) < self._max_workers:
+                worker = threading.Thread(
+                    target=self._drain,
+                    name=f"{self._thread_name_prefix}_{len(self._workers)}",
+                    daemon=True,
+                )
+                self._workers.append(worker)
+                worker.start()
+
+    def shutdown(self, *, wait: bool = True, cancel_futures: bool = False) -> None:
+        """Stop accepting new work; mirrors ``ThreadPoolExecutor.shutdown``.
+
+        ``cancel_futures=True`` drops anything still sitting in the queue
+        that no worker has picked up yet -- it never runs, exactly like
+        ``ThreadPoolExecutor``'s own ``cancel_futures``. It cannot, and does
+        not need to, interrupt a worker already inside ``fn(*args)``: that
+        worker is a daemon thread and is simply abandoned, not joined, when
+        ``wait=False``.
+
+        Admission is closed *first*, atomically, under ``_workers_lock`` --
+        before anything else (draining the queue or queuing stop sentinels)
+        happens. ``submit()`` checks the same flag under the same lock, so
+        the two methods can never interleave: a ``submit()`` that acquires
+        the lock after this closes admission observes the closed pool and
+        raises immediately (see ``submit``'s docstring) instead of racing
+        the cancellation drain below, and a ``submit()`` already holding the
+        lock is guaranteed to finish enqueuing before this method can
+        proceed -- so its item is still present in the queue when the drain
+        below runs and is correctly cancelled. Either way no submission can
+        land *between* the drain and admission closing, which is what let a
+        racing ``submit()`` slip past ``cancel_futures=True`` before this
+        fix (ContextualWisdomLab/contextual-orchestrator#971).
+
+        Idempotent: a repeated call observes ``self._shutdown`` already set
+        and skips re-draining the queue and re-queuing sentinels (both of
+        which are only correct to do once), while still joining the
+        already-captured worker list when ``wait=True``.
+        """
+        with self._workers_lock:
+            first_shutdown = not self._shutdown
+            self._shutdown = True
+            workers = list(self._workers)
+        if first_shutdown:
+            if cancel_futures:
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+            for _ in workers:
+                self._queue.put(None)
+        if wait:
+            for worker in workers:
+                worker.join()
+
+
 class ProviderEmbeddingBatchBackend:
     """Queue provider embedding work and expose a durable polling lifecycle."""
 
@@ -785,7 +932,7 @@ class ProviderEmbeddingBatchBackend:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
         self._max_concurrency = max_concurrency
-        self._executor: ThreadPoolExecutor | None = None
+        self._executor: _DaemonWorkerPool | None = None
         self._executor_lock = threading.Lock()
         self._closed = threading.Event()
         self._registry = job_registry or JobRegistryFactory()
@@ -804,11 +951,13 @@ class ProviderEmbeddingBatchBackend:
         )
         if execution_timeout_seconds is not None and execution_timeout_seconds <= 0:
             raise ValueError("provider embedding execution timeout must be positive")
-        self._execution_timeout_seconds = (
-            execution_timeout_seconds
-            if execution_timeout_seconds is not None
-            else self._registry.retention_seconds
-        )
+        # ``None`` is a genuine "no execution deadline" state (the caller's
+        # ``ModelClient`` has no configured wall-clock timeout) and must stay
+        # that way -- it previously fell back to the registry's storage
+        # retention window, silently expiring an intentionally unbounded
+        # embedding job once that window elapsed. ``_execution_deadline``
+        # below treats ``None`` as an unbounded (``+inf``) deadline instead.
+        self._execution_timeout_seconds = execution_timeout_seconds
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
@@ -856,7 +1005,7 @@ class ProviderEmbeddingBatchBackend:
             if self._states.get(job_id) in {"queued", "running"}
         ]
         if pending_job_ids:
-            self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+            self._executor = _DaemonWorkerPool(self._max_concurrency)
             for job_id in pending_job_ids:
                 self._terminal_events[job_id] = threading.Event()
                 self._executor.submit(copy_context().run, self._run_job, job_id)
@@ -915,7 +1064,7 @@ class ProviderEmbeddingBatchBackend:
             self._states[job.job_id] = "queued"
             self._terminal_events[job.job_id] = threading.Event()
             if self._executor is None:
-                self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+                self._executor = _DaemonWorkerPool(self._max_concurrency)
             self._executor.submit(copy_context().run, self._run_job, job.job_id)
 
     def _run_job(self, job_id: str) -> None:
@@ -956,7 +1105,12 @@ class ProviderEmbeddingBatchBackend:
                 event.set()
 
     def _execution_deadline(self, job_id: str) -> float:
-        """Persist a bounded lifetime beginning with the first execution claim."""
+        """Persist this job's lifetime beginning with the first execution claim.
+
+        ``+inf`` when the backend was built with no execution timeout (a
+        genuinely unbounded job) -- every deadline comparison below already
+        treats an infinite epoch as "never expires" without further changes.
+        """
         existing = self._deadlines.get(job_id)
         if existing is not None:
             return float(existing)
@@ -967,8 +1121,14 @@ class ProviderEmbeddingBatchBackend:
         ):
             existing = self._deadlines.get(job_id)
             if existing is None:
-                request_count = len(self._requests[job_id])
-                deadline = time.time() + self._execution_timeout_seconds * max(1, request_count)
+                if self._execution_timeout_seconds is None:
+                    deadline = float("inf")
+                else:
+                    request_count = len(self._requests[job_id])
+                    deadline = (
+                        time.time()
+                        + self._execution_timeout_seconds * max(1, request_count)
+                    )
                 set_if_absent = getattr(self._deadlines, "set_if_absent", None)
                 if callable(set_if_absent):
                     set_if_absent(job_id, deadline)
@@ -1112,10 +1272,17 @@ class ProviderEmbeddingBatchBackend:
             self._states[job_id] = status
 
     def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
-        """Wait within the caller's explicit deadline for a terminal state."""
+        """Wait within the caller's explicit deadline for a terminal state.
+
+        ``timeout`` may be ``float("inf")`` when the caller has no wall-clock
+        deadline (contextual-orchestrator's no-implicit-deadline default);
+        ``threading.Event.wait`` raises ``OverflowError`` for a non-finite
+        timeout on CPython, so a non-finite value is translated to ``None``
+        (block indefinitely) rather than passed through.
+        """
         event = self._terminal_events.get(job.job_id)
         if event is not None:
-            event.wait(timeout=timeout)
+            event.wait(timeout=timeout if math.isfinite(timeout) else None)
         return self.poll(job)
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:

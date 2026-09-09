@@ -1,6 +1,6 @@
 ---
 title: "Provider-diverse discovery and cost-honest failover routing"
-status: "implemented"
+status: "proposed"
 date: "2026-08-21"
 scope: "PR #770"
 ---
@@ -12,10 +12,16 @@ scope: "PR #770"
 PR #770 makes model discovery fail closed for invalid catalog rows (a price
 that is negative, non-finite, or a nonzero value that underflows to zero),
 retains eligible candidates that simply have no reported price as an
-explicit unknown-cost fallback, and selects a provider-diverse bootstrap
-pool before ordinary chat routing. The selector is deterministic eligibility
-and cost accounting; it is not a learned answer-quality judge and does not
-claim to reproduce the learning systems in the cited work.
+explicit unknown-cost fallback, and proposes a provider/model-group-diverse
+bootstrap pool before ordinary chat routing. Provider/model-group labels are
+not outage probabilities or utility evidence. A proposal therefore fails
+closed when it changes the price-evidenced candidate sequence, or when selected
+and excluded candidates have equal comparable cost or incomplete price
+evidence. Operators must supply a released decision model, comparable price
+evidence, or capacity for the whole competing class. The selector is
+deterministic eligibility and cost accounting; it is not a learned
+answer-quality or availability judge and does not claim to reproduce the
+learning systems in the cited work.
 
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
@@ -30,7 +36,8 @@ DNS failure can advance without changing an explicitly requested concrete model.
 | --- | --- | --- |
 | Reject malformed, negative, or non-finite price rows | A cost-aware router must not treat missing or invalid evidence as zero cost. | Discovery and persisted-price tests reject the row before selection. |
 | Keep unknown-price candidates only as an explicit fallback | Cost optimization must remain honest when price evidence is incomplete. | Selection tests never rank an unknown price above a valid priced candidate. |
-| Prefer distinct providers in the bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Provider-diversity tests assert the configured pool spans available providers. |
+| Propose distinct providers without treating labels as utility | A gateway may benefit from independently failing upstreams, but provider names alone do not quantify that benefit. | Discovery-selector tests reject a more-expensive diversity proposal until an explicit decision model supplies the missing evidence. |
+| Reject an evidence-tied capacity cutoff | Lexical provider/model identity is deterministic ordering metadata, not price, quality, or availability evidence. | Both selectors raise when a selected and excluded candidate share the same comparable-cost/unknown state. |
 | Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
 
@@ -40,6 +47,17 @@ stack base under `docs/papers/` (`routellm-routing-2406.18665.pdf`,
 `frugalgpt-cost-2305.05176.pdf`). This doctoring record makes their relevance
 to the exact discovery selector explicit instead of treating inherited files
 as incidental documentation.
+
+## Consumer migration boundary
+
+`provider_bootstrap.select_model_group_diverse_models` and
+`model_discovery.select_bootstrap_discovered_agents` may propose exact
+model-group/provider spread, but neither may let that proposal change the
+price-evidenced candidate sequence without an explicit decision model. Consumers
+that require provider-level redundancy must supply that released allocation
+contract at the approved owner boundary. Neither selector may break an
+equal/incomplete evidence tie or displace lower-cost evidence by provider or
+model name.
 
 ## APA 7 references
 

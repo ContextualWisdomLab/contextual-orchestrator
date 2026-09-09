@@ -15,6 +15,8 @@ from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
+    model_group_name_for,
 )
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
@@ -137,7 +139,7 @@ def test_configured_gateway_discovery_retains_only_structured_probe_successes(
     result = _auto_discover_runtime_agents(orchestrator)
 
     assert probes == ["stale-model", "live-model"]
-    assert result["added"] == ["configured_gateway_live_model"]
+    assert result["added"] == [agent_id_for(models[1])]
     assert all(agent.model != "stale-model" for agent in orchestrator.agents)
 
 
@@ -331,6 +333,56 @@ def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
     assert "structured:blocked" in restarted.candidates[0].tags
 
 
+def test_failed_gateway_probe_disables_legacy_id_persisted_agent(
+    monkeypatch, tmp_path
+) -> None:
+    """A persisted agent kept under the pre-fingerprint legacy id is disabled too.
+
+    A failed configured-gateway structured probe is recorded only under the
+    new fingerprinted id (``agent_id_for``), but a persisted agent from
+    before model-group fingerprinting keeps its legacy id
+    (``legacy_agent_id_for``). The ``runtime_models`` membership check must
+    accept either id form -- matching the ``existing_by_id`` fallback lookup
+    used later in the same function -- otherwise a legacy-id agent whose
+    model now fails the probe is silently dropped from ``runtime_models``,
+    ``sync_discovered_agents`` is never called for it, and it is left
+    enabled (and unpersisted) indefinitely.
+    """
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="stale-legacy-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    existing = replace(
+        agent_from_discovered(model),
+        id=legacy_agent_id_for(model),
+        disabled=False,
+    )
+    agents_db = str(tmp_path / "agents.db")
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([existing], agents_db=agents_db)
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["updated"] == [existing.id]
+    persisted = next(agent for agent in orchestrator.candidates if agent.id == existing.id)
+    assert persisted.disabled is True
+    assert "structured:blocked" in persisted.tags
+
+
 def test_failed_gateway_probe_keeps_persisted_embedding_capability(
     monkeypatch, tmp_path
 ) -> None:
@@ -480,9 +532,9 @@ def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
     )
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result["added"] == ["configured_gateway_gpt_chat_7x"]
+    assert result["added"] == [agent_id_for(bare_chat)]
     agents = orchestrator.agents
-    assert any(agent.id == "configured_gateway_gpt_chat_7x" for agent in agents)
+    assert any(agent.id == agent_id_for(bare_chat) for agent in agents)
     assert all(agent.model != "text-embedding-5" for agent in agents)
 
 
@@ -507,7 +559,7 @@ def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
     result = _auto_discover_runtime_agents(orchestrator)
 
     assert result == {
-        "added": ["nvidia_nim_provider_nim_chat"],
+        "added": [agent_id_for(provider_row)],
         "updated": ["bootstrap_agent"],
     }
     agent = orchestrator.candidates[-1]
@@ -515,13 +567,13 @@ def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
     assert agent.disabled is False
 
 
-def test_auto_discovery_never_activates_openrouter_evidence_rows(monkeypatch) -> None:
-    """OpenRouter catalog rows provide evidence but never serving agents."""
+def test_auto_discovery_never_activates_evidence_only_rows(monkeypatch) -> None:
+    """A row explicitly marked evidence_only never becomes a serving agent."""
     evidence = DiscoveredModel(
-        provider_name="openrouter",
+        provider_name="example_evidence_provider",
         model_id="provider/router-chat",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="EXAMPLE_EVIDENCE_PROVIDER_API_KEY",
+        chat_base_url="https://example-evidence-provider.example/v1",
         auth_scheme="Bearer",
         capabilities=("chat", "response_format"),
         evidence_only=True,
@@ -580,7 +632,7 @@ def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> 
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["openai_gpt_5_4"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert orchestrator.agents[-1].model == discovered.model_id
 
 
@@ -607,7 +659,7 @@ def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) 
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["configured_gateway_chat_capable_model"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert [agent.model for agent in orchestrator.agents] == ["chat-capable-model"]
     assert placeholder.id not in orchestrator._group_router.snapshot()
 
@@ -640,6 +692,30 @@ def test_auto_discovery_removes_placeholder_for_existing_gateway_model(monkeypat
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert orchestrator.agents == [existing]
+
+
+def test_auto_discovery_assigns_group_to_legacy_discovered_agent(monkeypatch) -> None:
+    discovered = DiscoveredModel(
+        "openrouter", "Vendor/Model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer", capabilities=("chat",),
+    )
+    legacy = replace(
+        agent_from_discovered(discovered),
+        id="openrouter_vendor_model",
+        group_name="",
+        disabled=False,
+    )
+    orchestrator = TaskOrchestrator([legacy])
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": [legacy.id]}
+    assert orchestrator.candidates[0].id == legacy.id
+    assert orchestrator.candidates[0].group_name == model_group_name_for(discovered)
 
 
 def test_auto_discovery_keeps_last_enabled_placeholder_for_disabled_gateway_model(
@@ -694,9 +770,9 @@ def test_auto_discovery_adds_embedding_without_disabling_configured_chat_pool(mo
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result == {"added": ["openai_embedding_capable_model"], "updated": []}
+    assert result == {"added": [agent_id_for(embedding)], "updated": []}
     assert {agent.id for agent in orchestrator.agents} == {
-        "bootstrap_agent", "openai_embedding_capable_model"
+        "bootstrap_agent", agent_id_for(embedding)
     }
 
 
@@ -723,7 +799,7 @@ def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["openai_chat_capable_model"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert placeholder in orchestrator.agents
 
 
@@ -744,7 +820,7 @@ def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(mo
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result["added"] == ["openai_generic_deployment"]
+    assert result["added"] == [agent_id_for(generic_non_chat)]
     agent = orchestrator.select_capability_agent("embedding")
     assert agent.model == "generic-deployment"
     assert "chat" not in agent.tags
@@ -916,7 +992,9 @@ def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_cre
     )
     _auto_discover_runtime_agents(orchestrator)
 
-    assert orchestrator.candidates[0] == existing
+    assert orchestrator.candidates[0] == replace(
+        existing, group_name=model_group_name_for(recovered)
+    )
 
 
 def test_auto_discovery_recovers_model_first_discovered_while_spend_blocked(
@@ -983,7 +1061,9 @@ def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
     )
     _auto_discover_runtime_agents(orchestrator)
 
-    assert orchestrator.candidates[0] == existing
+    assert orchestrator.candidates[0] == replace(
+        existing, group_name=model_group_name_for(recovered)
+    )
 
 
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
@@ -1055,8 +1135,13 @@ def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result == {"added": [], "updated": ["mock_seed_agent"]}
-    assert orchestrator.agents == [real_agent]
+    assert result == {
+        "added": [],
+        "updated": [real_agent.id, "mock_seed_agent"],
+    }
+    assert orchestrator.agents == [
+        replace(real_agent, group_name=model_group_name_for(discovered))
+    ]
 
 
 def test_auto_discovery_retires_mock_seed_when_current_discovery_is_empty(

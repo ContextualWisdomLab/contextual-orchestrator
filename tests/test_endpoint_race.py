@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ALL_COMPLETED, wait as wait_futures
 from contextvars import ContextVar
 
 import pytest
@@ -12,6 +13,7 @@ from contextual_orchestrator.endpoint_race import (
     EndpointEquivalenceContract,
     race_first_valid,
 )
+from contextual_orchestrator.orchestrator import _ProviderRequestCancelled
 
 
 def contract(**changes: object) -> EndpointEquivalenceContract:
@@ -55,6 +57,179 @@ def test_slow_valid_primary_loses_to_fast_valid_completion() -> None:
     assert outcome.winner_endpoint_id == "hedge_endpoint"
     assert outcome.attempted_endpoint_ids == ("primary_endpoint", "hedge_endpoint")
     assert outcome.cancellation_outcomes == (("primary_endpoint", "safe_drain"),)
+
+
+def test_winner_cancels_and_reaps_running_loser_without_generation_deadline() -> None:
+    release = threading.Event()
+    loser_started = threading.Event()
+
+    def loser() -> str:
+        loser_started.set()
+        release.wait()
+        return "late"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=True), loser,
+                cancellation_supported=True, cancel=release.set,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=True),
+                lambda: loser_started.wait(1) and "complete",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "cancellation_requested"),)
+    deadline = time.monotonic() + 1
+    while any(thread.name.startswith("equivalent_endpoint_race") for thread in threading.enumerate()):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+def test_winner_requests_running_loser_cancellation_exactly_once() -> None:
+    release = threading.Event()
+    started = threading.Event()
+    calls = 0
+
+    def slow() -> str:
+        started.set()
+        release.wait(timeout=1)
+        return "slow"
+
+    def cancel() -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("cancellation callback repeated")
+        release.set()
+
+    race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=True), slow,
+                cancellation_supported=True, cancel=cancel,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=True),
+                lambda: started.wait(1) and "fast",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert calls == 1
+
+
+def test_throwing_loser_cancellation_cannot_discard_valid_winner() -> None:
+    started = threading.Event()
+
+    def blocked() -> str:
+        started.set()
+        time.sleep(0.1)
+        return "late"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=True), blocked,
+                cancellation_supported=True,
+                cancel=lambda: (_ for _ in ()).throw(OSError("close failed")),
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=True),
+                lambda: started.wait(1) and "winner",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert outcome.value == "winner"
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "safe_drain"),)
+
+
+def test_cancelled_race_attempt_does_not_penalize_provider() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("cancelled_endpoint", "shared/model")])
+
+    orchestrator._record_race_attempt(
+        "cancelled_endpoint",
+        None,
+        _ProviderRequestCancelled("cancelled"),
+        capability="text",
+    )
+
+    assert orchestrator._circuit == {}
+    assert orchestrator._group_router.member_report("cancelled_endpoint")["failure_count"] == 0
+    event = orchestrator.list_recent_audit_events()[-1]
+    assert event["event_detail"]["validation_outcome"] == "cancelled"
+
+
+def test_already_completed_loser_is_reported_as_completed(monkeypatch) -> None:
+    second_done = threading.Event()
+
+    def first() -> str:
+        assert second_done.wait(timeout=1)
+        return "first"
+
+    def second() -> str:
+        second_done.set()
+        return "second"
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.endpoint_race.wait",
+        lambda futures, **_kwargs: (wait_futures(futures, return_when=ALL_COMPLETED)[0], set()),
+    )
+    outcome = race_first_valid(
+        [
+            EndpointAttempt("first_endpoint", contract(), first),
+            EndpointAttempt("second_endpoint", contract(), second),
+        ],
+        validate=bool,
+        deadline_seconds=1,
+        max_concurrency=2,
+    )
+
+    assert outcome.winner_endpoint_id == "first_endpoint"
+    assert outcome.cancellation_outcomes == (("second_endpoint", "completed"),)
+
+
+def test_unsupported_cancellation_is_safe_drain_without_callback() -> None:
+    release = threading.Event()
+    started = threading.Event()
+    cancellation_called = threading.Event()
+
+    def slow() -> str:
+        started.set()
+        release.wait(timeout=1)
+        return "slow"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=False), slow,
+                cancellation_supported=True, cancel=cancellation_called.set,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=False),
+                lambda: started.wait(1) and "fast",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+    release.set()
+
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "safe_drain"),)
+    assert not cancellation_called.is_set()
 
 
 def test_fast_invalid_completion_does_not_suppress_valid_result() -> None:
