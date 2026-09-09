@@ -211,6 +211,8 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         decoded_job = coordinator._batch_jobs[response_job.job_id]
         assert decoded_job is not response_job
         assert decoded_job.request_link_status == "durable"
+        assert decoded_job.registry_persistence_status == "unavailable"
+        assert response_job.registry_persistence_status == "stored"
         assert decoded_job.owner_id == "owner_one"
         assert response_job.request_link_status == "durable"
         assert orchestrator._store.load("batch_request_link")[0]["request_id"] == "trusted_origin_one"

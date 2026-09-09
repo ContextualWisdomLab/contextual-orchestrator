@@ -221,7 +221,9 @@ class BatchJob:
     # Finalized before the registry snapshot is written; the append-only event
     # supplies the durable request association independently of that registry.
     request_link_status: str = "unavailable"
-    registry_persistence_status: str = "unavailable"
+    # Deliberately not a dataclass field: HSET may succeed before expiry fails,
+    # so an operation result must never be serialized into its own snapshot.
+    registry_persistence_status = "unavailable"
 
 
 @dataclass
