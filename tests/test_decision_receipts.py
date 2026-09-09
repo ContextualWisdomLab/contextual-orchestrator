@@ -10,31 +10,38 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
-def test_http_route_persists_initial_decision(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_route_persists_initial_decision(tmp_path, monkeypatch, stream):
     """A real HTTP route retains one native-clock receipt before completion."""
     orchestrator = TaskOrchestrator(
         [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
     )
-    original_chat = orchestrator.client.chat
     dispatch_records = []
     dispatch_ready = threading.Event()
     generation_allowed = threading.Event()
     dispatched_snapshots = []
 
-    def inspect_committed_decision(*args, **kwargs):
+    def inspect_committed_decision(original_call, *args, **kwargs):
         with sqlite3.connect(tmp_path / "state.db") as independent:
             rows = independent.execute(
                 "SELECT payload FROM orchestration_records WHERE kind = 'initial_decision'"
             ).fetchall()
+            assert independent.execute(
+                "SELECT COUNT(*) FROM orchestration_records WHERE kind = 'accepted_request'"
+            ).fetchone()[0] == 1
         assert len(rows) == 1
         dispatch_records.extend(rows)
         from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
         dispatched_snapshots.append(_CURRENT_DECISION.get().snapshot())
         dispatch_ready.set()
         assert generation_allowed.wait(10)
-        return original_chat(*args, **kwargs)
+        return original_call(*args, **kwargs)
 
-    monkeypatch.setattr(orchestrator.client, "chat", inspect_committed_decision)
+    for method_name in ("chat", "stream_chat"):
+        original_call = getattr(orchestrator.client, method_name)
+        monkeypatch.setattr(orchestrator.client, method_name,
+                            lambda *args, _call=original_call, **kwargs:
+                            inspect_committed_decision(_call, *args, **kwargs))
     server = build_server(orchestrator, port=0, decision_receipts=True,
                           security=SecurityConfig(auth_token="test-token"))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -43,7 +50,7 @@ def test_http_route_persists_initial_decision(tmp_path, monkeypatch):
     try:
         connection.request(
             "POST", "/v1/chat/completions",
-            json.dumps({"model": "orchestrator/auto", "mode": "route", "messages": [
+            json.dumps({"model": "orchestrator/auto", "mode": "route", "stream": stream, "messages": [
                 {"role": "user", "content": "hello"}
             ]}), {"Content-Type": "application/json", "Authorization": "Bearer test-token"},
         )
