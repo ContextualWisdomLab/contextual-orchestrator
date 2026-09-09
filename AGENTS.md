@@ -1,5 +1,9 @@
 # AGENTS.md
 
+Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
+HTTP reproduction, atomic submission-event projection, and remote/local failure
+boundary. Do not retry a remotely submitted job after local lineage failure.
+
 Workflow origin identity and persistence limitations are documented in
 `docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
 
