@@ -66,6 +66,26 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Local Zotero discovery, 2026-09-09
+
+The read-only local API at `http://127.0.0.1:23119/api/users/0/items`
+returned HTTP 200. Query exact titles before broad terms: `q=Modeling%20Differences%20Between%20Response%20Times`
+returned no matches in the queried personal library; this does not establish
+absence from other libraries or external repositories. Quote URL arguments in
+zsh because an unquoted `?` is treated as a filename pattern before HTTP runs.
+Use `format=json`, a bounded `limit`, and project only bibliographic fields;
+do not export the full personal library or private notes.
+
+A bounded IRT query located item `E4INK5S3`, Fox and Glas (2001),
+*Bayesian estimation of a multilevel IRT model using Gibbs sampling*.
+Its bibliographic fields matched the University of Twente repository's record.
+The repository linked an accepted manuscript at
+`https://research.utwente.nl/files/247180414/Fox2001Bayesian.pdf`, but the
+research browser fetch returned HTTP 403. No manuscript was obtained or attached,
+and no full-method review or implementation result follows from the abstract.
+Next step is lawful full-text access and model/identification review, not
+production adoption from bibliographic discovery alone. No Zotero data changed.
+
 ### Completed observation-integrity verification
 
 PR #1109 code head `4cc0bf2c92181cb5ea175a1f1e1db1c8a85799bc` completed
