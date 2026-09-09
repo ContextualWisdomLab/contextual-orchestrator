@@ -18,6 +18,13 @@ def test_explicit_arxiv_references_have_inventory_entries() -> None:
         r"(?:arxiv\.org/(?:abs|pdf)/|arxiv[:.])(\d{4}\.\d{4,5})\b",
         re.IGNORECASE,
     )
+    for citation_text in (
+        "https://arxiv.org/abs/2601.17814",
+        "https://arxiv.org/pdf/2601.17814v1.pdf",
+        "https://arxiv.org/html/2601.17814v1",
+        "arXiv:2601.17814v2",
+    ):
+        assert reference_pattern.findall(citation_text) == ["2601.17814"]
     tracked_paths = subprocess.check_output(
         ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
     ).split("\0")
