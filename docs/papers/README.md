@@ -155,6 +155,30 @@ verified observed-task evidence and the protected release process.
 
 ## Psychometrics beyond orchestration
 
+### Cross-document reference index
+
+At `fcf0047c37706975d9bff1ab4b95c54a2a383f54`, a tracked-text census found
+six explicit arXiv identifiers referenced elsewhere but absent from this index.
+Their existing evidence records remain canonical; these links do not imply
+that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
+
+| Identifier | Existing evidence and implementation discussion |
+| --- | --- |
+| 1810.07876 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2007.08719 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2306.05685 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
+| 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
+| 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+
+Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
+Rust, Markdown, and TOML files. This is a discovery census, not a complete
+bibliography: DOI-only sources, author/year citations, other formats, and
+references inside PDFs need separate reconciliation. The table includes
+non-psychometric references to avoid hiding cross-cutting dependencies.
+
+### Interpretation constraints
+
 These sources constrain what a routing score may mean; they are not routing
 algorithms. They add validity, identification, and fair-comparison checks:
 
