@@ -91,6 +91,31 @@ innovation and regular school systems in Korea. *Journal of the Royal
 Statistical Society: Series C (Applied Statistics), 71*(5), 1225–1244.
 https://doi.org/10.1111/rssc.12569
 
+### LSIRM identification and version discrepancy (2026-09-09)
+
+Read scope: the authors' [arXiv v2 HTML](https://arxiv.org/html/2007.08719v2),
+sections 2.1, 2.3.2, 3.2, and 3.3; not the full paper or verified final journal
+text. At CO `4e078c5152d7aa021986ffb53735edb6891e1cea`, this extends the
+existing Jeon et al. citation without changing an estimator or routing policy.
+Section 3.2 identifies translation, reflection, and rotation invariance, uses
+Procrustes post-processing, and cautions that interpretation concerns relative
+distances rather than absolute positions.
+
+Section 3.3 needs version-level reconciliation before implementation: its
+displayed mixture assigns the slab to delta=1, but the following prose selects
+Rasch when P(delta=0) is below 0.5 and then describes estimation using delta=1
+counts. These event descriptions do not agree. It also describes a spike near
+zero for log(gamma); that is not a point mass at gamma=0. This is a discrepancy
+in the inspected preprint rendering, not a demonstrated defect in the final
+article, supplementary code, or fast-mlsirm. The publisher DOI fetch failed and
+the NSF PDF fetch timed out; neither failure establishes source absence.
+
+Engineering consequence: fast-mlsirm owns reconciliation against the final PDF
+and supplementary model-selection implementation before publishing such a
+contract. CO must not copy this threshold, infer axis meanings, or treat
+posterior model selection as held-out customer accuracy. Keep aligned recovery,
+observed prediction, and decision latency as separate acceptance measures.
+
 ### Existing references
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
