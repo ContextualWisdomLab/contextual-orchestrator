@@ -76,18 +76,21 @@ push or open a PR.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
 - Provider API keys and server bearer tokens are resolved from the **KV /
-  credential registry** (`get_credential`), not from `os.environ`. Ensure the
-  org `OPENAI_API_KEY` (and `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`) is seeded into the KV at
-  bootstrap time so auto-discovery and routing can use them.
+  credential registry** (`get_credential`), not from `os.environ`. Seed
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`, and any configured
+  `OPENAI_API_KEY` into the KV at bootstrap so auto-discovery and routing can
+  use them. One OpenCode Zen credential discovers the separate Zen and Go
+  catalogs; only explicit zero-cost capability evidence admits either source
+  to `orchestrator/free`.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
   three-stage CI review pipeline defined in `ContextualWisdomLab/.github`
   (`opencode.jsonc`, `noema-review.yml`, `strix.yml`) — are being migrated to
   use `contextual-orchestrator` as their shared backend, with
   `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
-  `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` registered in this repo's KV so
-  it auto-discovers models across all five and auto-optimizes routing by
+  `OPENROUTER_API_KEY`, and `OPENCODE_ZEN_API_KEY` registered in this repo's
+  KV so it auto-discovers their model catalogs and auto-optimizes routing by
   cost (see `contextual_orchestrator/model_discovery.py`, the
   `discover-models` CLI subcommand, and `ModelAgent.auth_scheme` for
   non-Bearer providers like Bytez). The provider-config change to the org
