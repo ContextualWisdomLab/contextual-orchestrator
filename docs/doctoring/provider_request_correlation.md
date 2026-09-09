@@ -117,3 +117,9 @@ prove a response-correlation regression, but it also does not establish a green
 suite or justify classifying the failure as a flake. Same-head isolated
 reproduction is the next diagnostic step. Preserve this failure receipt even
 if a subsequent isolated test passes.
+
+The same-head isolated command `python -m pytest
+tests/test_responses_store_http_honesty.py -q` then completed with exit 0:
+4 passed in 20.05s. The interruption did not recur in this run; its signal or
+operating-system trigger remains unproven. No TLS checks were bypassed and no
+retry was added. A clean isolated run does not replace full-suite verification.

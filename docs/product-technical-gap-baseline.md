@@ -8,7 +8,11 @@ The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
 suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
 `6b24fe96` passed 81 focused tests, including actual same-socket reuse and
 overlapping same-session HTTP requests with two distinct server thread IDs.
-The integrated candidate's full suite is a separate, still-pending verification.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
 
 Actual output from all seven provider diagnostic functions at
 `7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
