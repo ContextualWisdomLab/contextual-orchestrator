@@ -451,6 +451,24 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
     assert len(set(request_ids)) == 2
 
 
+def test_provider_diagnostic_events_preserve_request_identity(caplog):
+    """Every retry outcome keeps trusted identity before untrusted error text."""
+    agent = ModelAgent("diagnostic_agent", "mock-model")
+    failure = RuntimeError("controlled error")
+    with caplog.at_level("DEBUG"), telemetry_module.request_identity() as request_id:
+        orchestrator_module._log_provider_attempt(agent, 0, 1)
+        orchestrator_module._log_provider_attempt_failed(agent, 0, failure, False)
+        orchestrator_module._log_provider_backoff(agent, 0, 0.0)
+        orchestrator_module._log_provider_exhausted(agent, 2, failure)
+        orchestrator_module._log_provider_no_retry_budget(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_one_shot_call_failed(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_rejected_permanent(agent, 1, failure)
+    messages = [row.getMessage() for row in caplog.records if row.name == orchestrator_module.__name__]
+    assert len(messages) == 7
+    assert all(f"request_id={request_id}" in message for message in messages)
+    assert f"request_id={request_id} error_message=" in messages[1]
+
+
 def test_request_identity_restores_context_across_threads_and_failure():
     """Copied work inherits identity; reused workers and failed scopes do not leak it."""
     from concurrent.futures import ThreadPoolExecutor
