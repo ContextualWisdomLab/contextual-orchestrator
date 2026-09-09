@@ -24,6 +24,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from .decision_receipts import record_initial_selection
 
 from .batch_routing import (
     BatchBackend,
@@ -1332,6 +1333,8 @@ class CostRoutingCoordinator:
         if callable(reserve) and callable(start):
             job = reserve(requests, metadata=metadata)
         else:
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             job = backend.submit(requests, metadata=metadata)
         self._embedding_models[job.job_id] = resolved_model
         self._embedding_owners[job.job_id] = owner_id
@@ -1341,6 +1344,8 @@ class CostRoutingCoordinator:
         self._embedding_part_limits[job.job_id] = part_limits
         self._embedding_jobs[job.job_id] = job
         if callable(reserve) and callable(start):
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             start(job)
         return job
 
