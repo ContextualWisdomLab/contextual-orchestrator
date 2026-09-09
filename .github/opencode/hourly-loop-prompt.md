@@ -55,7 +55,10 @@ contract rather than an inferred ranking:
    dependency model do not identify an order, do not invent an ordering; record
    the unresolved decision evidence and fail closed rather than using an informal
    leverage score. Implement an identified gap with tests + docstrings and open a
-   PR that updates the baseline file.
+   PR that updates the baseline file. When the PR queue is exhausted, continue
+   with gap development and merges plus ContextualWisdomLab repository and
+   connector linkage under responsibility boundaries, without waiting on
+   review or Checks for unrelated work.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.

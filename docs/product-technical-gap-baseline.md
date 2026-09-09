@@ -2934,3 +2934,27 @@ cross-session push was attempted.
   (integrate deltas, normal-merge restack only, never flip another
   session's Draft) and the PRD/TRD case-preservation rule alongside the
   existing fail-closed ordering guidance.
+
+## 2026-09-09 Autoresearch loop: PR #1109 Ready flip and integer-index hardening, still unmerged
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is now Ready (`draft: false`, `mergeable: true`,
+`mergeable_state: unstable`); #1108 is confirmed `dirty` again; #1094
+remains protection-blocked. No PR met the merge bar (terminal-success
+checks plus resolved threads plus independent exact-head approvals), so
+no merge, readiness change, or cross-session push was attempted.
+
+- **PR #1109 new head `b8d2651d`:** the owner hardened validation from
+  `int(value)` to `operator.index(value)`, rejecting fractional rows,
+  whole-valued floats, and numeric strings that truncation previously
+  masked as valid dichotomous data, while keeping the integer protocol
+  including `numpy.int64`. Isolated evidence: 19 passed in 13.68s, exit
+  0. Hosted checks: both CodeQL jobs success; tests and fuzzing still in
+  progress; no reviews yet. Unit evidence only; full regression,
+  independent review, protected merge into the owner stack, and release
+  remain pending. Action: re-observe after hosted checks and first
+  review; do not merge across the stack boundary from this loop.
+- **Hourly prompt (this hour):** queue-exhausted continuation now
+  explicitly names gap development plus ContextualWisdomLab repository
+  and connector linkage under responsibility boundaries, so scheduled
+  passes do not idle after the PR list drains.

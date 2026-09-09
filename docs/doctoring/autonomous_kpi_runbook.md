@@ -267,3 +267,25 @@ protection. No merge, readiness flip, or push to another session's
 branch was attempted. Unit evidence only; full regression, independent
 review, protected merge, and release remain pending. Worktree removal
 follows the docs commit.
+
+## Isolated verification evidence, 2026-09-09 (PR #1109 new head)
+
+PR #1109 flipped from Draft to Ready during the loop and its head moved
+`4cc0bf2c` to `b8d2651d61f1d178971997c3ee49e404580fc2aa`, so the prior
+6-pass verification is superseded for the new head. Isolated worktree
+`/tmp/co-verify-1109b` (primary checkout untouched):
+`tests/test_psychometric_observation_atomicity.py` 19 passed in 13.68s,
+exit 0. The new delta replaces `int(value)` with `operator.index(value)`
+(`operator` was already imported): fractional rows (`0.7`, `1.7`,
+`-0.7`), whole-valued floats (`0.0`, `1.0`), and numeric strings
+(`"1"`) are now rejected with `TypeError` instead of silently truncated
+to `0`/`1`, while the integer protocol (`int`, `numpy.int64`, bools via
+`__index__`) is preserved and covered by
+`test_integer_protocol_rows_preserve_binary_values`. Direction is
+fail-closed evidence integrity: a fractional row was never a valid
+dichotomous observation, so refusing it repairs masking rather than
+regressing a contract; the compatibility boundary is documented on the
+PR. Hosted checks on the new head: both CodeQL jobs success; `Tests and
+package quality` and `Property and coverage-guided fuzzing` still in
+progress; no reviews posted. No merge, readiness change, or push to the
+owner stack was attempted. Unit evidence only.
