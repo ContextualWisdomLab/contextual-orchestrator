@@ -1,5 +1,24 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Stacked quality-trigger repair
+
+At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
+Security and Quality workflow filters pull requests to `main`. PR #1108 targets
+another PR branch, so its zero check-run count is consistent with this trigger
+exclusion, not a successful Security run. The repair removes the base filter
+without changing job permissions or switching to privileged `pull_request_target`.
+It also keys cancellation by workflow, repository, and PR number. Central review
+and security ownership is unchanged; this does not repair or replace their gates.
+
+The regression assertion failed on the old filter. After repair, the new contract
+and existing benchmark workflow contracts passed (9 tests), and actionlint emitted
+no findings. An initial test collection failed because PyYAML is not installed;
+the test instead uses the existing stdlib text-contract pattern, with actionlint
+checking YAML syntax. No dependency was added. A new synchronize event must still
+demonstrate hosted execution on the actual stacked merge revision. Trigger syntax
+and local tests alone are not that execution evidence. GitHub documents that PR
+branch filters match the [target branch](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
 ## 2026-09-09 Integrated rollback regression receipt
 
 PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c` includes the
