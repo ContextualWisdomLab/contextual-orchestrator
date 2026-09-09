@@ -13,7 +13,7 @@ from test_cost_review_server import _request
 
 
 @pytest.mark.parametrize("write_failure", [False, True])
-@pytest.mark.parametrize("registry_failure", [False, True])
+@pytest.mark.parametrize("registry_failure", [None, "hset", "expire"])
 def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monkeypatch, write_failure, registry_failure):
     """One submission joins two item outcomes without trusting their custom IDs."""
     class ObservedBatchClient(_FakeBatchApiClient):
@@ -48,13 +48,25 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         orchestrator, batch_backend=PgLlmBatchBackend(batch_client)
     )
     if registry_failure:
-        class RejectingRegistry(dict):
-            """Simulate a registry write failing after remote acceptance."""
+        from contextual_orchestrator.batch_job_registry import ValkeyJsonMapping
+        from contextual_orchestrator.batch_routing import BatchJob
+        from test_batch_job_registry import FakeValkeyClient
 
-            def __setitem__(self, key, value):
+        class RejectingClient(FakeValkeyClient):
+            """Distinguish no registry write from partial HSET-before-expiry."""
+
+            def hset(self, *args, **kwargs):
+                if registry_failure == "hset":
+                    raise RuntimeError("private-registry-secret")
+                return super().hset(*args, **kwargs)
+
+            def expire(self, *args, **kwargs):
                 raise RuntimeError("private-registry-secret")
 
-        coordinator._batch_jobs = RejectingRegistry()
+        registry_client = RejectingClient()
+        coordinator._batch_jobs = ValkeyJsonMapping(
+            registry_client, "jobs", decode=lambda raw: BatchJob(**raw)
+        )
     server = build_server(orchestrator, port=0, coordinator=coordinator,
                           security=SecurityConfig(auth_token="unit-token"))
     worker_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -75,6 +87,14 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         if registry_failure:
             assert submitted["job_id"] == "batch-789"
             assert batch_client.calls.count("create_batch_job") == 1
+            stored_handles = registry_client.hashes.get("jobs", {})
+            assert bool(stored_handles) == (registry_failure == "expire")
+            denied_status, _ = _request(
+                "POST", f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results",
+                "other-owner-token",
+            )
+            assert denied_status in {401, 403}
+            assert "download_results" not in batch_client.calls
             links = orchestrator._store.load("batch_request_link")
             assert len(links) == (0 if write_failure else 1)
             if links:
