@@ -79,3 +79,40 @@ all structured/coordinator/direct-provider paths, selection/cancellation/capacit
 HTTP negatives, complete ingress reconciliation, transactional snapshot export,
 declared retention window and actual release packaging workflow. No customer KPI
 gain is established. The Proposed ADR and full rendering inspection remain due.
+
+## Integrated request identity and indexed cohort checkpoint
+
+At `fe2db40e`, receipt, persistence and debug/correlation suites passed together:
+54 passed in 9.26 s. Normal merges preserve rollback owner #1108 at `129a6650`
+and request identity owner #1105 at `b655fe1b`. The handler now owns one
+measurement lifetime across repeated slot acquisitions, and passes its trusted
+request identity explicitly. Embedding fallback tests observe one admission and
+two backend selections; explicit validated-endpoint admission precedes embedding
+candidate ordering. Other endpoints remain labeled first_execution_slot and
+must not be assumed to include prior selection work.
+
+`6e4f87aa` adds a shared per-race invocation identity: replicas deduplicate within
+one invocation, while a second race in the same request remains a new attempt.
+The regression first failed with one attempt instead of two, then passed.
+The earlier route-mode-only deduplication is superseded.
+
+The state store backfills null keys only for valid measurement JSON identities
+inside its startup transaction, never overwrites non-null keys, and adds the
+(kind, key, seq) index. Its 2,000-measurement-row unit fixture plus malformed
+unrelated row retains all 2,001 rows. EXPLAIN for the actual phase query shows
+kind/key index search; this is query-plan evidence, not a measured latency gain.
+Export reads a bounded shared admission cohort, exposes sequence/truncation
+boundaries and unresolved legacy identities, and never independently prunes
+phase rows. Historical storage remains append-only pending an archival policy.
+
+An exact `01ce9035` native wheel and separately built noneditable core package
+passed 10 tests in 4.90 s outside the checkout with isolated imports. That proof
+does not cover the later merged runtime: rebuild the final candidate again.
+
+Outstanding semantic gap: structured triage and ranking-evidence embeddings may
+invoke providers before the current task-selection hook. Initial provider
+dispatch and final task-route decision must be distinguished; no current receipt
+is evidence of the headline routing-decision p95. Cache hits, non-generation
+operations, auxiliary dispatch, all preselection SSE failures and cancellation
+paths still require complete request-boundary coverage and executable evidence.
+No protected merge, production publication, or customer KPI gain is claimed.
