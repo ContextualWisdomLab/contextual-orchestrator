@@ -3254,3 +3254,16 @@ mock-provider unit reproduction over real HTTP, not customer latency evidence.
 Repair the valid-stream timing boundary without bypassing existing validation;
 see [the reproduction receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597865731).
 The full-suite checkout remained unchanged during this independent probe.
+
+Full regression at `bbe7eae1a24a95e17b5933ca75cc6b2598f896e4` terminated
+with **9 failed, 3420 passed, 2 skipped in 794.44 seconds** on local
+macOS/Python 3.14. Eight failures exposed compatibility with lightweight
+handlers when measurement was disabled; one workflow contract required the
+existing standalone benchmark import spelling. Repair
+`0b10b553ab916f341ddfbb5c1fc6989c23e0f293` keeps the unmeasured acquisition,
+release, and disconnect paths independent of measurement state and restores
+the explicit import. The failed-file plus receipt regression passed **55 tests
+in 10.92 seconds**. A transient indentation error during repair caused collection
+failure and was corrected before that run; it does not replace the original RCA.
+Full regression on the repaired final head and hosted Linux acceptance remain
+required, along with the valid-stream timing and typed-error accounting repairs.
