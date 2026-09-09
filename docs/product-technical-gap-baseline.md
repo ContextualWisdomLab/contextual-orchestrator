@@ -3062,3 +3062,30 @@ merge was attempted. #1108 mergeability is `unknown` (recomputing);
   fix and rerun owned failures immediately while continuing safe
   independent work, and codify manual workarounds with log-grounded RCA
   for PYTHONPATH, Actions, and execution errors.
+
+## 2026-09-09 Autoresearch loop: stacked-quality merge adopted, #1108 restack verified, #1105 pending-verdict diagnosed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **Loop merge `d721e04b` (adopted, reviewed):** the stacked-quality
+  repair now on this branch is compliant — exact
+  `{workflow}-{repository}-{PR}` concurrency with same-group PR-only
+  cancellation, expanded stacked-PR coverage, Draft/closed-only skips,
+  and test consolidation without dropped assertions (see runbook for
+  the clause-level verdict). Action: none; keep.
+- **PR #1108 restacked head `c11df645`:** isolated evidence 21 passed
+  in 28.10s, exit 0 (prior 20-pass run superseded). Mergeability still
+  recomputing. Action: re-observe; owner restacks with normal merges.
+- **PR #1109 head `b8d2651d`:** all hosted checks green, still no
+  reviews — awaiting independent approval on the owner stack. Action:
+  re-observe.
+- **PR #1105 (Ready, `main` base):** 3 CodeQL-compat failures are
+  pending-verdict fail-closed (`DISPATCH_OUTCOME: success`,
+  `VERDICT_STATE: pending`, self-rerun promised), not code defects.
+  Action: re-observe next turn for self-heal; owner owns any real fix.
+- **Hourly prompt (this hour):** never make a full foundation or mutual
+  official release a precondition — cut owner/consumer cycles with a
+  minimal contract, port, or ACL and complete independently verifiable
+  functionality first.

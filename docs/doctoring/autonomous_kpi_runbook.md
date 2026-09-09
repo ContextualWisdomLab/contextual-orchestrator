@@ -364,3 +364,46 @@ flipped, or pushed across branches. PR #1108 reports
 `mergeable: null` / `mergeable_state: unknown` (GitHub recomputing the
 dirty computation); still not actionable from this loop. Open-PR
 recount 88 (baseline 85).
+
+## Loop-merge review and PR re-observation, 2026-09-09
+
+Concurrent session merged the canonical stacked-quality repair into the
+loop branch (`d721e04b`, merging `59a8f4ea`). Reviewed rather than
+reverted. `security.yml` verdict: compliant, not weakened. The
+concurrency group is now exactly
+`${{ github.workflow }}-${{ github.repository }}-${{
+github.event.pull_request.number || github.event.schedule ||
+github.run_id }}` with `cancel-in-progress` only on `pull_request`
+events — the demanded `{workflow}-{repository}-{PR}` shape; scheduled
+and push runs serialize on schedule/`run_id` and are never cancelled.
+The removed `branches: [main]` PR filter expands coverage to stacked-PR
+bases instead of weakening main (main PRs still always run). New
+`action != 'closed' && draft == false` job guards skip only closed and
+Draft PRs, which can never merge; the `ready_for_review` trigger runs
+checks on every Draft-to-Ready transition. The deleted
+`tests/test_stacked_quality_workflow.py` was consolidated into
+`tests/test_repository_security_metadata.py` (updated group/cancel
+assertions plus new `test_security_workflow_supports_stacked_pull_requests`
+pinning unfiltered triggers, `contents: read`, and no
+`pull_request_target`); no assertion was dropped.
+
+PR #1108 restacked (`4316be85` to `c11df645`, retaining the rollback
+delta and activating the stacked checks). Isolated worktree
+`/tmp/co-verify-1108c`: `tests/test_persistence.py` 21 passed in
+28.10s, exit 0. The `orchestrator.py` fix is unchanged; the delta adds
+`durable=True` stream-retention coverage and a new independent-connection
+commit-visibility test pinning durable-return-means-committed. Prior
+20-pass verification is superseded. Unit evidence only.
+
+PR #1109 head unchanged (`b8d2651d`): all four hosted groups now green
+(both CodeQL jobs, fuzzing, tests) with still no reviews — merge bar
+still unmet (independent exact-head approvals missing), so unmerged.
+Base remains the owner stack branch; no cross-boundary merge attempted.
+
+PR #1105 (Ready, `main` base, error-request correlation) is blocked
+with 3 `CodeQL compatibility analysis` failures that are
+fail-closed pending verdicts, not code defects: job `102342918324` log
+shows `DISPATCH_OUTCOME: success` with `VERDICT_STATE: pending`, and the
+job's own message states the dispatch workflow will rerun it after
+publishing the terminal verdict. Expected to self-heal; re-observe next
+turn. No push to any owner branch was made from this loop.
