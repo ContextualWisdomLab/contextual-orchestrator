@@ -10,6 +10,13 @@ transaction remains immediately after failure and that both the previous and
 unrelated subsequent records survive reopening the database. The persistence
 suite passed 19 tests in 9.28s; this is not a latency or customer-accuracy result.
 
+Full local suite at `877d5112ed470d851afaa2c746b94393cc768ee7`: 3,396 passed,
+2 skipped, exit 0 (883.03s). Test-only follow-up
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` covers a deferred commit failure
+with real SQLite constraints; persistence, workflow authorization, and governance
+tests pass together (29 passed, 4.89s). Full-suite evidence remains attached to
+the earlier head, not silently reassigned to the new regression.
+
 At the earlier PR head `aa674187b0341c7852f85c27fb696aec21f1a799`, GitHub
 reported zero check runs and two success statuses whose descriptions explicitly
 said reviews were skipped (Draft; expired trial/no credits). Those statuses do

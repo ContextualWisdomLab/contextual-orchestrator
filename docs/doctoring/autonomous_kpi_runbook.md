@@ -109,6 +109,18 @@ full-suite success, protected merge, or production deployment. Next implement
 decision timing before provider invocation with explicit failure denominators;
 do not relabel existing response-generation timings.
 
+Follow-up validation: full `python -m pytest -q` at
+`877d5112ed470d851afaa2c746b94393cc768ee7` exited 0 with 3,396 passed and
+2 skipped in 883.03s. The quiet log does not identify the skip reasons; neither
+skip is counted as passed. Test-only commit
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` extends the regression to a real
+deferred foreign-key violation at commit, in addition to insertion failure.
+The existing transaction implementation is unchanged. At that commit,
+`python -m pytest tests/test_persistence.py
+tests/test_workflow_run_object_authorization.py tests/test_governance_runtime.py -q`
+exited 0: 29 passed in 4.89s. The new test head has not had a full-suite run;
+these local results do not establish hosted security checks or independent review.
+
 ## Break release cycles without copying implementation
 
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest
