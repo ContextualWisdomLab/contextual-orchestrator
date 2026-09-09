@@ -75,14 +75,15 @@ class PsychometricRoutingEvidence:
         """Restore or record one observation using a non-reversible context id."""
         with self._lock:
             stored_vector = list(vector) if vector is not None else None
-            self._contexts[context_id] = stored_vector
-            self._context_unit_vectors[context_id] = (
+            unit_vector = (
                 self._unit_vector(stored_vector) if stored_vector is not None else None
             )
-            self._contexts.move_to_end(context_id)
             values = (int(accepted), *(int(value) for value in irt_row))
             if any(value not in (0, 1) for value in values):
                 raise ValueError("judge IRT rows must be dichotomous")
+            self._contexts[context_id] = stored_vector
+            self._context_unit_vectors[context_id] = unit_vector
+            self._contexts.move_to_end(context_id)
             stale_index = len(values)
             while (agent_id, context_id, stale_index) in self._responses:
                 del self._responses[(agent_id, context_id, stale_index)]
