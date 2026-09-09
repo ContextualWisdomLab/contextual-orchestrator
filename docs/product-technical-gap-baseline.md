@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Response-time research and measurement gap
+
+The [psychometric review](doctoring/irt_router_measurement_review.md#response-time-research-extension-2026-09-09)
+now traces van der Linden's hierarchical speed/accuracy framework to a visually
+inspected earlier report and the final publication's DOI. It records a proposed
+joint-model experiment, not evidence that fast responses imply high ability.
+CO decision overhead and provider completion duration require separate clocks
+and denominators. Observed-data availability, released owner support, baseline
+accuracy, and routing-decision p95 remain unverified; no production default
+change or measured improvement is justified by this literature extension.
+
 ## 2026-09-09 Review gateway failure and existing timeout repair
 
 PR #1103 at `4776a970ed8bdef3406684aef84952740b476d88` has a terminal

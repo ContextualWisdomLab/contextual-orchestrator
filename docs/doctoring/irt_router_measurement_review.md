@@ -94,3 +94,50 @@ with a family-specific assertion or fixture for each one.
 Related: [ADR 0005](../planning/adrs/0005-irt-response-matrix-contract.md).
 Its matrix-shape validation is necessary boundary checking, not identification
 or construct-validity evidence.
+
+## Response-time research extension (2026-09-09)
+
+Status: proposed research, not a fitted model or production policy. Repository
+inspection at `29f417f256f8e50651b49506c042c5ec882ff472` found no reference
+matching `van der Linden`, `speed.accuracy`, or `response.time model` in tracked
+text. This bounded search does not establish an exhaustive literature inventory.
+
+van der Linden, W. J. (2007). A hierarchical framework for modeling speed and
+accuracy on test items. *Psychometrika, 72*(3), 287–308.
+https://doi.org/10.1007/s11336-006-1478-z
+
+The publisher confirms the final article's bibliographic identity. The separately
+available [RR 05-02 report](https://ris.utwente.nl/ws/files/5129699/Linden05hierarchical.pdf)
+is an earlier version, not verified identical to the journal article. Its printed
+page 6 (PDF page 10) was rendered and visually inspected: equations (8)–(14)
+separate response ability from response speed, specify a lognormal time model,
+and combine person parameters at a second level. The response/time likelihood
+factorization assumes conditional independence given the latent parameters.
+The inspected report is linked, not redistributed; redistribution permission
+has not been established.
+
+### CO hypothesis and acceptance boundary
+
+The following is our proposed application, not a result reported by the paper.
+A joint outcome/time model might improve calibration for repeated observed
+tasks, but provider generation duration cannot substitute for CO's accepted
+request-to-persisted-decision interval. Keep both measurements separate. Provider
+load, output length, reasoning settings, retries, and transport failures can
+change completion time without changing the intended ability construct.
+Do not infer that a faster provider is more capable or add an arbitrary
+speed-weighted ability score.
+
+For an observed-task experiment, compare outcome-only and joint models on the
+same predeclared held-out tasks and model revisions, with model/task/time
+grouping retained. Report calibration and delivered-correct fraction over all
+accepted requests, plus failure and censoring counts. Check residual dependence
+and held-out time fit before using the joint model. Fitting and diagnostics
+belong in released fast-mlsirm contracts; CO consumes their versioned outputs.
+
+The decision-latency experiment remains separate: profile selection and durable
+write costs under the analytics interval before choosing a runtime optimization.
+A joint estimator on the request path could increase that latency. No estimator
+is added here: neither observed training/held-out data nor released joint-model
+support has been verified. The next experiment must establish that baseline
+before claiming improvement, rather than using oracle-score fixtures as buyer
+evidence.
