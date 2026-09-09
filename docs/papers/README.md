@@ -35,9 +35,12 @@ Version-specific arXiv abstract pages were checked on 2026-09-09:
 | [2211.09110v2](https://arxiv.org/abs/2211.09110v2) | CC BY 4.0 | Preserve attribution and license requirements. |
 | [1812.00140v4](https://arxiv.org/abs/1812.00140v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
 
-This checks the declared version-page licenses; byte-level identity and
-release-package inclusion still require verification. Existing files are
-retained during the audit.
+This checks the declared version-page licenses. The local bytes were hashed on
+2026-09-09 in [stored_pdf_sha256.txt](stored_pdf_sha256.txt); from the repository
+root run `shasum -a 256 -c docs/papers/stored_pdf_sha256.txt` to verify all five.
+These hashes identify the stored copies only: comparison with publisher bytes,
+redistribution permission, and release-package inclusion remain separate checks.
+Existing files are retained during the audit.
 
 At source commit `15b8f52b`, `uv build` produced both package formats and
 archive-member inspection found no `.pdf` members in either:
