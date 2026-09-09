@@ -4997,7 +4997,7 @@ class TaskOrchestrator:
                         ):
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
-                            if candidate.group_name:
+                            if candidate.group_name or free_only:
                                 self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
@@ -5007,7 +5007,7 @@ class TaskOrchestrator:
                             last_retryable = classified
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
-                            if candidate.group_name:
+                            if candidate.group_name or free_only:
                                 self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
@@ -5019,7 +5019,7 @@ class TaskOrchestrator:
                             last_model_not_found = classified
                             request_exclusions.add(candidate.id)
                             self._record_failure(candidate.id)
-                            if candidate.group_name:
+                            if candidate.group_name or free_only:
                                 self._group_router.observe_failure(candidate.id)
                             synthesis_failure_recorded = True
                             continue
@@ -5052,7 +5052,7 @@ class TaskOrchestrator:
                 ):
                     self._record_failure(final_agent.id)
                 if (
-                    final_agent.group_name
+                    (final_agent.group_name or free_only)
                     and not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
                     and not synthesis_failure_recorded
@@ -5116,7 +5116,7 @@ class TaskOrchestrator:
             except ProviderUpstreamError as exc:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
-                if final_agent.group_name and not _is_request_too_large_error(exc):
+                if (final_agent.group_name or free_only) and not _is_request_too_large_error(exc):
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(final_agent, repaired)
@@ -5141,7 +5141,7 @@ class TaskOrchestrator:
 
             failed_agent = final_agent
             self._record_failure(failed_agent.id)
-            if failed_agent.group_name:
+            if failed_agent.group_name or free_only:
                 self._group_router.observe_failure(failed_agent.id)
             if not virtual_model:
                 raise ProviderResponseError(
@@ -5165,7 +5165,7 @@ class TaskOrchestrator:
             final_agent = next_agent
             synthesis_started = time.perf_counter()
         self._record_success(final_agent.id)
-        if final_agent.group_name:
+        if final_agent.group_name or free_only:
             self._group_router.observe_success(
                 final_agent.id, time.perf_counter() - synthesis_started
             )
@@ -6795,7 +6795,12 @@ class TaskOrchestrator:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
-                with self.client.suppress_request_tools():
+                tool_scope = (
+                    self.client.suppress_request_tools()
+                    if hasattr(self.client, "suppress_request_tools")
+                    else nullcontext()
+                )
+                with tool_scope:
                     steps = self._plan_generated(task)
                 plan_source = "generated"
             except BudgetExceededError:

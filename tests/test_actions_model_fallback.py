@@ -20,6 +20,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from contextual_orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -587,11 +589,14 @@ def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
     assert client.proxy_calls == ["primary_free_agent"]
 
 
-def test_http_virtual_free_response_format_reselects_after_retryable_502() -> None:
+@pytest.mark.parametrize("group_name", ["", "free_replica_group"])
+def test_http_virtual_free_response_format_reselects_after_retryable_502(
+    group_name: str,
+) -> None:
     """Noema-shaped virtual+response_format walks off a 502 synthesizer."""
     client = _StructuredFailThenServeClient()
     orchestrator = TaskOrchestrator(
-        _free_agents("free_replica_group"), client=client
+        _free_agents(group_name), client=client
     )
     server = build_server(
         orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)

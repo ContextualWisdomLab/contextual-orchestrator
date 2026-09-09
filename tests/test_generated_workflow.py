@@ -57,6 +57,15 @@ class _PlannerClient(ModelClient):
         return f"step-output({len(self.calls) - 1})"
 
 
+class _LegacyPlannerClient(_PlannerClient):
+    """Model client predating the optional request-tool suppression scope."""
+
+    def __getattribute__(self, name: str):
+        if name == "suppress_request_tools":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
 def _orch(plan_text: str) -> tuple[TaskOrchestrator, _PlannerClient]:
     client = _PlannerClient(plan_text)
     orchestrator = TaskOrchestrator(
@@ -89,6 +98,20 @@ def test_generated_planner_does_not_receive_caller_tools() -> None:
     assert client.tool_settings[0] is None
     assert client.tool_settings[1:3] == [tools, tools]
     assert client.tool_settings[3:] == [None, None]
+
+
+def test_generated_planner_supports_legacy_model_clients() -> None:
+    """Generated planning remains available to clients without the optional scope."""
+    client = _LegacyPlannerClient(json.dumps(PLAN))
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
+        client=client,
+    )
+    orchestrator.policy = replace(orchestrator.policy, workflow_planning="generated")
+
+    result = orchestrator.conduct([{"role": "user", "content": "solve it"}])
+
+    assert result["plan_source"] == "generated"
 
 
 def test_access_lists_actually_isolate_context() -> None:

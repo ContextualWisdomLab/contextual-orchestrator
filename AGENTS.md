@@ -86,10 +86,10 @@ push or open a PR.
 - Tool-bearing chat requests stay synchronous. Reject explicit deferred/batch
   routing before dispatch because the batch contract does not carry tool
   controls or returned tool calls. Generated planners, verifiers, and
-  synthesizers suppress caller tools; only worker calls receive them. Every
-  grouped structured-synthesis failure updates both the circuit breaker and
-  group stability exactly once, including failure followed by successful
-  failover.
+  synthesizers suppress caller tools when the client supports that optional
+  scope; only worker calls receive them. Every grouped or `free_only`
+  structured-synthesis attempt updates group stability exactly once, including
+  failure followed by successful failover.
 - A live 2026-09-09 Bytez catalog check with a configured credential returned
   zero `task=chat` rows, while unfiltered and `text-generation` requests
   returned HTTP 500. Treat this as provider/runtime evidence, not proof of an
