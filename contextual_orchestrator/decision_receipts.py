@@ -120,6 +120,8 @@ class DecisionMeasurement:
     def auxiliary_call(self, agent_ids, phase):
         """Retain auxiliary work without subtracting it from the task-route interval."""
         with self._lock:
+            if phase == "routing_evidence_embedding" and self.receipt.selection_elapsed_ns is not None:
+                phase = "post_decision_evidence_embedding"
             self._record_provider_locked(agent_ids, phase)
             started = self.receipt.current_elapsed_ns()
         outcome = "completed"

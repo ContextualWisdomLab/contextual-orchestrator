@@ -10,6 +10,62 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monkeypatch):
+    """Routing evidence calls occur only cold and remain before task acknowledgement."""
+    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts
+    orchestrator = TaskOrchestrator([
+        ModelAgent("worker_one", "mock/worker", tags=("writing",)),
+        ModelAgent("embedding_one", "mock-embedding", tags=("embedding",)),
+    ], state_db=tmp_path / "state.db")
+    original_embed = orchestrator.client.embed
+    embedding_snapshots = []
+    embedding_inputs = []
+    def observed_embed(*args, **kwargs):
+        embedding_inputs.extend(args[1])
+        snapshot = _CURRENT_DECISION.get().snapshot()
+        embedding_snapshots.append(snapshot)
+        return original_embed(*args, **kwargs)
+    monkeypatch.setattr(orchestrator.client, "embed", observed_embed)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        counts = []
+        for _ in range(2):
+            connection = http.client.HTTPConnection(*server.server_address)
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "route",
+                "messages": [{"role": "user", "content": "same evidence request"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token",
+                 "x-cache-bypass": "true"})
+            response = connection.getresponse()
+            response.read()
+            assert response.status == 200
+            connection.close()
+            counts.append(len(embedding_snapshots))
+        server.shutdown()
+        assert counts[0] > 0
+        assert counts[1] == counts[0]
+        assert embedding_inputs.count("same evidence request") == 1
+        assert all(snapshot["first_provider_phase"] == "routing_evidence_embedding"
+                   for snapshot in embedding_snapshots)
+        cold, warm = export_decision_receipts(orchestrator._store)["observations"]
+        assert cold["auxiliary_dispatches"]
+        assert all(row["finished_elapsed_ns"] <= cold["selection_elapsed_ns"]
+                   for row in cold["auxiliary_dispatches"] if row["phase"] == "routing_evidence_embedding")
+        assert any(row["phase"] == "post_decision_evidence_embedding"
+                   for row in cold["auxiliary_dispatches"])
+        assert warm["auxiliary_dispatches"] == []
+        assert cold["durable_ack_elapsed_ns"] is not None
+        assert warm["durable_ack_elapsed_ns"] is not None
+    finally:
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 def test_generated_planner_is_auxiliary_until_worker_selection(tmp_path, monkeypatch):
     """A planning provider does not freeze the task-execution route interval."""
     from contextual_orchestrator.decision_receipts import DecisionMeasurement
@@ -213,10 +269,13 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
     """Failed commits cannot become successful timing samples or leak detail."""
     from contextual_orchestrator.decision_receipts import DecisionMeasurement
 
+    auxiliary_records = []
     class FailedStore:
         def save(self, *args, **kwargs):
             if args[0] == "initial_decision":
                 raise RuntimeError("secret-canary-never-log")
+            if args[0] == "auxiliary_dispatch":
+                auxiliary_records.append(args[2])
 
     measurement = DecisionMeasurement(FailedStore())
     try:
@@ -226,6 +285,9 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
         assert snapshot["durable_ack_elapsed_ns"] is None
         snapshot["selected_agent_ids"].append("untrusted_mutation")
         assert measurement.snapshot()["selected_agent_ids"] == ["worker_one"]
+        with measurement.auxiliary_call(["embedding_one"], "routing_evidence_embedding"):
+            pass
+        assert auxiliary_records[0]["phase"] == "post_decision_evidence_embedding"
     finally:
         measurement.close()
     assert "secret-canary-never-log" not in caplog.text
