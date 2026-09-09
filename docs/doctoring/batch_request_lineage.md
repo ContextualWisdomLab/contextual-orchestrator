@@ -105,3 +105,54 @@ clients must preserve the handle and must not resubmit solely because local
 persistence is incomplete. If both SQLite and the registry fail, automatic recovery
 remains unavailable. This is a tested recovery slice, not complete cross-store
 atomicity, retention cleanup, production integration, or customer KPI evidence.
+
+## Independent review repairs and injected-adapter configuration
+
+At `a6b94855`, the four-file focused suite passes **84 tests in 32.63s**.
+Intermediate failures and successful checks remain attributed to their commits:
+
+| Source | Check | Result |
+| --- | --- | --- |
+| `e372bc54` | Registry outage, inconsistent item IDs and estimate keys | 3 failed, 3.59s |
+| `7fb1a71c` | Lineage file after recovery isolation | 19 passed, 14.94s |
+| `83394afa` | Malformed job fields and deployment binding added | 23 passed, 18.26s |
+| `f4d036bf` | Healthy coordinator handle, missing backend metadata | 1 failed, 1.37s |
+| `6cb530a7` | Four-file suite | 81 passed, 29.90s |
+| `42ad396c` | Duplicate persisted item IDs | 1 failed, 1.52s |
+| `aaa9b133` | Four-file suite | 82 passed, 31.21s |
+| `17cfa611` | Backend registry write fails after remote creation | 1 failed, 0.95s |
+| `8ddfeb9f` | Same backend-failure HTTP test | 1 passed, 1.79s |
+| `df638d6c` | Healthy active job with expired recovery descriptor | 1 failed, 1.51s |
+
+The Pg adapter now retains the upstream handle even when its own metadata
+registry write fails before returning to the coordinator. The response separates
+`backend_registry_persistence_status`, `registry_persistence_status`,
+`request_link_status`, and `recovery_status`. The first two describe individual
+write outcomes, not restart durability. HSET may apply before expiry fails;
+response-only write results are not serialized as claims about their own writes.
+Missing durable lineage still remains explicit; no handler repeats submission.
+
+Recovery tolerates continuing coordinator/backend registry outages. Validated
+item metadata is carried on the returned job for that retrieval, without writing
+back through the failed registry. The stored envelope's item list, descriptor
+items, job count, and estimate keys must agree before downloading. Invalid count
+types and null estimates fail closed. A healthy authorized registry job retains
+its original refresh-on-read lifecycle even if its separate fixed-deadline
+recovery descriptor has expired; missing metadata cannot use expired recovery.
+
+There is no built-in production Pg adapter constructor in this source tree:
+the CLI/default coordinator uses the local backend. Integrators injecting
+`PgLlmBatchBackend` configure its optional `recovery_identity` argument with a
+stable, non-secret service/deployment/account identifier. Keep this identifier
+stable during credential rotation and change it when the service or account
+changes. Do not use a credential, infer equivalence from an endpoint alias, or
+accept an HTTP caller's value. The default `None` disables durable recovery,
+and submission reports `recovery_status=unavailable`; a committed, explicitly
+bound Pg descriptor reports `durable_descriptor`. A different or missing binding
+cannot recover the old job, even if endpoint aliases are identical.
+
+The real-HTTP tests use offline injected clients; no deployed integration is
+claimed. Simultaneous loss of both durable submission evidence and job registries
+still cannot promise recovery. Full suite, clean wheel, hosted review and release
+remain pending. Do not stop at a status-only response when recoverable evidence
+exists, and do not label a retained remote handle complete recovery by itself.
