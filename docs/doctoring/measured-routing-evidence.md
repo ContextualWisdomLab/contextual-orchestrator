@@ -104,6 +104,14 @@ calibration and uncertainty before publishing a consumer contract. Keep fitting
 outside the request path unless measured latency supports otherwise. No routing
 default or estimator was changed by this reading.
 
+Visual evidence, 2026-09-09: opened the version-5 PDF in the actual browser
+at page 7 of 24, 100% zoom, 1280 × 720 viewport, English document. Directly
+inspected the screenshot: equation (2), its interpretation, the joint-model
+warning and identifiability paragraphs were legible, with no visible overlap
+or clipped equation in that viewport. Other pages and supplements were not
+visually audited; this does not establish a complete PDF inspection. No PDF
+was committed because redistribution permission remains unverified.
+
 Jin, I. H., Jeon, M., Schweinberger, M., Yun, J., & Lin, L. (2022).
 Multilevel network item response modelling for discovering differences between
 innovation and regular school systems in Korea. *Journal of the Royal
