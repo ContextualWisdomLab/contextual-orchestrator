@@ -15,6 +15,7 @@ import mmap
 import secrets
 import socket
 import struct
+import sys
 import tempfile
 import threading
 import time
@@ -25,6 +26,7 @@ from typing import Any, Callable, Mapping
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
+from .decision_receipts import DecisionMeasurement
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import (
@@ -5474,6 +5476,7 @@ def build_server(
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
     release_authority: Mapping[str, Any] | None = None,
+    decision_receipts: bool = False,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -5482,6 +5485,12 @@ def build_server(
     every completion is priced, recorded, and sync/batch routed.
     """
     security = security or SecurityConfig()
+    if type(decision_receipts) is not bool:
+        raise TypeError("decision_receipts must be a boolean")
+    if decision_receipts:
+        from ._decision_receipt import DecisionReceipt  # noqa: F401
+        if orchestrator._store is None:
+            raise ValueError("decision receipts require a durable state store")
     security.check_bind(host)
     release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
@@ -8129,10 +8138,37 @@ def build_server(
             return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:
-            security.acquire_run_slot()
+            self._acquire_measured_slot()
             try:
                 return callback()
             finally:
+                self._release_measured_slot()
+
+        def _acquire_measured_slot(self) -> None:
+            self._decision_failure_reason = "unfinished"
+            measurement = DecisionMeasurement(orchestrator._store) if decision_receipts else None
+            self._decision_measurement = measurement
+            try:
+                security.acquire_run_slot()
+            except Exception:
+                if measurement is not None:
+                    measurement.close("capacity_rejected")
+                self._decision_measurement = None
+                raise
+
+        def _release_measured_slot(self) -> None:
+            try:
+                measurement = self._decision_measurement
+                if measurement is not None:
+                    active_error = sys.exc_info()[1]
+                    reason = self._decision_failure_reason
+                    if isinstance(active_error, (ConnectionError, BrokenPipeError, GeneratorExit)):
+                        reason = "cancelled"
+                    elif active_error is not None:
+                        reason = "selection_failed"
+                    measurement.close(reason)
+            finally:
+                self._decision_measurement = None
                 security.release_run_slot()
 
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
@@ -8243,6 +8279,7 @@ def build_server(
                 writer()
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
+                self._decision_failure_reason = "cancelled"
                 _LOGGER.debug("client_disconnected")
                 # `_send*`/`_begin_sse` writers record their *intended*
                 # status in `self._last_status` before calling this method
@@ -8438,7 +8475,7 @@ def build_server(
                         part={"type": "summary_text", "text": text},
                     )
 
-            security.acquire_run_slot()
+            self._acquire_measured_slot()
             try:
                 if not self._begin_sse():
                     return False
@@ -8486,6 +8523,7 @@ def build_server(
                             conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
                         result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
+                    self._decision_failure_reason = "cancelled"
                     raise
                 except ProviderUpstreamError as exc:
                     failed = {
@@ -8595,9 +8633,10 @@ def build_server(
                 self._write_sse("data: [DONE]\n\n")
                 return True
             except ConnectionAbortedError:
+                self._decision_failure_reason = "cancelled"
                 return False
             finally:
-                security.release_run_slot()
+                self._release_measured_slot()
 
         def _stream_route_completion(
             self,
@@ -8643,7 +8682,7 @@ def build_server(
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-            security.acquire_run_slot()
+            self._acquire_measured_slot()
             try:
                 if not self._begin_sse() or not self._write_sse(
                     frame({"role": "assistant"})
@@ -8698,11 +8737,12 @@ def build_server(
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                    self._decision_failure_reason = "selection_failed"
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")
             finally:
-                security.release_run_slot()
+                self._release_measured_slot()
 
         def _send_security_headers(self) -> None:
             if getattr(self, "close_connection", False):
