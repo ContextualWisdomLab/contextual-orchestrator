@@ -1,5 +1,26 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Rejected observation integrity (proposed)
+
+PR #1109 is stacked on numerical-routing owner PR #1067. At candidate
+`181e6d4d`, rejected new/replacement observations preserve retained response
+records, vectors, context order, and revision. RED `b335bfa7` reproduced both
+mutations; fix `5a4c0e66` passed both regressions. The focused observation and
+vector suite at `181e6d4d` passed 10 tests (24 deselected, 41.34s).
+The [root-cause runbook](psychometric_observation_atomicity.md) describes shared
+callers and limits. This closes two local integrity failures, not customer
+accuracy/latency KPIs. Full regression, independent review, protected merge,
+and immutable release remain unverified; production defaults are unchanged.
+
+Follow-up `89d8ed51` rejects fractional IRT row values instead of silently
+truncating them. The 13-case boundary suite passed in 2.05s and 10 neighboring
+tests passed in 3.51s. Integer-protocol inputs remain supported; floats including
+`0.0`/`1.0` and numeric strings are no longer valid row values. Accepted-flag
+coercion is a separate unchanged limitation. Earlier head `4cc0bf2c` completed
+57 local psychometric regressions and 3595 hosted full-suite tests, but those
+receipts are not current-code verification after this follow-up. New review and
+hosted checks remain required. No customer KPI gain is claimed.
+
 ## 2026-09-07 measurement-only decision authority (proposed)
 
 RED `1cc27fca` retained two failures: the same 30 successful policy pairs
