@@ -1,5 +1,32 @@
 # Autonomous KPI experiment runbook
 
+## Noema terminal failure attribution, 2026-09-09
+
+Two central `.github` runs completed bootstrap but failed their review request:
+
+| Run / job | Caller observation | Interpretation boundary |
+| --- | --- | --- |
+| 34316107754 / 102352588433 | 502 after 128.5 s; llama-3.2-11b-vision-instruct | Server artifact records TimeoutError for the same model at 05:56:14.181, just before caller failure at 05:56:14.183; correlation is not request identity. |
+| 34315965378 / 102352582904 | 429 after 336.7 s; deepseek-v4-flash-0731 | Terminal rejection is verified; internal candidate history and exhaustion are not. |
+
+Both callers report one gateway attempt. That is not a count of CO internal
+attempts. Artifact `10090380702` (`noema-sidecar-evidence`, first run) contains
+stderr and preflight JSON, but no request identifier or source SHA in the
+inspected records. Earlier provider failures occurred during preflight; do not
+attribute them to the review request. Reproduce retrieval with
+`gh run download 34316107754 --repo ContextualWisdomLab/.github --name noema-sidecar-evidence --dir <new-private-directory>`;
+inspect only allowlisted diagnostics, never publish raw credentials or prompts.
+
+Existing owners are issue #1045, PR #1049 (`e2641c16`, replay safety),
+PR #1037 (`4ba6be74`, bounded attempt history), PR #1094 (Noema structured
+conduct), and PR #1105 (request correlation). A bare timeout/502 does not prove
+the non-idempotent operation was never applied; do not widen retry policy from
+this incident. Keep explicit 429 rejection separate. Next verification needs
+the deployed sidecar revision and request-correlated reproduction, followed by
+owner tests and protected release. See [the evidence receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1045#issuecomment-5596669214).
+These are failed deliveries in the accuracy denominator, not measured routing
+decision latencies. Their elapsed times include work beyond initial selection.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at

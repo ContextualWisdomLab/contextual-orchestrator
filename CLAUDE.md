@@ -116,6 +116,11 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Key conventions
 
+- **Failure attribution**: one Noema caller attempt is not one internal provider
+  attempt. Verify deployed revision and request identity; do not mix preflight
+  failures with the review request or automatically replay ambiguous timeout/502.
+  See [the incident runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
 - **Stacked quality checks**: zero check runs can result from the former
   `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
   trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
