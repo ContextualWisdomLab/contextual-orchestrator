@@ -82,6 +82,7 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         assert status == 201, submitted
         assert submitted["request_link_status"] == ("write_failed" if write_failure else "durable")
         assert "private-store-secret" not in str(submitted)
+        assert submitted["recovery_status"] == "unavailable"
         assert submitted["registry_persistence_status"] == ("write_failed" if registry_failure else "stored")
         assert "private-registry-secret" not in str(submitted)
         if registry_failure:
@@ -240,7 +241,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -301,6 +302,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     "messages": [{"role": "user", "content": "Never persist this prompt."}]}]})
                 assert status == 201
                 assert submitted["registry_persistence_status"] == "write_failed"
+                assert submitted["recovery_status"] == "durable_descriptor"
                 record = orchestrator._store.load("batch_request_link")[0]
                 assert "Never persist this prompt." not in str(record)
                 if recovery_case == "expired":
@@ -315,7 +317,9 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     record["recovery_descriptor"]["job"]["prompt_token_estimates"] = None
                 if recovery_case == "boolean_count":
                     record["recovery_descriptor"]["job"]["request_count"] = True
-                if recovery_case in {"expired", "malformed", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count"}:
+                if recovery_case == "duplicate_ids":
+                    record["custom_ids"] = ["a", "a"]
+                if recovery_case in {"expired", "malformed", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "duplicate_ids"}:
                     orchestrator._store.save("batch_request_link", submitted["job_id"], record, durable=True)
                 continue
             result_url = f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
@@ -323,7 +327,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
             assert denied_status == 404
             assert "download_results" not in client.calls
             status, retrieved = _request("POST", result_url, "owner-one")
-            if recovery_case in {"expired", "malformed", "backend_mismatch", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity"}:
+            if recovery_case in {"expired", "malformed", "backend_mismatch", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "duplicate_ids"}:
                 assert status == 404, retrieved
                 assert "download_results" not in client.calls
                 continue
@@ -331,6 +335,8 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                 assert status != 200
                 continue
             assert status == 200, retrieved
+            poll_status, _ = _request("GET", result_url.removesuffix("/results"), "owner-one")
+            assert poll_status == 200
             assert retrieved["results"][0]["custom_id"] == "a"
             if recovery_case == "missing_usage":
                 assert retrieved["results"][0]["measurement_status"] != "measured"
