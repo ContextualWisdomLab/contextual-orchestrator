@@ -53,6 +53,19 @@ include coordinator-registry hits with missing backend metadata, malformed job
 field types, and a changed deployment using the same backend alias. A backend
 alias or API path alone cannot establish service/account identity.
 
+At `aaa9b133`, the focused suite reports **82 passed in 31.21 seconds**
+(terminal execution `6240`), and independent source review clears the preceding
+typed-identity and partial-registry findings within its inspected scope. Root
+end-to-end review nevertheless identified two remaining paths before full-suite
+acceptance: the Pg adapter writes its own registry after remote acceptance but
+before returning the handle to the coordinator, and healthy registry reads
+refresh retention whereas recovery descriptors use a fixed expiry. Reproduce
+backend-registry submission failure without losing the accepted handle; also
+ensure an expired recovery descriptor does not invalidate otherwise healthy,
+authorized, complete registry state. Expired recovery with missing registry
+state must remain denied. These findings supersede any bounded recommendation
+to freeze the candidate for full-suite verification.
+
 Visual receipt: the GitHub-rendered document at
 `aee00ac9da1e7f17ddfaec4ad3ebbafc06dee01f` was opened in the actual browser,
 and its screenshot directly inspected at **1265 × 712**, English. The title,
