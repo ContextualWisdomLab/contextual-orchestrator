@@ -6,7 +6,9 @@ from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvid
 
 
 @pytest.mark.parametrize("context_id", ["first_context", "new_context"])
-@pytest.mark.parametrize("invalid_row", [[2], ["not_an_integer"], [None]])
+@pytest.mark.parametrize(
+    "invalid_row", [[2], ["not_an_integer"], [None], [0.7], [1.7], [-0.7]]
+)
 def test_rejected_row_preserves_evidence(context_id, invalid_row):
     """Invalid new and replacement rows preserve vectors, order, and revision."""
     evidence = PsychometricRoutingEvidence(max_contexts=2)
