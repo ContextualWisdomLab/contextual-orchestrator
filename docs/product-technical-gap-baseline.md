@@ -1,5 +1,28 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Integrated rollback regression receipt
+
+PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c` includes the
+non-force base integration and transaction rollback repair. Its clean, pinned
+worktree completed the full local suite: **3,399 passed, 2 skipped in 823.46
+seconds**, exit 0. The focused persistence, workflow-object authorization, and
+governance checks separately passed **30 tests in 10.06 seconds**. The full log
+is `/tmp/co-rollback-integrated-fbb933cb.log` on the validation host; it is a
+local receipt, not a hosted artifact or release attestation. At the subsequent
+GitHub check, this exact head had **zero check runs and zero reviews**. Status
+contexts alone do not satisfy the Security job or independent review gates;
+protected merge and release remain unverified.
+
+The analytics specification at `ddf087da136dbb5f2110aba6db20dd9bd384db7c`
+was opened in the actual browser and its screenshots directly inspected at
+1265 × 712, English locale. The opening context and autonomous-target table
+were readable; the table's three columns and three rows had no overlap or
+horizontal clipping in that view. Images are inline in the validation task,
+linked by [the PR inspection receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1107#issuecomment-5596505419).
+This is bounded document evidence, not responsive, multilingual, Figma, or
+product-interaction verification. No customer accuracy or latency gain follows
+from either receipt.
+
 ## 2026-09-09 Decision-latency durable acknowledgement gap
 
 [Issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110)
