@@ -139,11 +139,17 @@ def test_failed_keyed_save_preserves_previous_committed_record() -> None:
                 pass
             else:
                 raise AssertionError("the injected write failure did not occur")
+            assert not store._conn.in_transaction
             store.save("workflow_run", "run_other", {"version": 3})
             assert store.load("workflow_run") == [{"version": 1}, {"version": 3}]
             assert not store._conn.in_transaction
         finally:
             store.close()
+        reopened = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            assert reopened.load("workflow_run") == [{"version": 1}, {"version": 3}]
+        finally:
+            reopened.close()
 
 
 def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
