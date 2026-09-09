@@ -84,6 +84,33 @@ full visual-inspection requirement complete from this receipt.
 
 ## Break release cycles without copying implementation
 
+## State-write atomicity prerequisite (2026-09-09)
+
+At CO `ab8a7caa6c00a49eede17a03d0897865cfdce9f5`, `run()` calls
+`complete()` before saving its workflow record. Its duration includes generation
+and cannot represent accepted-request-to-decision latency. Analytics stream
+`save()` normally enqueues, whereas `durable=True` reaches the synchronous
+commit path. Neither queue acceptance nor final workflow storage is a substitute
+for a pre-invocation decision acknowledgement.
+
+Tracing that common synchronous path exposed an atomicity defect: a keyed
+replacement deletes the old row before inserting the new one. An insertion
+failure left the deletion in an open transaction, and a subsequent unrelated
+save committed it. A real SQLite trigger injecting an insertion failure reproduced
+the loss: the previous version disappeared. The new regression failed before
+the fix (1 failed, 18 deselected, 6.17s).
+
+Code commit `d7bba88f3d711883a37effe49ab4f503c4fb8e01` uses the existing
+connection's transaction context inside the existing lock. Success commits;
+failure rolls back before another writer acquires the lock. No new dependency,
+schema, numerical implementation, or production routing default was introduced.
+The same project-local Python environment ran `python -m pytest
+tests/test_persistence.py -q` from the isolated worktree: 19 passed in 16.38s.
+This establishes the tested SQLite failure case, not customer KPI improvement,
+full-suite success, protected merge, or production deployment. Next implement
+decision timing before provider invocation with explicit failure denominators;
+do not relabel existing response-generation timings.
+
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest
 isolated real integration → protected immutable release → consumer adoption.
 
