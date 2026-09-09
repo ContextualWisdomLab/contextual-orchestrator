@@ -8574,7 +8574,7 @@ def build_server(
                         "error": _error_payload(
                             exc.error_code,
                             _provider_upstream_message(exc),
-                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                            {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                         )["error"],
                     }
                     emit("response.failed", response=failed)
@@ -8760,8 +8760,8 @@ def build_server(
                 except ToolFallbackStoppedError as exc:
                     self._decision_failure_reason = "selection_failed"
                     detail = {
-                        "request_id": uuid.uuid4().hex,
                         **_tool_fallback_error_detail(exc),
+                        "request_id": current_request_id() or uuid.uuid4().hex,
                     }
                     payload = _error_payload(
                         TOOL_FALLBACK_STOPPED_CODE,
@@ -8779,7 +8779,7 @@ def build_server(
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
-                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                        {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
