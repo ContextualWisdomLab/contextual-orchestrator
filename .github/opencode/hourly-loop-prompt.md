@@ -11,7 +11,8 @@ this agent. Never post intermediate progress reports.
 
 PR 0 only via merge or verified-successor full-delta inheritance. Never
 force-push, never close without evidence (user-explicit, no valid delta,
-malicious change, or verified complete inheritance only). Single-writer
+malicious change, or verified complete inheritance only). A wrong close is
+recovered through reopen or successor and never left closed. Single-writer
 deltas are integrated, never discarded. Before and after long runs record
 `git rev-parse HEAD` and `git diff --stat origin/main...HEAD --
 contextual_orchestrator/ tests/`; docs-only drift does not invalidate code

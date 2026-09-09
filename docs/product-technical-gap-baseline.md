@@ -3100,6 +3100,25 @@ or cross-session push was attempted.
   minimal contract, port, or ACL and complete independently verifiable
   functionality first.
 
+## 2026-09-09 Autoresearch loop: #1108 loop-merge absorbed, #1105 still unhealed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **PR #1108 head `129a6650`:** owner merged the loop branch with a
+  normal merge (no force). The fix files are byte-identical to the
+  verified head, so the 21-pass evidence stands. Mergeability
+  recomputing. Action: re-observe for clean state, then hosted checks.
+- **PR #1109 head `b8d2651d`:** still clean, still no reviews. Action:
+  await independent approval; re-observe.
+- **PR #1105 head `b655fe1b`:** same 3 pending-verdict failures, no
+  self-healing rerun observed yet. Action: re-observe; owner owns any
+  real fix.
+- **Hourly prompt (this hour):** wrong closes are recovered through
+  reopen or successor and never left closed (close only on the four
+  evidenced conditions).
+
 ### PR #1108 terminal repair evidence, 2026-09-09
 
 At head `129a665016ed1acd79ae12915c905b1020856fcc`, base

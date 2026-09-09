@@ -408,6 +408,25 @@ job's own message states the dispatch workflow will rerun it after
 publishing the terminal verdict. Expected to self-heal; re-observe next
 turn. No push to any owner branch was made from this loop.
 
+## Re-observation, 2026-09-09 (PR #1108 loop-merge, PR #1105 unhealed)
+
+Loop HEAD `0ef13edcefcf562383dc5ef3391cbe46a38635cf` is in sync with
+`origin/autoresearch/20260909-kpi-loop` (concurrent docs-only
+`analytics_spec.md` dispatch-latency distinction arrived before this
+commit; code/test diff since `origin/main` unchanged). PR #1108 head moved `c11df645`
+to `129a6650`, which is a normal merge of `origin/loop` into the PR
+branch (no force-push): the delta carries the loop's stacked-quality
+test consolidation plus this loop's `2996cd3c` docs commit.
+`git diff c11df645..129a6650 -- tests/test_persistence.py` is empty, so
+the 21-pass isolated verification of the rollback fix stands without
+rerun; `contextual_orchestrator/orchestrator.py` is likewise untouched
+by the merge. Mergeability reports `null`/`unknown` while GitHub
+recomputes after the merge. PR #1109 head unchanged (`b8d2651d`),
+still clean with no reviews. PR #1105 head unchanged (`b655fe1b`):
+the same 3 `CodeQL compatibility analysis` failures persist with no
+self-healing rerun yet observed. Open-PR recount 88 (baseline 85). No
+merge, readiness change, or cross-branch push from this loop.
+
 ## DOI discovery visual receipt, 2026-09-09
 
 Inspected the actual GitHub-rendered `docs/papers/README.md` at
