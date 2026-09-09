@@ -1077,7 +1077,7 @@ class CostRoutingCoordinator:
             not self._batch_item_usage_valid(item)
             and item.custom_id not in prompt_token_estimates
             for item in items
-        )
+        ) and job.recovered_request_metadata is None
         request_by_custom_id = (
             self._legacy_batch_requests(job) if needs_legacy_lookup else {}
         )
@@ -1317,7 +1317,10 @@ class CostRoutingCoordinator:
         return provider, item.model
 
     def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
-        job = self._batch_jobs.get(job_id)
+        try:
+            job = self._batch_jobs.get(job_id)
+        except Exception:
+            job = None
         if job is None and owner_id is not None and self.orchestrator._store is not None:
             record = self.orchestrator._store.load_latest_key("batch_request_link", job_id)
             if (isinstance(record, dict) and record.get("owner_id") == owner_id
@@ -1332,7 +1335,19 @@ class CostRoutingCoordinator:
                     recovered = BatchJob(**descriptor["job"])
                     if recovered.job_id != job_id or recovered.owner_id != owner_id or recovered.backend != self.batch_backend.name:
                         raise ValueError("mismatched descriptor")
+                    custom_ids = record.get("custom_ids")
+                    if (type(recovered.request_count) is not int or recovered.request_count < 1
+                            or not isinstance(custom_ids, list)
+                            or any(not isinstance(item, str) or not item for item in custom_ids)
+                            or len(set(custom_ids)) != recovered.request_count):
+                        raise ValueError("invalid recovery item identities")
+                    estimates = recovered.prompt_token_estimates
+                    if (not isinstance(estimates, dict) or not set(estimates).issubset(custom_ids)
+                            or any(type(value) is not int or value < 0 for value in estimates.values())):
+                        raise ValueError("invalid recovery estimates")
                     self.batch_backend.restore_descriptor(recovered, descriptor["backend"])
+                    if set(recovered.recovered_request_metadata) != set(custom_ids):
+                        raise ValueError("mismatched recovery items")
                     recovered.request_link_status = "durable"
                     job = recovered
                 except (KeyError, TypeError, ValueError):

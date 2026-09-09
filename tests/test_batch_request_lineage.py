@@ -272,7 +272,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
         coordinator = CostRoutingCoordinator(orchestrator,
             batch_backend=PgLlmBatchBackend(client, endpoint_alias=(
                 "changed-endpoint" if restarted and recovery_case == "backend_mismatch"
-                else "original-endpoint")))
+                else "original-endpoint"), recovery_identity="unit-deployment-account"))
         if not restarted:
             coordinator._batch_jobs = MissingRegistry()
         elif recovery_case == "registry_outage":

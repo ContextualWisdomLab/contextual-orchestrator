@@ -224,6 +224,7 @@ class BatchJob:
     # Deliberately not a dataclass field: HSET may succeed before expiry fails,
     # so an operation result must never be serialized into its own snapshot.
     registry_persistence_status = "unavailable"
+    recovered_request_metadata = None
 
 
 @dataclass
@@ -459,11 +460,15 @@ class PgLlmBatchBackend:
         endpoint: str = "/v1/chat/completions",
         payload_assembler: Any = None,
         job_registry: Any = None,
+        recovery_identity: str | None = None,
     ) -> None:
         self._client = client
         self._endpoint_alias = endpoint_alias
         self._endpoint = endpoint
         self._assembler = payload_assembler
+        if recovery_identity is not None and (not isinstance(recovery_identity, str) or not recovery_identity.strip()):
+            raise ValueError("recovery identity must be a nonempty operator-controlled identifier")
+        self._recovery_identity = recovery_identity
         # Tracked requests survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._jobs: Dict[str, Dict[str, Any]] = (
@@ -474,6 +479,7 @@ class PgLlmBatchBackend:
         """Describe exact target and item metadata without submitted prompt text."""
         from .cost_ledger import AttributionDimensions
         return {
+            "recovery_identity": self._recovery_identity,
             "backend_name": self.name,
             "endpoint_alias": self._endpoint_alias,
             "endpoint": self._endpoint,
@@ -485,6 +491,8 @@ class PgLlmBatchBackend:
     def restore_descriptor(self, job: BatchJob, descriptor: Dict[str, Any]) -> None:
         """Restore prompt-free item identity only for this exact configured target."""
         if (not isinstance(descriptor, dict) or descriptor.get("backend_name") != self.name
+                or self._recovery_identity is None
+                or descriptor.get("recovery_identity") != self._recovery_identity
                 or descriptor.get("endpoint_alias") != self._endpoint_alias
                 or descriptor.get("endpoint") != self._endpoint):
             raise ValueError("batch target mismatch")
@@ -500,7 +508,7 @@ class PgLlmBatchBackend:
             if item["custom_id"] in restored or not isinstance(item["attribution"], dict):
                 raise ValueError("invalid batch item metadata")
             restored[item["custom_id"]] = {**item, "messages": []}
-        self._jobs[job.job_id] = {"endpoint_alias": self._endpoint_alias, "requests": restored}
+        job.recovered_request_metadata = restored
 
     def _assemble_payload(self, requests: List[BatchRequest]) -> str:
         if self._assembler is not None:
@@ -580,7 +588,8 @@ class PgLlmBatchBackend:
                 reason,
             )
             raise BatchDownloadError(job.job_id, reason)
-        tracked = self._jobs.get(job.job_id, {}).get("requests", {})
+        tracked = (job.recovered_request_metadata if job.recovered_request_metadata is not None
+                   else self._jobs.get(job.job_id, {}).get("requests", {}))
         responses = _validated_download_responses(
             payload,
             expected_custom_ids=set(tracked),
