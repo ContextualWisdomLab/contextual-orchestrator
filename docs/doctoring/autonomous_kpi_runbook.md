@@ -5,6 +5,86 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Completed observation-integrity verification
+
+PR #1109 code head `4cc0bf2c92181cb5ea175a1f1e1db1c8a85799bc` completed
+the three-file local psychometric regression command with **57 passed in
+1159.23s**, exit 0 (Python 3.13.14, fast-mlsirm 0.9.1). Process sampling during
+the run found Rust CAT/EAP reduction and thread joins on a heavily loaded host;
+this elapsed time is not routing-decision latency.
+Hosted job [102339210701](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34311594936/job/102339210701)
+completed full pytest with **3595 passed, 2 skipped in 791.75s**. Its tested
+merge `75d08ce905dc3d0c0468420bf4094a4cc7359ab3` has parents
+`84a6052369a7bf8b6faae5db475bb68a5ad54a91` and the code head above.
+These receipts supersede earlier pending-test observations, not the outstanding
+independent GitHub approval, protected-owner integration, or release gates.
+
+### Multimodal cost evidence boundary
+
+At CO `632831de9cc2a510af41981711eedc13e38df479`, inspected MMR-Bench v1's
+abstract, Section 3.1, and Appendix C.2–C.3; this is a partial read.
+The [primary source](https://arxiv.org/html/2601.17814v1) defines a text/image
+routing problem. Its normalized cost compares models within a fixed pool;
+Appendix C.3 also describes disabled reasoning traces for selected models.
+Therefore the reported roughly 33% cost scenario is not a CO invoice saving,
+decision-latency p95, or audio/video validation result. CO's model-group
+specification cites this paper for evaluation design, not achieved performance.
+Any local comparison must fix the candidate and reasoning-policy revisions,
+report real prices and latency separately, and retain failed requests. No
+production routing or reasoning policy was changed from this partial review.
+
+### Executable reference inventory check
+
+At `9a9f1ab2`, run `python -m pytest tests/test_paper_contracts.py -k
+explicit_arxiv -q` in a Git checkout with the project test dependencies.
+Result: 1 passed, 4 deselected in 16.76s. An in-memory negative check removed
+`2601.17814` only from the inventory read; the test failed with that identifier
+and its source path as expected. No source file was modified by that check.
+The test uses tracked `.py`, `.rs`, `.md`, and `.toml` text and explicit arXiv
+identifiers. It detects discovery omissions, not title accuracy, version/license
+compliance, evidence quality, full-paper review, or DOI-only references.
+
+### Expanded-population validity proposal
+
+Source inspection at CO `479bfe7e096832e1711c4d99b59621a66c3a2f59`:
+Kim and Chung (2019), ETS RM-19-07, abstract and printed pages 1–8.
+Their method checks item DIF and subgroup score-linking invariance separately;
+the report does not establish LLM routing performance. See the
+[source and APA reference](../papers/README.md#apa-7th-edition-references).
+
+Engineering proposal, not an implemented or validated estimator: treat a new
+language, task domain, or model revision as an explicitly declared evaluation
+population. CO records those evaluation conditions and observed outcomes;
+fast-mlsirm owns estimation, alignment, and diagnostic computation. A released
+owner contract should return the reference population, anchor-set revision,
+identification constraints, supported strata, uncertainty, and diagnostic status.
+Do not equate raw accuracy differences with DIF, or a nonsignificant diagnostic
+with proven equivalence. Missing support is unknown, not a passing result.
+
+For acceptance, report held-out correctness and failure denominators by declared
+stratum alongside the overall paired accuracy change. Estimate the cost of
+retrieving a versioned diagnostic with the same accepted-request-to-durable-
+decision clock; do not silently omit it from latency. Offline estimation may
+keep the request path small, but requires provenance and an expiry policy whose
+operational effect is tested. No new heuristic weights or production default
+change follows from this proposal. The next evidence gate is an owner-contract
+inventory and an observed-data evaluation design, not implementation copied
+into CO. No numerical effect or universal DIF cutoff is claimed.
+
+### Paper inventory consistency check, 2026-09-09
+
+At `b031d3acecc89b29b35fdd769598aa3826615553`, the paper inventory correctly
+marked redistribution permission as unverified but its closing paragraph still
+claimed the arXiv non-exclusive license authorized redistribution. The
+[official license guidance](https://info.arxiv.org/help/license/index.html)
+was rechecked: that license grants limited distribution rights to arXiv, not a
+general reuse grant. Commit `34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes
+the contradictory assurance and places batch references under their own heading.
+All five stored PDF hashes still verify; no PDF was added, removed, or republished.
+Actual browser inspection of this revision was attempted but the native browser
+tool reported the Mac locked and automatic unlock unavailable. Rendering is
+**not visually verified**; inspect the headings and license callout after unlock.
+
 Read AGENTS.md, CLAUDE.md, and the targets in `docs/analytics_spec.md`.
 Record head/base, clean or unrelated worktree changes, locked dependencies,
 runtime version, dataset identity and permitted use, workload, observation
@@ -152,3 +232,113 @@ legible, code+tests untouched). Before and after long runs, record
 contextual_orchestrator/ tests/`; docs-only drift does not invalidate code
 evidence, but any code/test drift does. Prefer isolated worktrees for code
 experiments; never rebase or push another session's branch.
+
+## Autonomous KPI scope, 2026-09-09 (selected without asking)
+
+Goal: USD 20,000,000,000 sale quality and customer-felt gap closure.
+Scope is chosen under `docs/analytics_spec.md`; no KPI-scope question was
+asked. Primary engineering metric is `open_pr_count` (lower is better,
+`gh pr list --state open --json number | jq length`): 85 at loop start,
+87 on recount (concurrent-session growth, not this change). PR 0 only via
+merge or verified-successor full-delta inheritance; no force-push and no
+close without evidence (user-explicit, no valid delta, malicious change,
+or verified complete inheritance only).
+
+Product acceptance stays observed-only: delivered-correct fraction at
+least +1 point with the 95% difference interval wholly above zero, and
+routing-decision p95 at most 20 ms with at least 10% reduction and the
+95% candidate/baseline ratio interval wholly below 1, each with declared
+population, workload, failure denominators, and uncertainty. Synthetic
+true-parameter recovery is unit evidence only (family-wise aligned RMSE,
+no regression); never substitute it for buyer accuracy. Latency claims
+use accepted-request to durable-decision timestamps on one monotonic
+clock, including queueing, selection, and persistence; worker durations
+that include generation cannot supply this metric. Measured-local
+commercial signals (`commercial_readiness_pass_rate`,
+`buyer_evidence_completeness`, `security_control_pass_rate`,
+`trace_audit_completeness`) may advance; buyer/production warnings stay
+warnings until buyer or production evidence arrives.
+
+## Isolated verification evidence, 2026-09-09
+
+Head `0ea2a58d34fb07e15c12dfcfd65f7242b2a45c91`, base
+`origin/main`; `contextual_orchestrator/ tests/` diff since `origin/main`
+is `benchmark_priors.py` only (17 insertions, 20 deletions, docstrings
+and comments bounding the legacy heuristic; runtime unchanged).
+`tests/test_model_group.py` plus `tests/test_benchmark_priors.py`: 37
+passed in 25.82s, exit 0, on the primary checkout.
+
+PR #1108 head `4316be85` verified in isolated worktree
+`/tmp/co-verify-1108` (primary checkout untouched):
+`tests/test_persistence.py` 20 passed in 32.42s, exit 0. The
+`_save_sync` change uses the SQLite connection context under the writer
+lock so a failed keyed replacement rolls back instead of leaking its
+DELETE into the next commit; the added test covers insert-phase and
+deferred-commit-phase failures, closed-transaction state, and reopened
+persistence. Focused unit evidence only; no customer KPI, full-suite,
+release, or deployment claim. Merge test of loop HEAD `0ea2a58d` into
+PR #1108 auto-merged code but conflicted in
+`docs/product-technical-gap-baseline.md` (both sides append); restack is
+a normal merge with manual docs resolution by the PR owner, never a
+force-push. Worktrees removed after verification.
+
+## Isolated verification evidence, 2026-09-09 (PR #1109)
+
+Loop HEAD `8839bfc5f3e6608e11faf3c8a2b237d5bd4050a5` is in sync with
+`origin/autoresearch/20260909-kpi-loop`; code diff since
+`origin/main` remains `benchmark_priors.py` only, while `tests/`
+additionally carries the concurrent session's `test_paper_contracts.py`
+guard (+24), which this turn does not claim as its evidence. Open-PR recount is 88
+(baseline 85; +1 new draft #1109 on the psychometric stack).
+
+PR #1109 head `4cc0bf2c` verified in isolated worktree
+`/tmp/co-verify-1109` (primary checkout untouched):
+`tests/test_psychometric_observation_atomicity.py` 6 passed in 52.15s,
+exit 0. The `observe_context_id` change validates the copied vector and
+complete dichotomous response row before any retained-state mutation
+under the existing lock; no new numerical arithmetic is introduced, so
+the Rust-authoritative computation rule is unaffected. Hosted checks at
+observation time: CodeQL success; `Tests and package quality` and
+`Property and coverage-guided fuzzing` still in progress. PR #1108 head
+reports no check runs while `dirty` against the loop branch; PR #1094
+remains `mergeable: true` but `mergeStateStatus: blocked` on main
+protection. No merge, readiness flip, or push to another session's
+branch was attempted. Unit evidence only; full regression, independent
+review, protected merge, and release remain pending. Worktree removal
+follows the docs commit.
+
+## Isolated verification evidence, 2026-09-09 (PR #1109 new head)
+
+PR #1109 flipped from Draft to Ready during the loop and its head moved
+`4cc0bf2c` to `b8d2651d61f1d178971997c3ee49e404580fc2aa`, so the prior
+6-pass verification is superseded for the new head. Isolated worktree
+`/tmp/co-verify-1109b` (primary checkout untouched):
+`tests/test_psychometric_observation_atomicity.py` 19 passed in 13.68s,
+exit 0. The new delta replaces `int(value)` with `operator.index(value)`
+(`operator` was already imported): fractional rows (`0.7`, `1.7`,
+`-0.7`), whole-valued floats (`0.0`, `1.0`), and numeric strings
+(`"1"`) are now rejected with `TypeError` instead of silently truncated
+to `0`/`1`, while the integer protocol (`int`, `numpy.int64`, bools via
+`__index__`) is preserved and covered by
+`test_integer_protocol_rows_preserve_binary_values`. Direction is
+fail-closed evidence integrity: a fractional row was never a valid
+dichotomous observation, so refusing it repairs masking rather than
+regressing a contract; the compatibility boundary is documented on the
+PR. Hosted checks on the new head: both CodeQL jobs success; `Tests and
+package quality` and `Property and coverage-guided fuzzing` still in
+progress; no reviews posted. No merge, readiness change, or push to the
+owner stack was attempted. Unit evidence only.
+
+## Re-observation, 2026-09-09 (PR #1109 same head, PR #1108 unknown)
+
+Loop HEAD `9e08f1448f23a22d10c99f3899021d241910f636` is in sync with
+`origin/autoresearch/20260909-kpi-loop`. PR #1109 head is unchanged
+(`b8d2651d`), so the 19-pass isolated verification stands without
+rerun. Hosted movement since last observation: `Property and
+coverage-guided fuzzing` moved from in-progress to success; `Tests and
+package quality` remains in progress; still no reviews; state remains
+`unstable`, so the merge bar is still unmet and nothing was merged,
+flipped, or pushed across branches. PR #1108 reports
+`mergeable: null` / `mergeable_state: unknown` (GitHub recomputing the
+dirty computation); still not actionable from this loop. Open-PR
+recount 88 (baseline 85).

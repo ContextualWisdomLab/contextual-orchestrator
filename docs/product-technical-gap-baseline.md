@@ -24,6 +24,79 @@ not establish review approval or security validation. Keep protected merge and
 release pending actual exact-head evidence. The root cause and reproduction are
 in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
 
+## 2026-09-09 Decision-latency durable acknowledgement gap
+
+[Issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110)
+tracks the accepted-request-to-durable-decision interval required by
+[the analytics specification](analytics_spec.md). At
+`b2c09930a8d335952e4f4d8de5371460cb14fcd6`, `route_once` still times the upstream
+invocation, not that interval. `conduct` persists a completed workflow after
+generation. Neither is a measured initial-decision receipt.
+
+The existing state store has synchronous `durable=True` writes and best-effort
+queued stream writes. Reuse that owner; a successful queue operation, a later
+flush-on-read, or an audit append without configured storage is not a durable
+acknowledgement. Three retention tests now explicitly exercise the synchronous
+path. An additional test prevents background draining and verifies committed
+records through an independent SQLite connection before any store read.
+All 19 persistence tests passed in 7.19 seconds. An in-memory mutation forcing
+asynchronous writes fails the new assertion. This proves commit visibility in
+the tested SQLite configuration, not power-loss survival or customer latency.
+
+Next implementation must connect validated admission, selection completion and
+successful commit acknowledgement within one monotonic clock domain; distinguish
+initial/failover decisions and retain failed/unfinished requests in accounting.
+PR #1108 owns transaction rollback repair and remains open; its valid delta must
+be retained during integration. No measured p95 or accuracy improvement is yet
+established, and no production routing default changes follow from these tests.
+
+## 2026-09-09 LSIRM model-selection source reconciliation
+
+At source `1b31166024a20b5ab5be6547a0cfd95a7099a7f1`, direct visual inspection
+of the NSF-hosted Springer-formatted LSIRM PDF confirmed the same mixture/event
+description discrepancy previously found in arXiv v2. The
+[version-specific receipt](doctoring/measured-routing-evidence.md#lsirm-identification-and-version-discrepancy-2026-09-09)
+records the PDF hash and inspected page. Before publishing a model-selection
+contract, fast-mlsirm must reconcile the decision event and prior parameterization
+against the current publisher copy and supplementary implementation. CO must
+not copy the ambiguous threshold into routing or count this investigation as
+an accuracy improvement. No current fast-mlsirm implementation defect has been
+demonstrated by this source comparison.
+
+## 2026-09-09 Expanded-population validity research gap
+
+At source `479bfe7e096832e1711c4d99b59621a66c3a2f59`, the research inventory
+was extended with ETS RM-19-07 and a bounded read receipt. The
+[proposed evaluation design](doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
+separates item DIF, scale linking, and observed routing accuracy. CO owns
+evaluation context and outcome collection; fast-mlsirm remains the numerical
+owner. Released diagnostic-contract availability, observed-data support by
+language/domain/model revision, and any accuracy or latency gain remain
+unverified. This is a research proposal, not a production gate already shipped.
+
+## 2026-09-09 Benchmark prior interpretation gap
+
+At `ef374defdf4037a829d4b4d6d61c5a8b314e8c05`,
+`contextual_orchestrator/benchmark_priors.py` labels an equal-weight composite
+of median/MAD-normalized Arena and Quality Index scores as a measured success
+probability. Inspection of the cited Chatbot Arena v1 metadata and sections 3–4
+does not justify that cross-instrument calibration. The docstrings now identify
+the legacy heuristic and correct the paper's author list; runtime behavior is
+unchanged. Outstanding work: authenticate archived rating snapshots, define
+the target outcome and model-version mapping, fit/calibrate against observed
+held-out tasks in the numerical owner, and validate accuracy/decision latency
+before protected adoption. A bounded score and constant prior mass do not prove
+measurement validity. No customer KPI gain is claimed.
+
+## 2026-09-09 Paper inventory consistency
+
+`34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes a stale blanket
+redistribution assurance that contradicted the version-specific license audit.
+All five stored PDF fingerprints verify, but publisher-byte equivalence and
+additional redistribution rights remain unverified. Browser inspection of this
+revision could not proceed because the Mac was locked; no visual pass is claimed.
+See the [runbook evidence](doctoring/autonomous_kpi_runbook.md).
+
 ## 2026-09-09 Numerical candidate and rendered KPI evidence
 
 The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a
@@ -2857,3 +2930,108 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-09 Autoresearch loop: autonomous KPI scope, PR #1108 verification, hourly-prompt hardening
+
+PRD/Goal adjustment: KPI scope was selected autonomously under
+`docs/analytics_spec.md` without asking (see the runbook scope entry).
+Loop metric `open_pr_count` is 87 on recount (baseline 85; growth from
+concurrent sessions). PR 0 only via merge or verified-successor
+full-delta inheritance; single-writer deltas are integrated, never
+discarded; no force-push; close only on user instruction, no valid
+delta, malicious change, or verified complete inheritance.
+
+- **PR #1108 (fix(persistence): roll back failed state replacements):**
+  valid minimal root-cause fix. `_save_sync` now runs under the writer
+  lock plus the SQLite connection context so a failed keyed replacement
+  rolls back instead of leaking its DELETE into a later unrelated commit.
+  Isolated-worktree evidence at head `4316be85`:
+  `tests/test_persistence.py` 20 passed in 32.42s, exit 0 (insert-phase
+  and deferred-commit-phase failures, closed-transaction checks,
+  reopen persistence). Unit evidence only. The PR is `dirty` against
+  loop HEAD `0ea2a58d` because both sides appended to this baseline
+  file; code auto-merges. Action: owner restacks with a normal merge
+  and manual docs resolution; this loop does not push to that branch.
+- **Current HEAD `0ea2a58d` (`benchmark_priors.py` calibration bound):**
+  docstrings/comments only in effect; `tests/test_model_group.py` plus
+  `tests/test_benchmark_priors.py` 37 passed in 25.82s, exit 0. No
+  runtime, routing-default, or numerical-formula change; no customer KPI
+  claim.
+- **Actions concurrency (reviewed, no change):** `security.yml` groups by
+  `local-quality`-repository-event-PR/schedule/ref with same-group
+  cancel only, so distinct PRs stay independent and pushes/schedules
+  serialize on ref/schedule; the hourly loop uses its own
+  `opencode-hourly-loop` group with `cancel-in-progress: false` and never
+  cancels merge/release/deploy/migration. Renaming groups without an ADR
+  would churn CI for no functional gain; left as is.
+- **Hourly prompt:** `.github/opencode/  hourly-loop-prompt.md` now records
+  the shared-checkout, live-handle, synthetic-vs-observed, and PR-0
+  rules so the next scheduled pass inherits them without re-derivation.
+  Follow-up: keep #1079 (main-protection stale job names) with the
+  owner; keep #1075 closure with the owner; re-observe #1108 after its
+  restack and hosted checks.
+
+## 2026-09-09 Autoresearch loop: PR #1109 atomicity review, no merge, prompt stacking rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is a new draft on the psychometric stack
+(`codex/psychometric-kpi-successor` base); #1108 is still `dirty`
+against the loop branch; #1094 is still protection-blocked. No PR met
+the merge bar this turn (terminal-success checks plus resolved threads
+plus independent exact-head approvals), so no merge, readiness flip, or
+cross-session push was attempted.
+
+- **PR #1109 (fix(psychometrics): preserve evidence when observations
+  are rejected):** read-only review plus isolated verification. The
+  reorder validates before mutating retained vectors, order, and
+  revision under the existing lock; valid-input behavior is preserved
+  and no new Python-side numerical arithmetic is added. Isolated
+  evidence at head `4cc0bf2c`:
+  `tests/test_psychometric_observation_atomicity.py` 6 passed in
+  52.15s, exit 0. Hosted checks: CodeQL success; tests and fuzzing still
+  in progress at observation time. Unit evidence only; full regression,
+  independent review, protected merge, and release remain pending.
+  Action: leave the draft with its owner stack; re-observe after hosted
+  checks complete.
+- **Hourly prompt (this hour):** added the single-writer stacking rule
+  (integrate deltas, normal-merge restack only, never flip another
+  session's Draft) and the PRD/TRD case-preservation rule alongside the
+  existing fail-closed ordering guidance.
+
+## 2026-09-09 Autoresearch loop: PR #1109 Ready flip and integer-index hardening, still unmerged
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is now Ready (`draft: false`, `mergeable: true`,
+`mergeable_state: unstable`); #1108 is confirmed `dirty` again; #1094
+remains protection-blocked. No PR met the merge bar (terminal-success
+checks plus resolved threads plus independent exact-head approvals), so
+no merge, readiness change, or cross-session push was attempted.
+
+- **PR #1109 new head `b8d2651d`:** the owner hardened validation from
+  `int(value)` to `operator.index(value)`, rejecting fractional rows,
+  whole-valued floats, and numeric strings that truncation previously
+  masked as valid dichotomous data, while keeping the integer protocol
+  including `numpy.int64`. Isolated evidence: 19 passed in 13.68s, exit
+  0. Hosted checks: both CodeQL jobs success; tests and fuzzing still in
+  progress; no reviews yet. Unit evidence only; full regression,
+  independent review, protected merge into the owner stack, and release
+  remain pending. Action: re-observe after hosted checks and first
+  review; do not merge across the stack boundary from this loop.
+- **Hourly prompt (this hour):** queue-exhausted continuation now
+  explicitly names gap development plus ContextualWisdomLab repository
+  and connector linkage under responsibility boundaries, so scheduled
+  passes do not idle after the PR list drains.
+
+## 2026-09-09 Autoresearch loop: PR #1109 fuzzing green, tests pending, failure-never-idles rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 head unchanged (`b8d2651d`): fuzzing success is
+new since last turn, tests still in progress, no reviews, still
+`unstable` — the prior 19-pass isolated verification stands and no
+merge was attempted. #1108 mergeability is `unknown` (recomputing);
+#1094 remains protection-blocked.
+
+- **Hourly prompt (this hour):** a failing check never idles the loop —
+  fix and rerun owned failures immediately while continuing safe
+  independent work, and codify manual workarounds with log-grounded RCA
+  for PYTHONPATH, Actions, and execution errors.

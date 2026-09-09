@@ -339,7 +339,7 @@ def test_durable_audit_retention_is_bounded() -> None:
         store = _StateStore(os.path.join(directory, "s.db"))
         limit = store._STREAM_LIMITS["audit"]
         for index in range(limit + 3):
-            store.save("audit", None, {"index": index})
+            store.save("audit", None, {"index": index}, durable=True)
 
         assert len(store.load("audit")) == limit
         assert store.load("audit", 1) == [{"index": limit + 2}]
@@ -351,7 +351,7 @@ def test_durable_authorization_retention_is_bounded() -> None:
         store = _StateStore(os.path.join(directory, "s.db"))
         limit = store._STREAM_LIMITS["authorization"]
         for index in range(limit + 3):
-            store.save("authorization", None, {"index": index})
+            store.save("authorization", None, {"index": index}, durable=True)
 
         assert len(store.load("authorization")) == limit
         assert store.load("authorization", 1) == [{"index": limit + 2}]
@@ -364,11 +364,30 @@ def test_durable_analytics_retention_is_bounded() -> None:
         assert store._STREAM_LIMITS["analytics"] == 256
         limit = 256
         for index in range(limit + 3):
-            store.save("analytics", None, {"index": index})
+            store.save("analytics", None, {"index": index}, durable=True)
 
         assert len(store.load("analytics")) == limit
         assert store.load("analytics", 1) == [{"index": limit + 2}]
         store.close()
+
+
+def test_durable_stream_return_is_visible_to_an_independent_connection() -> None:
+    """A durable return must acknowledge commit, not enqueue or flush-on-read."""
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "s.db")
+        store = _StateStore(database_path)
+        try:
+            # Prevent the asynchronous worker from making a queued write look durable.
+            with store._stream_condition, sqlite3.connect(database_path) as reader:
+                for stream_kind in store._STREAM_LIMITS:
+                    store.save(stream_kind, None, {"committed": True}, durable=True)
+                    rows = reader.execute(
+                        "SELECT payload FROM orchestration_records WHERE kind = ?",
+                        (stream_kind,),
+                    ).fetchall()
+                    assert rows == [('{"committed": true}',)]
+        finally:
+            store.close()
 
 
 def test_authorization_stream_persists_separately_from_audit() -> None:

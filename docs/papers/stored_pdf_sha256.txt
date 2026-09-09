@@ -1,0 +1,5 @@
+035ae8b90333dad8b7817fc8f55e7c4cbca435368c5c1a4dbf7bba9e5db87473  docs/papers/frugalgpt-cost-2305.05176.pdf
+b683da872e369882f0b8ebcb7423058e1317aa9571f8187ccd1c6148e3ac3992  docs/papers/fuzzing-art-science-engineering-manes-2019.pdf
+30970bda8958a1a8adf6a0a82feef9728331840288b7d2b49368bac87fd25f18  docs/papers/helm-holistic-evaluation-2211.09110.pdf
+c0ebc21073112b8f8e51c7ea279eeac4d5b62be88c69a5cd2bccc2d58ec28cbb  docs/papers/hybrid-llm-query-routing-2404.14618.pdf
+c9bc9c8171cab95bb3832cde8767c6b5e0925cd62930e51ddbd60d7cb2616741  docs/papers/routellm-routing-2406.18665.pdf

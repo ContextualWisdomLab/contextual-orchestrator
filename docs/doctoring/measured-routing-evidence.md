@@ -50,6 +50,28 @@ formula changes in this correction. Current calibration, sampling design, and
 group/time validity must be measured before interpreting ledger scores as
 psychometric accuracy.
 
+### Hybrid LLM attribution correction, 2026-09-09
+
+Reviewed the authors' [version-one text](https://arxiv.org/html/2404.14618v1),
+especially Sections 2–3. Model choice based on predicted quality gaps does not
+establish sync/batch transport choice. Removed that attribution from the paper
+index; no runtime policy changed. In psychometric work, request urgency and
+batchability must not become unvalidated proxies for item difficulty. A policy
+combining these signals needs separately identified constructs and observed
+outcome validation. Existing `test_paper_contracts.py` checks role/trace behavior
+and citation strings, not faithful paper reproduction or empirical validity.
+
+Section 4.4/Table 2 reports router mean latency 0.036 ± 0.002 seconds over
+200 randomly chosen queries; the uncertainty is one standard error, not a
+95% interval or p95. The paper explicitly excludes GPT-3.5 API timing because
+network, queueing, and inference cannot be separated there. This cannot serve
+as CO's 20 ms durable-decision p95 baseline. Section 4.5 selects thresholds on
+500 validation examples and evaluates them on a separate test set: retain that
+selection/evaluation separation, but do not adopt 500 as a universal sample-size
+requirement. CO must choose its sample size from the declared effect, variance,
+power, and clustering design. These are interpretation boundaries, not a new
+measured performance result or a reproduction of the paper.
+
 ## APA 7 references
 
 ### Multilevel follow-up source (2026-09-09)
@@ -69,7 +91,65 @@ innovation and regular school systems in Korea. *Journal of the Royal
 Statistical Society: Series C (Applied Statistics), 71*(5), 1225–1244.
 https://doi.org/10.1111/rssc.12569
 
+### LSIRM identification and version discrepancy (2026-09-09)
+
+Read scope: the authors' [arXiv v2 HTML](https://arxiv.org/html/2007.08719v2),
+sections 2.1, 2.3.2, 3.2, and 3.3; not the full paper or verified final journal
+text. At CO `4e078c5152d7aa021986ffb53735edb6891e1cea`, this extends the
+existing Jeon et al. citation without changing an estimator or routing policy.
+Section 3.2 identifies translation, reflection, and rotation invariance, uses
+Procrustes post-processing, and cautions that interpretation concerns relative
+distances rather than absolute positions.
+
+Section 3.3 needs version-level reconciliation before implementation: its
+displayed mixture assigns the slab to delta=1, but the following prose selects
+Rasch when P(delta=0) is below 0.5 and then describes estimation using delta=1
+counts. These event descriptions do not agree. It also describes a spike near
+zero for log(gamma); that is not a point mass at gamma=0. This is a discrepancy
+in the inspected preprint rendering, not a demonstrated defect in the final
+article, supplementary code, or fast-mlsirm. The publisher DOI fetch failed and
+the NSF PDF fetch timed out; neither failure establishes source absence.
+
+Engineering consequence: fast-mlsirm owns reconciliation against the final PDF
+and supplementary model-selection implementation before publishing such a
+contract. CO must not copy this threshold, infer axis meanings, or treat
+posterior model selection as held-out customer accuracy. Keep aligned recovery,
+observed prediction, and decision latency as separate acceptance measures.
+
+Follow-up: a direct download of the [NSF repository copy](https://par.nsf.gov/servlets/purl/10229440)
+succeeded after the browser fetch failures. The 26-page PDF identifies Springer
+as creator and carries the journal DOI; SHA-256 is
+`587e6967678a639dec5e9824b75baad92e58a042a017c34a837ead45828960a3`.
+PDF page 12 was rendered at 1188 × 1600 and directly visually inspected.
+The mixture/event discrepancy is also printed there, so it is not solely an
+arXiv HTML conversion artifact. This archived Springer-formatted copy is not
+yet byte-compared with the current publisher version or supplementary code.
+It specifies the spike as N(-3, 1), unlike the generic near-zero description;
+do not implement a prior from that description alone. No PDF is vendored.
+Local inspection artifacts: `/tmp/lsirm-10229440.pdf` and
+`/tmp/lsirm-model-selection.png`; these temporary paths are not release assets.
+
 ### Existing references
+
+Kang, I., & Jeon, M. (2025). Multidimensional latent space item response models:
+A note on the relativity of conditional dependence. *Psychometrika, 90*(2),
+799–826. https://doi.org/10.1017/psy.2025.5
+
+Read receipt (2026-09-09): publisher abstract and model introduction, plus
+[supplement S1, pages 1–3](https://static.cambridge.org/content/id/urn%3Acambridge.org%3Aid%3Aarticle%3AS0033312325000055/resource/name/S0033312325000055sup001.pdf).
+The paper extends Rasch-based latent-space models with between-item dimensions
+and discrimination. Conditional dependence is relative to what the base model
+explains. Engineering inference: CO comparison evidence should retain base
+formulation and dimensional structure; residual-dependence values from different
+models are not automatically interchangeable quality scores.
+
+Direct visual inspection of supplement page 2 (1082 × 1400) confirmed a
+declaration of `log_gamma` followed by `lambda = exp(log_lambda)`; S1's extracted
+pages 1–3 contain no declaration of `log_lambda`. This is a published-example
+name mismatch, not a compiler-run result or evidence against the reported
+empirical findings. No Stan execution or Rust port was performed. Reconcile
+the executable source before reproduction; fast-mlsirm issue #1713 remains
+the candidate-specification owner, not permission to add estimation to CO.
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance*. arXiv.
@@ -81,6 +161,11 @@ Rubin, D. B. (2013). *Bayesian data analysis* (3rd ed.). CRC Press.
 Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
 Computer Communication Review, 18*(4), 314–329.
 https://doi.org/10.1145/52325.52356
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Ruhle, V.,
+Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient
+and quality-aware query routing*. arXiv.
+https://doi.org/10.48550/arXiv.2404.14618
 
 Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping unobserved
 item–respondent interactions: A latent space item response model with interaction
