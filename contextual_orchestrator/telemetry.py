@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import logging
 import re
+import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -38,6 +39,25 @@ _CURRENT_SESSION: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_session_id", default=None
 )
 _CONFIGURED = False
+_CURRENT_REQUEST_ID: ContextVar[str | None] = ContextVar("gateway_request_id", default=None)
+
+
+def current_request_id() -> str | None:
+    """Return the server-generated request identity, never a caller value."""
+    return _CURRENT_REQUEST_ID.get()
+
+
+@contextmanager
+def request_identity() -> Iterator[str]:
+    """Bind a fresh identity and restore the enclosing context on every exit."""
+    request_id = uuid.uuid4().hex
+    request_token = _CURRENT_REQUEST_ID.set(request_id)
+    try:
+        yield request_id
+    finally:
+        _CURRENT_REQUEST_ID.reset(request_token)
+
+
 # Match the OpenTelemetry SDK's default span-attribute budget so a single
 # sequence-valued attribute cannot exceed the span's default evidence budget.
 _MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128

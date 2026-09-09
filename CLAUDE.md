@@ -27,6 +27,10 @@ This file complements AGENTS.md with commands and architecture; where they diffe
 
 ## Common commands
 
+For missing provider/error correlation, run the focused telemetry and debug-log
+tests in `docs/doctoring/provider_request_correlation.md`. A green local producer
+test does not prove the central collector preserves the new field.
+
 ```bash
 # Install (pinned, hash-locked — always this two-step form)
 python -m pip install --require-hashes -r requirements.lock

@@ -67,6 +67,8 @@ from .telemetry import (
     attach_trace_context,
     configure_telemetry,
     current_session_id,
+    current_request_id,
+    request_identity,
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
@@ -5638,14 +5640,15 @@ def build_server(
             self._request_started = None
             self._decision_measurement = None
             self._decision_failure_reason = "unfinished"
-            try:
-                super().handle_one_request()
-            finally:
-                if self._decision_measurement is not None:
-                    self._decision_measurement.close(self._decision_failure_reason)
-                    self._decision_measurement = None
-                self._log_request_summary(self._request_started)
-                self._reset_session()
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    if self._decision_measurement is not None:
+                        self._decision_measurement.close(self._decision_failure_reason)
+                        self._decision_measurement = None
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -5703,13 +5706,15 @@ def build_server(
             if not method and not path and status is None:
                 return
             _LOGGER.info(
+                "%s request_id=%s",
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
                     status=status,
                     latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
-                )
+                ),
+                current_request_id() or "-",
             )
 
         def do_GET(self) -> None:  # noqa: N802
@@ -8173,6 +8178,7 @@ def build_server(
                         orchestrator._store, policy=orchestrator.policy,
                         endpoint_path=endpoint, request_method=self.command,
                         admission_boundary=boundary,
+                        request_id=current_request_id(),
                     )
                 except RuntimeError:
                     raise RequestError(
@@ -8254,8 +8260,11 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            request_id = current_request_id() or uuid.uuid4().hex
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, request_id
+            )
+            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
