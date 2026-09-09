@@ -472,13 +472,13 @@ class PgLlmBatchBackend:
 
     def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
         """Describe exact target and item metadata without submitted prompt text."""
-        from .cost_ledger import Attribution
+        from .cost_ledger import AttributionDimensions
         return {
             "backend_name": self.name,
             "endpoint_alias": self._endpoint_alias,
             "endpoint": self._endpoint,
             "items": [{"custom_id": item.custom_id, "model": item.model,
-                       "mode": item.mode, "attribution": Attribution.from_mapping(item.attribution).as_dict()}
+                       "mode": item.mode, "attribution": AttributionDimensions.from_mapping(item.attribution).as_dict()}
                       for item in requests],
         }
 
