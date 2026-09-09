@@ -3173,3 +3173,22 @@ the proposed `(kind, key, seq)` index with `key IN (...)` searches by both
 the proposed lookup shape only, not a measured customer latency improvement.
 Keep historical records, validate migration identity, and test rollback before
 adopting the index/backfill. The implementation agent owns that change.
+
+At committed candidate `05b512effe0045340224e5e0408ae984f5784d1e`, an
+independent read-only review found that a successful answer-cache return bypasses
+selection hooks and can finalize as `unfinished`. The required HTTP regression
+uses two identical authenticated requests: two admissions, one provider dispatch,
+and a distinct cache-hit terminal outcome with absent provider-selection duration.
+Keep the cache hit in the accepted denominator. This is tracked in
+[the existing owner issue](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597507862),
+not a separate implementation branch.
+
+The in-progress auxiliary/task repair has a reported cold/warm triage HTTP result
+of one passed test in 8.72 seconds, but it ran on an uncommitted delta over that
+candidate. It is development feedback, not exact-head acceptance. Root inspection
+also found that the new auxiliary records were not yet included in the bounded
+receipt export. Export the same admission cohort's component evidence and test
+it before claiming component reporting. A provider-ready timestamp preceding a
+diagnostic write is not evidence of the actual network-send instant. Generated
+planning, evidence embedding, and answer-cache outcomes remain explicit coverage
+items; no customer KPI gain or release is established by this checkpoint.
