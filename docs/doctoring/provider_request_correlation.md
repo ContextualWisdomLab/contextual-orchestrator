@@ -105,3 +105,15 @@ extra detail field or substituting a non-allowlisted path caused rejection.
 This supersedes the missing-success-summary contract limitation for that one
 route/state; it does not verify all routes, current production adoption, or
 latency improvement. No external provider was called.
+
+## Integrated full-suite failure
+
+At `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2`, the integrated full suite
+terminated with exit 1: **3399 passed, 2 skipped, 1 failed in 1767.82s**.
+`test_http_responses_rejects_store_true` failed while constructing the server's
+ModelClient, before HTTP assertions: `context.load_verify_locations` raised
+`InterruptedError` (errno 4) while loading the certifi CA bundle. This does not
+prove a response-correlation regression, but it also does not establish a green
+suite or justify classifying the failure as a flake. Same-head isolated
+reproduction is the next diagnostic step. Preserve this failure receipt even
+if a subsequent isolated test passes.
