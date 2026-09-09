@@ -65,3 +65,43 @@ ambiguity; no cross-store transaction, complete recovery, retention/export
 window, API reconciliation surface, or remote integration is claimed here.
 The event is currently only consumed by the test projection. Full-suite,
 package, hosted checks, independent approval, and protected release are pending.
+
+## Recovery successor (supersedes status-only limitations above)
+
+Actual HTTP restart regression `d71bcc0a` failed once in 1.96s: an accepted
+remote job returned 201 despite a failed registry write, but its rightful owner
+received 404 after restart. A different authenticated owner also received 404.
+This established unrecoverable work, not just missing status metadata.
+
+Candidate `853e8609` passes **73 focused tests in 21.17s** across lineage,
+batch routing, cost-review HTTP, and registry files. New coverage distinguishes
+HSET failure (no handle stored) from expiry failure (HSET partially applied),
+and returns the original upstream handle without a second submission. Earlier
+`18af2947` expiry tests incorrectly inspected an unprefixed fake-registry key;
+`b12981d6` corrected the test and passed ten cases in 6.18s.
+
+The single durable submission event now includes a prompt-free recovery
+descriptor: exact backend name/endpoint alias/endpoint, owner-bound job snapshot,
+original token estimates, expected job-scoped item IDs, model/mode/normalized
+attribution, and expiry tied to the configured registry retention. This is only
+supported for PgLlmBatchBackend, not arbitrary local or embedding backends.
+No prompts or credentials are included. Absent source messages remain unavailable;
+their contents are never fabricated for token estimates.
+
+An indexed exact-key lookup permits the original owner to recover a missing
+registry handle after SQLite reload. Wrong owner, expired descriptor, malformed
+backend object, or changed backend target fail closed. Restored expected item
+IDs retain the existing response-identity validator; unexpected result IDs are
+rejected. Missing usage remains estimated or unavailable, never relabeled measured.
+The malformed-backend test initially returned 500 at `65b41603` (one failure,
+five passes in 9.90s); explicit type validation changed that to a concealed 404.
+
+Request-link status is finalized before the single registry write and survives
+Valkey decoding consistently. Registry-write outcome is response-only and is
+excluded from dataclass serialization, since HSET may apply before expiry fails.
+`stored` means that configured registry operation returned, not proof of process
+restart durability for a local dictionary. HTTP 201 still means remote submission;
+clients must preserve the handle and must not resubmit solely because local
+persistence is incomplete. If both SQLite and the registry fail, automatic recovery
+remains unavailable. This is a tested recovery slice, not complete cross-store
+atomicity, retention cleanup, production integration, or customer KPI evidence.
