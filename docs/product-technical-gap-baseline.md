@@ -3344,3 +3344,19 @@ branch labels, Scope heading and opening provenance paragraph remain readable
 without overlap in the inspected viewport. Lower sections require scrolling
 and were not visually audited. This is a PR-document inspection, not product
 UI, responsive, locale or Figma acceptance.
+
+The linkage successor at `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`
+completed its frozen local full suite: **3462 passed, 2 skipped in 822.68s**,
+exit 0 (execution 81304). This supersedes the collection-only failure above:
+a separate locked project environment supplied the missing test dependency,
+without changing the base candidate's wheel environment. The run used successor
+Python source and the unchanged base native extension, so dedicated successor
+wheel acceptance remains separate and in progress. See the successor's
+`docs/doctoring/workflow_request_link.md` for exact reproduction and failure
+history. No observed accuracy baseline, protected merge or release is established.
+
+Research follow-up [now records](doctoring/measured-routing-evidence.md#multilevel-follow-up-source-2026-09-09)
+the read scope and proposed applicability conditions for Jin et al. (2022),
+including independent review and direct inspection of PDF page 7. The remaining
+work is an owner-validated observation/estimand contract and dependence-aware
+held-out evaluation, not production adoption based on a literature citation.
