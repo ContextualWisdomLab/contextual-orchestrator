@@ -142,3 +142,30 @@ def test_library_batch_without_state_store_keeps_legacy_submission():
         assert job.job_id == "batch-789"
     finally:
         orchestrator.close()
+
+
+def test_batch_link_does_not_rewrite_submitted_registry_handle(tmp_path):
+    """Lineage status must not add another failure-prone registry assignment."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+
+    class SingleWriteRegistry(dict):
+        """Reject a redundant second remote-registry assignment."""
+
+        def __setitem__(self, key, value):
+            if key in self:
+                raise RuntimeError("second registry write failed")
+            super().__setitem__(key, value)
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                  state_db=tmp_path / "state.db")
+    coordinator = CostRoutingCoordinator(
+        orchestrator, batch_backend=PgLlmBatchBackend(_FakeBatchApiClient())
+    )
+    coordinator._batch_jobs = SingleWriteRegistry()
+    try:
+        job = coordinator.submit_batch([BatchRequest(
+            messages=[{"role": "user", "content": "Fixture"}], custom_id="a"
+        )], request_id="trusted_origin_one")
+        assert job.request_link_status == "durable"
+    finally:
+        orchestrator.close()
