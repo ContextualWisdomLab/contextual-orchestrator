@@ -142,7 +142,12 @@ before comparing policies. A faster failed decision is not a quality improvement
 
 ## Commercial Due-Diligence KPIs
 
-These metrics support the KRW 2,000,000,000 commercial-readiness review. The
+The active goal uses a USD 20,000,000,000 sale-quality ambition. This is an
+aspirational quality target, not a measured valuation or a signed transaction.
+The KRW 2,000,000,000 references in the legacy metrics below describe the
+earlier commercial-readiness review; they must not substitute for the active
+goal or be treated as its currency conversion. Accuracy and decision-latency
+acceptance still require the observed evidence specified above. The
 `evidence_type` column is mandatory so measured local evidence is never mixed
 with proposed production targets.
 
