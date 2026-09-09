@@ -1,5 +1,33 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Autoresearch loop: KPI baseline, #1075 closure evidence, main-protection blocker
+
+Loop branch `autoresearch/20260909-kpi-loop` (code+tests identical to
+`origin/main@414f2297`; branch diff is docs-only). KPI baseline: **85 open
+PRs** (`gh pr list --state open`, lower-is-better toward 0 via merge or
+verified-successor full-delta inheritance only; no force-push, no close
+without evidence).
+
+- **Issue #1075 (nim_benchmark 100% branch coverage): gap already closed.**
+  The issue's exact gate block passes on unmodified code: 134 passed,
+  `nim_benchmark.py 1205 stmts / 436 branches / 0 miss / 0 partial = 100%`
+  (coverage 7.15.0, `--fail-under=100` exit 0), no `pragma: no cover` in the
+  module. Former gaps `434`, `645`, branch `671->682` are covered by
+  `EqualBudgetModelClient` + `_BudgetDelegate` cases (including `usage=None`)
+  in `tests/test_nim_benchmark_release_acceptance.py` that landed after filing
+  (e.g. `7ba5fefc`, `a080297d`). Evidence comment posted on #1075; issue left
+  open for owner close. No code change (experiment 1: discard, unit evidence).
+- **Issue #1079 (main branch protection): owner-action blocker confirmed live.**
+  Protection still requires stale `Hypothesis property tests`,
+  `Atheris coverage-guided`, `CodeQL analysis`, `Python supply chain`
+  (API-verified); every post-#1054 PR to `main` is unmergeable via protection
+  (e.g. #1094 `MERGEABLE` but `BLOCKED`). Not bypassed; documented for owner.
+- **PR #1094 RCA:** `opencode-review` failure is reviewer-verdict wait, not a
+  code defect. The wait does not stop independent work.
+- **Mergeable path:** non-main-base stacked PRs (e.g. #1104→#1101:
+  `MERGEABLE`/`CLEAN`, core checks green) but Draft — no readiness flip
+  attempted (owner process boundary).
+
 ## 2026-09-09 Autonomous KPI targets and verified unit execution
 
 `docs/analytics_spec.md` now sets an observed delivered-correct improvement

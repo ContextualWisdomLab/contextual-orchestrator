@@ -58,3 +58,23 @@ are allowed in isolated CI, never as production dependencies or release proof.
 Remove the temporary candidate integration after released-contract adoption;
 restore the previous released contract if integration fails. Required reviews,
 security checks, and `orchestrator/free` remain enforced throughout.
+
+## Coverage-gate evidence 2026-09-09 (autoresearch experiment 1: discard)
+
+Head `74efc7bf` (code+tests identical to `origin/main@414f2297`), coverage
+7.15.0, exact issue-#1075 gate block on unmodified code: 134 passed in
+143.50s, `nim_benchmark.py` 1205/0/436/0 = 100%, `--fail-under=100` exit 0.
+Former gaps 434 / 645 / 671->682 are covered by later-main acceptance tests;
+no change needed. Single-file `tests/test_nim_benchmark.py` alone is 93% —
+always run the full three-file gate before claiming coverage. Unit evidence
+only, not customer accuracy.
+
+## Shared primary checkout (lesson 2026-09-09)
+
+The primary checkout may receive commits from a concurrent scheduled session
+mid-run (7 docs-only commits observed on the loop branch via reflog; purposes
+legible, code+tests untouched). Before and after long runs, record
+`git rev-parse HEAD` and `git diff --stat origin/main...HEAD --
+contextual_orchestrator/ tests/`; docs-only drift does not invalidate code
+evidence, but any code/test drift does. Prefer isolated worktrees for code
+experiments; never rebase or push another session's branch.
