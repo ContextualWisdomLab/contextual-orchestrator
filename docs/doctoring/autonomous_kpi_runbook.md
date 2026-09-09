@@ -47,9 +47,7 @@ it. Do not terminate unrelated host jobs or shrink the fixture to manufacture a
 speedup. Use paired/interleaved baseline and candidate measurements with recorded
 host conditions; retain unfavorable runs and report interference.
 
-## Break release cycles without copying implementation
-
-### Owner unit experiment receipt, 2026-09-09
+## Owner unit experiment receipt, 2026-09-09
 
 Baseline owner `256470c7d1df4910a018841499a74d88b751a774` completed the
 scoring-filtered Cargo command with 41 passed, 1 ignored, 1106 filtered out,
@@ -67,7 +65,7 @@ sequential, host-contended unit timings do not prove a causal regression either.
 Owner experiment record: `docs/single_person_scoring_experiment.md` at local
 commit `e3d9a939` in fast-mlsirm. No release or CO dependency change occurred.
 
-### Document visual inspection, 2026-09-09
+## Document visual inspection, 2026-09-09
 
 Inspected the actual Edge-rendered `docs/analytics_spec.md` at
 `dccd37e032f74251e3c02e38046dab68c0049787`, fragment
@@ -80,6 +78,8 @@ visible focus. This is a partial desktop document inspection, not admin-product
 UI acceptance. Viewport dimensions, durable image export, responsive sizes,
 other locales, and error/loading states remain unverified. Do not mark the
 full visual-inspection requirement complete from this receipt.
+
+## Break release cycles without copying implementation
 
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest
 isolated real integration → protected immutable release → consumer adoption.
