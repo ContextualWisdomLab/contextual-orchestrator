@@ -73,6 +73,17 @@ provider call was issued during this read-only investigation.
 
 ## Exact-revision collector contract
 
+The full suite at `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` terminated
+with exit status 0: **3399 passed, 2 skipped in 1594.26s**. This result predates
+the success-summary and concurrent-HTTP follow-up; it must not be attributed
+to their later revision. Those changes have the focused 81-test evidence above.
+
+The published Markdown at that same revision was opened in Edge and its
+1897 × 949 screenshot directly inspected. The visible upper document had readable
+heading/body contrast, wrapped paragraphs and commit identifiers, and an unclipped
+test command. This is an English desktop upper-viewport inspection only, not a
+full-document, responsive, interaction, or product-UI visual acceptance result.
+
 The producer candidate `7cb97ec8e2979d35b72c86a801ab18f0fd9c213d`
 was cross-executed with the sanitizer from central PR #2053,
 `fc0ab87bfde0900461034be815046914f9019bfc`. All seven actual provider
