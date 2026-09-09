@@ -178,6 +178,17 @@ not earlier model work required to make it. Cache hits need explicit evidence
 and the same endpoint definition; changing endpoint or cache mix cannot establish
 a speedup. Later failover decisions remain separate attempts.
 
+The same embedding helper can also run after task selection to update quality
+evidence. Classify each invocation at its own start, using whether selection
+has occurred; do not infer its phase from the helper name or from successful
+persistence alone. A decision-write failure still follows a selection, but
+provides no successful acknowledgement duration. Preserve post-selection
+component records separately, without extending or replacing the initial
+decision interval. A provider-ready timestamp taken before a diagnostic write
+is not a network-send timestamp. Test observers must collect passively and
+assert after the request: an assertion raised inside a best-effort provider
+hook can change fallback and cache behavior and invalidate the experiment.
+
 This clarification follows the direct auxiliary calls found at candidate
 `07957ee643bf74c5beb13c03827f59331307cc5d` in #1110. Tests must distinguish
 cached and uncached triage, embedding evidence, and task execution. Existing
