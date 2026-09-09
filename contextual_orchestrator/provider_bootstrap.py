@@ -267,7 +267,13 @@ def _require_unambiguous_model_group_boundary(
 def select_model_group_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded pool, rejecting diversity that changes priced admission."""
+    """Choose a bounded pool, rejecting diversity that changes priced admission.
+
+    Consumer migration: selection favors exact ``model_group`` identity and
+    known cost over provider spread. Consumers relying on provider-level
+    diversity must review migration (price-evidenced admission is
+    authoritative; provider spread alone does not displace cheaper evidence).
+    """
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
