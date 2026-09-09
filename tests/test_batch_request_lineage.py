@@ -71,6 +71,12 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         assert batch_client.retrieval_request_id
         assert batch_client.submission_request_id != batch_client.retrieval_request_id
         assert batch_client.submission_request_id not in {"a", "b"}
+        repeated_status, repeated = _request(
+            "POST", f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results",
+            "unit-token",
+        )
+        assert repeated_status == 200
+        assert {item["custom_id"] for item in repeated["results"]} == {"a", "b"}
         assert batch_client.calls.count("create_batch_job") == 1
         assert coordinator._batch_jobs[submitted["job_id"]].job_id == submitted["job_id"]
     finally:
@@ -97,3 +103,42 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         }
     finally:
         restored.close()
+
+
+def test_batch_submission_links_keep_job_scoped_item_ids(tmp_path):
+    """Repeated item identifiers across submissions retain every origin association."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+
+    agents = [ModelAgent("worker_one", "mock/worker")]
+    orchestrator = TaskOrchestrator(agents, state_db=tmp_path / "state.db")
+    coordinator = CostRoutingCoordinator(
+        orchestrator, batch_backend=PgLlmBatchBackend(_FakeBatchApiClient())
+    )
+    try:
+        for request_id in ("trusted_origin_one", "trusted_origin_two"):
+            coordinator.submit_batch([
+                BatchRequest(messages=[{"role": "user", "content": "Fixture"}], custom_id="a")
+            ], owner_id="owner_one", request_id=request_id)
+        links = orchestrator._store.load("batch_request_link")
+        assert {row["request_id"] for row in links} == {"trusted_origin_one", "trusted_origin_two"}
+        assert [row["custom_ids"] for row in links] == [["a"], ["a"]]
+    finally:
+        orchestrator.close()
+
+
+def test_library_batch_without_state_store_keeps_legacy_submission():
+    """Standalone calls explicitly report unavailable durable request lineage."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")])
+    coordinator = CostRoutingCoordinator(
+        orchestrator, batch_backend=PgLlmBatchBackend(_FakeBatchApiClient())
+    )
+    try:
+        job = coordinator.submit_batch([BatchRequest(
+            messages=[{"role": "user", "content": "Fixture"}], custom_id="a"
+        )])
+        assert job.request_link_status == "unavailable"
+        assert job.job_id == "batch-789"
+    finally:
+        orchestrator.close()
