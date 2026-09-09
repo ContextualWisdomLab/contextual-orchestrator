@@ -3724,6 +3724,40 @@ class _StateStore:
             return
         self._save_sync(kind, key, payload)
 
+    def load_decision_window(self, limit: int = 256) -> dict[str, Any]:
+        """Read a bounded shared admission cohort without deleting historical rows."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("decision window limit must be between 1 and 1000")
+        with self._lock:
+            admissions = self._conn.execute(
+                "SELECT seq, payload FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?",
+                ("accepted_request", limit + 1),
+            ).fetchall()
+            truncated = len(admissions) > limit
+            admissions = list(reversed(admissions[:limit]))
+            accepted = [json.loads(payload) for _, payload in admissions]
+            request_ids = [row["request_id"] for row in accepted]
+            phases = []
+            if request_ids:
+                placeholders = ",".join("?" for _ in request_ids)
+                phases = self._conn.execute(
+                    "SELECT kind, payload FROM orchestration_records "
+                    "WHERE kind IN ('initial_decision', 'decision_receipt') "
+                    "AND json_extract(payload, '$.request_id') IN (" + placeholders + ") "
+                    "ORDER BY seq DESC LIMIT ?",
+                    (*request_ids, 2 * limit + 1),
+                ).fetchall()
+            phase_truncated = len(phases) > 2 * limit
+            phases = list(reversed(phases[:2 * limit]))
+        return {
+            "accepted": accepted,
+            "decisions": [json.loads(payload) for kind, payload in phases if kind == "initial_decision"],
+            "receipts": [json.loads(payload) for kind, payload in phases if kind == "decision_receipt"],
+            "window": {"limit": limit, "truncated": truncated, "phase_truncated": phase_truncated,
+                       "first_admission_seq": admissions[0][0] if admissions else None,
+                       "last_admission_seq": admissions[-1][0] if admissions else None},
+        }
+
     def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
         with self._lock:
@@ -4396,7 +4430,6 @@ class TaskOrchestrator:
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
-            record_initial_selection([candidate.id], "automatic_proxy")
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
@@ -4415,6 +4448,7 @@ class TaskOrchestrator:
                 send_once = getattr(self.client, "proxy_send_once", None)
                 if not callable(send_once):
                     send_once = self.client.proxy_send
+                record_initial_selection([candidate.id], "automatic_proxy")
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):

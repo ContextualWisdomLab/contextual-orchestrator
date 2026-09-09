@@ -5636,9 +5636,14 @@ def build_server(
             self.command = None
             self.path = None
             self._request_started = None
+            self._decision_measurement = None
+            self._decision_failure_reason = "unfinished"
             try:
                 super().handle_one_request()
             finally:
+                if self._decision_measurement is not None:
+                    self._decision_measurement.close(self._decision_failure_reason)
+                    self._decision_measurement = None
                 self._log_request_summary(self._request_started)
                 self._reset_session()
             # A request that declared a body it never delivered (unsupported
@@ -7241,13 +7246,6 @@ def build_server(
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
-                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
-                    )
-                    embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        embedding_agents
-                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7297,6 +7295,12 @@ def build_server(
                         attribution["model_name"] = model_name
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
+                    self._ensure_decision_measurement("validated_endpoint")
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        orchestrator._capability_agents(
+                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        )
+                    )
                     started_at = time.perf_counter()
                     embedding_deadline = time.monotonic() + float(
                         orchestrator.client.timeout
@@ -7383,13 +7387,6 @@ def build_server(
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
-                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
-                    )
-                    embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        embedding_agents
-                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -7408,6 +7405,12 @@ def build_server(
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
+                    self._ensure_decision_measurement("validated_endpoint")
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        orchestrator._capability_agents(
+                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        )
+                    )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
@@ -8149,25 +8152,34 @@ def build_server(
 
         def _acquire_measured_slot(self) -> None:
             """Retain accepted admission before the nonblocking capacity decision."""
-            self._decision_failure_reason = "unfinished"
-            try:
-                measurement = DecisionMeasurement(
-                    orchestrator._store, policy=orchestrator.policy.as_dict()
-                ) if decision_receipts else None
-            except RuntimeError:
-                raise RequestError(
-                    503, "measurement_unavailable",
-                    "Request measurement is unavailable; retry after service recovery.",
-                    {"measurement_complete": False, "reconciliation_required": True},
-                ) from None
-            self._decision_measurement = measurement
+            self._ensure_decision_measurement()
             try:
                 security.acquire_run_slot()
             except Exception:
-                if measurement is not None:
-                    measurement.close("capacity_rejected")
-                self._decision_measurement = None
+                self._decision_failure_reason = "capacity_rejected"
                 raise
+
+        def _ensure_decision_measurement(self, boundary="first_execution_slot") -> None:
+            """Open one request scope, with explicit timing eligibility at this boundary."""
+            if decision_receipts and self._decision_measurement is None:
+                endpoint = urllib.parse.urlsplit(self.path).path
+                if endpoint not in {
+                    "/v1/chat/completions", "/v1/completions", "/v1/responses",
+                    "/v1/embeddings", "/v1/batch/embeddings",
+                }:
+                    endpoint = "other_execution_endpoint"
+                try:
+                    self._decision_measurement = DecisionMeasurement(
+                        orchestrator._store, policy=orchestrator.policy,
+                        endpoint_path=endpoint, request_method=self.command,
+                        admission_boundary=boundary,
+                    )
+                except RuntimeError:
+                    raise RequestError(
+                        503, "measurement_unavailable",
+                        "Request measurement is unavailable; retry after service recovery.",
+                        {"measurement_complete": False, "reconciliation_required": True},
+                    ) from None
 
         def _release_measured_slot(self) -> None:
             """Finalize measurement independently of releasing the execution slot."""
@@ -8180,9 +8192,8 @@ def build_server(
                         reason = "cancelled"
                     elif active_error is not None:
                         reason = "selection_failed"
-                    measurement.close(reason)
+                    self._decision_failure_reason = reason
             finally:
-                self._decision_measurement = None
                 security.release_run_slot()
 
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
@@ -8553,6 +8564,7 @@ def build_server(
                     self._write_sse("data: [DONE]\n\n")
                     return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
+                    self._decision_failure_reason = "selection_failed"
                     failed = {
                         **created_response,
                         "status": "failed",

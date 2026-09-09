@@ -205,6 +205,45 @@ def test_export_retains_accepted_request_without_finalization(tmp_path):
         store.close()
 
 
+def test_export_window_keeps_unfinished_selected_cohort(tmp_path):
+    """A bounded admission cohort never silently drops its unfinished member."""
+    from contextual_orchestrator.decision_receipts import export_decision_receipts
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    store = _StateStore(tmp_path / "state.db")
+    try:
+        for request_id in ("older_request", "unfinished_request", "newest_request"):
+            store.save("accepted_request", None, {"request_id": request_id, "status": "accepted"}, durable=True)
+        exported = export_decision_receipts(store, limit=2)
+        assert exported["window"]["truncated"] is True
+        assert [row["request_id"] for row in exported["observations"]] == ["unfinished_request", "newest_request"]
+        assert all(row["status"] == "unfinished" for row in exported["observations"])
+        assert len(store.load("accepted_request")) == 3  # No retention deletion.
+    finally:
+        store.close()
+
+
+def test_failed_nested_admission_restores_same_thread_context(tmp_path):
+    """A constructor failure restores its prior token before leaving the thread."""
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, _CURRENT_DECISION
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    class FailedStore:
+        def save(self, *args, **kwargs):
+            raise RuntimeError("unavailable")
+
+    store = _StateStore(tmp_path / "state.db")
+    outer = DecisionMeasurement(store)
+    try:
+        with pytest.raises(RuntimeError, match="could not be persisted"):
+            DecisionMeasurement(FailedStore())
+        assert _CURRENT_DECISION.get() is outer
+    finally:
+        outer.close()
+        store.close()
+    assert _CURRENT_DECISION.get() is None
+
+
 @pytest.mark.parametrize("invalid_capacity", [False, True])
 def test_race_receipt_retains_candidate_set_not_winner(tmp_path, monkeypatch, invalid_capacity):
     """Real race workers share one clock; rejected races cannot acknowledge selection."""
@@ -243,4 +282,57 @@ def test_race_receipt_retains_candidate_set_not_winner(tmp_path, monkeypatch, in
             assert len(orchestrator._store.load("initial_decision")) == 1
     finally:
         measurement.close()
+        orchestrator.close()
+
+
+def test_embedding_failover_has_one_admission_and_two_selection_attempts(tmp_path, monkeypatch):
+    """Two backend submissions remain children of one validated HTTP request."""
+    from contextual_orchestrator.cost_router import CostRoutingCoordinator
+
+    agents = [ModelAgent(f"embedding_{index}", f"mock-embedding-{index}", tags=("embedding",))
+              for index in range(2)]
+    orchestrator = TaskOrchestrator(agents, state_db=tmp_path / "state.db")
+    class FixtureTokenCounter:
+        def count_text(self, text, model):
+            assert text == "hello"
+            return 1
+
+    coordinator = CostRoutingCoordinator(orchestrator, embedding_token_counter=FixtureTokenCounter())
+    backend = coordinator.embedding_batch_backend
+    original_submit = backend.submit
+    submissions = []
+
+    def fail_first_submission(*args, **kwargs):
+        submissions.append(True)
+        if len(submissions) == 1:
+            raise RuntimeError("controlled first member failure")
+        return original_submit(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "submit", fail_first_submission)
+    server = build_server(orchestrator, port=0, coordinator=coordinator,
+                          decision_receipts=True, security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        connection.request("POST", "/v1/embeddings", json.dumps({"input": "hello"}),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        assert len(submissions) == 2
+        assert len(orchestrator._store.load("accepted_request")) == 1
+        receipts = orchestrator._store.load("decision_receipt")
+        assert len(receipts) == 1
+        assert receipts[0]["selection_attempt_count"] == 2
+        assert receipts[0]["admission_boundary"] == "validated_endpoint"
+        assert len(orchestrator._store.load("selection_attempt")) == 1
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
         orchestrator.close()
