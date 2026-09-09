@@ -24,6 +24,48 @@ not establish review approval or security validation. Keep protected merge and
 release pending actual exact-head evidence. The root cause and reproduction are
 in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
 
+## 2026-09-09 Stacked quality-trigger repair
+
+At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
+Security and Quality workflow filters pull requests to `main`. PR #1108 targets
+another PR branch, so its zero check-run count is consistent with this trigger
+exclusion, not a successful Security run. The repair removes the base filter
+without changing job permissions or switching to privileged `pull_request_target`.
+It also keys cancellation by workflow, repository, and PR number. Central review
+and security ownership is unchanged; this does not repair or replace their gates.
+
+The regression assertion failed on the old filter. After repair, the new contract
+and existing benchmark workflow contracts passed (9 tests), and actionlint emitted
+no findings. An initial test collection failed because PyYAML is not installed;
+the test instead uses the existing stdlib text-contract pattern, with actionlint
+checking YAML syntax. No dependency was added. A new synchronize event must still
+demonstrate hosted execution on the actual stacked merge revision. Trigger syntax
+and local tests alone are not that execution evidence. GitHub documents that PR
+branch filters match the [target branch](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+## 2026-09-09 Integrated rollback regression receipt
+
+PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c` includes the
+non-force base integration and transaction rollback repair. Its clean, pinned
+worktree completed the full local suite: **3,399 passed, 2 skipped in 823.46
+seconds**, exit 0. The focused persistence, workflow-object authorization, and
+governance checks separately passed **30 tests in 10.06 seconds**. The full log
+is `/tmp/co-rollback-integrated-fbb933cb.log` on the validation host; it is a
+local receipt, not a hosted artifact or release attestation. At the subsequent
+GitHub check, this exact head had **zero check runs and zero reviews**. Status
+contexts alone do not satisfy the Security job or independent review gates;
+protected merge and release remain unverified.
+
+The analytics specification at `ddf087da136dbb5f2110aba6db20dd9bd384db7c`
+was opened in the actual browser and its screenshots directly inspected at
+1265 × 712, English locale. The opening context and autonomous-target table
+were readable; the table's three columns and three rows had no overlap or
+horizontal clipping in that view. Images are inline in the validation task,
+linked by [the PR inspection receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1107#issuecomment-5596505419).
+This is bounded document evidence, not responsive, multilingual, Figma, or
+product-interaction verification. No customer accuracy or latency gain follows
+from either receipt.
+
 ## 2026-09-09 Decision-latency durable acknowledgement gap
 
 [Issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110)

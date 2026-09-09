@@ -140,6 +140,16 @@ never present it as an all-request guarantee or encode missing durations as zero
 Declare the observation window, quantile method, uncertainty method, and workload
 before comparing policies. A faster failed decision is not a quality improvement.
 
+Implementation tracking: [CO #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110).
+For this metric, accepted means authenticated and fully validated, before run-slot
+acquisition. A subsequent capacity rejection stays in that denominator, with no
+persisted-decision duration. The current nonblocking slot acquisition does not
+create a queue-wait observation. Instrument both ordinary callbacks and direct
+streaming admission paths; recording only the shared callback wrapper is incomplete.
+Separate initial decisions from failover attempts and never substitute a completed
+workflow record written after generation for the initial decision acknowledgement.
+This specifies the required boundary; it does not claim instrumentation exists.
+
 ### Autonomous experiment targets
 
 These are engineering acceptance targets selected on 2026-09-09, not measured
