@@ -1,5 +1,24 @@
 # Autonomous KPI experiment runbook
 
+## Versioned citation discovery repair, 2026-09-09
+
+The citation check at `c226d30d` passed six tests but omitted arXiv HTML URLs
+and version-suffixed identifiers. The old word boundary immediately after the
+paper number rejected the following `v`, including versioned PDF and abstract
+links. Regression checkpoint `c43a7d9214caf54d5276500149c44cea201ecfac`
+failed one test with five passing (0.93s). Adding HTML and optional versions
+then exposed a second mismatch: the inventory itself contains `1812.00140v4`,
+but its identifier extraction also rejected version suffixes (one failed,
+five passed in 0.87s). Normalize both sides to the paper identifier while
+retaining exact version URLs in the bibliography.
+
+Reproduce with `.venv/bin/python -m pytest tests/test_paper_contracts.py -q`.
+At `9ac931581aae638860833f1b7f79b49cfc9569ff`, all six tests pass in 0.81s.
+This checks explicit modern arXiv identifiers and DOI links in tracked Python,
+Rust, Markdown and TOML files; it does not establish complete citation discovery
+across other formats, legacy arXiv identifiers, title-only citations, full-text
+review, redistribution rights or customer KPI improvement.
+
 ## Integrated receipt regression and remaining capacity defect, 2026-09-09
 
 Candidate `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` completed the
