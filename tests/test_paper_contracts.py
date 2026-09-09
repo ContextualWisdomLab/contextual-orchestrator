@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,6 +10,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def test_explicit_arxiv_references_have_inventory_entries() -> None:
+    """Keep tracked-text paper discovery complete without claiming paper review."""
+    reference_pattern = re.compile(
+        r"(?:arxiv\.org/(?:abs|pdf)/|arxiv[:.])(\d{4}\.\d{4,5})\b",
+        re.IGNORECASE,
+    )
+    tracked_paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
+    ).split("\0")
+    inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
+    inventoried_ids = set(re.findall(r"\b\d{4}\.\d{4,5}\b", inventory))
+    missing_references = {}
+    for relative_path in tracked_paths:
+        source_path = ROOT_DIR / relative_path
+        if source_path.suffix not in {".py", ".rs", ".md", ".toml"}:
+            continue
+        references = set(reference_pattern.findall(source_path.read_text(encoding="utf-8")))
+        if missing_ids := references - inventoried_ids:
+            missing_references[relative_path] = sorted(missing_ids)
+    assert not missing_references, missing_references
 
 
 class RecordingClient:
