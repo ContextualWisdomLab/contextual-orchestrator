@@ -29,3 +29,20 @@ This unit evidence does not establish customer accuracy or decision-latency
 improvement, complete memory-allocation failure safety, or durable-store repair.
 Independent review, full regression verification, protected merge, and release
 remain required.
+
+## Fractional-row follow-up
+
+The initial correction preserved coercion behavior, but follow-up reproduction
+at `4cc0bf2c` showed `0.7`, `1.7`, and `-0.7` silently stored as `0`, `1`, and
+`0`. That contradicts the declared integer dichotomous-row contract. RED
+`452d7490` produced 6 failed and 6 passed in 1.41s. Fix `89d8ed51` replaces
+row-value `int` conversion with the already-imported `operator.index`: Python
+and NumPy integers remain supported; fractions and numeric strings are rejected
+before state mutation. The boolean accepted flag's existing conversion is
+unchanged. Invalid persisted fractional/string rows now fail restoration rather
+than fabricating observations; operators must repair their source evidence,
+not round it or silently drop it. No valid integer-row migration is required.
+
+At `89d8ed51`, 13 focused tests passed in 2.05s, including native integer
+compatibility. Earlier 57-test local and 3595-test hosted receipts apply only
+to `4cc0bf2c` and must not be carried forward to this changed code head.
