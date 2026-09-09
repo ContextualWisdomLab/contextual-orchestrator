@@ -40,6 +40,15 @@ frontend surface is required.
 
 ## Customer verification
 
+The [request-revision implementation record](../../doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
+is **Proposed** in PR #1067, with source `1eff6338` and guards `1edf574b`.
+The later policy repair at source `6d4b5ac7` extends the existing context to
+effective evaluation policy through answer reuse, final synthesis, and saved
+records. The record retains the catalog/standalone-adapter boundary, rejected
+alternatives, UML sequence, and exact local evidence. Both implementation
+notes remain **Proposed**. This note does not accept an unmerged
+implementation, change this ADR's existing decision, or establish delivery.
+
 Run `uv run pytest -q tests/test_reasoning_effort_profile.py` and inspect
 `reasoning_effort_snapshot.snapshot_hash` on route, conduct, stream, batch,
 and persisted records before enabling a real provider profile.

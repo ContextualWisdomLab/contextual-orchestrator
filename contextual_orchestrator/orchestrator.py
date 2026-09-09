@@ -12,6 +12,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import wraps
+from inspect import isgeneratorfunction
 import http.client
 import io
 import ipaddress
@@ -82,11 +83,49 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
+    EffortCatalogSnapshot,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
 from .token_counting import TokenCountUnavailable, build_token_counter
+
+
+_REQUEST_EXECUTION_SNAPSHOT: ContextVar[
+    tuple[object, EffortCatalogSnapshot | None, OrchestrationPolicy] | None
+] = ContextVar(
+    "contextual_orchestrator_request_execution_snapshot", default=None
+)
+
+
+def _request_execution_scoped(method: Callable) -> Callable:
+    """Share policy and effort across nested calls without leaking suspended streams."""
+    if isgeneratorfunction(method):
+        @wraps(method)
+        def scoped_stream(self, *args, **kwargs):
+            """Advance and close a stream in its own captured request context."""
+            with self._request_execution_scope():
+                context = copy_context()
+                stream = method(self, *args, **kwargs)
+            exhausted = object()
+            try:
+                while True:
+                    item = context.run(next, stream, exhausted)
+                    if item is exhausted:
+                        return
+                    yield item
+            finally:
+                context.run(stream.close)
+
+        return scoped_stream
+
+    @wraps(method)
+    def scoped_call(self, *args, **kwargs):
+        """Restore the caller's context after a synchronous result or exception."""
+        with self._request_execution_scope():
+            return method(self, *args, **kwargs)
+
+    return scoped_call
 
 
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
@@ -3900,6 +3939,11 @@ class TaskOrchestrator:
         allow_empty_agents: bool = False,
         token_counter: Any = None,
     ) -> None:
+        """Overlay stored agents, initialize routing ledgers, and restore optional state.
+
+        Start the uptime collector and retain the caller's opt-in effort catalog.
+        Call ``close()`` to release the collector and configured durable stores.
+        """
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -3922,6 +3966,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -3929,7 +3974,6 @@ class TaskOrchestrator:
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
             self._group_router,
-            self._quality_router,
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
@@ -4121,7 +4165,15 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        """Restore configured durable state and discard obsolete candidate evidence.
+
+        Restore spend for every saved run, but keep pending verification out of
+        recent-run listings. The constructor calls this only with a state store.
+        """
+        candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -4129,6 +4181,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
             # A batch_route row persisted before judging (see batch_route's
@@ -4455,6 +4508,7 @@ class TaskOrchestrator:
             ) from None
         raise RuntimeError("passthrough has no eligible provider candidate")
 
+    @_request_execution_scoped
     def _orchestrated_provider_completion(
         self,
         body: dict[str, Any],
@@ -5000,7 +5054,7 @@ class TaskOrchestrator:
             synthesis_step,
             *([repair_step] if repair_step is not None else []),
         ]
-        record = self._with_effort_snapshot(
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
                 "created_at": int(time.time()),
@@ -5153,6 +5207,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
+    @_request_execution_scoped
     def complete(
         self,
         messages: list[ChatMessage],
@@ -5176,6 +5231,9 @@ class TaskOrchestrator:
             return result
         try:
             key = self._cache_key(messages, mode, model_name, cache_partition)
+        except EffortProfileError:
+            # Invalid execution settings are not a cache serialization failure.
+            raise
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
@@ -5229,6 +5287,7 @@ class TaskOrchestrator:
             )
         )
 
+    @_request_execution_scoped
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -5245,9 +5304,13 @@ class TaskOrchestrator:
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(
+        requested = self._requested_agent(model_name)
+        ranked_pool = [requested] if requested is not None else self._ranked_agents(
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
+        agent = ranked_pool[0]
+        if requested is None and "worker" in agent.provider_exclusions:
+            raise RuntimeError("no eligible agent available for role=worker")
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -5297,7 +5360,10 @@ class TaskOrchestrator:
         }
         if isinstance(usage, dict):
             trace_step["usage"] = usage
-        record = self._with_effort_snapshot(
+        trace_step["selection_design"] = self._selection_design_receipt(
+            ranked_pool, [agent], agent
+        )
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
                 "created_at": int(time.time()),
@@ -5333,6 +5399,7 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
+        """Partition cached answers by effective policy, settings, and role effort."""
         snapshot = getattr(self.client, "request_settings_snapshot", None)
         parameters = snapshot() if callable(snapshot) else {
             "temperature": getattr(self.client, "default_temperature", None),
@@ -5341,7 +5408,14 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        parameters = {
+            **parameters,
+            "zdr_only": _REQUEST_ZDR_ONLY.get(),
+            "policy_snapshot": self.policy.as_dict(),
+        }
+        effort_snapshot = self._effort_snapshot()
+        if effort_snapshot is not None:
+            parameters["reasoning_effort_snapshot_hash"] = effort_snapshot.snapshot_hash
         endpoint_partition = _request_endpoint_partition()
         cache_partition = (
             endpoint_partition
@@ -5382,20 +5456,22 @@ class TaskOrchestrator:
             cache_partition=cache_partition,
         )
         prompt = self._latest_user_text(messages)
-        record = self._with_effort_snapshot(
-            {
-                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-                "created_at": int(time.time()),
-                "mode": result["mode"],
-                "policy_mode": mode,
-                "prompt_text": prompt,
-                "answer": result["answer"],
-                "cache_status": result.get("cache_status", "disabled"),
-                "trace": result["trace"],
-                "policy_snapshot": self.policy.as_dict(),
-                "verification": result.get("verification"),
-            }
-        )
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": result["mode"],
+            "policy_mode": mode,
+            "prompt_text": prompt,
+            "answer": result["answer"],
+            "cache_status": result.get("cache_status", "disabled"),
+            "trace": result["trace"],
+            "policy_snapshot": copy.deepcopy(
+                result["policy_snapshot"] if "policy_snapshot" in result else self.policy.as_dict()
+            ),
+            "verification": result.get("verification"),
+        }
+        if "reasoning_effort_snapshot" in result:
+            record["reasoning_effort_snapshot"] = copy.deepcopy(result["reasoning_effort_snapshot"])
         if owner_id is not None:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
@@ -5501,6 +5577,7 @@ class TaskOrchestrator:
         )
         return output_tokens, round(output_cost, 6)
 
+    @_request_execution_scoped
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -5739,7 +5816,7 @@ class TaskOrchestrator:
         if result.get("usage") is not None:
             row["usage"] = result["usage"]
         run_id = f"run_{uuid.uuid4().hex}"
-        pending_record = self._with_effort_snapshot(
+        pending_record = self._with_execution_snapshot(
             {
                 "workflow_run_id": run_id,
                 "created_at": int(time.time()),
@@ -5802,7 +5879,7 @@ class TaskOrchestrator:
             "accepted": verification["accepted"],
             "reason": verification["reason"],
         }
-        record = self._with_effort_snapshot(
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": run_id,
                 "created_at": int(time.time()),
@@ -6231,6 +6308,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -6286,6 +6364,7 @@ class TaskOrchestrator:
             {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
         )
 
+    @_request_execution_scoped
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -6333,14 +6412,22 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
                 candidate,
                 messages,
                 text=text,
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
+                selection_design_sink=selection_design.append,
             )
             latency_seconds = time.perf_counter() - start
+            if not selection_design:
+                selection_design.append(
+                    self._selection_design_receipt(
+                        ranked_pool, [candidate], self._agent(attempt_served_id)
+                    )
+                )
             row = {
                 "id": attempt_index,
                 "role": "worker",
@@ -6371,6 +6458,7 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            row["selection_design"] = selection_design[0]
             trace_rows.append(row)
             if verification["accepted"]:
                 break
@@ -6387,7 +6475,7 @@ class TaskOrchestrator:
             "latency_ms": None,
             "output": "",
         }
-        return self._with_effort_snapshot(
+        return self._with_execution_snapshot(
             {
                 "mode": "route",
                 "answer": answer,
@@ -6479,6 +6567,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @_request_execution_scoped
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -6580,6 +6669,7 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             output, served_id, _served_model, usage = self._invoke(
                 agent,
                 step_messages,
@@ -6589,8 +6679,15 @@ class TaskOrchestrator:
                     free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
+                selection_design_sink=selection_design.append,
             )
             elapsed = (time.perf_counter() - start) * 1000
+            if not selection_design:
+                selection_design.append(
+                    self._selection_design_receipt(
+                        [agent], [agent], self._agent(served_id)
+                    )
+                )
             outputs[step.id] = output
             row = step.as_dict()
             row["agent_id"] = agent.id
@@ -6603,6 +6700,7 @@ class TaskOrchestrator:
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
+            row["selection_design"] = selection_design[0]
             trace.append(row)
             if progress is not None:
                 progress(step.role, "completed")
@@ -6649,8 +6747,8 @@ class TaskOrchestrator:
             "plan_source": plan_source,
         }
         if workflow_run_id is None:
-            return self._with_effort_snapshot(result)
-        record = self._with_effort_snapshot(
+            return self._with_execution_snapshot(result)
+        record = self._with_execution_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
                 "created_at": int(time.time()),
@@ -6715,26 +6813,66 @@ class TaskOrchestrator:
                 + ", ".join(unsupported_roles)
             )
 
-    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
-        """Return the opt-in profile bound to one workflow role."""
-        if self.role_effort_catalog is None:
-            return None
-        return self.role_effort_catalog.get(role)
+    @property
+    def policy(self) -> OrchestrationPolicy:
+        """Read the active request's policy, or the configured policy between requests."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        return active[2] if active is not None and active[0] is self else self._configured_policy
 
-    def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Attach a replayable role-effort snapshot when the operator opted in.
+    @policy.setter
+    def policy(self, policy: OrchestrationPolicy) -> None:
+        """Publish policy for later requests without changing work already in progress."""
+        self._configured_policy = policy
+
+    @contextmanager
+    def _request_execution_scope(self):
+        """Capture policy and validate effort once; preserve nested calls and other instances."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            yield
+            return
+        policy = self._configured_policy
+        token = _REQUEST_EXECUTION_SNAPSHOT.set((self, self._effort_snapshot(), policy))
+        try:
+            yield
+        finally:
+            _REQUEST_EXECUTION_SNAPSHOT.reset(token)
+
+    def _effort_snapshot(self) -> EffortCatalogSnapshot | None:
+        """Read this request's catalog, or validate a fresh standalone-operation copy."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            return active[1]
+        catalog = self.role_effort_catalog
+        return snapshot_role_effort_catalog(dict(catalog)) if catalog is not None else None
+
+    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
+        """Use the active request revision; preserve standalone single-role adapters."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is None or active[0] is not self:
+            catalog = self.role_effort_catalog
+            return catalog.get(role) if catalog is not None else None
+        snapshot = active[1]
+        if snapshot is None:
+            return None
+        profile = snapshot.role_profiles.get(role)
+        return ReasoningEffortProfile(**profile) if profile is not None else None
+
+    def _with_execution_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Attach effective policy and an opt-in replayable role-effort snapshot.
 
         Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
         on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
-        the constructor catalog to keep today's payload.
+        the constructor catalog to omit role-effort metadata.
         """
-        if self.role_effort_catalog is None:
+        result["policy_snapshot"] = self.policy.as_dict()
+        snapshot = self._effort_snapshot()
+        if snapshot is None:
             return result
-        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
         result["reasoning_effort_snapshot"] = {
             "profile_version": snapshot.profile_version,
             "snapshot_hash": snapshot.snapshot_hash,
-            "role_profiles": snapshot.role_profiles,
+            "role_profiles": copy.deepcopy(snapshot.role_profiles),
         }
         return result
 
@@ -7038,18 +7176,74 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = dict(zip(
+            self._psychometric_candidate_ids(candidates), candidates, strict=True
+        ))
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
+
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind routing evidence to the declared deployment and decode policy."""
+        return self._psychometric_candidate_ids((agent,))[0]
+
+    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
+        """Bind an ordered batch to the request's validated decode-policy snapshot.
+
+        Materialize inputs and preserve repeated agents. Standalone operations
+        validate a fresh catalog; request-nested operations reuse its revision.
+        Deployment configuration is read per operation, not frozen per request.
+        """
+        agents = list(agents)
+        if not agents:
+            return []
+        effort_snapshot = self._effort_snapshot()
+        effort_catalog = effort_snapshot.snapshot_hash if effort_snapshot is not None else None
+        candidate_ids = []
+        for agent in agents:
+            configuration = json.dumps(
+                {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+            candidate_ids.append(f"{agent.id}:{revision}")
+        return candidate_ids
+
+    def _selection_design_receipt(
+        self,
+        candidates: Iterable[ModelAgent],
+        attempted: Iterable[ModelAgent],
+        selected: ModelAgent,
+    ) -> dict[str, Any]:
+        """Describe the observed deterministic assignment without inventing propensity."""
+        policy = json.dumps(
+            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        candidates = list(candidates)
+        attempted = list(attempted)
+        deployment_ids = self._psychometric_candidate_ids([*candidates, *attempted, selected])
+        return {
+            "assignment_mechanism": "deterministic_ranked",
+            "propensity_status": "not_identified",
+            "selected_probability": None,
+            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
+            "candidate_deployment_ids": deployment_ids[:len(candidates)],
+            # Retain repeated selection attempts, including sequential reentry
+            # after a failed race; this is not a unique-deployment set.
+            "attempted_deployment_ids": deployment_ids[len(candidates):-1],
+            "selected_deployment_id": deployment_ids[-1],
+        }
 
     def _observe_contextual_quality(
         self,
@@ -7063,29 +7257,35 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        self._psychometric_router.observe(
-            prompt_context,
-            served_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
-        )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+        with self._psychometric_persistence_lock:
+            candidate_id = self._psychometric_candidate_id(self._agent(served_id))
+            self._psychometric_router.observe(
+                prompt_context,
+                candidate_id,
+                accepted,
+                self._embed_cached(prompt_context),
+                irt_row,
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                records = self._psychometric_router.records()
+                record = next(
+                    item
+                    for item in records
+                    if item["context_id"] == context_id
+                    and item["agent_id"] == candidate_id
+                )
+                key = hashlib.sha256(
+                    f"{context_id}\0{candidate_id}".encode()
                 ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in records
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -7107,6 +7307,22 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Keep evidence only for the pool's current deployment configurations."""
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_ids(self.candidates)
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
@@ -7713,6 +7929,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -7750,6 +7967,7 @@ class TaskOrchestrator:
             ]
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        attempted: list[ModelAgent] = []
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
@@ -7772,6 +7990,7 @@ class TaskOrchestrator:
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
             try:
+                attempted.extend(race_members)
                 outcome = race_first_valid(
                 [
                     EndpointAttempt(
@@ -7805,6 +8024,12 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(
+                        candidates,
+                        attempted,
+                        self._agent(outcome.winner_endpoint_id),
+                    ))
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
@@ -7815,6 +8040,7 @@ class TaskOrchestrator:
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
+            attempted.append(agent)
             retry_attempt = 0
             while True:
                 try:
@@ -7937,6 +8163,10 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if selection_design_sink is not None:
+                    selection_design_sink(
+                        self._selection_design_receipt(candidates, attempted, agent)
+                    )
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None

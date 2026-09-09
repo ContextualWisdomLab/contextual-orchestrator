@@ -14,6 +14,8 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -366,11 +368,33 @@ def test_would_route_true_for_route_false_for_conduct() -> None:
 
 
 def test_stream_route_yields_and_persists() -> None:
+    """Retain a streamed result and its deterministic candidate-selection record."""
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])
     deltas = list(orchestrator.stream_route([{"role": "user", "content": "stream this please"}]))
     answer = "".join(deltas)
     assert answer.startswith("[general_agent:worker]")
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
+    design = next(iter(orchestrator._workflow_runs.values()))["trace"][0]["selection_design"]
+    assert design["propensity_status"] == "not_identified"
+    assert design["candidate_deployment_ids"] == design["attempted_deployment_ids"]
+    assert design["selected_deployment_id"] == design["candidate_deployment_ids"][0]
+
+
+def test_stream_route_rejects_automatically_ranked_excluded_worker() -> None:
+    """Reject role-excluded auto selection while preserving an explicit model choice."""
+    excluded = ModelAgent(
+        "excluded_worker", "m-model", provider_exclusions=("worker",)
+    )
+    orchestrator = TaskOrchestrator([excluded])
+
+    with pytest.raises(RuntimeError, match="no eligible agent available for role=worker"):
+        list(orchestrator.stream_route([{"role": "user", "content": "stream"}]))
+
+    assert list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "stream"}], model_name="m-model"
+        )
+    )
 
 
 def test_stream_route_uses_canonical_provider_name_in_trace() -> None:

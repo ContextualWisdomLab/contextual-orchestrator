@@ -133,4 +133,14 @@ push or open a PR.
   RMSE is computed from θ̂ versus known true parameters, not a rank
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
+- Request-scoped effort and evaluation policy must remain consistent across
+  execution, answer reuse, selection receipts, and saved runs. Preserve the
+  standalone single-role adapter contract; do not pad partial catalogs to hide
+  a validation regression. The implementation record remains Proposed until
+  protected delivery is verified.
+- Availability summaries may update transport evidence only, never judged
+  answer-quality priors. Preserved observation counts alone do not prove
+  unchanged posterior evidence; test subsequent judgment influence and member
+  order. See the Proposed availability-boundary record in
+  `docs/doctoring/measured-routing-evidence.md`.
 <!-- END cwl-agent-guidance -->

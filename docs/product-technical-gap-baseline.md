@@ -1,5 +1,525 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Rejected observation integrity (proposed)
+
+PR #1109 is stacked on numerical-routing owner PR #1067. At candidate
+`181e6d4d`, rejected new/replacement observations preserve retained response
+records, vectors, context order, and revision. RED `b335bfa7` reproduced both
+mutations; fix `5a4c0e66` passed both regressions. The focused observation and
+vector suite at `181e6d4d` passed 10 tests (24 deselected, 41.34s).
+The [root-cause runbook](psychometric_observation_atomicity.md) describes shared
+callers and limits. This closes two local integrity failures, not customer
+accuracy/latency KPIs. Full regression, independent review, protected merge,
+and immutable release remain unverified; production defaults are unchanged.
+
+Follow-up `89d8ed51` rejects fractional IRT row values instead of silently
+truncating them. The 13-case boundary suite passed in 2.05s and 10 neighboring
+tests passed in 3.51s. Integer-protocol inputs remain supported; floats including
+`0.0`/`1.0` and numeric strings are no longer valid row values. Accepted-flag
+coercion is a separate unchanged limitation. Earlier head `4cc0bf2c` completed
+57 local psychometric regressions and 3595 hosted full-suite tests, but those
+receipts are not current-code verification after this follow-up. New review and
+hosted checks remain required. No customer KPI gain is claimed.
+
+## 2026-09-07 measurement-only decision authority (proposed)
+
+RED `1cc27fca` retained two failures: the same 30 successful policy pairs
+received production-candidate-review classification for declared task counts
+30 and 30,000. Source `31664b7a` adapts only the decision-authority slice of
+PR #1000 commit `715f24a130416da3a255fa45823910410297845a`: counts remain
+observations, classification is measurement-only, and threshold/recommendation
+fields remain null. Markdown and parameter provenance use the same boundary.
+The original token-allocation delta and source-fix removals remain separate;
+neither the original commit nor PR is fully superseded. This is not a validated
+production decision model or an accuracy/latency gain. Population, expected-matrix,
+scorer, uncertainty and held-out validation remain required. Parent-to-child
+integration must preserve #1074 locked isolation and failure-inclusive pairing;
+fresh tests, hosted checks, independent review and protected delivery remain gates.
+
+## 2026-09-07 exact-head regression and stacked hosted verification
+
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+at `36307389e715632cf5a78602d682acae5dec3483` completed its local full suite:
+**3,583 passed, two skipped, 704.02 seconds**. JUnit records 3,585 tests,
+zero errors/failures and 702.134 seconds. The execution session returned exit
+zero; pre/post HEAD and clean tracked state matched. This supersedes earlier
+full-suite gaps for that exact source revision, not subsequent commits.
+
+Child [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+at `239f894edb2b37f4c28430d1acecb5ab36eef712` has successful actual
+[pull-request CI](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34039966047).
+Its checkout was merge result `cb60f17` of that child into parent `36307389`.
+The full job reports **3,598 passed, two skipped, 802.08 seconds** and the
+benchmark-coverage/public-docstring check reports **149 passed, 15.68 seconds**.
+Property/coverage-guided fuzzing and CodeQL/supply-chain/SBOM jobs succeeded.
+This proves the local workflow admits a non-main stacked PR base; it does not
+prove every organization-required workflow admits that base or grants approval.
+
+Both PRs remain Draft. Parent CodeQL compatibility run `34039956529` had
+three failed dispatch-shard jobs whose actual logs report dispatch success but
+a pending terminal verdict. These are neither confirmed vulnerability findings
+nor ignorable flakes. The canonical scanner must publish its authenticated
+verdict and complete exact-job callback verification before the gate can pass.
+
+Regression duration is not a routing latency KPI, particularly for concurrent
+local suites. Synthetic recovery, mutation and calibration tests remain unit
+evidence. Buyer-held-out accuracy, invariant measurement scales, correctly
+oriented DIF/judge effects, paired decision latency and actual administrator UI
+remain separate acceptance requirements. No production routing default changes,
+protected merge, immutable release or deployed timeout activation are claimed.
+
+## 2026-09-06 documented endpoint collection path
+
+Whole-identifier encoding produced HTTP 404 for `openai/gpt-4o`; the documented
+author/slug address returned HTTP 200 in public metadata checks. Committed RED
+`aee1e497` reproduces 16 request-path/admission failures. Source `98cdc3ec`
+validates two path segments and encodes each separately, with **147 related
+tests passing in 4.80 seconds**. The changed fetch method covers **18/18
+statements and 6/6 branches** in a separate 77-test run. One actual isolated
+current-source collector poll subsequently adds transport-window mass while
+leaving observed attempts at zero. No model inference, new dependency,
+estimator, or production weight is introduced. This is a collection repair,
+not a calibrated success probability or buyer accuracy/latency gain.
+The [Proposed evidence record](doctoring/measured-routing-evidence.md#endpoint-author-and-slug-path-repair-2026-09-06)
+preserves alternatives, source scope and limitations. Prior clean fulls at
+`db4d21da` (3,566 passes/two skips) and `5eebac47` (3,581 passes/two skips)
+completed with exit 0 but predate this repair. Both PRs stay Draft; new-head
+full, hosted, visual, independent-review and protected-release gates remain.
+
+## 2026-09-06 endpoint percentage admission
+
+Malformed endpoint percentages could change transport evidence after numeric
+coercion and clamping. RED `e405b803` has 33 failures/28 passes; source
+`b49d583f` validates numeric type and the inclusive 0–100 domain before endpoint
+aggregation. Invalid input leaves the ledger unchanged; null/missing input
+remains absent, not an observed failure. The unit mutation KPI falls from
+**33/39 invalid cases to 0/39**, with **98 related tests passing in 1.83
+seconds**. Two changed methods cover **27/27 statements and 8/8 branches** in
+a separate 61-test run. This is zero-provider-call input validation, not an
+estimator replacement, live incident, or buyer accuracy/latency improvement.
+The [Proposed contract](doctoring/measured-routing-evidence.md#endpoint-percentage-input-validation-2026-09-06)
+records requirements, alternatives, flow, APA references, exact evidence, and
+remaining full/hosted/visual/release gates. Prior fulls at `7b634397` and
+`2f770351` passed but do not verify this later revision. Both PRs stay Draft.
+
+## 2026-09-06 provider-usage test completion contract
+
+The availability-repair full suites are terminal: clean parent `6ca30364`
+passes **3,520 tests/two skips**; clean child `0707e524` has **one failure,
+3,534 passes/two skips**. The failed provider-usage test assumed an
+asynchronous batch had completed immediately. Barrier RED `cfef8462`
+reproduces that mismatch without relying on thread scheduling. Test-only
+`8d1ea613` uses the existing explicit wait contract in both affected tests,
+including the three Unicode cases, while preserving usage/cost assertions
+and cleaning up their worker resources. **137 related tests pass in 16.64
+seconds**, exit 0. No runtime, provider timeout, estimator, or production
+policy changes. The original failed full remains evidence; the
+[doctoring follow-up](doctoring/measured-routing-evidence.md#full-suite-follow-up-provider-completion-contract-2026-09-06)
+records exact results and the separate corrected-full requirement. Actual
+Edge desktop screenshots of the PRs, collector diff, document diagram and KPI
+table were inspected; this is not product-admin/mobile E2E or deployed proof.
+
+## 2026-09-06 availability and answer-quality boundary
+
+Committed RED `450599f1` reproduces eight failures: uptime polling changes
+answer-quality priors, can hide extra mass behind an unchanged mean, and can
+reverse judged member selection without another answer evaluation. Source
+`b3be48e3` removes the quality dependency from the existing collector and keeps
+transport refresh independent of answer-benchmark priors. No new estimator,
+dependency, production default, or statistical-owner bypass is introduced.
+
+At clean `e5775648223d561bacba93022a06c720f9d5613c`, **132 focused tests pass
+in 234.74 seconds**, terminal exit 0. A controlled collector-swap unit probe
+reduces maximum quality-mean drift from **0.604839 to zero** and preserves the
+8/10-versus-2/10 judged order after 50 opposite-uptime polls per member.
+The collector constructor and polling method cover **19/19 statements and
+4/4 branches**; changed-definition docstrings are **205/205** against main
+`414f2297`. These are scoped counts, not whole-repository coverage.
+
+The [Proposed doctoring contract](doctoring/measured-routing-evidence.md#availability-and-answer-quality-separation-2026-09-06)
+records requirements, alternatives, UML, exact revisions, corrected RED
+fixtures, commands, and artifacts. It makes zero external provider calls and
+does not prove live polling, a production incident, buyer accuracy, latency
+improvement, or a defect in IRT-Router. Overlapping transport windows, maximum
+endpoint uptime versus actual routing, and the existing benchmark prior's
+calibration remain open. Both stack PRs remain Draft; current full/hosted
+verification, independent review, protected merge, and release remain gates.
+
+The preceding policy full suites are terminal: parent `7bdc27ea` has **3,512
+passed/two skipped/exit 0 in 725.04 seconds**, and child `eba36d81` has **3,527
+passed/two skipped/exit 0 in 723.74 seconds**, with matching clean start/end
+heads. Their `full-*` artifacts remain in `/tmp/co-1067-policy-snapshot.hC9q25`
+and `/tmp/co-1074-policy-snapshot.AQGsr5`. They do not verify this later change.
+
+## 2026-09-06 evaluation-policy attribution
+
+The new request-policy RED commit `d70e6848` demonstrates **12 failures**:
+judging changes can reuse unjudged answers and alter in-flight, stream, batch,
+final-synthesis, and persisted policy attribution. Source `6d4b5ac7` extends
+the existing request context with the immutable policy, partitions cache keys
+by policy content, and saves the completed policy rather than later settings.
+It adds no dependency, statistical kernel, provider fallback, or default change.
+
+The 12 regressions and previous 24 effort guards pass after the source change.
+At `55d5202a`, **262 focused tests pass in 14.30 seconds**. Final test head
+`c922329e` passes **48 request/cache guards in 1.10 seconds**, retaining
+concurrency, retry, cleanup, single-role compatibility, invalid-catalog,
+policy-identity, and detached-record checks. The focused nine-definition
+coverage is **52/52 statements and 14/14 branches**, not whole-module coverage.
+Changed-definition docstrings are **196/196** against main `414f2297`, including
+distinct property getter/setter definitions. The
+[Proposed contract](doctoring/reasoning-effort-profile.md#policy-attribution-repair-2026-09-06)
+records the product/technical requirements, alternatives, UML, failures,
+reproduction commands, and limits. The correctness KPI is 12 failures to zero;
+buyer accuracy, decision latency, and psychometric validity remain unmeasured
+by this unit repair.
+
+The preceding corrected frozen full suites are **terminal**: parent `0bf86aca`
+has **3,494 passed/two skipped/exit 0 in 661.00 seconds**; child `a762e433` has
+**3,509 passed/two skipped/exit 0 in 663.74 seconds**. Each clean start/end head
+matches. Their separate `corrected-full-*` artifacts preserve the prior failed
+runs described below. Neither verifies this later policy change, which still
+requires exact-head full/hosted evidence, independent review, protected merge,
+and immutable release. Both stack PRs remain Draft.
+
+## 2026-09-06 request-local effort revision
+
+RED `beae9fb45f13d9401357444f0d527ba4be64645a` turns the remaining in-flight
+catalog problem into eight failing cases. Source
+`1eff633810e0269afda349ae8ccacba3bc9e447d` validates one catalog snapshot at
+each outer execution boundary and reuses it for role profiles, cache keys,
+effort identity, and result metadata. Independent requests stay concurrent;
+stream iteration/close uses an isolated context without leaking suspended
+state. Later requests observe updates, and returned batch records are detached.
+
+At guard head `1edf574b81a7d25c9eb54d47a10afd063375c1a6`, **317 integration
+tests pass in 18.90 seconds**. The request suite's 23 cases cover overlapping
+threads, nested orchestrators, stream cleanup, retry, invalid catalogs before
+execution, late opt-in, identity, cache replay, and subsequent updates.
+Seven scope/snapshot helpers cover **43/43 statements and 12/12 branches**;
+this is not whole-module or exhaustive interleaving coverage. The explicit
+changed-definition census against main `414f2297` is **173/173** documented.
+Test-only `ec3ad654` passes the 23 cases and the new test file's default Ruff
+selection. No lint rule, provider, production policy, or dependency is changed.
+
+Under a fixed one-worker unit fixture, validated catalog computations fall
+from **2 to 1 for route** and **5 to 1 for conduct**, with identical answers,
+snapshots, and selected identities. No-catalog executions remain at zero.
+These are exact operation counts, not measured latency or buyer accuracy.
+The [Proposed implementation record](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
+contains the product/technical contract, Y-Statement, alternatives, UML,
+reproduction commands, and evidence paths. The catalog guarantee does not
+extend to mutable deployment metadata, agent pools, or, at that historical
+revision, orchestration policy. The later policy repair above extends the scope.
+
+The first full suites found a real compatibility regression: parent `f660d71f`
+finished with **one failure/3,492 passed/two skipped in 658.68 seconds** and
+child `44a49529` with **one failure/3,507 passed/two skipped in 668.91 seconds**.
+Both clean start/end heads match and both exit 1. The existing CEFR Responses
+adapter's judge-only catalog was incorrectly forced through full-workflow
+validation. RED `0a5e24b7` preserves that adapter contract rather than padding
+its fixture. Source `e4314c18ecc7a2b1c4894a6439ff4f134abd1596` keeps standalone
+single-role lookup while still rejecting partial catalogs at full-request
+boundaries. **118 compatibility tests pass in 1.52 seconds**; 24 request guards
+cover **47/47 statements and 14/14 branches** in the same seven definitions.
+The changed-definition census is now **174/174** documented. Failed full-run
+artifacts remain in the request-effort directories; the corrected full runs
+must use separate files. No previous full or hosted result verifies this fix.
+
+The preceding frozen parent `79d8d81dc769bc3fcf681f3064bb07cdd0fb8978`
+completed **3,470 passed/two skipped in 665.66 seconds**; child
+`2bf99a82dccd9d551f3c51b73bc80fbab8543fab` completed **3,485 passed/two
+skipped in 664.51 seconds**, both exit 0 with identical clean start/end heads.
+Evidence: `/tmp/co-1067-effort-cache.u3eBJA` and
+`/tmp/co-1074-effort-cache.SClhY8`. Those full runs predate this request-scope
+repair and do not verify it. Current-head full/hosted checks, independent
+review, protected delivery, and released statistical/buyer evidence remain.
+
+## 2026-09-06 effort-aware answer reuse and record attribution
+
+RED `80fe7d5f75973b40986cac895369613ac51803d5` demonstrates four failures:
+local and shared-provider cache paths reuse a medium-effort answer after a
+high-effort change, a malformed catalog can bypass validation on a cache hit,
+and persistence replaces a completion's settings with later operator settings.
+The failure occurs with sequential requests and a worker double; it is not a
+claim about a live provider or a concurrent-production incident.
+
+Source `29712e060645a1a127b49e2be90bc4d3e03dcb10` reuses the canonical catalog
+hash in the common cache key and copies the completion's declared settings
+into the saved record. Equal catalog content still hits the cache; invalid
+catalog errors are not treated as optional-cache outages. The no-catalog key
+envelope, provider-outage fallback, and production routing defaults remain.
+Follow-up `92858f33f52902460b9cc4d003e02a5aff21d28c` removes an accidentally
+duplicated import by retaining the pre-existing import.
+
+At clean `92858f33`, **148 focused tests pass in 15.25 seconds**. A separate
+27-test coverage run covers all eight statements and both branches of the
+cache-key method, the invalid-catalog rethrow, and both paths of the new
+snapshot-preservation condition. This is not whole-module or whole-method
+coverage for completion/persistence. The changed-definition census against
+protected main `414f2297` is **138/138**: runtime 29/29, scripts 44/44, tests
+65/65, using the same scope as the earlier documentation audit.
+
+Isolated Ruff E4/E7/E9/F checks pass. The environment's broader default Ruff
+selection reports 31 findings already present at RED `80fe7d5f`, with no new
+code/message pairs; that broader run is not green. No lint rule was changed.
+Exact commands, logs, rejected alternatives, and limits are in the
+[cache doctoring record](doctoring/DISTRIBUTED_RESPONSE_CACHE.md#effort-catalog-attribution-repair-2026-09-06).
+No request-wide atomic snapshot, end-to-end latency gain, buyer accuracy,
+protected merge, or released delivery is established by this repair.
+
+## 2026-09-06 changed-definition documentation and completed full runs
+
+Documentation-only `02f60c40e0d1d9f8b0fe79ca8d8c53b43cda0903` fills 39
+missing explanations across the current PR's runtime and test definitions.
+Against protected main `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, the declared
+AST-difference scope improves from **90/129 to 129/129 documented definitions**:
+runtime 26/26, scripts 44/44, tests 59/59. This includes initializers, classes,
+private methods, and nested functions; unchanged definitions are not counted.
+It is neither whole-repository coverage nor CodeRabbit's historical scope.
+
+The seven Python files retain identical docstring-stripped ASTs to `d740602f`.
+Ruff passes, and **235 focused tests pass in 20.57 seconds** at clean `02f60c40`.
+No calculation, population size, dependency, production gate, or API is changed.
+The [doctoring audit](doctoring/measured-routing-evidence.md#complete-changed-definition-audit-2026-09-06)
+contains the exact reproduction script, test command, and evidence paths.
+
+Before this documentation repair, frozen parent
+`d740602fdd8c0e4f7d55e4d3ad37b9f560c09e01` completed **3,466 passed, two skipped,
+exit 0 in 733.63 seconds**. Frozen child
+`fa8eef97cd7368e8985a367dc5a7a8e0147fe4d5` completed **3,481 passed, two skipped,
+exit 0 in 664.63 seconds**. Start/end heads and clean tracked trees match.
+JUnit has 3,468 and 3,483 cases respectively, with zero failures or errors.
+Logs and JUnit are in `/tmp/co-1067-catalog-batch.84vEgu` and
+`/tmp/co-1074-catalog-batch.MIcuwO`; sessions 7424 and 79929 are terminal.
+These are exact earlier full-suite results, not full runs on a later
+documentation or integration commit. Hosted checks, independent approval,
+protected delivery, and a released statistical-owner API remain separate.
+
+
+## 2026-09-06 operation-local identity snapshot
+
+RED `ad3fbf874608a5da366095f92c746cfbefcc1131` reproduces two defects:
+one three-candidate/four-attempt record validates the same catalog eight times,
+and a lazy attempt input can mix old and new catalog revisions in that record.
+Source `db195d734c0a27adf38f59d7427ef196da5da7d3` uses one fresh validated
+catalog snapshot per ordered candidate batch. Ranking, observation, reload,
+retention, and decision records share the same identity calculation. Repeated
+attempts remain repeated, and later calls still see catalog/deployment changes.
+There is no persistent identity cache or new estimator/dependency.
+
+Guard-test head `2d1592af5c8df90733f6b1d5c66cd33976d02d15` passes **206 focused
+tests in 117.36 seconds**. Seven targeted cases cover all **16 statements and
+four branches** across the single-ID entry point, batch calculation, and record
+builder; all three have docstrings. This is not whole-module coverage.
+Malformed catalog changes fail closed; an empty pool still clears observations.
+
+The [complete unit-fixture profile](research/psychometric-identity-batch-profile.json)
+retains scripts, source heads, and every timing. In three same-process paired
+runs, each condition/version has 189 calls, including first calls. With 50
+candidates and an opt-in catalog, median record-computation time changes from
+**9.121 to 0.677417 ms (92.57% lower)** with identical output hashes. The default
+no-catalog medians are 0.481667 and 0.478208 ms, too small a difference to claim
+an improvement. An earlier cross-process default comparison regressed; those
+samples remain in the artifact, and its cause was not isolated. This profile
+measures only unit-fixture computation, not live routing, buyer accuracy, or
+end-to-end latency. Full-suite and protected validation of this change remain
+separate requirements.
+
+The preceding frozen parent `bfeb73a6c58add7a23df052110593cdf43c0b0db` completed
+**3,461 passed, two skipped, exit 0 in 675.10 seconds**. Frozen child
+`9207412ea8ac529d7d2622ab298989ef7899befb` completed **3,476 passed, two skipped,
+exit 0 in 790.27 seconds**. Both kept matching start/end heads and clean trees;
+their JUnit counts are 3,463 and 3,478 with no failures or errors. Their evidence
+directories are `/tmp/co-1067-current-integration.ZEiSf0` and
+`/tmp/co-1074-current-integration.PBuxSQ`. These results predate the new batch
+change and must not be relabeled as its full-suite verification.
+
+## 2026-09-06 predecessor and protected-main integration
+
+Normal merge `2340bea5f3abfb06d8d78afdaf09df2742da68ac` retains the
+documentation/lint corrections below and current predecessor #1064 head
+`4c4e5f135d5745aa6273c0ed4036cac76c7bd03d`. That predecessor incorporates
+protected main `a080297d2546bb61e89520d637cabc202db331ec`, including the
+reviewed NVIDIA cost-evidence dates and their isolated test fixtures.
+At the clean merge head, **244 integration tests passed in 32.90 seconds**.
+
+A fresh branch read then found protected main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, which suppresses stacked transport
+retries when the orchestration loop owns retry-versus-failover decisions.
+Normal merge `c4008bb540ce5f2d59bffe93c3ef9408ea6b9410` preserves both histories
+without conflicts. Its **157 transport, failover, psychometric-routing, and
+streaming tests passed in 23.56 seconds**, terminal exit 0.
+Both runs retain logs and JUnit in `/tmp/co-1067-documentation-audit.h2ZVMV`.
+The 244-test result belongs to `2340bea5`; it does not cover the later transport
+merge. Full-suite verification of the combined tree remains separate.
+
+Predecessor PRs remain open. These integration results do not prove protected
+delivery of #1067, live gateway recovery, or improved buyer accuracy/latency.
+
+## 2026-09-05 internal measurement documentation audit
+
+Strict `interrogate -c /dev/null --fail-under 100` on
+`contextual_orchestrator/psychometric_routing.py`,
+`scripts/benchmark_psychometric_routing.py`, and
+`scripts/benchmark_psychometric_heldout.py` found 20 undocumented entities among
+61 at `ae704491fc24cd4618c709b036cc9353ea9923e5`: **67.2%** coverage.
+This empty-config scope includes initializers, private helpers, and nested
+functions rather than inheriting repository exclusions.
+
+Documentation-only `f8b142aab59e651ed5864dda8d344f27b06fc4a9` reaches **61/61,
+100%**, with identical docstring-stripped ASTs and 48 focused tests passing in
+24.99 seconds. Contracts now distinguish injected oracle probabilities from
+estimated parameters, expected losses from observed responses, resolved-only
+risk from all-candidate query burden, and local ranking time from end-to-end
+latency. The class description also separates default single-neighbor behavior
+from the opt-in positive two-neighbor experiment.
+
+The lint run exposed a pre-existing unread `neighbor_limit` assignment;
+stdin lint of `ae704491` independently reproduced F841. Follow-up
+`1710cfe76485e9a3b25041a3810b7865eb5d1ed0` removes only that assignment.
+All three files then pass Ruff and strict documentation coverage; the same
+48 tests pass in 18.24 seconds. ASTs match the baseline after removing
+docstrings and that one explicitly identified assignment. These are focused
+local results, not a new full-suite result or protected delivery evidence.
+
+This closes the declared three-file documentation gap, not CodeRabbit's wider
+107-function scope. Entity documentation coverage does not establish complete
+measurement validity, buyer accuracy, latency improvement, or release readiness.
+Reproduction and interpretation boundaries are in the
+[doctoring audit](doctoring/measured-routing-evidence.md#internal-benchmark-contract-audit-2026-09-05).
+
+## 2026-09-05 exact-head gate verification and paper distribution audit
+
+The frozen, clean `47ae9d65c2bc013c553f4fb045964867363f4e94` tree completed the
+full suite with **3,460 passed, two skipped, exit 0, in 675.71 seconds**.
+Start and end heads match; JUnit records 3,462 cases, zero failures, zero errors,
+and two skips. Evidence is in `/tmp/co-1067-measurement-gate.8EWUFJ`.
+The same head's 57 profile/paper checks passed in 0.63 seconds, with the profile's
+185 statements and 68 branches at 100%. These are local verification results,
+not hosted acceptance, protected merge, or buyer performance evidence.
+
+The subsequent documentation-only rights audit covers all six bundled PDFs.
+The old blanket claim that an arXiv distribution grant permits repository
+redistribution was incorrect. Four current-tree copies (FrugalGPT, RouteLLM,
+Hybrid LLM, and the fuzzing survey) are replaced by citations, links, and
+summaries. HELM and IRT-Router remain with explicit CC BY 4.0 sources and
+attribution. HELM's local bytes match the source v2 download exactly. The
+[paper register](papers/README.md#redistribution-audit-2026-09-05) records
+versions, hashes, rights boundaries, and the unresolved historical distribution
+scope. Git history, other branches, and past artifacts are not purged.
+The earlier full-suite result does not claim to test these later document edits;
+their citation and link checks are a separate verification step.
+
+## 2026-09-05 measurement-declaration boundary repair
+
+The IRT-Router review distinguishes prediction from measurement and corrects
+the earlier equation-only inference about public implementation constraints.
+The pinned implementation uses positive discrimination transforms; that does
+not establish invariant score units, construct validity, or the meaning of an
+unweighted 25-coordinate average. The
+[doctoring audit](doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
+records exact paper sections, source revision, a positive-rescaling algebraic
+counterexample, and the remaining validation requirements. The paper is now
+cited as its ACL 2025 publication rather than only its preprint.
+
+The existing reasoning-effort default-change helper had a separate input defect:
+missing or unrecognized measurement status, negative candidate error, and
+boolean/string errors could pass; very large integers raised an uncaught error.
+RED `76908a55` produced 12 failures among 29 gate checks: ten invalid approvals
+and two unhandled overflows. Source `0ad54cdf` passed all 52 profile tests with
+185 statements and 68 branches covered at 100%. The repair reuses the existing
+number validator, preserves the 55% improvement threshold and valid zero
+candidate error, and adds no estimator or dependency. Later formatting-only
+cleanup preserves the surrounding source layout.
+
+The KPI here is invalid input admission: ten accepted invalid reports and two
+uncaught failures become zero in the declared regression matrix. It is not a
+buyer accuracy, latency, or measurement-validity result. The helper validates
+declarations only; provenance authentication, buyer observations, and protected
+approval remain necessary. This report-only helper and the held-out benchmark's
+multi-gate admission result are separate contracts. No production default was
+changed and no synthetic record became measured evidence.
+
+## 2026-09-05 PR #1067 review correction
+
+Source `a8109a65` follows RED `43706aad` on the existing successor #1067.
+At 401 or 403 generated candidates, the former hard-coded denominator reported
+101% near-cut coverage. The corrected harness derives subgroup sizes from
+the actual generated trait grid, including the unequal negative/positive
+strata, and fails explicitly when a requested summary lacks resolved evidence.
+It retains the default 400 candidates, ten replication seeds, and all
+production gates. Observation p95 keeps nearest-rank semantics while deriving
+its position from the actual sample count; the default remains 101.
+
+The targeted suite passed 58 tests before the final formatting-only pass.
+The full suite with executable source `a8109a65` finished with **3,432 passed,
+two skipped, exit 0, in 728.31 seconds**. This includes the unchanged full-size
+experiment and its fixed numerical assertions. Documentation was updated while
+that run executed; a separate 102-test routing, paper, and boundary suite passed
+after those edits. This is not full-suite evidence for a later documentation
+commit or hosted acceptance. Race-failure
+reentry retains repeated deployment IDs because those are actual repeat
+selection attempts. The receipt is not a full transport/tool-retry ledger,
+and deduplication would hide retries without identifying exposure propensities.
+
+The doctoring bibliography restores the missing psychometric references from
+the existing paper register and adds Brogden's verified bibliographic record.
+It also removes unsupported claims that JSON structure establishes judge
+reliability, separate ledgers establish a multilevel model, or DPR validates
+this gateway's cosine policy. ADR 0034 remains Proposed, with production
+single-neighbor and experimental two-neighbor paths shown separately.
+
+GitHub API reads initially hit an account rate limit; both remaining comment
+lists were retrieved after service recovered. The five inline findings are
+accounted for above. The issue comment also reports 42.99% docstring coverage
+over 107 changed functions with six exclusions. That wider review scope is not
+the same as the repository-configured public-API check, which passes 100% for
+the psychometric module and both harnesses. Wider documentation coverage and
+the review's optional caching/test-structure suggestions remain separate work;
+neither this suite nor an automated comment supplies independent approval.
+Hosted checks, review feedback, and normal protected delivery still require a
+fresh exact-head recheck; no conversation has been resolved or dismissed here.
+
+## 2026-09-05 psychometric successor reconciliation
+
+PR [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+is the consolidation target on a base-repository branch. Its initial head
+`845d09dc666bee4a212710f517b0f1c9f38a0c52` has exactly the same Git tree as
+PR #1058. The following source heads are all ancestors of #1064's
+`ba010d5a023f69204df73e0a8e4d9b0a5bf7ee2f`:
+
+| Source PR | Preserved head |
+| --- | --- |
+| #1058 | `3c22bf31c33520b128cb2c449d03e3762e1f4c75` |
+| #1059 | `99efa19ea7846f7b2c47934bc1cf15bf0635d0da` |
+| #1061 | `c5a09630b4473d6981f3fbc5c555fbbcd9406a74` |
+| #1062 | `cafdc7c7b381e9b3d22ea0b8b34de49b39a2ae0b` |
+| #1064 | `ba010d5a023f69204df73e0a8e4d9b0a5bf7ee2f` |
+
+Integration commit `e44ee9087c369b8846b0a143578de5725aae389f` preserves both
+histories and exactly reproduces the #1064 tree
+`8735f953c2fecca07c2b6c1951275689742be92e`. Tree equality and ancestry justify
+the history-only merge: the original successor contributes no independent
+change to discard. Later documentation commits record this audit. Recheck
+every source head and the complete effective delta before retiring a source
+PR; all five remain open pending protected delivery.
+
+The full local suite on source `ba010d5a` passed **3,417 tests, with two skips,
+in 666.99 seconds**. This is evidence for that source tree; the new successor
+commit still needs its own required hosted workflows and independent review.
+The branch-rule snapshot requires at least one independent approving review,
+approval after the last push, resolved conversations, and the seven required
+organization workflows; additional approval rules for unattributed changes
+also apply. The snapshot found no approvals or unresolved threads on #1067.
+
+This consolidation removes the external-fork admission obstacle without
+authorizing production routing. The accuracy and time evidence, measurement
+limitations, and owner boundaries remain in
+[ADR 0034](planning/adrs/0034-anti-heuristic-routing-evidence.md) and the
+[research evidence](doctoring/measured-routing-evidence.md). Buyer response
+calibration, end-to-end latency, and measurement validity remain unexecuted.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -2185,11 +2705,287 @@ live work item.
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) records the no-blanket-masking policy and explicitly leaves authorization/encryption as follow-up. The actual design is proposed [ADR 0011 at #762's exact head](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/8f87bcaeddff0866e26900e41deeafe208d8f9e4/docs/planning/adrs/0011-pii-purpose-authorization-and-field-encryption.md); both design [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) and implementation [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) remain open and are not protected-main evidence. | Protected main has purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests proving raw PII is returned only to an authorized purpose. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
+| P1 | Psychometric routing lacks buyer-held-out accuracy-time and measurement-validity gates. | Local performance commit `0561c9b8`, carried by [#1058](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1058), reduces fixed-fit preparation median from 2.448167 ms to 1.100583 ms. Stacked [#1061](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1061) adds a seeded 24-training/24-held-out semantic warm-start experiment: `50d91c9e` reduces expected Brier 0.1438369123 to 0.1418346845, log loss 0.4525311878 to 0.4475784303, and mean top-choice regret from 0.0024259478 to zero. Source commit `94615dff` adds paired 2,000-resample intervals and 200 alternating-order timing repetitions per context: Brier `[-0.0022969, -0.0016986]`, log loss `[-0.0053736, -0.0045191]`, regret `[-0.0072778, 0]`, and a slower context-median latency delta `[0.0047666, 0.0054775]` ms; `2cc8427f` locks point-delta/interval consistency. Gate commit `079b3f80` requires accuracy, latency, buyer-heldout, and measurement-validity decisions to all pass and therefore emits `production_default_change_allowed=false`. Source commit `70cfc91f` restores one-pass production neighbor selection; isolated 512-row selection fell from 27 to 5.5 µs without changing the experimental top-2 rule. Source commit `972bd4a0` reduces experimental interpolation passes; across ten alternating process pairs, candidate decision p50 fell 7.39% and the paired latency-delta CI upper bound fell 70.84% with unchanged Brier, log loss, and regret. Source commit `260fa1dd` reuses the query-vector norm across retained contexts; five before/after runs reduced median candidate p50 from `0.023167` to `0.015042` ms with bit-identical quality, but the positive latency-delta CI upper bound keeps the gate closed. These are synthetic local results, not protected-main, buyer-prompt, invariant-scale, or end-to-end latency evidence; two-neighbor interpolation therefore remains disabled in production. PR [#1062](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1062) source commits `0554b3ac` and `ffb1383b` bind evidence to candidate configuration plus the active role effort/sampling catalog, purge invalid rows across runtime changes and restarts, serialize observation writes against concurrent pruning, and preserve the pre-experiment single-neighbor behavior. Its 185-test focused verification is local evidence, not protected-main proof. IRT-Router motivates the interaction model but its public evidence does not establish scale linking, parameter invariance, local independence, DIF, judge effects, or adaptive-exposure correction. Source commit `ab17ff87` further records the model orientation: LLM deployments are persons and queries are items, so buyer language/domain cannot be relabeled as a person-group DIF vector; the item-side Multilingual-IRT direction remains an owner prerequisite and the gate stays false. | Define the measurement unit as a versioned endpoint + model + system/decode/tool policy. Run the same metric contract on a preregistered buyer model-query matrix; add end-to-end p95, true-parameter RMSE where available, anchors across recalibration, local-dependence and correctly oriented candidate-group DIF checks, item-side language/domain effects, judge/rater effects, and randomized exposure or propensity correction. Admit two-neighbor routing only when accuracy is non-inferior or better, latency improves, measurement-validity checks pass, and protected exact-head checks pass. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; active PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) now provides the bounded benchmark, but it is not protected-main evidence while OpenCode/Strix and independent approval remain incomplete. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
 | P2 | Frontend component inventory is not applicable to the operative admin console. | An unwired `admin_ui/` React + Storybook scaffold and workspace entry exist, but the inline stdlib admin remains the served interface. | Keep the existing Figma artifact record; defer Storybook adoption until the frontend is built and wired under ADR 0033's triggers. |
+
+The local-independence prerequisite now has an owner-side implementation path:
+`fast-mlsirm` PR [#1748](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1748)
+at exact head `8461914a5bf04f9732add77761dd121bbec00103` exposes the existing
+Rust Chen-Thissen signed X2/G2 indices through Python. This is proposed owner
+evidence, not released consumer evidence. A detached exact-head audit passes 44
+focused fitstats, control-safety, and result-contract tests in 4.71 seconds plus
+`git diff --check`; the current source has no unresolved review thread. The PR
+nevertheless remains Draft, `REVIEW_REQUIRED`, and blocked, while its hosted
+rollup is not green and no independent approval exists. It does not open the
+routing gate without a preregistered buyer matrix, multiplicity plan, and
+threshold.
+CO source commit `92b9309b` adds probability calibration to the paired accuracy
+gate rather than relying only on Brier, log loss, and winner regret. Synthetic
+held-out calibration slope moves from `0.991445` to `1.014030`, and logit RMSE
+falls from `0.231235` to `0.025803`; the paired RMSE-delta 95% interval is
+`[-0.208030, -0.202924]`. These known probabilities prove calculation
+sensitivity, not calibration on buyer outcomes.
+CO source commit `1309b3ce` also stops conflating this absent evidence with a
+failed measurement: its report marks buyer-heldout and validity gates
+`not_executed`, the measured latency gate `failed`, and accuracy `passed`; only
+`passed` maps to the compatibility Boolean or production authorization.
+Source commit `c690ebe7` expands the validity denominator into six named
+components. All remain `not_executed`; in particular, winner-only adaptive
+history carries no recorded randomized exposure probability and therefore
+cannot support an invented propensity correction.
+Source commit `fdb8e57a` now separates released owner contracts, the pending
+local-independence contract, and owner gaps from execution status. Later source
+commits refine two owner classifications; none can pass without the buyer
+evidence named in the benchmark report.
+Source commit `7edccae0` caches validated unit context embeddings at observation
+time. Five before/after local runs reduced median candidate decision p50 from
+`0.016083` to `0.009791` ms with unchanged Brier, log loss, and regret. The
+candidate-minus-baseline latency interval still crosses only positive values,
+so the latency and production gates remain closed.
+Source commit `00b2eef3` corrects the item-side language/domain owner status:
+`fast-mlsirm` 0.9.1 already exposes one multigroup item-covariate coefficient,
+so a preregistered difficulty contrast is `released_limited`, not wholly
+unimplemented. Language-specific discrimination and residual effects still
+require owner work, and no buyer observations or anchors have executed the
+available slice.
+Source commit `a095b41f` also corrects the adaptive-exposure owner status:
+`fast-mlsirm` 0.9.1 exposes CAT exposure control, but that surface neither logs
+CO routing propensities nor identifies unobserved candidate outcomes. The
+gateway still needs randomized assignment or a propensity ledger before this
+validity component can execute.
+Source commit `46e15555` closes the winner-only audit gap without overstating
+identification: route, conducted-workflow, and streaming traces retain the
+ordered versioned candidate set, actual attempts, selected deployment, and
+policy hash, while deterministic propensity remains `not_identified`. Buyer
+outcomes under a preregistered randomized design or another defensible
+identification strategy are still required before the validity component passes.
+Source commit `2c783b98` makes the proposed observation design executable in
+the synthetic held-out benchmark without changing live routing. Its fixed
+20% ε-greedy policy assigns every one of four candidates probability at least
+0.05 across 24,000 trials. Horvitz-Thompson value RMSE is 0.008943 against known
+truth and all four 95% intervals cover their targets. This proves the logging
+and estimator contract only; buyer prompts, operational guardrails, variance
+limits, and protected-main evidence are still absent, so the gate stays closed.
+Source commit `36dbf3bb` adds the corresponding selection-bias KPI. Naively
+averaging the adaptively selected observations produces RMSE `0.321979` against
+the four known candidate values; the same logged observations produce
+inverse-propensity RMSE `0.008943`, reducing error by `0.313036`. This confirms
+why winner-only routing history cannot serve as psychometric calibration data,
+but `adaptive_exposure` remains `not_executed` without buyer randomization or
+another identified observation design.
+Source commit `ca6e9a75` exercises the released Stocking–Lord linking path on
+six common-item anchors under a known affine metric change. The fit converges
+and recovers slope 1.3 and intercept -0.4 with true-parameter RMSE `3.24e-16`.
+Because these are synthetic anchors rather than stable items observed across
+buyer recalibrations, `scale_linking` remains `not_executed` and cannot open
+the aggregate validity gate.
+Source commit `d0d81e8f` exercises the released purified logistic DIF path on
+4,000 synthetic observations with one known candidate-cohort item shift. The
+unpurified screen produces one contamination-driven extra flag; purification
+stabilizes with seven anchors and reports recall 1.0 with zero false positives.
+This proves the computation and contamination guard, not candidate-group
+invariance on buyer data, so `candidate_group_dif` remains `not_executed`.
+Source commit `ac28b6d0` exercises the released many-facet Rasch path on a
+connected, fully crossed synthetic design with 1,000 respondents, six items,
+and three judges. It converges in five iterations, recovers judge-severity
+order, and reports centered-severity RMSE 0.018292. No versioned buyer judge
+ratings were executed, so `judge_effects` remains `not_executed`.
+Source commit `0f875e3f` exercises the released multigroup item-covariate path
+on a known `delta=-0.8`. It converges after 941 iterations and estimates
+`-0.789650` (absolute error `0.010350`). The baseline records recovery and
+convergence separately and leaves
+`item_language_domain_effects` `not_executed`. IRT-Router remains an
+IRT-shaped prediction reference, not evidence that its learned coordinates are
+identified, invariant psychometric ability or difficulty measurements.
+Its printed MIRT equation omits the positive discrimination transforms present
+in public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`. The source
+distinction is recorded in the interpretation audit above. Positive direction
+does not establish common coordinate units or validate their average. CO keeps
+production admission closed until direction, identification/linking,
+item/model fit, and uncertainty are separately checked on buyer evidence.
+Source commit `b0f3703f` reuses the released Oakes observed-information API on
+1,200 synthetic observations and six known item intercepts. The converged fit
+reports intercept RMSE `0.039160`, 95% Wald-interval coverage `1.0`, and mean
+interval width `0.295945`. Because the current API conditions on population
+parameters and rejects anchors, zero inflation, and item covariates, this is an
+implementation check rather than buyer uncertainty evidence;
+`parameter_uncertainty` remains `not_executed`.
+Source commit `2e129e2a` adds a separate recalibration-invariance screen. It
+links two known parameter sets through seven stable anchors, recovers the one
+injected drift item, and reports no stable-item false positive. The fixed `0.25`
+tolerance is an effect-size rule rather than a significance test; versioned
+buyer recalibrations and sampling uncertainty are still absent, so
+`parameter_invariance` remains `not_executed`.
+Source commit `5c6ba17a` adds a separate candidate-roster invariance screen.
+It independently calibrates synthetic rosters of 20 and 16 candidates and
+links the scales through 200 common items. The 16 retained candidates have
+linked-score RMSE `0.010866`, correlation `0.999999`, and maximum absolute
+shift `0.016498`. This verifies the released calculation path only. Without
+versioned buyer rosters, common buyer items, identified linking, and registered
+score-shift targets, `candidate_roster_invariance` remains `not_executed` and
+the production gate stays closed.
+Source commit `c7c4a13f` adds a separate test-function impact check. A known
+shift in item 6 creates TCC-area difference `0.123355`; the released backward
+elimination identifies item 6 and reduces the residual difference to zero in
+one iteration. This complements parameter-distance screening but uses a fixed
+synthetic threshold and a narrower search than Guo, Zheng, and Chang's full
+stepwise method. Buyer recalibrations and preregistered review rules remain
+absent, so the validity gate stays closed.
+Source commit `7c3e6e98` adds temporal drift KPIs motivated by Chen, Lee, and
+Li (2022). Source commit `1b3b7244` selects a threshold on 500 calibration runs
+using a 95% Wilson false-alarm upper bound, then evaluates it on an independent
+500-run seed. Selected threshold `6.6` records held-out false alarms `2.4%`
+with upper bound `4.15%`, delay p50 10, and p95 20. The tradeoff is a synthetic
+calculation contract, not the paper's multistream Bayesian compound-risk
+procedure or a buyer-approved threshold.
+`sequential_drift`
+remains `not_executed` pending versioned buyer time series, declared risk, and
+preregistered false-alarm and detection-delay targets.
+Source commit `1dce9688` adds a separate alternate-form score-equating check.
+For 1,100 observations per form under a known `y = 2x + 1` transformation,
+raw cross-form RMSE is `6.782330`; released linear equating recovers slope `2`
+and intercept `1` exactly, reducing RMSE to zero. Three hundred bootstrap 95%
+intervals cover all 11 known equivalent scores, with maximum standard error
+`0.351886`. Equal synthetic form populations do not prove buyer score
+comparability, so `score_equating` remains `not_executed` pending versioned
+buyer forms, comparable populations or anchors, and registered error targets.
+Source commit `a18e25f7` exercises the released nonparametric person-fit API on
+1,000 synthetic candidate response patterns. The injected inverted pattern
+ranks first and has ZU3 separation `1.818719` from the next-highest pattern.
+Because unusual response patterns neither identify a cause nor prove invalidity,
+the report applies no universal cutoff and leaves `response_pattern_fit`
+`not_executed` pending complete buyer responses and a human-review policy.
+Source commit `73e07a8e` exercises the released Horn parallel-analysis API on
+1,000 synthetic binary response vectors and 12 items. It retains the two known
+dimensions; the first three adjusted eigenvalues are `1.683630`, `1.643308`,
+and `0.847486`. This only verifies that the implementation detects the seeded
+departure from a single latent dimension. Pearson-PCA parallel analysis on
+binary responses cannot identify the construct or replace confirmatory
+holdout fit, so `construct_dimensionality` remains `not_executed` pending a
+preregistered buyer construct structure and complete buyer responses.
+Source commit `7f13dc7d` exercises the released limited-information M2 global-fit
+diagnostics on two seeded 1,200-response, 10-item cases. The correctly specified
+one-factor case gives M2 `45.744317`, `p=0.105619`, and RMSEA `0.016001`; the
+known two-factor case fitted as one factor gives M2 `287.163678`, `p≈2.27e-41`,
+and RMSEA `0.077517`. This verifies detection for one known misspecification,
+not universal sensitivity or buyer construct validity. `global_model_fit`
+remains `not_executed` pending converged buyer calibration, complete responses,
+a preregistered model, and held-out review.
+Source commit `5b50e10c` exercises the released posterior empirical-reliability
+calculation on two seeded 1,200-response, 12-item cases. Reliability rises from
+`0.366437` with true discrimination `0.45` to `0.800436` with discrimination
+`1.5`, a separation of `0.433999`. This verifies sensitivity to known item
+information, not buyer score precision or validity. Reliability and model fit
+remain separate evidence, so `score_reliability` stays `not_executed` pending
+buyer calibration, posterior errors, a purpose-specific target, and fit review.
+Source commit `015c4bf6` exercises the released two-facet G-theory API on an
+80-candidate, 12-query, four-occasion synthetic tensor. Its D-study separates
+candidate signal from query, occasion, and interaction error: dependability is
+`0.401565` for one query and one occasion, `0.730184` for six and two, and
+`0.849616` for 12 and four. A complete balanced synthetic design and clamped
+ANOVA components do not establish live buyer generalizability, so
+`generalizability_design` remains `not_executed` pending complete observations,
+random-facet justification, and a registered dependability target.
+Source commit `b4efa489` exercises the released test-information calculation at
+trait points `[-2, 0, 2]`. Spreading 12 item difficulties across `[-2, 2]`
+raises worst information from `1.259923` to `1.458854` (`15.789%`) and lowers
+worst conditional standard error from `0.890897` to `0.827931`; center
+information falls from `3.0` to `2.194529`, exposing the actual precision
+tradeoff. `conditional_information` remains `not_executed` until buyer-relevant
+regions, calibrated items, and preregistered precision targets exist.
+Source commit `0b19116e` exercises the released Rudner classification API at a
+declared synthetic cut of zero. Lowering standard error from `0.8` to `0.2`
+raises expected classification accuracy from `0.814182` to `0.996895`
+(`+0.182713`) and consistency from `0.710275` to `0.993829` (`+0.283554`).
+This converts measurement uncertainty into an observable decision-error KPI,
+but cannot define a buyer decision or its asymmetric costs.
+`classification_decision` remains `not_executed` pending buyer-linked measures,
+valid standard errors, a declared cut and cost model, and preregistered targets.
+Source commit `452a3649` adds a separate decision-utility screen. Raising
+synthetic predictive validity from `0.2` to `0.6` raises the Taylor-Russell
+selected-success ratio from `0.500273` to `0.723515` and net utility from
+`2,042.21` to `5,626.64`. Keeping validity fixed while increasing total cost
+from `2,000` to `10,000` leaves selected success unchanged but makes net utility
+negative at `-2,373.36`. The personnel-selection normal model is an analogue,
+not validated routing economics, so `decision_utility` remains `not_executed`
+pending buyer-valued outcomes, actual routing costs and volume, selection ratio,
+and a preregistered target.
+Source commit `68831dff` applies the predictive-fit distinction from Stenhaug
+and Domingue (2022). Existing Brier and log-loss results cover held-out queries
+for known candidate deployments only. The report now exposes cold-start
+prediction for an unseen candidate deployment as a separate task. Source
+commit `54833bd8` executes that synthetic path across 24
+contexts and measures zero psychometric prediction coverage; the router
+correctly declines to fabricate an unseen candidate score. Query holdout
+evidence therefore cannot be reused as candidate-generalization evidence.
+`predictive_fit` remains closed until versioned buyer outcomes support separate
+held-out-query and held-out-candidate scoring.
+Source commit `f4513527` adds a bounded alternative to fabricated cold-start
+scores: released maximum-information EAP selection for candidate onboarding.
+Across 400 known synthetic candidates, it reaches target SE 0.5 after 7.1775
+calibration queries on average versus 10.47 for a random order, reduces theta
+RMSE from 0.607152 to 0.575996, and reduces unobserved-probability MSE from
+0.014746 to 0.007504. Paired 95% intervals are `[-3.4125, -3.18]` queries,
+`[-0.080874, 0.006129]` theta squared error, and
+`[-0.008804, -0.005716]` unobserved-probability squared error. The theta
+interval includes zero, so no general theta-accuracy improvement is claimed.
+These are calibration-query and prediction-error KPIs, not live decision
+latency or buyer evidence; zero-observation candidate coverage and the
+production gate therefore remain unchanged.
+Source commit `f4cceb59` separately tests classification-oriented stopping at a
+declared synthetic cut of zero. Stopping when a 95% normal interval excludes
+the cut, with a 12-query maximum, averages 9.875 queries and stops early for
+41% of 400 candidates. It exactly matches the fixed-length decisions and
+0.9125 accuracy; paired intervals are `[-2.425, -1.835]` queries and `[0, 0]`
+accuracy. Buyer cuts and costs, near-cut risk, interval calibration, and live
+provider latency remain absent, so this result does not change the production
+gate.
+Source commit `298e1fc8` stratifies this stopping result by distance from the
+cut. The within-0.5 stratum stops early 3%, averages 11.86 queries, and reaches
+0.70 accuracy; the at-least-1.0-away stratum stops early 68%, averages 8.305
+queries, and reaches 1.0 accuracy. The gap confirms that aggregate query
+savings cannot stand in for near-cut buyer risk or calibrated subgroup
+performance.
+Source commit `e2cb547f` makes abstention observable rather than folding it
+into forced classification. The interval resolves 42.5% of candidates with
+1.0 conditional synthetic accuracy, but resolves only 3% within 0.5 of the
+cut. Unresolved candidates therefore remain a buyer-policy and fallback gap;
+this selective result does not change the production gate.
+Source commit `e1ff2e61` measures the risk–coverage frontier without choosing
+on the evaluation sample. A development-seed rule maximizes coverage subject
+to a 2.5% Wilson 95% error upper bound and selects `z=1.645`. On the same
+independent responses, it raises coverage from the `z=1.96` baseline's 44.25%
+to 56% and lowers all-candidate mean queries from 9.88 to 8.395. Paired 95%
+intervals are `[8.75, 14.75]` percentage points and `[-1.715, -1.2625]` queries.
+Observed selective risk is zero with a 1.686% Wilson upper bound; directional
+coverage differs by 3 points. This remains a synthetic KPI:
+buyer-valued rejection cost, fallback behavior, subgroup coverage, calibrated
+intervals, and live provider latency are still missing.
+Source commit `609faff8` audits that candidate across ten independent response
+seeds. Coverage gain stays positive at 9.75–15 percentage points and query
+reduction stays 1.27–1.485, but selective risk reaches 1.802% and the Wilson
+upper bound reaches 4.540%. Only 20% of replications satisfy the declared 2.5%
+ceiling. The benchmark therefore marks `z=1.645` as
+`rejected_not_replication_stable`; it is not an accuracy improvement eligible
+for production admission. The next valid experiment needs more independent
+buyer-linked evidence or a preregistered, adequately powered calibration design.
+Source commit `1862893a` measures Monte Carlo uncertainty rather than treating
+ten seeds as exact. The ceiling-pass-rate MCSE is 0.1265; coverage-delta,
+all-candidate query-delta, and selective-risk MCSEs are 0.00619, 0.02257, and
+0.00211. A conservative pass-rate design requires 400 replications for target
+MCSE 0.025. The present ten-run audit is a fail-closed falsification screen,
+not a powered estimate of buyer operating characteristics.
+Source commit `0b87905c` profiles and shortens the actual `ranked_evidence`
+wall-time hot path without altering fitted probabilities or cosine arithmetic.
+Across ten before/after process runs, median candidate p50 falls from 0.01325
+to 0.007708 ms (41.83%) and the median candidate-minus-baseline latency-CI
+upper bound falls from 0.000910 to 0.000635 ms (30.14%). The upper bound remains
+positive, so `decision_latency_improved` stays failed; provider end-to-end p95
+and buyer traffic are still unexecuted.
 
 ## 7. Delivery gates
 
@@ -2233,6 +3029,16 @@ RFC Editor. https://www.rfc-editor.org/rfc/rfc9111.html
 National Institute of Standards and Technology. (2024). *Artificial
 intelligence risk management framework: Generative artificial intelligence
 profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1
+
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
+Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
+(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory. In *Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
+Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
 
 These sources support the current product shape, OpenAI-compatible wire
 honesty, deep-versus-shallow orchestration allocation, cache safety, and
@@ -2508,7 +3314,8 @@ Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeColl
 
 ### Live exact-head continuation — 2026-08-27 12:0x KST (arbitrary-weight remediation)
 
-GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
+Historical claim on PR #892 head `af9d667f…+fixups` (partially corrected by
+the 2026-09-06 availability/quality audit above; not calibration evidence):
 - The shipped `_BASELINE_PRIORS` table carried invented Beta pseudo-counts
   ("alpha=10, beta=1…" style), violating the organization rule that no
   weight may be arbitrary. Replaced with a measurement-typed derivation:
@@ -2525,7 +3332,9 @@ GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
   counts trace to polls; failure denominator = polls performed.
 - `ModelGroupRouter.update_prior()` was added so prior components can be
   refreshed atomically while `success_count`/`failure_count` remain
-  bit-identical — telemetry can no longer masquerade as outcomes.
+  bit-identical. That counter invariant did not prevent telemetry from
+  changing quality posterior means or later judgment influence; see the
+  2026-09-06 repair above.
 - Collector previously called the nonexistent `update_prior`; it now has
   a contract + tests, hardened HTTPS/percent-encoded fetch, full
   docstrings, and injectable startup delay for deterministic tests.

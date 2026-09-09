@@ -2,6 +2,14 @@
 
 ## Equivalent endpoint execution
 
+Availability polling feeds only the transport ledger. Answer-quality evidence
+receives judged outcomes, not provider uptime or an availability-derived prior.
+The [Proposed boundary repair](doctoring/measured-routing-evidence.md#availability-and-answer-quality-separation-2026-09-06)
+removes the collector's quality dependency; it does not calibrate overlapping
+availability windows or establish live provider polling. With judgments,
+member refinement uses quality evidence; otherwise transport evidence remains
+the fallback. No new numerical core or persisted schema is introduced.
+
 After model-group selection, endpoints may race only when their normalized
 equivalence contracts match completely and `hedge_eligible` is true. Text and
 every media capability use the same bounded executor. The first completed
@@ -108,6 +116,12 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   temperature is not reasoning effort. Production route/conduct defaults stay
   locked until `production_default_change_allowed` passes a true-θ RMSE gate.
   The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
+  The proposed [request-revision contract](doctoring/reasoning-effort-profile.md#request-revision-contract-proposed)
+  binds nested execution and recorded effort to one validated catalog revision
+  and effective immutable policy, including conducted provider final synthesis.
+  Stream iteration is isolated; later independent requests see operator updates.
+  Policy content partitions answer reuse and completion-owned settings are saved.
+  This does not freeze agent-pool changes or establish protected-release evidence.
   Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
   and keep live defaults unchanged while that gate is false.
 

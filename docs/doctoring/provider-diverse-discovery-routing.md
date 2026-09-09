@@ -34,12 +34,12 @@ DNS failure can advance without changing an explicitly requested concrete model.
 | Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
 
-The routing papers and OA PDFs are already committed in the prerequisite
-stack base under `docs/papers/` (`routellm-routing-2406.18665.pdf`,
-`hybrid-llm-query-routing-2404.14618.pdf`, and
-`frugalgpt-cost-2305.05176.pdf`). This doctoring record makes their relevance
-to the exact discovery selector explicit instead of treating inherited files
-as incidental documentation.
+The routing papers remain cited and summarized in `docs/papers/README.md`.
+Its 2026-09-05 redistribution audit removes the earlier RouteLLM, Hybrid LLM,
+and FrugalGPT PDF copies from the current tree because permission for the
+intended product distribution was not established. Their research relevance
+and this historical implementation mapping are retained; public availability
+of a manuscript does not by itself permit bundling it.
 
 ## APA 7 references
 

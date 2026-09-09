@@ -534,20 +534,25 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
 
 
 def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
-    """Return whether a live default change is allowed from this ablation.
+    """Check the declared measurement prerequisites for a default change.
 
     Buyer next action: keep current route/conduct defaults when this is false.
-    A later slice may unlock only after RMSE improvement, a non-estimated
-    measurement, and robustness all clear the predeclared gate.
+    Only an explicitly measured report with valid RMSE values and robustness
+    can pass the predeclared improvement gate. This input check does not
+    authenticate evidence or itself change production defaults.
     """
+    if not isinstance(report, Mapping) or report.get("measurement_status") != "measured":
+        return False
     try:
-        baseline = float(report["single_model_baseline"]["rmse"])
-        candidate = float(report["role_differentiated"]["rmse"])
-    except (KeyError, TypeError, ValueError):
+        baseline = report["single_model_baseline"]["rmse"]
+        candidate = report["role_differentiated"]["rmse"]
+        _reject_non_finite_number(baseline, "baseline RMSE")
+        _reject_non_finite_number(candidate, "candidate RMSE")
+        baseline = float(baseline)
+        candidate = float(candidate)
+    except (KeyError, TypeError, ValueError, OverflowError):
         return False
-    if not math.isfinite(baseline) or not math.isfinite(candidate) or baseline <= 0:
-        return False
-    if report.get("measurement_status") == "estimated":
+    if baseline <= 0 or candidate < 0:
         return False
     if report.get("robustness_passed") is not True:
         return False
