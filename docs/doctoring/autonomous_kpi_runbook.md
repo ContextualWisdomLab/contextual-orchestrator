@@ -1,5 +1,27 @@
 # Autonomous KPI experiment runbook
 
+## Stacked quality-trigger repair
+
+On 2026-09-09, PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c`
+had zero GitHub check runs despite a completed local suite (3,399 passed,
+2 skipped). Its base was `autoresearch/20260909-kpi-loop`, excluded by the
+repository quality workflow's `pull_request.branches: [main]` filter.
+Commit `1a510faa` removes that filter, preserves permissions, and uses the
+workflow/repository/PR cancellation key. Central required workflows remain
+separate owners; this change cannot provide their approval.
+
+Reproduce with `.venv/bin/python -m pytest tests/test_stacked_quality_workflow.py -q`.
+The old trigger fails its assertion; with the repair, this and the existing NIM
+workflow contracts pass (9 tests). `actionlint .github/workflows/security.yml`
+has no findings. An initial PyYAML-based test failed collection because that
+package is absent; the retained stdlib contract needs no new dependency.
+The integrated rollback head `c11df645865062da6c4d1680a285eb5c21a91594`
+passed 30 persistence/workflow contracts in 8.71 seconds before push.
+Do not assign the earlier full-suite count to this new head. After pushing a
+new synchronize event, inspect the live run's head and checked-out merge parents;
+no run or a queued run is not a pass. Retain both sides of gap-baseline merge
+conflicts so rollback evidence and newer research evidence are not discarded.
+
 Status: measurement preparation; no measured customer gain. Owner: CO for
 request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 

@@ -143,3 +143,11 @@ push or open a PR.
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
+
+## Stacked quality checks
+
+Zero check runs on a stacked PR can mean its base was excluded by
+`pull_request.branches: [main]`, not that checks passed. Keep the repository
+quality trigger unfiltered and validate `tests/test_stacked_quality_workflow.py`
+plus actionlint. After a new head, verify actual hosted execution; previous-head
+results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
