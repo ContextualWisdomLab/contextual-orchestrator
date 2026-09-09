@@ -8,9 +8,14 @@ is Ready/Open at `73404f89d7a90f7a6b98caf514af859b02a375dd`, based on
 Full-suite execution `82637` completed with **3,491 passed, 2 skipped in
 757.78 seconds**, supplementing the separate **69 installed-package tests**.
 Root verified the live head/base and empty review inventory. Hosted Security
-run **34333545448** subsequently completed fuzzing and CodeQL/supply-chain/SBOM
-successfully. Tests/package quality remains in progress at the hash-locked
-quality-tool installation step; no full hosted success is claimed. No independent approval,
+run **34333545448** completed all three jobs successfully on tested merge
+`138fa7aca0554d5695137a1cfa6b74a48b26715d`. Linux/Python 3.12.14 hosted
+full suite: **3,491 passed, 2 skipped in 785.64 seconds**; benchmark/docstring
+checks: **134 passed in 10.85 seconds**; installed wheel checks: **40 passed
+in 15.85 seconds**. Hosted core wheel SHA-256:
+`4c34fdc911270ab07297fdd7bbf782e8ee4368547e879f288cf9c3805ed3798e`.
+Current PR head/base still match the above revisions, Ready/Open with no reviews.
+No independent approval,
 protected merge, release, remote-provider integration, or observed KPI gain is
 established. The untracked local native extension was not committed.
 
