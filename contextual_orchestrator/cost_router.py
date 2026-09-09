@@ -43,7 +43,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
-from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry, DEFAULT_RETENTION_SECONDS
+from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook, PriceEntry
 from .kv_config import InMemoryConfigStore
 from .model_discovery import _currency_is_comparable
@@ -1010,7 +1010,7 @@ class CostRoutingCoordinator:
                     "owner_id": owner_id,
                     "recovery_descriptor": ({
                         "job": asdict(job),
-                        "expires_at": job.submitted_at + DEFAULT_RETENTION_SECONDS,
+                        "expires_at": job.submitted_at + self._job_registry.retention_seconds,
                         "backend": self.batch_backend.recovery_descriptor(prepared_requests),
                     } if isinstance(self.batch_backend, PgLlmBatchBackend) else None),
                 }, durable=True)

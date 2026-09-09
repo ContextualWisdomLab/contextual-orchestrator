@@ -484,7 +484,7 @@ class PgLlmBatchBackend:
 
     def restore_descriptor(self, job: BatchJob, descriptor: Dict[str, Any]) -> None:
         """Restore prompt-free item identity only for this exact configured target."""
-        if (descriptor.get("backend_name") != self.name
+        if (not isinstance(descriptor, dict) or descriptor.get("backend_name") != self.name
                 or descriptor.get("endpoint_alias") != self._endpoint_alias
                 or descriptor.get("endpoint") != self._endpoint):
             raise ValueError("batch target mismatch")
