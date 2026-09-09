@@ -111,3 +111,19 @@ not a historical grant snapshot for the failed execution.
 
 Sources: [job log](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34195571142/job/101967720557),
 [matching artifact](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34195571142/artifacts/10045693660).
+
+Additional reproducibility sources:
+
+- [Central dispatch run](https://github.com/ContextualWisdomLab/.github/actions/runs/34122498232)
+  and [Python publication failure](https://github.com/ContextualWisdomLab/.github/actions/runs/34122498232/job/101756437515).
+- Required compatibility jobs: [Python](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34098501126/job/101701439950),
+  [Actions](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34098501126/job/101701439874),
+  and [JavaScript](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34098501126/job/101701439897).
+- [Separate dispatch coordinator](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34098501126/job/101717808225).
+- Permission metadata rechecked at `2026-09-09T01:59:29Z` using
+  `GET /apps/opencode-agent` and
+  `GET /orgs/ContextualWisdomLab/installations`, selecting installation
+  `141441800`. Both still report `statuses: read` and `actions: read`;
+  installation scope remains `all`. These endpoints require appropriate
+  authentication; their responses are current metadata, not execution-time
+  permission evidence. No credential values are recorded.

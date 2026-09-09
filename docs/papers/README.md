@@ -10,7 +10,7 @@ permission for this repository to redistribute it. See the
 Version-page licenses are recorded below. Additional redistribution permission,
 where required, and the contents of release archives remain unverified.
 
-### Stored PDF version inventory
+## Stored PDF version inventory
 
 First-page text inspection on 2026-09-09 identifies the following versions.
 This establishes document identity, not redistribution permission or a complete
