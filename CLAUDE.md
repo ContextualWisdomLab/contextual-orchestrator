@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
+tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first

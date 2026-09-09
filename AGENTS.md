@@ -1,5 +1,8 @@
 # AGENTS.md
 
+Workflow origin identity and persistence limitations are documented in
+`docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 
