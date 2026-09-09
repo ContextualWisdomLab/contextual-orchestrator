@@ -240,7 +240,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -275,6 +275,15 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                 else "original-endpoint")))
         if not restarted:
             coordinator._batch_jobs = MissingRegistry()
+        elif recovery_case == "registry_outage":
+            class UnavailableRegistry(MissingRegistry):
+                """All reads and writes remain unavailable during recovery."""
+
+                def get(self, *args, **kwargs):
+                    raise RuntimeError("registry still unavailable")
+
+            coordinator._batch_jobs = UnavailableRegistry()
+            coordinator.batch_backend._jobs = UnavailableRegistry()
         server = build_server(orchestrator, port=0, coordinator=coordinator, security=security)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -292,7 +301,11 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     record["recovery_descriptor"]["expires_at"] = 0
                 if recovery_case == "malformed":
                     record["recovery_descriptor"]["backend"] = []
-                if recovery_case in {"expired", "malformed"}:
+                if recovery_case == "item_mismatch":
+                    record["custom_ids"] = ["different-original-item"]
+                if recovery_case == "estimate_mismatch":
+                    record["recovery_descriptor"]["job"]["prompt_token_estimates"] = {"different-item": 99}
+                if recovery_case in {"expired", "malformed", "item_mismatch", "estimate_mismatch"}:
                     orchestrator._store.save("batch_request_link", submitted["job_id"], record, durable=True)
                 continue
             result_url = f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
@@ -300,7 +313,7 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
             assert denied_status == 404
             assert "download_results" not in client.calls
             status, retrieved = _request("POST", result_url, "owner-one")
-            if recovery_case in {"expired", "malformed", "backend_mismatch"}:
+            if recovery_case in {"expired", "malformed", "backend_mismatch", "item_mismatch", "estimate_mismatch"}:
                 assert status == 404, retrieved
                 assert "download_results" not in client.calls
                 continue
