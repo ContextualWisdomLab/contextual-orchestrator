@@ -1014,7 +1014,6 @@ class CostRoutingCoordinator:
                 job.request_link_status = "write_failed"
             else:
                 job.request_link_status = "durable"
-        self._batch_jobs[job.job_id] = job
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
