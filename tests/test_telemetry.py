@@ -548,6 +548,70 @@ def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
         router.close()
 
 
+def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
+    """Overlapping same-session requests keep their own provider/error identities."""
+    import http.client
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    rendezvous = threading.Barrier(2, timeout=10)
+    overlapping_threads = set()
+    overlap_lock = threading.Lock()
+    model_agent = ModelAgent("parallel_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        rendezvous.wait()
+        with overlap_lock:
+            overlapping_threads.add(threading.get_ident())
+        raise RuntimeError("controlled overlapping failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="parallel-test-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def send_request():
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer parallel-test-token",
+                 "X-LineageWeave-Session-Id": "same-private-session"})
+            response = connection.getresponse()
+            assert response.status == 502
+            return json.loads(response.read())["error"]["detail"]["request_id"]
+        finally:
+            connection.close()
+
+    try:
+        with caplog.at_level("DEBUG"), ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(send_request) for _ in range(2)]
+            request_ids = [future.result(timeout=20) for future in futures]
+        assert len(overlapping_threads) == 2
+        assert len(set(request_ids)) == 2
+        provider_logs = [row.getMessage() for row in caplog.records
+                         if row.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+        assert len(provider_logs) == 4
+        for request_id in request_ids:
+            matching = [message for message in provider_logs if f"request_id={request_id}" in message]
+            assert len(matching) == 2
+            assert sum(message.startswith("provider_attempt ") for message in matching) == 1
+        assert "same-private-session" not in "\n".join(provider_logs)
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
+
+
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
     """Client cancellation cannot create a second error or leak path identifiers."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
