@@ -3,6 +3,12 @@
 Status: exploratory integration evidence; not a claim that the local judge is
 unbiased or that this single case is sufficient for IRT estimation.
 
+Evidence classification (2026-09-09 audit): these historical model calls use
+constructed release-plan cases. They are not a probability sample of customer
+requests and must not supply the observed delivered-correct KPI or parameter
+recovery evidence. Tables below are historical reports, not freshly reproduced
+raw-artifact verification.
+
 ## Setup
 
 The path under test was:
@@ -137,7 +143,8 @@ parser rejected the model response; it was never repaired or accepted.
 | liked | `invalid` / `0.7500; yes` / `0.8333; yes` | `0.5000; no` / `0.0000; no` / `invalid` |
 | disliked | `0.5000; no` / `0.7500; yes` / `0.8333; yes` | `invalid` / `invalid` / `invalid` |
 
-The good plan parsed in 11/18 calls and was accepted in 5/11 parsed calls;
+The good plan parsed in 11/18 calls and was accepted in 5/11 parsed calls
+(45.45%, conditional on parsing), or 5/18 of all attempted calls (27.78%);
 the seven failures were five invalid JSON responses, one out-of-range category,
 and one non-monotone threshold vector. The unsafe plan parsed in all 18 calls,
 scored `0.0000` in every case, and was accepted zero times. Direct judging
