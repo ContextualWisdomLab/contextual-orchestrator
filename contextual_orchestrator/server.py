@@ -7218,7 +7218,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
+                            cache_bypass=cache_bypass or bool(tools_list),
                             cache_partition=cache_partition,
                             owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
@@ -7925,6 +7925,9 @@ def build_server(
                         top_p=body.get("top_p"),
                         presence_penalty=body.get("presence_penalty"),
                         frequency_penalty=body.get("frequency_penalty"),
+                        tools=tools_list or None,
+                        tool_choice=body.get("tool_choice"),
+                        parallel_tool_calls=body.get("parallel_tool_calls"),
                     ):
                         proxied = self._run(
                             lambda: coordinator.complete(

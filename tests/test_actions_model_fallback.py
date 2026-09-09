@@ -122,6 +122,43 @@ def test_http_virtual_free_tools_stay_on_route() -> None:
     assert "echo" not in body
 
 
+def test_http_virtual_tools_bypass_response_cache() -> None:
+    """Tool declarations cannot replay an answer cached for another tool contract."""
+
+    class RecordingCoordinator(CostRoutingCoordinator):
+        cache_bypass: bool | None = None
+
+        def complete(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            self.cache_bypass = kwargs.get("cache_bypass")
+            return super().complete(*args, **kwargs)
+
+    orchestrator = TaskOrchestrator(_free_agents())
+    coordinator = RecordingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "inspect cached state"}],
+                "tools": _TOOLS,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert coordinator.cache_bypass is True
+
+
 def test_http_virtual_free_tools_stream_stays_on_control_plane() -> None:
     """stream=true does not eject virtual tool calls into passthrough."""
     orchestrator = TaskOrchestrator(_free_agents())
@@ -890,6 +927,58 @@ def test_structured_repair_exhaustion_records_each_failed_attempt_once() -> None
 
     client = RepairExhaustionClient()
     orchestrator = TaskOrchestrator(_free_agents(), client=client)
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return json"}],
+                "response_format": _JSON_SCHEMA,
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator._group_router.member_report("primary_free_agent")[
+        "failure_count"
+    ] == 1
+    assert orchestrator._group_router.member_report("fallback_free_agent")[
+        "failure_count"
+    ] == 1
+
+
+def test_structured_repair_records_retryable_then_terminal_candidates_once() -> None:
+    """Failure accounting is scoped to each repair candidate."""
+
+    class MixedRepairFailureClient(_StructuredFailThenServeClient):
+        def proxy_send(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            del endpoint, payload
+            if not self.proxy_calls:
+                self.proxy_calls.append(agent.id)
+                return {
+                    "choices": [
+                        {
+                            "message": {"content": '{"wrong": true}'},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            self.proxy_calls.append(agent.id)
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="server_error" if agent.id.startswith("primary_") else "auth_error",
+                message="provider rejected repair",
+                client_status=502 if agent.id.startswith("primary_") else 401,
+                provider_status=502 if agent.id.startswith("primary_") else 401,
+                retryable=agent.id.startswith("primary_"),
+                transport="structured_synthesis",
+            )
+
+    orchestrator = TaskOrchestrator(
+        _free_agents(), client=MixedRepairFailureClient()
+    )
 
     with pytest.raises(ProviderUpstreamError):
         orchestrator.proxy_completion(

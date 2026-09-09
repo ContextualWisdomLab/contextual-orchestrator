@@ -4762,8 +4762,9 @@ class TaskOrchestrator:
                     "stream": False,
                 }
             )
-        for tool_key in ("tools", "tool_choice", "parallel_tool_calls"):
-            upstream.pop(tool_key, None)
+        if virtual_model:
+            for tool_key in ("tools", "tool_choice", "parallel_tool_calls"):
+                upstream.pop(tool_key, None)
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
@@ -4900,6 +4901,7 @@ class TaskOrchestrator:
                 )
 
             for candidate in ordered_candidates:
+                synthesis_failure_recorded = False
                 candidate_endpoint = candidate.base_url.rstrip("/").casefold()
                 if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
                     continue
