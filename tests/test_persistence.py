@@ -121,6 +121,31 @@ def test_store_upserts_keyed_records_and_appends_streams() -> None:
         store.close()
 
 
+def test_failed_keyed_save_preserves_previous_committed_record() -> None:
+    """A failed replacement must not leak its deletion into the next commit."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            store.save("workflow_run", "run_existing", {"version": 1})
+            store._conn.execute(
+                "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
+                "WHEN NEW.payload = '{\"version\": 2}' "
+                "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+            )
+            store._conn.commit()
+            try:
+                store.save("workflow_run", "run_existing", {"version": 2})
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise AssertionError("the injected write failure did not occur")
+            store.save("workflow_run", "run_other", {"version": 3})
+            assert store.load("workflow_run") == [{"version": 1}, {"version": 3}]
+            assert not store._conn.in_transaction
+        finally:
+            store.close()
+
+
 def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
     with tempfile.TemporaryDirectory() as directory:
         store = _StateStore(os.path.join(directory, "s.db"))
