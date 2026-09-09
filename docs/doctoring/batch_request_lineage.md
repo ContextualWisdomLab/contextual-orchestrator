@@ -156,3 +156,17 @@ claimed. Simultaneous loss of both durable submission evidence and job registrie
 still cannot promise recovery. Full suite, clean wheel, hosted review and release
 remain pending. Do not stop at a status-only response when recoverable evidence
 exists, and do not label a retained remote handle complete recovery by itself.
+
+## Final focused acceptance before full regression
+
+Runtime `45066759`: **86 passed in 36.58s** across the four focused files.
+The last review exposed inconsistent endpoint binding on healthy metadata:
+`c06615ab` failed once in 2.09s. New metadata now stores the exact endpoint and
+stable deployment binding before the healthy fast path can use it. A changed
+binding, changed endpoint, or missing binding on opted-in metadata cannot bypass
+the validated descriptor path. This fixes a contract inconsistency; no cross-service
+data leak was established by the offline test. Unbound legacy metadata remains
+compatible only with an unbound backend; its missing identity is never described
+as validated recovery. The legacy-focused suite passed 85 tests in 35.09s at
+`2d68f705`. Independent review accepted freezing this bounded implementation for
+full regression and separate installed-artifact verification, not publication.
