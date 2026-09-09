@@ -1,40 +1,37 @@
 """Benchmark-quality priors for the model-group Beta ledgers.
 
-Two public measurements feed each member's prior success probability:
-LMSYS Chatbot Arena Elo (Bradley–Terry rating scale) and Artificial
-Analysis' Quality Index. Both are *published measurements*; this module
-never invents a numeric weight. Everything else is derived from either
-
-1. those measurements themselves,
-2. an existing repository constant (``model_group``'s Laplace prior
-   budget), or
-3. arithmetic over the items above.
+Legacy heuristic priors combine shipped Chatbot Arena ratings and Artificial
+Analysis Quality Index values. Their snapshot provenance has not been verified
+against archived source data. The transform below is deterministic but is not a
+calibrated probability of task success or an identified psychometric estimate.
 
 Derivation contract (auditable, deterministic):
 
 - Each shipped rating ``r_i`` is centered on the median of the shipped
   set and scaled by the set's own median absolute deviation (MAD),
   giving ``z_i = (r_i - median) / MAD_i``.
-- The two instruments are averaged after normalization (they measure
-  overlapping-but-distinct constructs; equal weight is the maximum
-  entropy choice across exactly two sources, not a tuned parameter).
-- ``p_hat = logistic(z)`` is then a posterior-style membership value in
-  ``(0, 1)`` measured from ratings alone.
+- The two instruments are averaged after normalization. Equal weighting is
+  an implementation choice, not a fitted weight justified by these references.
+- ``p_hat = logistic(z)`` maps the composite to ``(0, 1)``. That range alone
+  does not establish posterior or predictive calibration.
 - The prior is *mass preserving*: ``(alpha0, beta0)`` splits the exact
   unobserved-evidence budget that ``model_group`` already spends on any
   unknown member (its Laplace counts), so a known member never receives
   more evidence than an unknown one — it only receives that identical
   budget distributed according to measurement instead of uniformly.
 
-Failure denominator: members absent from every shipped instrument fall
-back to the unchanged repository Laplace prior.
+Members missing from either instrument fall back to the existing Laplace prior.
+Neither the fixed evidence budget nor that fallback proves validity. Replacing
+this legacy behavior requires observed-task calibration and release evidence;
+do not treat these values as customer accuracy evidence.
 
 References (APA 7th):
     Bradley, R. A., & Terry, M. E. (1952). Rank analysis of incomplete
         block designs: I. The method of paired comparisons. *Biometrika,
         39*(3/4), 324–345. https://doi.org/10.1093/biomet/39.3-4.324
-    Chiang, W., Zheng, L., Ma, Z., Li, Y., Sheng, Z., Wu, X., ... Zhang,
-        H. (2024). *Chatbot Arena: An open platform for evaluating LLMs
+    Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T.,
+        Li, D., Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., &
+        Stoica, I. (2024). *Chatbot Arena: An open platform for evaluating LLMs
         by human preference* [Preprint]. arXiv.
         https://doi.org/10.48550/arXiv.2403.04132
 """
@@ -123,7 +120,7 @@ def _normalized_membership(name: str) -> float | None:
 
 
 def measured_quality_probability(member_id: str) -> float | None:
-    """Return the measurement-derived prior success probability, if known."""
+    """Return the legacy heuristic prior fraction, if both scores are known."""
     lowered = member_id.lower()
     for key in _ARENA_ELO:
         if key in lowered:
@@ -134,7 +131,7 @@ def measured_quality_probability(member_id: str) -> float | None:
 
 
 def resolve_quality_prior(member_id: str) -> tuple[float, float]:
-    """Resolve the benchmark-measured ``(alpha, beta)`` prior for one member.
+    """Resolve the legacy benchmark-derived ``(alpha, beta)`` prior.
 
     Unknown members receive the repository's unchanged Laplace pair, so
     behaviour for unmeasured identifiers is bit-for-bit the pre-existing

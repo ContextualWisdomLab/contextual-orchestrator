@@ -131,6 +131,17 @@ verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
+  Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
+  *Chatbot Arena: An open platform for evaluating LLMs by human preference*.
+  arXiv. https://doi.org/10.48550/arXiv.2403.04132
+  Cited by `contextual_orchestrator/benchmark_priors.py`. Version 1 metadata
+  and HTML sections 3–4 were inspected on 2026-09-09. Pairwise human preference
+  is distinct from absolute task correctness. The repository's equal-weight
+  composite of normalized Arena and Quality Index scores is not validated by
+  this citation; its historical snapshot values also need archived provenance.
+  Citation only; no PDF copied. This is not a completed full-paper review.
+
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
   `helm-holistic-evaluation-2211.09110.pdf`

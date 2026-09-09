@@ -1,5 +1,19 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Benchmark prior interpretation gap
+
+At `ef374defdf4037a829d4b4d6d61c5a8b314e8c05`,
+`contextual_orchestrator/benchmark_priors.py` labels an equal-weight composite
+of median/MAD-normalized Arena and Quality Index scores as a measured success
+probability. Inspection of the cited Chatbot Arena v1 metadata and sections 3–4
+does not justify that cross-instrument calibration. The docstrings now identify
+the legacy heuristic and correct the paper's author list; runtime behavior is
+unchanged. Outstanding work: authenticate archived rating snapshots, define
+the target outcome and model-version mapping, fit/calibrate against observed
+held-out tasks in the numerical owner, and validate accuracy/decision latency
+before protected adoption. A bounded score and constant prior mass do not prove
+measurement validity. No customer KPI gain is claimed.
+
 ## 2026-09-09 Paper inventory consistency
 
 `34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes a stale blanket
