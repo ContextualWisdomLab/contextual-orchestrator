@@ -41,3 +41,41 @@ actual wheel installation outside the source checkout (the current editable
 extension is not package proof). Add the Proposed ADR with the completed seam
 inventory, dependency graph and rendering inspection. Do not claim production
 instrumentation, p95, accuracy improvement, protected CI, or release.
+
+## Admission and SSE follow-up
+
+At candidate descended from `df6eb4a7`, ten focused tests passed in 4.72 s.
+These include ordinary HTTP chat, direct chat SSE, direct Responses SSE,
+actual race worker context propagation and full candidate-set identity, and
+oversized-race rejection before acknowledgement. The first race test fixture
+omitted the required group identity and correctly exercised sequential routing;
+adding the operator-contract group activated the intended race path.
+
+An immutable accepted_request row now precedes the capacity check. Export joins
+that row with initial_decision and final decision_receipt rather than dropping
+unfinished requests. Rows are append-only and not automatically pruned; operators
+must retain them for reconciliation and archive after verified export. A storage
+outage can prevent the admission itself from being recorded: opt-in then returns
+503 before dispatch, states measurement_complete=false and reconciliation_required=true,
+and requires external ingress evidence. The local export never claims all-ingress
+completeness. This is a deliberate limitation, not a zero-duration observation.
+
+The existing analytics snapshot carries the joined records only with measurement
+enabled and retains its local-runtime labeling. A separate Rust clock remains
+the only duration implementation. A trusted request_id argument is the explicit
+port for PR #1105; until integrated, identity_source=measurement_scope is honest.
+The policy snapshot is hashed; route_mode currently identifies the dispatch
+kind/role, not a complete top-level requested-mode contract.
+
+An isolated noneditable core install plus native wheel, outside the checkout,
+passed six tests (one then-current test deselected) in 9.13 s. Both imports were
+verified under the isolated environment's site-packages. That build used an
+uncommitted candidate and is not final exact-head package evidence. Dependencies
+resolved anew there; locked PyO3 remained 0.29.2. Rebuild the final commit before
+release. No binary is committed.
+
+Still unverified: cache-hit and other callback-bypassing accepted-request coverage,
+all structured/coordinator/direct-provider paths, selection/cancellation/capacity
+HTTP negatives, complete ingress reconciliation, transactional snapshot export,
+declared retention window and actual release packaging workflow. No customer KPI
+gain is established. The Proposed ADR and full rendering inspection remain due.

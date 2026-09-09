@@ -8148,6 +8148,7 @@ def build_server(
                 self._release_measured_slot()
 
         def _acquire_measured_slot(self) -> None:
+            """Retain accepted admission before the nonblocking capacity decision."""
             self._decision_failure_reason = "unfinished"
             try:
                 measurement = DecisionMeasurement(
@@ -8169,6 +8170,7 @@ def build_server(
                 raise
 
         def _release_measured_slot(self) -> None:
+            """Finalize measurement independently of releasing the execution slot."""
             try:
                 measurement = self._decision_measurement
                 if measurement is not None:

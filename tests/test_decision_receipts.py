@@ -203,3 +203,44 @@ def test_export_retains_accepted_request_without_finalization(tmp_path):
         assert exported["observations"][0]["durable_ack_elapsed_ns"] is None
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("invalid_capacity", [False, True])
+def test_race_receipt_retains_candidate_set_not_winner(tmp_path, monkeypatch, invalid_capacity):
+    """Real race workers share one clock; rejected races cannot acknowledge selection."""
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement
+    from contextual_orchestrator.orchestrator import MAX_LOCAL_CONCURRENCY
+
+    contract = {
+        "contract_id": "test_contract", "model_revision": "test_revision",
+        "reasoning_effort_profile": "worker_medium", "capability_set": ["text"],
+        "structured_output_contract": "openai_response_v1", "accuracy_class": "full_precision",
+        "data_residency_policy": "test_region", "retention_policy": "zero_retention",
+        "context_limit": 128000, "pricing_evidence_id": "test_price_evidence",
+        "hedge_eligible": True, "cancellation_supported": False,
+        "execution_policy": "immediate_race",
+    }
+    agents = [ModelAgent(f"worker_{index}", "mock/worker", group_name="shared_group",
+                        endpoint_equivalence=contract)
+              for index in range(2)]
+    orchestrator = TaskOrchestrator(agents, state_db=tmp_path / "state.db")
+    measurement = DecisionMeasurement(orchestrator._store)
+    try:
+        if invalid_capacity:
+            monkeypatch.setattr(orchestrator, "_equivalent_race_members",
+                                lambda *args, **kwargs: [agents[0]] * (MAX_LOCAL_CONCURRENCY + 1))
+            with pytest.raises(ValueError, match="concurrency capacity"):
+                orchestrator._invoke(agents[0], [{"role": "user", "content": "hello"}],
+                                     text="hello", role="worker")
+            assert measurement.receipt.status == "accepted"
+            assert not orchestrator._store.load("initial_decision")
+        else:
+            orchestrator._invoke(agents[0], [{"role": "user", "content": "hello"}],
+                                 text="hello", role="worker")
+            snapshot = measurement.snapshot()
+            assert snapshot["status"] == "acknowledged"
+            assert set(snapshot["selected_agent_ids"]) == {"worker_0", "worker_1"}
+            assert len(orchestrator._store.load("initial_decision")) == 1
+    finally:
+        measurement.close()
+        orchestrator.close()
