@@ -37,7 +37,7 @@ at `4cc0bf2c` showed `0.7`, `1.7`, and `-0.7` silently stored as `0`, `1`, and
 `0`. That contradicts the declared integer dichotomous-row contract. RED
 `452d7490` produced 6 failed and 6 passed in 1.41s. Fix `89d8ed51` replaces
 row-value `int` conversion with the already-imported `operator.index`: Python
-and NumPy integers remain supported; fractions and numeric strings are rejected
+and NumPy integers remain supported; all floats (including `0.0`/`1.0`) and numeric strings are rejected
 before state mutation. The boolean accepted flag's existing conversion is
 unchanged. Invalid persisted fractional/string rows now fail restoration rather
 than fabricating observations; operators must repair their source evidence,
