@@ -4212,7 +4212,7 @@ class TaskOrchestrator:
                 observation.get("irt_row", ()),
             )
         for record in self._store.load("workflow_run"):
-            self._replace_workflow_run(record)
+            self._replace_workflow_run(record, restored=True)
             # A batch_route row persisted before judging (see batch_route's
             # own pending-record comment) carries an explicit
             # "pending_verification" marker and intentionally never reaches
@@ -5402,6 +5402,8 @@ class TaskOrchestrator:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
@@ -8790,7 +8792,7 @@ class TaskOrchestrator:
                 )
         return output_by_model, True
 
-    def _replace_workflow_run(self, record: dict[str, Any]) -> None:
+    def _replace_workflow_run(self, record: dict[str, Any], *, restored: bool = False) -> None:
         """Store one run and update its constant-time budget meter atomically."""
         model_by_agent = {agent.id: agent.model for agent in self.candidates}
         for step in record.get("trace", []):
@@ -8800,6 +8802,13 @@ class TaskOrchestrator:
         run_id = record["workflow_run_id"]
         with self._budget_spend_lock:
             previous = self._workflow_runs.get(run_id)
+            origin_request_id = (previous.get("request_id") if previous is not None
+                                 else record.get("request_id") if restored
+                                 else current_request_id())
+            if origin_request_id is not None:
+                record["request_id"] = origin_request_id
+            else:
+                record.pop("request_id", None)
             for sign, run in ((-1, previous), (1, record)):
                 if run is None:
                     continue
