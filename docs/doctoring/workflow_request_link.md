@@ -19,8 +19,21 @@ in-memory run and budget update precede storage: memory is not durable proof,
 and no atomic memory/database transaction is claimed. Consumers must reconcile
 against persisted records rather than count the in-memory run as stored.
 
-Run tests/test_workflow_request_link.py with the native extension built for the
-same candidate. Initial four cases failed; subsequent HTTP enabled/disabled,
+Reproduction prerequisite: the unchanged native extension built at base
+`c7345670e08f029ad3aa5dd1133037bb4b451d9b` is installed in the existing isolated
+Python 3.14 environment below. From `/tmp/co-outcome-request-link-20260909`, run:
+
+```sh
+/tmp/co-receipt-wheel-install-20260909/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-receipt-wheel-install-20260909/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["tests/test_workflow_request_link.py", "tests/test_persistence.py", "tests/test_stream_error_identity.py", "-q"]))'
+```
+
+This explicitly loads successor Python source and the unchanged base native
+extension. The namespace append is test-only; it does not install the successor
+or establish wheel/release acceptance. Preserve that environment unchanged.
+The three-file command passed 34 tests in 9.36 seconds. A final linkage-only
+run after adding the in-memory failure-state assertion passed 10 in 5.43 seconds.
+The independent original HTTP probe also confirmed one admission joins one
+durably stored route outcome. Initial four cases failed; subsequent HTTP enabled/disabled,
 cache, reload, persistence and SSE regressions passed. Tests use controlled
 provider output and establish identity, not independently adjudicated accuracy.
 The request may map to multiple workflow outcomes; it is not a one-to-one join
