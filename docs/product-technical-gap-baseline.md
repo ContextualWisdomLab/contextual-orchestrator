@@ -1,5 +1,14 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Paper inventory consistency
+
+`34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes a stale blanket
+redistribution assurance that contradicted the version-specific license audit.
+All five stored PDF fingerprints verify, but publisher-byte equivalence and
+additional redistribution rights remain unverified. Browser inspection of this
+revision could not proceed because the Mac was locked; no visual pass is claimed.
+See the [runbook evidence](doctoring/autonomous_kpi_runbook.md).
+
 ## 2026-09-09 Numerical candidate and rendered KPI evidence
 
 The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a

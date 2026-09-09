@@ -5,6 +5,20 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Paper inventory consistency check, 2026-09-09
+
+At `b031d3acecc89b29b35fdd769598aa3826615553`, the paper inventory correctly
+marked redistribution permission as unverified but its closing paragraph still
+claimed the arXiv non-exclusive license authorized redistribution. The
+[official license guidance](https://info.arxiv.org/help/license/index.html)
+was rechecked: that license grants limited distribution rights to arXiv, not a
+general reuse grant. Commit `34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes
+the contradictory assurance and places batch references under their own heading.
+All five stored PDF hashes still verify; no PDF was added, removed, or republished.
+Actual browser inspection of this revision was attempted but the native browser
+tool reported the Mac locked and automatic unlock unavailable. Rendering is
+**not visually verified**; inspect the headings and license callout after unlock.
+
 Read AGENTS.md, CLAUDE.md, and the targets in `docs/analytics_spec.md`.
 Record head/base, clean or unrelated worktree changes, locked dependencies,
 runtime version, dataset identity and permitted use, workload, observation
