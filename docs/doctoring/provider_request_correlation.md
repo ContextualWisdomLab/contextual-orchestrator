@@ -95,3 +95,13 @@ The final `request_failed` summary retained its ID and omitted trailing detail.
 These are isolated, exact-revision contract checks, not live provider or release
 evidence. The consumer deliberately leaves successful HTTP summaries outside
 this PR's allowlist; that follow-up contract remains unverified.
+
+Follow-up consumer `4a0125bf9f50d4d26355249011df03c3735b3abc` adds a strict
+HTTP-summary allowlist. Against producer
+`f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2`, an actual local HTTP GET to
+`/healthz` returned 200 and emitted one request summary. The new sanitizer
+retained it verbatim, including the generated request ID. Appending a controlled
+extra detail field or substituting a non-allowlisted path caused rejection.
+This supersedes the missing-success-summary contract limitation for that one
+route/state; it does not verify all routes, current production adoption, or
+latency improvement. No external provider was called.
