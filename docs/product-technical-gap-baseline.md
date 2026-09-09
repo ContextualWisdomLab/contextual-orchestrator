@@ -1,5 +1,25 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Batch restart recovery checkpoint
+
+The isolated batch successor, based on #1113, retains the failed restart
+experiment `d71bcc0a`: **1 failed in 1.96 seconds**. Remote submission succeeded,
+but after registry failure and restart the authenticated owner received 404;
+another owner correctly received 404 without a remote download. Runtime
+`853e860946d2d55a06d824e042057806c3ad79d8` then passed **73 focused tests in
+21.17 seconds** (terminal execution `86930`). Documentation checkpoint
+`b4abdd660b0ee44fd1a5b7a8b8c7a7ad5d1e1f92` remains unpushed.
+
+The candidate reuses an indexed durable submission event for an owner-bound,
+expiring, prompt-free recovery descriptor. Focused cases cover target mismatch,
+malformed descriptors, unexpected result IDs, missing usage, and no resubmission.
+This is not acceptance: independent review and additional RED cases must check
+registry reads/writes that remain unavailable during recovery, and consistency
+between submission-envelope item IDs and restored descriptor IDs. Full-suite,
+installed-package, hosted, protected-merge, and release evidence remain absent
+for this candidate. Simultaneous durable-store and registry failure cannot be
+reported as recoverable. No observed customer KPI improvement is established.
+
 ## 2026-09-09 Stacked quality-trigger repair
 
 Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
