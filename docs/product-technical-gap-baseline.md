@@ -3283,3 +3283,12 @@ adds a lawfully redistributable 2017 perspective and a predecision-covariate
 comparison proposal. Its source figure was inspected in the actual browser.
 Observed-data calibration and an immutable owner estimation contract remain
 unverified; latency correlation cannot substitute for those acceptance gates.
+
+Full regression for `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` is now
+terminal: **3442 passed, 2 skipped in 771.43s** on macOS/Python 3.14.
+This supersedes the pending observation above, not the separate hosted/release
+gates. An independent installed-wheel HTTP probe exposed pre-capacity triage
+in auto chat streaming; Responses streaming and nonstreaming chat passed the
+same saturated-slot controls. Preserve the green regression as historical
+evidence and repair the uncovered case, as specified in
+[the runbook](doctoring/autonomous_kpi_runbook.md#integrated-receipt-regression-and-remaining-capacity-defect-2026-09-09).

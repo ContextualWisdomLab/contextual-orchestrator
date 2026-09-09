@@ -1,5 +1,33 @@
 # Autonomous KPI experiment runbook
 
+## Integrated receipt regression and remaining capacity defect, 2026-09-09
+
+Candidate `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` completed the
+full local macOS/Python 3.14 regression: **3442 passed, 2 skipped in 771.43s**.
+The checkout remained unchanged throughout the run. Its isolated wheel-only
+receipt and SSE identity regressions separately passed **33 tests in 14.21s**.
+Root independently verified both wheel hashes, disjoint manifests and
+outside-checkout imports. These results repair the earlier nine-failure
+baseline, but do not prove hosted Linux acceptance, protected merge or release.
+
+A separate real HTTP unit probe holds the only slot in
+`SecurityConfig(max_concurrent_runs=1)` before sending an auto chat streaming
+request. At this same installed revision the request calls the mock triage
+provider once, then returns 503 with one `capacity_rejected` admission.
+The initial expected status of 429 was corrected to the existing 503 contract;
+the zero-provider-call assertion still fails. Equivalent Responses-streaming
+and nonstreaming-chat controls each make zero calls and pass. The observers
+record state only and assert after response completion.
+
+See [the failing receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5598185904)
+and [passing sibling controls](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5598207533).
+Repair chat streaming so its existing execution slot covers classification
+before task execution, without double acquisition or release. Test saturated
+rejection, capacity-one success, classifier failure and authorized trace
+rejection. Start source edits only after the prior full run is terminal;
+attribute the next regression to its new head. The initial-decision clock and
+failure denominator must survive this change. No customer gain is measured.
+
 ## Publishing secret metadata correction, 2026-09-09
 
 The authenticated organization Actions Secrets API succeeded. Both
