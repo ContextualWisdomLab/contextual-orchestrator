@@ -3292,3 +3292,22 @@ in auto chat streaming; Responses streaming and nonstreaming chat passed the
 same saturated-slot controls. Preserve the green regression as historical
 evidence and repair the uncovered case, as specified in
 [the runbook](doctoring/autonomous_kpi_runbook.md#integrated-receipt-regression-and-remaining-capacity-defect-2026-09-09).
+
+Next accuracy gap, independently reproduced against installed candidate
+`c7345670e08f029ad3aa5dd1133037bb4b451d9b`: a successful real HTTP route
+request retains one admission receipt and one workflow result, but neither
+record exposes an explicit durable link to the other's identity. The receipt
+has `request_id`; the workflow has `workflow_run_id` and `owner_id` only.
+Field-level equality assertions fail; this mock-provider probe does not claim
+observed customer accuracy. A separately stacked successor must bind trusted
+request identity to outcomes without treating cache reuse as a new execution
+or discarding requests that fail before producing a workflow.
+
+The bounded tracked-data audit at `53a9266a639361651064d7748fa74b396dd493ef`
+found no qualifying observed-accuracy cohort. The NIM manifest contains authored
+tasks, historical benchmark reports contain aggregates, and Noema incidents
+select failed deliveries rather than a complete request window. These cannot
+supply the existing customer KPI. Require permitted-use provenance, a complete
+bounded ingress window, independent outcome adjudication and exact model/policy
+revisions before the first observed baseline. The linkage successor prepares
+that measurement; it does not itself establish its correctness or improvement.
