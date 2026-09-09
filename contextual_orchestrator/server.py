@@ -7049,10 +7049,9 @@ def build_server(
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
                             structured_routing = routing
-                            if structured_routing and (
-                                structured_routing.get("channel") == "batch"
-                                or structured_routing.get("latency_tolerant") is True
-                            ):
+                            if structured_routing and coordinator.policy.decide(
+                                RoutingHints.from_mapping(structured_routing)
+                            ).channel == "batch":
                                 raise RequestError(
                                     400,
                                     "invalid_routing",

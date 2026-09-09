@@ -740,6 +740,75 @@ def test_http_virtual_structured_tools_run_only_on_worker() -> None:
     )
 
 
+def test_virtual_structured_worker_tool_calls_skip_synthesis(monkeypatch) -> None:
+    """A worker tool request is the terminal Chat Completions response."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    tool_calls = [
+        {
+            "id": "call_worker",
+            "type": "function",
+            "function": {"name": "inspect_repository", "arguments": "{}"},
+        }
+    ]
+
+    monkeypatch.setattr(
+        orchestrator,
+        "conduct",
+        lambda *args, **kwargs: {
+            "mode": "conduct",
+            "answer": "",
+            "trace": [],
+            "verification": {"accepted": True},
+            "tool_calls": tool_calls,
+            "finish_reason": "tool_calls",
+        },
+    )
+
+    response = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "inspect then return json"}],
+            "tools": _TOOLS,
+            "tool_choice": "required",
+            "response_format": _JSON_SCHEMA,
+        },
+        endpoint="chat/completions",
+        single_agent=False,
+    )
+
+    assert response["choices"][0]["message"]["tool_calls"] == tool_calls
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+    assert client.proxy_calls == []
+
+
+def test_http_virtual_structured_tools_honor_explicit_sync_policy() -> None:
+    """Explicit sync wins over latency_tolerant for structured tool requests."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "inspect then return json"}],
+                "tools": _TOOLS,
+                "response_format": _JSON_SCHEMA,
+                "routing": {"channel": "sync", "latency_tolerant": True},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+
+
 def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
     """Structured synthesis must not classify a terminal tool stop as failover."""
     client = _StructuredToolStopClient()

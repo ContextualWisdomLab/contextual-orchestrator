@@ -4700,6 +4700,38 @@ class TaskOrchestrator:
             additional_cost_usd=in_flight_cost,
         )
 
+        if not response_request and workflow.get("tool_calls"):
+            workflow_run_id = f"run_{uuid.uuid4().hex}"
+            record = self._with_effort_snapshot(
+                {
+                    "workflow_run_id": workflow_run_id,
+                    "created_at": int(time.time()),
+                    "mode": "conduct",
+                    "policy_mode": "conduct",
+                    "prompt_text": task,
+                    "answer": workflow.get("answer", ""),
+                    "cache_status": "bypass",
+                    "trace": workflow["trace"],
+                    "policy_snapshot": self.policy.as_dict(),
+                    "verification": workflow.get("verification"),
+                    "tool_calls": workflow["tool_calls"],
+                    "finish_reason": workflow.get("finish_reason") or "tool_calls",
+                }
+            )
+            self._replace_workflow_run(record)
+            self._run_order.appendleft(workflow_run_id)
+            if self._store is not None:
+                self._store.save("workflow_run", workflow_run_id, record)
+            self._append_audit_event(
+                "workflow_run_created",
+                {
+                    "workflow_run_id": workflow_run_id,
+                    "mode": "conduct",
+                    "agent_count": len(workflow["trace"]),
+                },
+            )
+            return chat_completion_response(record, model=str(requested_model))
+
         evidence = "\n\n".join(
             f"Workflow step {step['id']} ({step['role']}):\n{step['output']}"
             for step in workflow["trace"]
