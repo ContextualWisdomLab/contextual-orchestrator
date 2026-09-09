@@ -512,6 +512,7 @@ def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
     server_thread.start()
     connection = http.client.HTTPConnection(*server.server_address, timeout=5)
     request_ids = []
+    first_socket = None
     try:
         with caplog.at_level("DEBUG"):
             for request_index in range(2):
@@ -522,8 +523,14 @@ def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
                     "Content-Type": "application/json", "Authorization": "Bearer test-correlation-token",
                     "X-LineageWeave-Session-Id": "shared-private-session",
                 })
+                if first_socket is None:
+                    first_socket = connection.sock
+                    assert first_socket is not None
+                else:
+                    assert connection.sock is first_socket
                 response = connection.getresponse()
                 assert response.status >= 400
+                assert not response.will_close
                 response_body = json.loads(response.read())
                 request_id = response_body["error"]["detail"]["request_id"]
                 request_ids.append(request_id)
