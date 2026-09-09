@@ -13,7 +13,8 @@ from test_cost_review_server import _request
 
 
 @pytest.mark.parametrize("write_failure", [False, True])
-def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monkeypatch, write_failure):
+@pytest.mark.parametrize("registry_failure", [False, True])
+def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monkeypatch, write_failure, registry_failure):
     """One submission joins two item outcomes without trusting their custom IDs."""
     class ObservedBatchClient(_FakeBatchApiClient):
         """Reuse the existing offline provider contract with passive identity capture."""
@@ -46,6 +47,14 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
     coordinator = CostRoutingCoordinator(
         orchestrator, batch_backend=PgLlmBatchBackend(batch_client)
     )
+    if registry_failure:
+        class RejectingRegistry(dict):
+            """Simulate a registry write failing after remote acceptance."""
+
+            def __setitem__(self, key, value):
+                raise RuntimeError("private-registry-secret")
+
+        coordinator._batch_jobs = RejectingRegistry()
     server = build_server(orchestrator, port=0, coordinator=coordinator,
                           security=SecurityConfig(auth_token="unit-token"))
     worker_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -61,6 +70,16 @@ def test_http_batch_origin_survives_distinct_retrieval_and_reload(tmp_path, monk
         assert status == 201, submitted
         assert submitted["request_link_status"] == ("write_failed" if write_failure else "durable")
         assert "private-store-secret" not in str(submitted)
+        assert submitted["registry_persistence_status"] == ("write_failed" if registry_failure else "stored")
+        assert "private-registry-secret" not in str(submitted)
+        if registry_failure:
+            assert submitted["job_id"] == "batch-789"
+            assert batch_client.calls.count("create_batch_job") == 1
+            links = orchestrator._store.load("batch_request_link")
+            assert len(links) == (0 if write_failure else 1)
+            if links:
+                assert links[0]["request_id"] == batch_client.submission_request_id
+            return
         status, retrieved = _request(
             "POST", f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results",
             "unit-token",
@@ -191,7 +210,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         )], owner_id="owner_one", request_id="trusted_origin_one")
         decoded_job = coordinator._batch_jobs[response_job.job_id]
         assert decoded_job is not response_job
-        assert decoded_job.request_link_status == "unavailable"
+        assert decoded_job.request_link_status == "durable"
         assert decoded_job.owner_id == "owner_one"
         assert response_job.request_link_status == "durable"
         assert orchestrator._store.load("batch_request_link")[0]["request_id"] == "trusted_origin_one"
