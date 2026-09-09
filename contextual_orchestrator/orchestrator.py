@@ -3863,6 +3863,15 @@ class _StateStore:
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
 
+    def load_latest_key(self, kind: str, key: str) -> dict[str, Any] | None:
+        """Read one exact-key durable event using the existing identity index."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM orchestration_records WHERE kind = ? AND key = ? "
+                "ORDER BY seq DESC LIMIT 1", (kind, key),
+            ).fetchone()
+        return json.loads(row[0]) if row is not None else None
+
     def prune_keyed(self, kind: str, retained_keys: set[str]) -> None:
         """Delete keyed rows outside the caller's bounded in-memory set."""
         if kind not in self._KEYED:

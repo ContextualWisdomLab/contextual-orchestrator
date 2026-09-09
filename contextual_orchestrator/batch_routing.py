@@ -470,6 +470,38 @@ class PgLlmBatchBackend:
             job_registry.mapping("pg_llm_batch_jobs") if job_registry is not None else {}
         )
 
+    def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
+        """Describe exact target and item metadata without submitted prompt text."""
+        from .cost_ledger import Attribution
+        return {
+            "backend_name": self.name,
+            "endpoint_alias": self._endpoint_alias,
+            "endpoint": self._endpoint,
+            "items": [{"custom_id": item.custom_id, "model": item.model,
+                       "mode": item.mode, "attribution": Attribution.from_mapping(item.attribution).as_dict()}
+                      for item in requests],
+        }
+
+    def restore_descriptor(self, job: BatchJob, descriptor: Dict[str, Any]) -> None:
+        """Restore prompt-free item identity only for this exact configured target."""
+        if (descriptor.get("backend_name") != self.name
+                or descriptor.get("endpoint_alias") != self._endpoint_alias
+                or descriptor.get("endpoint") != self._endpoint):
+            raise ValueError("batch target mismatch")
+        items = descriptor.get("items")
+        if not isinstance(items, list) or len(items) != job.request_count:
+            raise ValueError("batch item count mismatch")
+        restored = {}
+        for item in items:
+            if not isinstance(item, dict) or set(item) != {"custom_id", "model", "mode", "attribution"}:
+                raise ValueError("invalid batch item descriptor")
+            if any(not isinstance(item[field], str) or not item[field] for field in ("custom_id", "model", "mode")):
+                raise ValueError("invalid batch item identity")
+            if item["custom_id"] in restored or not isinstance(item["attribution"], dict):
+                raise ValueError("invalid batch item metadata")
+            restored[item["custom_id"]] = {**item, "messages": []}
+        self._jobs[job.job_id] = {"endpoint_alias": self._endpoint_alias, "requests": restored}
+
     def _assemble_payload(self, requests: List[BatchRequest]) -> str:
         if self._assembler is not None:
             return self._assembler.assemble(

@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import asdict, replace
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from .decision_receipts import record_initial_selection
@@ -38,10 +39,11 @@ from .batch_routing import (
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     ProviderEmbeddingBatchBackend,
+    PgLlmBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
-from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry
+from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry, DEFAULT_RETENTION_SECONDS
 from .cost_ledger import CostLedger, PriceBook, PriceEntry
 from .kv_config import InMemoryConfigStore
 from .model_discovery import _currency_is_comparable
@@ -1001,11 +1003,16 @@ class CostRoutingCoordinator:
             try:
                 # One append-only submission envelope commits all item links
                 # together. A later retrieval never rewrites this origin.
-                self.orchestrator._store.save("batch_request_link", None, {
+                self.orchestrator._store.save("batch_request_link", job.job_id, {
                     "request_id": request_id,
                     "batch_job_id": job.job_id,
                     "custom_ids": [request.custom_id for request in prepared_requests],
                     "owner_id": owner_id,
+                    "recovery_descriptor": ({
+                        "job": asdict(job),
+                        "expires_at": job.submitted_at + DEFAULT_RETENTION_SECONDS,
+                        "backend": self.batch_backend.recovery_descriptor(prepared_requests),
+                    } if isinstance(self.batch_backend, PgLlmBatchBackend) else None),
                 }, durable=True)
             except Exception:
                 # The upstream submission already happened. Preserve its handle
@@ -1311,6 +1318,25 @@ class CostRoutingCoordinator:
 
     def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
         job = self._batch_jobs.get(job_id)
+        if job is None and owner_id is not None and self.orchestrator._store is not None:
+            record = self.orchestrator._store.load_latest_key("batch_request_link", job_id)
+            if (isinstance(record, dict) and record.get("owner_id") == owner_id
+                    and record.get("batch_job_id") == job_id
+                    and isinstance(self.batch_backend, PgLlmBatchBackend)):
+                descriptor = record.get("recovery_descriptor")
+                try:
+                    if not isinstance(descriptor, dict) or type(descriptor.get("expires_at")) is not int:
+                        raise ValueError("invalid descriptor")
+                    if descriptor["expires_at"] <= time.time():
+                        raise ValueError("expired descriptor")
+                    recovered = BatchJob(**descriptor["job"])
+                    if recovered.job_id != job_id or recovered.owner_id != owner_id or recovered.backend != self.batch_backend.name:
+                        raise ValueError("mismatched descriptor")
+                    self.batch_backend.restore_descriptor(recovered, descriptor["backend"])
+                    recovered.request_link_status = "durable"
+                    job = recovered
+                except (KeyError, TypeError, ValueError):
+                    job = None
         if job is None or job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
