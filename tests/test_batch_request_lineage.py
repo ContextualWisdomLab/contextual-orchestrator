@@ -169,3 +169,31 @@ def test_batch_link_does_not_rewrite_submitted_registry_handle(tmp_path):
         assert job.request_link_status == "durable"
     finally:
         orchestrator.close()
+
+
+def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
+    """Decoded registry status is non-authoritative; committed events supply proof."""
+    from contextual_orchestrator.batch_job_registry import ValkeyJsonMapping
+    from contextual_orchestrator.batch_routing import BatchJob, BatchRequest
+    from test_batch_job_registry import FakeValkeyClient
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                  state_db=tmp_path / "state.db")
+    coordinator = CostRoutingCoordinator(
+        orchestrator, batch_backend=PgLlmBatchBackend(_FakeBatchApiClient())
+    )
+    coordinator._batch_jobs = ValkeyJsonMapping(
+        FakeValkeyClient(), "jobs", decode=lambda raw: BatchJob(**raw)
+    )
+    try:
+        response_job = coordinator.submit_batch([BatchRequest(
+            messages=[{"role": "user", "content": "Fixture"}], custom_id="a"
+        )], owner_id="owner_one", request_id="trusted_origin_one")
+        decoded_job = coordinator._batch_jobs[response_job.job_id]
+        assert decoded_job is not response_job
+        assert decoded_job.request_link_status == "unavailable"
+        assert decoded_job.owner_id == "owner_one"
+        assert response_job.request_link_status == "durable"
+        assert orchestrator._store.load("batch_request_link")[0]["request_id"] == "trusted_origin_one"
+    finally:
+        orchestrator.close()
