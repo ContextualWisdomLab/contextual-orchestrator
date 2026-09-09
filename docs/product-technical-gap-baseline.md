@@ -20,6 +20,17 @@ infer ownership from request IDs. Recovery descriptors and private payloads
 must stay excluded. This operational capability is needed before collecting
 the requested observed KPI cohort; it does not supply adjudicated outcomes.
 
+Successor `codex/request-outcome-export-20260909`, based on `73404f89`,
+established actual HTTP RED at `3e14dfbbb87e8cc22a98ddd9e6ebb8ed576c0021`:
+**1 failed in 5.37 seconds**, terminal execution `24161`. After successful
+workflow/batch requests, an invalid admission, and SQLite restart, the proposed
+admin export returned 404; an inference principal was denied with 401.
+This is not installed-successor evidence. Design review found keyed workflow
+replacement deletes prior versions, so a high-water query alone cannot promise
+historical reproducibility. The successor must retain the necessary prompt-free
+association revisions in the same journal transaction or otherwise prove the
+claimed snapshot semantics; missing legacy history cannot be fabricated.
+
 ## 2026-09-09 Installed batch recovery validation
 
 Frozen `73404f89d7a90f7a6b98caf514af859b02a375dd` produced separately built
