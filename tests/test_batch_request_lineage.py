@@ -238,3 +238,51 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         assert orchestrator._store.load("batch_request_link")[0]["request_id"] == "trusted_origin_one"
     finally:
         orchestrator.close()
+
+
+def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path):
+    """SQLite recovery binds the original owner without another remote submission."""
+    class MissingRegistry(dict):
+        """Lose the registry assignment, retaining only committed SQLite evidence."""
+
+        def __setitem__(self, key, value):
+            raise RuntimeError("registry unavailable")
+
+    state_path = tmp_path / "state.db"
+    agents = [ModelAgent("worker_one", "mock/worker")]
+    security = SecurityConfig(bearer_verifier=lambda token, scope:
+                              token in {"owner-one", "owner-two"})
+    clients = []
+    for restarted in (False, True):
+        orchestrator = TaskOrchestrator(agents, state_db=state_path)
+        client = _FakeBatchApiClient()
+        clients.append(client)
+        coordinator = CostRoutingCoordinator(orchestrator,
+            batch_backend=PgLlmBatchBackend(client, endpoint_alias="original-endpoint"))
+        if not restarted:
+            coordinator._batch_jobs = MissingRegistry()
+        server = build_server(orchestrator, port=0, coordinator=coordinator, security=security)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            if not restarted:
+                status, submitted = _request("POST", f"{base_url}/api/v1/batch_routing_jobs",
+                    "owner-one", {"requests": [{"custom_id": "a", "model": "mock/worker",
+                    "messages": [{"role": "user", "content": "Never persist this prompt."}]}]})
+                assert status == 201
+                assert submitted["registry_persistence_status"] == "write_failed"
+                continue
+            result_url = f"{base_url}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
+            denied_status, _ = _request("POST", result_url, "owner-two")
+            assert denied_status == 404
+            assert "download_results" not in client.calls
+            status, retrieved = _request("POST", result_url, "owner-one")
+            assert status == 200, retrieved
+            assert retrieved["results"][0]["custom_id"] == "a"
+            assert sum(item.calls.count("create_batch_job") for item in clients) == 1
+        finally:
+            server.shutdown()
+            worker.join()
+            server.server_close()
+            orchestrator.close()
