@@ -3326,3 +3326,21 @@ terminated during collection: missing `hypothesis`, exit 2 after 5.41s.
 This is an incomplete test environment, not a passing full regression. Repair
 the successor's isolated test dependencies without changing the base candidate's
 installed-wheel environment, then rerun against a frozen documented checkpoint.
+
+The capacity candidate is now [PR #1112](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1112),
+head `c7345670e08f029ad3aa5dd1133037bb4b451d9b`, stacked on #1108 at
+`129a665016ed1acd79ae12915c905b1020856fcc`. Security run
+[34327884508](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34327884508)
+was admitted with three queued jobs. The review list is empty. CodeRabbit's
+SUCCESS status is explicitly a
+[skipped review](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1112#issuecomment-5598554823)
+because its automatic reviews exclude non-default target branches; it is not
+approval. Canonical review coordination received this finding. No merge or
+deployment follows from the page's “Able to merge” indicator.
+
+Bounded visual inspection: opened the actual PR in the browser and directly
+viewed its 1265 × 712 English screenshot. The title wraps onto two lines;
+branch labels, Scope heading and opening provenance paragraph remain readable
+without overlap in the inspected viewport. Lower sections require scrolling
+and were not visually audited. This is a PR-document inspection, not product
+UI, responsive, locale or Figma acceptance.
