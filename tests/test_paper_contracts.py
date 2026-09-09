@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 def test_explicit_arxiv_references_have_inventory_entries() -> None:
     """Keep tracked-text paper discovery complete without claiming paper review."""
     reference_pattern = re.compile(
-        r"(?:arxiv\.org/(?:abs|pdf)/|arxiv[:.])(\d{4}\.\d{4,5})\b",
+        r"(?:arxiv\.org/(?:abs|pdf|html)/|arxiv[:.])(\d{4}\.\d{4,5})(?:v\d+)?\b",
         re.IGNORECASE,
     )
     for citation_text in (
