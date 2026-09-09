@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Numerical candidate and rendered KPI evidence
+
+The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a
+completed owner baseline scoring-filtered run (41 passed, 1 ignored), finite-case
+bitwise cross-version parity, and an unfavorable candidate unit p95. The candidate
+remains experimental: full candidate tests, observed customer outcomes, durable
+decision timing, protected release, and consumer adoption are not established.
+The exact-revision KPI table received a partial desktop screenshot inspection;
+this does not complete responsive, multilingual, or product UI verification.
+
+The live REST PR inventory still includes correction PR #1043 at
+`05fe7178c12f37206458e256e468f498e9a5ce20`. Its proposed correction supersedes
+the historical blanket `_invoke` deadline recommendation below in intent, but
+is not merged evidence. Current policy remains default-null model timeouts;
+do not implement the historical overall-cap recommendation. Keep #1043's delta
+in its owner PR rather than duplicating its patch in this research branch.
+
 ## 2026-09-09 Autoresearch loop: KPI baseline, #1075 closure evidence, main-protection blocker
 
 Loop branch `autoresearch/20260909-kpi-loop` (code+tests identical to

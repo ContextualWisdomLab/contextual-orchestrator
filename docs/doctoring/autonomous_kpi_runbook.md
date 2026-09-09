@@ -49,6 +49,38 @@ host conditions; retain unfavorable runs and report interference.
 
 ## Break release cycles without copying implementation
 
+### Owner unit experiment receipt, 2026-09-09
+
+Baseline owner `256470c7d1df4910a018841499a74d88b751a774` completed the
+scoring-filtered Cargo command with 41 passed, 1 ignored, 1106 filtered out,
+exit 0. Compilation took 27m20s; tests took 0.05s. Neither duration is a
+customer latency measurement. Candidate code
+`b1709fa1e67a70274126d358506c7e9282fe5605` remained in live compilation at
+this receipt; the baseline result does not establish candidate success.
+
+A separately linked unit probe compared three synthetic missingness patterns
+across both built libraries. All four output families matched bitwise, with
+single-person versus repeated-person equality also checked. Across 300 calls
+per version, baseline/candidate median was 569333/180209 ns and nearest-rank
+p95 was 7738375/20093625 ns. The worse candidate tail prevents acceptance;
+sequential, host-contended unit timings do not prove a causal regression either.
+Owner experiment record: `docs/single_person_scoring_experiment.md` at local
+commit `e3d9a939` in fast-mlsirm. No release or CO dependency change occurred.
+
+### Document visual inspection, 2026-09-09
+
+Inspected the actual Edge-rendered `docs/analytics_spec.md` at
+`dccd37e032f74251e3c02e38046dab68c0049787`, fragment
+`autonomous-experiment-targets`, in English document content with Korean browser
+chrome. Browser-tab selection timed out, but native app selection of the
+already-created CO KPI tab worked. Opened the screenshot directly in the
+inspection conversation: all three table columns, wrapped text, caveats, and
+the runbook link were legible without overlap; the heading permalink displayed
+visible focus. This is a partial desktop document inspection, not admin-product
+UI acceptance. Viewport dimensions, durable image export, responsive sizes,
+other locales, and error/loading states remain unverified. Do not mark the
+full visual-inspection requirement complete from this receipt.
+
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest
 isolated real integration → protected immutable release → consumer adoption.
 
