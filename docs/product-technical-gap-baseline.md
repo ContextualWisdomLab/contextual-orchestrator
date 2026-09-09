@@ -19,8 +19,12 @@ Actual output from all seven provider diagnostic functions at
 PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
 survived, untrusted error-body IDs and text were omitted, and malformed IDs and
 embedded newlines were rejected. This isolated contract test does not establish
-collector adoption; successful HTTP summaries remain outside that candidate's
-allowlist. The [runbook](doctoring/provider_request_correlation.md) records
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
 RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
 Not yet established: every orchestration worker path, integrated full-suite and
 security gates, protected release, live collector adoption, or customer KPI
