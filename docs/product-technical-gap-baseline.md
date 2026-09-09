@@ -5,7 +5,8 @@
 The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a
 completed owner baseline scoring-filtered run (41 passed, 1 ignored), finite-case
 bitwise cross-version parity, and an unfavorable candidate unit p95. The candidate
-remains experimental: full candidate tests, observed customer outcomes, durable
+remains experimental: candidate scoring-filtered tests now pass (42 passed,
+1 ignored), but full-suite tests, observed customer outcomes, durable
 decision timing, protected release, and consumer adoption are not established.
 The exact-revision KPI table received a partial desktop screenshot inspection;
 this does not complete responsive, multilingual, or product UI verification.

@@ -53,8 +53,11 @@ Baseline owner `256470c7d1df4910a018841499a74d88b751a774` completed the
 scoring-filtered Cargo command with 41 passed, 1 ignored, 1106 filtered out,
 exit 0. Compilation took 27m20s; tests took 0.05s. Neither duration is a
 customer latency measurement. Candidate code
-`b1709fa1e67a70274126d358506c7e9282fe5605` remained in live compilation at
-this receipt; the baseline result does not establish candidate success.
+`b1709fa1e67a70274126d358506c7e9282fe5605` subsequently completed with exit 0.
+A post-completion rerun retained the full local log at
+`/tmp/co_candidate_scoring_completed.log`: 42 passed, 1 ignored, 1106 filtered
+out, 0 failed, test duration 0.39s. The additional single-person parity test
+passed. This is the scoring filter, not the complete crate suite or GPU testing.
 
 A separately linked unit probe compared three synthetic missingness patterns
 across both built libraries. All four output families matched bitwise, with
