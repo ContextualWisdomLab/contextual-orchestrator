@@ -10,8 +10,11 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_http_route_persists_initial_decision(tmp_path, monkeypatch, stream):
+@pytest.mark.parametrize("endpoint,stream", [
+    ("/v1/chat/completions", False), ("/v1/chat/completions", True),
+    ("/v1/responses", True),
+])
+def test_http_route_persists_initial_decision(tmp_path, monkeypatch, endpoint, stream):
     """A real HTTP route retains one native-clock receipt before completion."""
     orchestrator = TaskOrchestrator(
         [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
@@ -48,11 +51,13 @@ def test_http_route_persists_initial_decision(tmp_path, monkeypatch, stream):
     worker.start()
     connection = http.client.HTTPConnection(*server.server_address)
     try:
+        body = {"model": "orchestrator/auto", "mode": "route", "stream": stream,
+                "messages": [{"role": "user", "content": "hello"}]}
+        if endpoint == "/v1/responses":
+            body = {"model": "orchestrator/auto", "stream": True, "input": "hello"}
         connection.request(
-            "POST", "/v1/chat/completions",
-            json.dumps({"model": "orchestrator/auto", "mode": "route", "stream": stream, "messages": [
-                {"role": "user", "content": "hello"}
-            ]}), {"Content-Type": "application/json", "Authorization": "Bearer test-token"},
+            "POST", endpoint, json.dumps(body),
+            {"Content-Type": "application/json", "Authorization": "Bearer test-token"},
         )
         assert dispatch_ready.wait(10)
         assert dispatched_snapshots[0]["status"] == "acknowledged"
@@ -112,11 +117,12 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
 
     class FailedStore:
         def save(self, *args, **kwargs):
-            raise RuntimeError("secret-canary-never-log")
+            if args[0] == "initial_decision":
+                raise RuntimeError("secret-canary-never-log")
 
     measurement = DecisionMeasurement(FailedStore())
     try:
-        measurement.select(["worker_one"])
+        measurement.select(["worker_one"], "route")
         snapshot = measurement.snapshot()
         assert snapshot["status"] == "write_failed"
         assert snapshot["durable_ack_elapsed_ns"] is None
@@ -126,3 +132,74 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
         measurement.close()
     assert "secret-canary-never-log" not in caplog.text
     assert "error_type=RuntimeError" in caplog.text
+
+
+def test_admission_write_failure_rejects_before_dispatch_and_recovers(tmp_path, monkeypatch):
+    """A failed ingress receipt returns safe 503 and does not poison the next context."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
+    )
+    original_save = orchestrator._store.save
+    original_chat = orchestrator.client.chat
+    failed_once = []
+    dispatched = []
+
+    def fail_first_admission(kind, *args, **kwargs):
+        if kind == "accepted_request" and not failed_once:
+            failed_once.append(True)
+            raise RuntimeError("never-disclose-storage-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_dispatch(*args, **kwargs):
+        dispatched.append(True)
+        return original_chat(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_first_admission)
+    monkeypatch.setattr(orchestrator.client, "chat", record_dispatch)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        for expected_status in (503, 200):
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "route",
+                "messages": [{"role": "user", "content": "hello"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+            response = connection.getresponse()
+            payload = response.read().decode()
+            assert response.status == expected_status
+            assert "never-disclose-storage-secret" not in payload
+            if expected_status == 503:
+                assert not dispatched
+                assert '"measurement_complete": false' in payload
+        assert len(orchestrator._store.load("accepted_request")) == 1
+        assert len(orchestrator._store.load("decision_receipt")) == 1
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+def test_export_retains_accepted_request_without_finalization(tmp_path):
+    """Crash-like missing finalization stays an unfinished denominator row."""
+    from contextual_orchestrator.decision_receipts import export_decision_receipts
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    store = _StateStore(tmp_path / "state.db")
+    try:
+        store.save("accepted_request", None, {
+            "request_id": "accepted_only", "status": "accepted",
+            "selection_elapsed_ns": None, "durable_ack_elapsed_ns": None,
+        }, durable=True)
+        exported = export_decision_receipts(store)
+        assert exported["measurement_complete"] is False
+        assert exported["reconciliation_required"] is True
+        assert exported["observations"][0]["request_id"] == "accepted_only"
+        assert exported["observations"][0]["status"] == "unfinished"
+        assert exported["observations"][0]["durable_ack_elapsed_ns"] is None
+    finally:
+        store.close()

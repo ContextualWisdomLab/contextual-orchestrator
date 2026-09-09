@@ -4330,7 +4330,7 @@ class TaskOrchestrator:
                     agent, upstream, effort_profile, api_surface=api_surface
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
-            record_initial_selection([agent.id])
+            record_initial_selection([agent.id], "explicit_proxy")
             started_at = time.perf_counter()
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
@@ -4396,7 +4396,7 @@ class TaskOrchestrator:
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
-            record_initial_selection([candidate.id])
+            record_initial_selection([candidate.id], "automatic_proxy")
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
@@ -5258,7 +5258,7 @@ class TaskOrchestrator:
             stream_kwargs["effort_profile"] = effort_profile
         if include_usage:
             stream_kwargs["include_usage"] = True
-        record_initial_selection([agent.id])
+        record_initial_selection([agent.id], "stream_route")
         stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
@@ -6784,7 +6784,7 @@ class TaskOrchestrator:
             {"role": "user", "content": task},
         ]
         effort_profile = self._role_effort_profile("planner")
-        record_initial_selection([planner.id])
+        record_initial_selection([planner.id], "generated_planner")
         raw = (
             self.client.chat(planner, planner_messages, effort_profile=effort_profile)
             if effort_profile is not None
@@ -7619,7 +7619,7 @@ class TaskOrchestrator:
                     if agent.provider_name == "openrouter" and endpoint == "images/generations"
                     else endpoint
                 )
-                record_initial_selection([member.id for member in race_members])
+                record_initial_selection([member.id for member in race_members], "capability_race")
                 return (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary else self.client.proxy_send(agent, provider_endpoint, payload)
@@ -7678,7 +7678,7 @@ class TaskOrchestrator:
             )
             started_at = time.perf_counter()
             try:
-                record_initial_selection([agent.id])
+                record_initial_selection([agent.id], "capability_proxy")
                 result = (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary
@@ -7768,7 +7768,7 @@ class TaskOrchestrator:
 
             def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
-                    record_initial_selection([member.id for member in race_members])
+                    record_initial_selection([member.id for member in race_members], "text_race")
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
                         if effort_profile is not None
@@ -7841,7 +7841,7 @@ class TaskOrchestrator:
                     single_attempt = getattr(self.client, "single_attempt_transport", None)
                     transport_scope = single_attempt() if callable(single_attempt) else nullcontext()
                     with transport_scope:
-                        record_initial_selection([agent.id])
+                        record_initial_selection([agent.id], "invocation_" + role)
                         output = (
                             self.client.chat(agent, messages, effort_profile=effort_profile)
                             if effort_profile is not None

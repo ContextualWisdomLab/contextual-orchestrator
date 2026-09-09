@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
-from .decision_receipts import DecisionMeasurement
+from .decision_receipts import DecisionMeasurement, export_decision_receipts
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import (
@@ -5985,7 +5985,10 @@ def build_server(
                     self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
-                    self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    snapshot = orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS)
+                    if decision_receipts:
+                        snapshot["initial_decision_measurements"] = export_decision_receipts(orchestrator._store)
+                    self._send(snapshot)
                     return
                 if path == "/api/v1/spend_analytics/latest":
                     self._send(orchestrator.spend_analytics())
@@ -8146,7 +8149,16 @@ def build_server(
 
         def _acquire_measured_slot(self) -> None:
             self._decision_failure_reason = "unfinished"
-            measurement = DecisionMeasurement(orchestrator._store) if decision_receipts else None
+            try:
+                measurement = DecisionMeasurement(
+                    orchestrator._store, policy=orchestrator.policy.as_dict()
+                ) if decision_receipts else None
+            except RuntimeError:
+                raise RequestError(
+                    503, "measurement_unavailable",
+                    "Request measurement is unavailable; retry after service recovery.",
+                    {"measurement_complete": False, "reconciliation_required": True},
+                ) from None
             self._decision_measurement = measurement
             try:
                 security.acquire_run_slot()
