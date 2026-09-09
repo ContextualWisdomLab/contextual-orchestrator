@@ -1,5 +1,50 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 #1110: route decision receipt RED-to-GREEN (minimal boundary contract)
+
+Scope is the two-commit chain on branch
+`feat/telemetry-route-decision-receipt-red` at exact head `34f8b250`:
+`3e51f059` RED boundary contract, `34f8b250` minimal GREEN. Tracks
+issue `#1110` (measure accepted-request to durable route-decision latency).
+Related `#1067`/`#1109` scope is referenced, not re-argued or duplicated here.
+
+RED exact `3e51f05967602771463715133d2aebb69fe30848`
+`test(telemetry): RED route decision receipt interval for #1110` adds
+`tests/test_route_decision_receipt.py` `+81`, two boundary tests failing
+on the missing `TaskOrchestrator.request_route_decision_receipt` entry point:
+slow generation must not inflate the acknowledged interval, and failed
+persistence must yield no success receipt while staying in accepted-request
+accounting.
+
+GREEN exact `34f8b250f9b3dba4426063c8e0a87e1a757c313a`
+`feat(telemetry): GREEN minimal route decision receipt for #1110` is
+additive only: new `contextual_orchestrator/decision_receipt.py` `+115`
+plus one thin `TaskOrchestrator.request_route_decision_receipt` method `+19`
+in `contextual_orchestrator/orchestrator.py`. No existing path, default,
+or behavior is changed; existing routes, retries, and admission defaults
+are untouched.
+
+Local verification on exact head `34f8b250`:
+`tests/test_route_decision_receipt.py` `2 passed`,
+regression `152 passed` on `tests/test_model_discovery.py` plus
+`tests/test_provider_bootstrap.py`, `interrogate` `100%` on both new and
+touched files (`decision_receipt.py`, `orchestrator.py` receipt method),
+`git diff --check` clean.
+
+Design facts pinned by the boundary contract:
+one monotonic clock domain via `time.monotonic`, so wall-clock adjustments
+never distort the acknowledged interval; `admitted_first_at` is taken
+post-probe after the selection probe completes, so slow generation time is
+excluded from `admitted_first_at` to `receipt_acked_at`; a failed probe
+yields `receipt_status` `unavailable`, never a fabricated `success`; and
+`BaseException` cancellation propagates instead of being converted into a
+receipt.
+
+Explicit non-claims: no durable journal yet, no workload command yet, and
+no p95 numbers — those are later `#1110` acceptance steps. This is
+stub-grade GREEN for the two boundary tests only, not a latency SLO, not
+a persistence guarantee, and not a routing-policy change.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
