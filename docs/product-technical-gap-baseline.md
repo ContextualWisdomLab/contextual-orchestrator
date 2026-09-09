@@ -3267,3 +3267,19 @@ in 10.92 seconds**. A transient indentation error during repair caused collectio
 failure and was corrected before that run; it does not replace the original RCA.
 Full regression on the repaired final head and hosted Linux acceptance remain
 required, along with the valid-stream timing and typed-error accounting repairs.
+
+Integrated candidate `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` preserves
+#1105 trusted SSE identities and includes valid-stream triage in admission time.
+An actual HTTP rejection after authorized triage reproduced `unfinished`; the
+shared error adapter now classifies pending admitted failures without replacing
+acknowledged, capacity, cancellation or write-failure outcomes. Focused local
+verification: **83 passed in 35.72s**. Independently installed exact-head wheels:
+**33 passed in 14.21s**, with disjoint package manifests and imports verified
+outside the checkout. Full regression is still pending; no hosted, deployed or
+customer-KPI success follows from these local receipts.
+
+The [response-process follow-up](doctoring/irt_router_measurement_review.md#response-process-identification-follow-up)
+adds a lawfully redistributable 2017 perspective and a predecision-covariate
+comparison proposal. Its source figure was inspected in the actual browser.
+Observed-data calibration and an immutable owner estimation contract remain
+unverified; latency correlation cannot substitute for those acceptance gates.

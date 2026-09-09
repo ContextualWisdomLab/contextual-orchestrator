@@ -165,3 +165,38 @@ using the observed outcome to choose a speed component would leak the target.
 Any deployable prediction must marginalize unknown outcomes; oracle-conditioned
 fit is not a routing KPI. The fitting owner remains fast-mlsirm. No new request-path
 estimator or production default is introduced, and full-method review is pending.
+
+### Response-process identification follow-up
+
+Bolsinova, M., Tijmstra, J., Molenaar, D., & De Boeck, P. (2017).
+Conditional dependence between response time and accuracy: An overview of its
+possible sources and directions for distinguishing between them. *Frontiers in
+Psychology, 8*, Article 202. https://doi.org/10.3389/fpsyg.2017.00202
+
+Read scope: publisher HTML Sections 1–4 on 2026-09-09, with Figure 1 opened
+and directly inspected in the actual browser at 1265 × 712, English. Panels
+A–E and arrows were readable; the separate caption pane required scrolling.
+The initial capture preceded image loading; the second capture confirmed the
+diagram. This is a perspective, not a reproduced numerical experiment. The
+paper explains why residual time/accuracy association may reflect different
+response processes, and why its sign alone does not identify their cause.
+Section 4 recommends hypothesis-relevant covariates and model comparisons,
+including residual checks. It does not provide a complete estimation algorithm.
+
+CO engineering proposal at research head `946726408556c3145ee5c996905f5bd5e907645e`:
+predeclare model revision, task family, policy revision and configured effort as
+available-before-decision covariates. Record realized cache, auxiliary work,
+fallback and failure states separately as diagnostics; do not use future
+outcomes or realized durations to predict the same request's initial route.
+Do not label a latent class “reasoning” merely because its answers took longer.
+Compare an outcome-only baseline, a joint independence model and a
+covariate-extended model on the same held-out groups before choosing complexity.
+Estimation remains a fast-mlsirm responsibility, with a released contract and
+predictive checks required before CO adoption. No new estimator is implemented.
+
+This sharpens the existing KPI experiment rather than changing its targets:
+the initial-task decision interval remains distinct from generation duration;
+success and failure denominators remain complete within the declared cohort.
+Candidate #1110 `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` now retains
+admitted semantic rejection as selection failure. Its local focused suite passed
+83 tests; full-suite and production observation evidence remain separate gates.
