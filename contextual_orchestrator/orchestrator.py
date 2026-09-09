@@ -4762,6 +4762,8 @@ class TaskOrchestrator:
                     "stream": False,
                 }
             )
+        for tool_key in ("tools", "tool_choice", "parallel_tool_calls"):
+            upstream.pop(tool_key, None)
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
@@ -5114,9 +5116,13 @@ class TaskOrchestrator:
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
             except ProviderUpstreamError as exc:
-                if not _is_request_too_large_error(exc):
+                if not _is_request_too_large_error(exc) and not synthesis_failure_recorded:
                     self._record_failure(final_agent.id)
-                if (final_agent.group_name or free_only) and not _is_request_too_large_error(exc):
+                if (
+                    (final_agent.group_name or free_only)
+                    and not _is_request_too_large_error(exc)
+                    and not synthesis_failure_recorded
+                ):
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(final_agent, repaired)
@@ -5476,6 +5482,7 @@ class TaskOrchestrator:
         last_error: BaseException | None = None
         agent = primary
         parts: list[str] = []
+        failed_trace_steps: list[dict[str, Any]] = []
         started_at = time.perf_counter()
         for agent in candidates:
             parts = []
@@ -5487,7 +5494,8 @@ class TaskOrchestrator:
                     parts.append(delta)
                     yield delta
             except Exception as exc:
-                if agent.group_name or free_only:
+                request_too_large = _is_request_too_large_error(exc)
+                if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 if emitted or pinned is not None:
                     raise
@@ -5511,6 +5519,29 @@ class TaskOrchestrator:
                     self._record_failure(agent.id)
                 if decision.action is ToolFallbackAction.FAIL_CLOSED:
                     raise upstream from None
+                if not request_too_large:
+                    failed_usage = (
+                        self.client.take_usage()
+                        if hasattr(self.client, "take_usage")
+                        else None
+                    )
+                    failed_step = {
+                        "id": len(failed_trace_steps),
+                        "role": "worker",
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": agent.provider_name
+                        or self._infer_provider_name(agent.base_url),
+                        "subtask": "Failed direct route attempt (streamed)",
+                        "access": [],
+                        "latency_ms": round(
+                            (time.perf_counter() - started_at) * 1000, 2
+                        ),
+                        "output": "",
+                    }
+                    if isinstance(failed_usage, dict):
+                        failed_step["usage"] = failed_usage
+                    failed_trace_steps.append(failed_step)
                 continue
             last_error = None
             break
@@ -5539,7 +5570,7 @@ class TaskOrchestrator:
             free_only=free_only,
         )
         trace_step = {
-            "id": 0,
+            "id": len(failed_trace_steps),
             "role": "worker",
             "agent_id": agent.id,
             "model": agent.model,
@@ -5559,9 +5590,7 @@ class TaskOrchestrator:
                 "policy_mode": "route",
                 "prompt_text": text,
                 "answer": answer,
-                "trace": [
-                    trace_step
-                ],
+                "trace": [*failed_trace_steps, trace_step],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
             }
@@ -5572,12 +5601,16 @@ class TaskOrchestrator:
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
             "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+            {
+                "workflow_run_id": record["workflow_run_id"],
+                "mode": "route",
+                "agent_count": len(record["trace"]),
+            },
         )
         self.record_analytics_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+             "trace_step_count": len(record["trace"]), "trace_complete": self._is_trace_complete(record)},
         )
 
     def _cache_key(

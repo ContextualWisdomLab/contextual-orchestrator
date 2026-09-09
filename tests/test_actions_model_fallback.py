@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from contextual_orchestrator import (
+    CostRoutingCoordinator,
     ModelAgent,
     TaskOrchestrator,
     ToolExecutionError,
@@ -30,6 +31,7 @@ from contextual_orchestrator import (
     ToolFailureKind,
     classify_tool_failure,
 )
+from contextual_orchestrator.orchestrator import ProviderRequestTooLargeError
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
 
@@ -211,6 +213,100 @@ class _FailThenServeClient:
     def stream_chat(self, agent: ModelAgent, messages: list, **kwargs: Any):
         content = self.chat(agent, messages, **kwargs)
         yield content
+
+
+class _StreamFailThenServeClient:
+    """Fail before the first byte, then expose only provider-reported usage."""
+
+    def __init__(self, *, request_too_large: bool = False) -> None:
+        self.calls: list[str] = []
+        self.request_too_large = request_too_large
+        self._usage: dict[str, int] | None = None
+
+    def stream_chat(self, agent: ModelAgent, messages: list, **kwargs: Any):
+        del messages, kwargs
+        self.calls.append(agent.id)
+        if agent.id == "primary_free_agent":
+            if self.request_too_large:
+                raise ProviderRequestTooLargeError(
+                    "request exceeds provider limit",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    provider_status=413,
+                    transport="stream",
+                )
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="server_error",
+                message="provider disconnected before streaming",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="stream",
+            )
+        self._usage = {
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5,
+        }
+        yield "served-by-fallback"
+
+    def take_usage(self) -> dict[str, int] | None:
+        usage, self._usage = self._usage, None
+        return usage
+
+
+def test_stream_fallback_records_failed_attempt_as_unavailable_usage() -> None:
+    """A pre-byte failure remains visible when the fallback response succeeds."""
+    client = _StreamFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+
+    assert list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "stream with fallback"}],
+            workflow_run_id="run_stream_fallback",
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    ) == ["served-by-fallback"]
+
+    result = orchestrator.get_workflow_run("run_stream_fallback")
+    assert [step["agent_id"] for step in result["trace"]] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert "usage" not in result["trace"][0]
+    assert result["trace"][1]["usage"]["total_tokens"] == 5
+
+    coordinator = CostRoutingCoordinator(orchestrator)
+    accounting = coordinator.record_stream_usage(
+        result=result,
+        attribution=None,
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+    assert [row["measurement_status"] for row in coordinator.ledger.records()] == [
+        "unavailable",
+        "measured",
+    ]
+    assert accounting["cost"]["measurement_status"] == "unavailable"
+
+
+def test_stream_request_too_large_does_not_penalize_group_member() -> None:
+    """HTTP 413 is a request constraint, not member reliability evidence."""
+    client = _StreamFailThenServeClient(request_too_large=True)
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+
+    assert list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "oversized stream"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    ) == ["served-by-fallback"]
+
+    assert client.calls == ["primary_free_agent", "fallback_free_agent"]
+    assert orchestrator._group_router.member_report("primary_free_agent")[
+        "failure_count"
+    ] == 0
 
 
 def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
@@ -475,6 +571,8 @@ class _StructuredFailThenServeClient:
 
     def __init__(self, *, fail_all: bool = False) -> None:
         self.proxy_calls: list[str] = []
+        self.synthesis_payloads: list[dict[str, Any]] = []
+        self.tool_payloads: list[Any] = []
         self._settings: dict[str, Any] = {}
         self._fail_all = fail_all
 
@@ -499,8 +597,19 @@ class _StructuredFailThenServeClient:
         finally:
             self._settings = previous
 
+    @contextmanager
+    def suppress_request_tools(self):
+        previous = dict(self._settings)
+        for key in ("tools", "tool_choice", "parallel_tool_calls"):
+            self._settings.pop(key, None)
+        try:
+            yield
+        finally:
+            self._settings = previous
+
     def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
         del agent, messages, kwargs
+        self.tool_payloads.append(self.request_settings_snapshot().get("tools"))
         return "paper-role-output"
 
     def take_usage(self) -> None:
@@ -509,8 +618,9 @@ class _StructuredFailThenServeClient:
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        del endpoint, payload
+        del endpoint
         self.proxy_calls.append(agent.id)
+        self.synthesis_payloads.append(dict(payload))
         if self._fail_all or agent.id.startswith("primary_"):
             raise ProviderUpstreamError(
                 agent_id=agent.id,
@@ -558,6 +668,39 @@ class _StructuredToolStopClient(_StructuredFailThenServeClient):
             )
         )
         raise ToolFallbackStoppedError(agent.id, decision)
+
+
+def test_http_virtual_structured_tools_run_only_on_worker() -> None:
+    """Structured virtual requests expose tools to workers, not synthesis."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "inspect then return json"}],
+                "tools": _TOOLS,
+                "tool_choice": "required",
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    assert client.tool_payloads.count(_TOOLS) == 1
+    assert all(
+        key not in payload
+        for payload in client.synthesis_payloads
+        for key in ("tools", "tool_choice", "parallel_tool_calls")
+    )
 
 
 def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
@@ -715,6 +858,57 @@ def test_http_virtual_free_response_format_exhausts_retryable_502() -> None:
     assert set(outcomes) == {"retryable_transport"}
 
 
+def test_structured_repair_exhaustion_records_each_failed_attempt_once() -> None:
+    """Repair failover does not duplicate the terminal candidate failure."""
+
+    class RepairExhaustionClient(_StructuredFailThenServeClient):
+        def proxy_send(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            if not self.proxy_calls:
+                self.proxy_calls.append(agent.id)
+                self.synthesis_payloads.append(dict(payload))
+                return {
+                    "choices": [
+                        {
+                            "message": {"content": '{"wrong": true}'},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            self.proxy_calls.append(agent.id)
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error",
+                message="provider rejected repair",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+
+    client = RepairExhaustionClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return json"}],
+                "response_format": _JSON_SCHEMA,
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator._group_router.member_report("primary_free_agent")[
+        "failure_count"
+    ] == 1
+    assert orchestrator._group_router.member_report("fallback_free_agent")[
+        "failure_count"
+    ] == 1
+
+
 class _ToolCallClient:
     """Selected worker returns a Chat Completions tool call, not assistant text."""
 
@@ -833,6 +1027,42 @@ def test_http_tools_reject_deferred_batch_routing() -> None:
         assert status == 400, body
         assert isinstance(body, dict)
         assert body["error"]["code"] == "invalid_routing"
+
+
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"channel": "sync", "latency_tolerant": True},
+        {"channel": "sync", "priority": "bulk"},
+        {"channel": "batch", "priority": "interactive"},
+    ],
+)
+def test_http_tools_accept_effectively_synchronous_routing(
+    routing: dict[str, Any],
+) -> None:
+    """Routing policy precedence accepts tool requests that resolve to sync."""
+    server = build_server(
+        TaskOrchestrator(_free_agents()),
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "inspect now"}],
+                "tools": _TOOLS,
+                "routing": routing,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200, body
 
 
 def test_conduct_does_not_forward_tools_to_non_worker_roles() -> None:

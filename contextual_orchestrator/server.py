@@ -32,7 +32,7 @@ from .cost_router import (
     CostRoutingCoordinator,
     InvalidBatchModelError,
 )
-from .batch_routing import BatchDownloadError, BatchRequest
+from .batch_routing import BatchDownloadError, BatchRequest, RoutingHints
 from .debug_logging import (
     redact_credential_shaped_keys,
     response_metadata_for_log,
@@ -6955,9 +6955,10 @@ def build_server(
                     )
                     if tools_list:
                         deferred_tool_request = routing and (
-                            routing.get("channel") == "batch"
-                            or routing.get("latency_tolerant") is True
-                            or routing.get("priority") == "bulk"
+                            coordinator.policy.decide(
+                                RoutingHints.from_mapping(routing)
+                            ).channel
+                            == "batch"
                         )
                         if deferred_tool_request:
                             raise RequestError(
@@ -7071,6 +7072,9 @@ def build_server(
                                 top_p=top_p,
                                 presence_penalty=presence_penalty,
                                 frequency_penalty=frequency_penalty,
+                                tools=tools_list or None,
+                                tool_choice=body.get("tool_choice"),
+                                parallel_tool_calls=body.get("parallel_tool_calls"),
                             ):
                                 proxied = self._run(
                                     lambda: coordinator.complete(

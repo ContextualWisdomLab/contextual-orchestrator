@@ -84,12 +84,16 @@ push or open a PR.
   catalogs; only explicit zero-cost capability evidence admits either source
   to `orchestrator/free`.
 - Tool-bearing chat requests stay synchronous. Reject explicit deferred/batch
-  routing before dispatch because the batch contract does not carry tool
-  controls or returned tool calls. Generated planners, verifiers, and
-  synthesizers suppress caller tools when the client supports that optional
-  scope; only worker calls receive them. Every grouped or `free_only`
+  routing after applying `RoutingPolicy` precedence because the batch contract
+  does not carry tool controls or returned tool calls. Generated planners,
+  verifiers, and synthesizers suppress caller tools when the client supports
+  that optional scope; structured virtual requests keep them on worker calls
+  and strip them from final synthesis. Every grouped or `free_only`
   structured-synthesis attempt updates group stability exactly once, including
-  failure followed by successful failover.
+  failure followed by successful failover. A streamed failure before the first
+  byte remains a trace step and usage row; missing provider usage is
+  `unavailable`. HTTP 413 may fall back but never counts against member
+  stability because it describes the request, not provider health.
 - A live 2026-09-09 Bytez catalog check with a configured credential returned
   zero `task=chat` rows, while unfiltered and `text-generation` requests
   returned HTTP 500. Treat this as provider/runtime evidence, not proof of an
