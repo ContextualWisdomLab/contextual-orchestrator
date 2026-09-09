@@ -1,5 +1,25 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Request-outcome export gap
+
+[Issue #1114](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1114)
+records an installed-wheel HTTP probe at frozen `73404f89`: batch submission
+returned 201 with durable lineage and one committed association, while the
+200 analytics snapshot omitted the submitted batch job ID. Execution `83174`
+completed successfully as an observation probe, not a passing assertion that
+the proposed export exists. Its script is
+`/tmp/co-batch-export-probe.s0ytig/probe_export.py` on the validation host.
+The correct `measurement_complete=false` remains unchanged.
+
+Independent source review confirms associations currently support internal
+recovery, not an operator outcome-link export. The next delta is a bounded,
+prompt-free, purpose-authorized join preserving many-to-one links, cache
+provenance and unmatched/failed admissions. Existing admissions are not
+owner-filtered; do not expose a global join through owner-scoped replay or
+infer ownership from request IDs. Recovery descriptors and private payloads
+must stay excluded. This operational capability is needed before collecting
+the requested observed KPI cohort; it does not supply adjudicated outcomes.
+
 ## 2026-09-09 Installed batch recovery validation
 
 Frozen `73404f89d7a90f7a6b98caf514af859b02a375dd` produced separately built
