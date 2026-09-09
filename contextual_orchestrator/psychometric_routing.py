@@ -78,7 +78,7 @@ class PsychometricRoutingEvidence:
             unit_vector = (
                 self._unit_vector(stored_vector) if stored_vector is not None else None
             )
-            values = (int(accepted), *(int(value) for value in irt_row))
+            values = (int(accepted), *(operator.index(value) for value in irt_row))
             if any(value not in (0, 1) for value in values):
                 raise ValueError("judge IRT rows must be dichotomous")
             self._contexts[context_id] = stored_vector

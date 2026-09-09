@@ -26,3 +26,14 @@ def test_rejected_row_preserves_evidence(context_id, invalid_row):
     assert list(evidence._contexts.items()) == before_contexts
     assert evidence._context_unit_vectors == before_vectors
     assert evidence._revision == before_revision
+
+
+def test_integer_protocol_rows_preserve_binary_values():
+    """Python and native integer scalar rows retain exact zero/one values."""
+    import numpy as np
+
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe_context_id(
+        "integer_context", "agent_one", True, None, [0, 1, np.int64(0), np.int64(1)]
+    )
+    assert evidence.records()[0]["irt_row"] == [0, 1, 0, 1]
