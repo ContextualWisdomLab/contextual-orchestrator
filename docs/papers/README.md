@@ -142,8 +142,6 @@ verified observed-task evidence and the protected release process.
   (same tasks, scorers, caps, and budgets). Version-page license: CC BY 4.0;
   source: https://arxiv.org/abs/2211.09110.
 
-## Batch execution / load balancing
-
 ## Psychometrics beyond orchestration
 
 These sources constrain what a routing score may mean; they are not routing
@@ -160,15 +158,17 @@ algorithms. They add validity, identification, and fair-comparison checks:
   and practical measurement. Report family-wise fit and uncertainty separately
   from route accuracy and latency, and fail closed when identification is absent.
 
+## Batch execution / load balancing
+
 The external `pg-llm-batch` service carries its own grounding papers, including
 PagedAttention / vLLM (2309.06180) and DeepSpeed-FastGen (2401.08671), which
 motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
-> Citations are provided for scholarly attribution. Redistribution here relies
-> on the arXiv non-exclusive distribution license each author granted; no
-> GPL/AGPL-licensed material is vendored anywhere in this repository.
+> Citations provide attribution, not redistribution permission. Apply the
+> version-specific inventory above before including PDFs in a release; the
+> arXiv non-exclusive license alone does not authorize this repository's reuse.
 
 ## APA 7th edition references
 
