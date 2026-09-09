@@ -44,7 +44,7 @@ verify exact-SHA producer/collector integration before adoption. Do not copy
 collector code into CO or enable unfiltered logs. Timeouts and replay policy
 are unchanged by this patch. Browser rendering remains unverified.
 
-## Independent second incident
+## Concurrent HTTP follow-up
 
 Follow-up at `6b24fe96` (local candidate, not the full-suite head): the success
 summary also carries the request ID. A socket-identity assertion proves actual
@@ -55,6 +55,8 @@ two tasks. Both requests retain distinct IDs and matching attempt/failure logs.
 tests/test_request_framing.py -q` passed 81 tests in 20.76s. This supersedes the
 earlier simultaneous-HTTP limitation for these controlled failure cases only;
 real provider integration and every orchestration worker path remain unverified.
+
+## Independent second incident
 
 Run 34306399309/job 102324739644 used the same trusted workflow and CO pins.
 Artifact 10087151196 again records candidate_count=24, ready_count=1,
@@ -68,3 +70,17 @@ do not support attributing the final 429 to the default 90-second timeout.
 Role/request attribution remains incomplete without correlation; keep the
 timeout repair and this diagnostic repair as separate claims. No rerun or
 provider call was issued during this read-only investigation.
+
+## Exact-revision collector contract
+
+The producer candidate `7cb97ec8e2979d35b72c86a801ab18f0fd9c213d`
+was cross-executed with the sanitizer from central PR #2053,
+`fc0ab87bfde0900461034be815046914f9019bfc`. All seven actual provider
+logging functions produced records whose trusted request ID survived sanitization.
+A controlled error body containing a second, forged ID was omitted, as was its
+controlled sensitive-text sentinel. Replacing the trusted ID with `INVALID`
+or appending an embedded newline caused rejection for all seven records.
+The final `request_failed` summary retained its ID and omitted trailing detail.
+These are isolated, exact-revision contract checks, not live provider or release
+evidence. The consumer deliberately leaves successful HTTP summaries outside
+this PR's allowlist; that follow-up contract remains unverified.
