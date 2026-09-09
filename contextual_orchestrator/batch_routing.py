@@ -225,6 +225,7 @@ class BatchJob:
     # Deliberately not a dataclass field: HSET may succeed before expiry fails,
     # so an operation result must never be serialized into its own snapshot.
     registry_persistence_status = "unavailable"
+    backend_registry_persistence_status = "unavailable"
     recovered_request_metadata = None
 
 
@@ -548,18 +549,24 @@ class PgLlmBatchBackend:
         # Tracked requests are stored as JSON primitives (not dataclass
         # instances) so the registry can be a JSON-backed Valkey mapping;
         # retrieve() rebuilds the dataclass view it needs.
-        self._jobs[batch_id] = {
-            "endpoint_alias": self._endpoint_alias,
-            "requests": {
-                request.custom_id: dataclasses.asdict(request) for request in requests
-            },
-        }
-        return BatchJob(
+        registry_status = "stored"
+        try:
+            self._jobs[batch_id] = {
+                "endpoint_alias": self._endpoint_alias,
+                "requests": {
+                    request.custom_id: dataclasses.asdict(request) for request in requests
+                },
+            }
+        except Exception:
+            registry_status = "write_failed"
+        job = BatchJob(
             job_id=batch_id,
             backend=self.name,
             status=job_payload.get("status", "validating"),
             request_count=len(requests),
         )
+        job.backend_registry_persistence_status = registry_status
+        return job
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Poll batch status via the pg-llm-batch client."""
