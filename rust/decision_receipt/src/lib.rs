@@ -13,6 +13,8 @@ pub struct DecisionReceipt {
     selection_elapsed_ns: Option<u64>,
     #[pyo3(get)]
     durable_ack_elapsed_ns: Option<u64>,
+    #[pyo3(get)]
+    first_provider_elapsed_ns: Option<u64>,
 }
 
 impl DecisionReceipt {
@@ -35,7 +37,23 @@ impl DecisionReceipt {
             status: "accepted".into(),
             selection_elapsed_ns: None,
             durable_ack_elapsed_ns: None,
+            first_provider_elapsed_ns: None,
         }
+    }
+
+    /// Mark the first provider-ready boundary without advancing task selection.
+    fn record_provider_dispatch(&mut self) -> PyResult<u64> {
+        if let Some(elapsed) = self.first_provider_elapsed_ns {
+            return Ok(elapsed);
+        }
+        let elapsed = self.elapsed_ns()?;
+        self.first_provider_elapsed_ns = Some(elapsed);
+        Ok(elapsed)
+    }
+
+    /// Timestamp an auxiliary phase in the same acceptance clock domain.
+    fn current_elapsed_ns(&self) -> PyResult<u64> {
+        self.elapsed_ns()
     }
 
     /// Record the initial selection without allowing later attempts to replace it.

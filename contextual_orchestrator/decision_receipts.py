@@ -1,6 +1,7 @@
 """Persistence boundary for Rust-owned initial-decision measurements."""
 
 from contextvars import ContextVar
+from contextlib import contextmanager
 import logging
 import threading
 import uuid
@@ -35,6 +36,7 @@ class DecisionMeasurement:
         self.selected_agent_ids = []
         self.selection_attempt_count = 0
         self._race_attempt_ids = set()
+        self.first_provider_phase = None
         self._lock = threading.Lock()
         self._token = _CURRENT_DECISION.set(self)
         try:
@@ -62,7 +64,9 @@ class DecisionMeasurement:
             "selection_attempt_count": self.selection_attempt_count,
             "selection_elapsed_ns": self.receipt.selection_elapsed_ns,
             "durable_ack_elapsed_ns": self.receipt.durable_ack_elapsed_ns,
-            "metric_scope": "initial_provider_dispatch",
+            "first_provider_elapsed_ns": self.receipt.first_provider_elapsed_ns,
+            "first_provider_phase": self.first_provider_phase,
+            "metric_scope": "initial_task_route_decision",
         }
 
     def select(self, agent_ids, route_mode, *, attempt_id=None):
@@ -96,6 +100,44 @@ class DecisionMeasurement:
                 _LOGGER.warning("Initial decision measurement write failed error_type=%s", type(exc).__name__)
                 return
             self.receipt.record_durable_ack()
+            self._record_provider_locked(agent_ids, "task_execution")
+
+    def _record_provider_locked(self, agent_ids, phase):
+        """Keep a first-provider diagnostic independent of the task-route clock."""
+        if self.first_provider_phase is not None:
+            return
+        self.receipt.record_provider_dispatch()
+        self.first_provider_phase = phase
+        try:
+            self.store.save("provider_dispatch", self.request_id, {
+                **self.snapshot(), "provider_agent_ids": list(agent_ids),
+            }, durable=True)
+        except Exception as exc:
+            _LOGGER.warning("Provider diagnostic write failed error_type=%s", type(exc).__name__)
+
+    @contextmanager
+    def auxiliary_call(self, agent_ids, phase):
+        """Retain auxiliary work without subtracting it from the task-route interval."""
+        with self._lock:
+            self._record_provider_locked(agent_ids, phase)
+            started = self.receipt.current_elapsed_ns()
+        outcome = "completed"
+        try:
+            yield
+        except BaseException:
+            outcome = "failed"
+            raise
+        finally:
+            with self._lock:
+                finished = self.receipt.current_elapsed_ns()
+                try:
+                    self.store.save("auxiliary_dispatch", self.request_id, {
+                        "request_id": self.request_id, "phase": phase,
+                        "provider_agent_ids": list(agent_ids), "outcome": outcome,
+                        "started_elapsed_ns": started, "finished_elapsed_ns": finished,
+                    }, durable=True)
+                except Exception as exc:
+                    _LOGGER.warning("Auxiliary diagnostic write failed error_type=%s", type(exc).__name__)
 
     def close(self, reason="unfinished"):
         """Persist the post-commit measurement separately; never claim its own ack."""
@@ -117,6 +159,17 @@ def record_initial_selection(agent_ids, route_mode="unclassified", *, attempt_id
     measurement = _CURRENT_DECISION.get()
     if measurement is not None:
         measurement.select(agent_ids, route_mode, attempt_id=attempt_id)
+
+
+@contextmanager
+def observe_auxiliary_dispatch(agent_ids, phase):
+    """Use the request's native clock for an actual auxiliary provider call."""
+    measurement = _CURRENT_DECISION.get()
+    if measurement is None:
+        yield
+    else:
+        with measurement.auxiliary_call(agent_ids, phase):
+            yield
 
 
 def export_decision_receipts(store, limit=256):

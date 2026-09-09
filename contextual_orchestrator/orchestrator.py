@@ -6,7 +6,7 @@ from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
-from .decision_receipts import record_initial_selection
+from .decision_receipts import observe_auxiliary_dispatch, record_initial_selection
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
@@ -7288,7 +7288,8 @@ class TaskOrchestrator:
         if embedding_member is None:
             return None
         try:
-            vectors = self.client.embed(self._agent(embedding_member), [text])
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -7315,9 +7316,10 @@ class TaskOrchestrator:
         if embedding_member is None:
             return None
         try:
-            vectors = self.client.embed(
-                self._agent(embedding_member), [self._agent_descriptor_text(agent)]
-            )
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(
+                    self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+                )
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -7403,7 +7405,8 @@ class TaskOrchestrator:
             {"role": "user", "content": text},
         ]
         try:
-            reply = self.client.chat(triage_agent, messages, temperature=0.0)
+            with observe_auxiliary_dispatch([triage_agent.id], "structured_triage"):
+                reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True

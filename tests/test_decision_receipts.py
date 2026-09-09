@@ -372,3 +372,67 @@ def test_legacy_identity_backfill_and_indexed_window(tmp_path):
         assert cohort["window"]["truncated"] is True
     finally:
         store.close()
+
+
+def test_http_cold_and_cached_triage_keep_task_ack_after_auxiliary_work(tmp_path, monkeypatch):
+    """Cold triage is diagnostic only; warm triage still measures the task decision."""
+    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("writing",))],
+        state_db=tmp_path / "state.db",
+    )
+    original_chat = orchestrator.client.chat
+    auxiliary_ready = threading.Event()
+    auxiliary_release = threading.Event()
+    auxiliary_snapshots = []
+    task_snapshots = []
+
+    def controlled_chat(agent, messages, **kwargs):
+        measurement = _CURRENT_DECISION.get()
+        if messages[0]["content"] == orchestrator.TRIAGE_SYSTEM_PROMPT:
+            auxiliary_snapshots.append(measurement.snapshot())
+            auxiliary_ready.set()
+            assert auxiliary_release.wait(10)
+            return '{"workflow_required": false}'
+        task_snapshots.append(measurement.snapshot())
+        return original_chat(agent, messages, **kwargs)
+
+    monkeypatch.setattr(orchestrator.client, "chat", controlled_chat)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        for request_index in range(2):
+            connection = http.client.HTTPConnection(*server.server_address)
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "auto",
+                "messages": [{"role": "user", "content": "same question"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token",
+                 "x-cache-bypass": "true"})
+            if request_index == 0:
+                assert auxiliary_ready.wait(10)
+                snapshot = auxiliary_snapshots[0]
+                assert snapshot["durable_ack_elapsed_ns"] is None
+                assert snapshot.get("first_provider_elapsed_ns") is not None
+                assert snapshot.get("first_provider_phase") == "structured_triage"
+                auxiliary_release.set()
+            response = connection.getresponse()
+            response.read()
+            assert response.status == 200
+            connection.close()
+        server.shutdown()
+        server.server_close()
+        assert len(auxiliary_snapshots) == 1
+        assert len(task_snapshots) == 2
+        cold, warm = task_snapshots
+        assert cold["first_provider_elapsed_ns"] < cold["selection_elapsed_ns"] <= cold["durable_ack_elapsed_ns"]
+        assert warm["first_provider_phase"] != "structured_triage"
+        assert warm["durable_ack_elapsed_ns"] is not None
+    finally:
+        auxiliary_release.set()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
