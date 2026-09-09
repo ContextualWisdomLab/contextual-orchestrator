@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Existing research attribution repaired
+
+Audit of `279f7e03` found an incorrect Jeon et al. title/DOI in
+[measured routing evidence](doctoring/measured-routing-evidence.md), plus claims
+that per-member ledgers prevent atomistic fallacy and JSON structure establishes
+judge reliability. The corrected citation identifies the latent-space
+item–respondent interaction model; the mapping now separates ledger arithmetic,
+schema validation, and unverified psychometric validity. This removes unsupported
+research justification without changing runtime policy. A calibrated observed
+task evaluation and released owner diagnostics remain required.
+
 ## 2026-09-09 Response-time research and measurement gap
 
 The [psychometric review](doctoring/irt_router_measurement_review.md#response-time-research-extension-2026-09-09)

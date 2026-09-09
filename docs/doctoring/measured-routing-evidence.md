@@ -32,11 +32,23 @@ fails closed to conducted orchestration when its reply violates the exact
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |
 | --- | --- | --- |
 | EWMA with gain 1/8 for latency and throughput | Jacobson's congestion-avoidance estimator is the canonical low-pass filter for volatile network measurements; it needs no tuning window. | Exact-arithmetic tests reproduce hand-computed EWMA values. |
-| Laplace rule of succession as stability prior | The uniform Beta(1,1) posterior mean is the minimum-assumption estimate of a Bernoulli accept probability (Gelman et al., 2013). | Stability tests assert alpha/(alpha+beta) exactly. |
+| Laplace rule of succession as stability prior | Beta(1,1) is an explicit uniform prior for Bernoulli probability, not a uniquely assumption-free choice (Gelman et al., 2013). Calibration and sensitivity to the prior require separate evidence. | Stability tests assert alpha/(alpha+beta) exactly; arithmetic correctness is not calibration evidence. |
 | Cosine similarity over declared metadata documents | Dense retrieval established query-document cosine ordering without keyword overlap (Karpukhin et al., 2020). Affinity uses operator-declared descriptors only. | Deterministic mock-embedding tests verify cosine ordering and zero-vector guards. |
-| Strict JSON triage verdict | LLM judges are reliable only under constrained output schemas; Zheng et al. (2023) show judge agreement collapses without structure. Fail-closed preserves verification guarantees. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash. |
+| Strict JSON triage verdict | The schema is a CO boundary-validation decision. Zheng et al. (2023) examine judge agreement and biases; their citation does not establish that this schema makes a verdict correct. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash; these checks do not measure human agreement. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
-| Multi-layer simple-structure measurement (fast-mlsirm) | Judged quality is modeled per member rather than pooled, avoiding atomistic fallacy across heterogeneous providers (Jeon et al., 2021). | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`. |
+| Per-member quality ledger; latent-interaction research candidate | Jeon et al. (2021) model latent item–respondent interactions. Separate per-member Beta posteriors do not implement that model, establish multilevel validity, or justify group-level inference from individual results. | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`; interaction recovery and cross-group validity remain separate acceptance work. |
+
+### Citation correction, 2026-09-09
+
+Audit source: `279f7e03`, before this correction. The Jeon et al. entry previously
+used an incorrect title and DOI. The authors' [arXiv record, version 3](https://arxiv.org/abs/2007.08719v3)
+identifies the latent-space paper and links its published DOI. This corrects the
+reference, not evidence that CO implements the cited estimator. The former
+claims that separate ledgers prevent atomistic fallacy and that JSON structure
+establishes judge reliability are withdrawn. No runtime behavior or score
+formula changes in this correction. Current calibration, sampling design, and
+group/time validity must be measured before interpreting ledger scores as
+psychometric accuracy.
 
 ## APA 7 references
 
@@ -51,9 +63,10 @@ Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM
 Computer Communication Review, 18*(4), 314–329.
 https://doi.org/10.1145/52325.52356
 
-Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Estimating
-parameters for unidimensional multidimensional logistic item response
-models. *Psychometrika*. https://doi.org/10.1007/s11336-021-09783-y
+Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping unobserved
+item–respondent interactions: A latent space item response model with interaction
+map. *Psychometrika, 86*(2), 378–403.
+https://doi.org/10.1007/s11336-021-09762-5
 
 Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
 & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
