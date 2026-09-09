@@ -8,8 +8,9 @@ is Ready/Open at `73404f89d7a90f7a6b98caf514af859b02a375dd`, based on
 Full-suite execution `82637` completed with **3,491 passed, 2 skipped in
 757.78 seconds**, supplementing the separate **69 installed-package tests**.
 Root verified the live head/base and empty review inventory. Hosted Security
-run **34333545448** has started admission with all three jobs queued at this
-observation. Queued checks are not successful checks. No independent approval,
+run **34333545448** subsequently completed fuzzing and CodeQL/supply-chain/SBOM
+successfully. Tests/package quality remains in progress at the hash-locked
+quality-tool installation step; no full hosted success is claimed. No independent approval,
 protected merge, release, remote-provider integration, or observed KPI gain is
 established. The untracked local native extension was not committed.
 
@@ -44,6 +45,23 @@ historical reproducibility. The successor must retain the necessary prompt-free
 association revisions in the same journal transaction or otherwise prove the
 claimed snapshot semantics; missing legacy history cannot be fabricated.
 
+Successor checkpoint `f0304d7bab409823ab17f8b0d3f08f69701441d0` now has
+**68 focused tests passed in 23.08 seconds** (execution `55267`) and a clean
+bounded independent source review of persistence/privacy. Root review found a
+separate HTTP parsing gap: default query parsing discards empty values before
+unknown/duplicate validation. Blank-query RED/fix is pending after the live
+frozen full-suite execution `50159`; no source or environment mutation during
+that execution is authorized by this receipt. Proposed ADR 0131 and the
+runbook record the service-wide admin boundary; no independent purpose-claim
+verification is supplied by the existing external verifier.
+
+Direct browser inspection of the temporary local runbook first viewport
+(`1265×712`, English) found its heading and PRD text legible. The ADR preview
+(`1129×1022`, English) exposed a renderer defect: YAML frontmatter became
+merged prose/list content. This is being repaired in the temporary renderer,
+not hidden by changing the source ADR. Whole-document and rendered UML
+acceptance remain pending. Neither inspection establishes deployed UI quality.
+
 ## 2026-09-09 Installed batch recovery validation
 
 Frozen `73404f89d7a90f7a6b98caf514af859b02a375dd` produced separately built
@@ -57,8 +75,9 @@ used in this receipt. Core SHA-256:
 native SHA-256:
 `fb0a88ff477f422d496720d551f051a06172c848d2a6bc95d7caaa5e95bc87ea`.
 
-The separate full-suite execution `82637` remains live; the frozen checkout
-and its environment are not being modified. Installed focused success does
+At this installed-package checkpoint the separate full-suite execution `82637`
+was live; it subsequently passed as recorded in the delivery section above.
+Installed focused success alone does
 not prove full-suite or hosted success, real remote integration, review
 approval, protected merge, publishing, or customer KPI improvement.
 
