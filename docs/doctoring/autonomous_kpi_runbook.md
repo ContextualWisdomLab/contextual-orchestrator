@@ -1,5 +1,26 @@
 # Autonomous KPI experiment runbook
 
+## Publishing secret metadata correction, 2026-09-09
+
+The authenticated organization Actions Secrets API succeeded. Both
+`CARGO_REGISTRY_TOKEN` and `PIPY_TOKEN` exist with `visibility=all`; the Python
+publishing name is spelled `PIPY`, not `PYPI`. A name filter matching only
+`PYPI` misses it. No credential values were read. Repository and `production`
+environment inventories each returned zero secrets, which does not negate
+inherited organization secrets. Earlier permission failures establish unknown
+visibility at that time, not missing keys. No permission change was needed.
+
+Reproduce metadata-only checks with
+`gh api orgs/ContextualWisdomLab/actions/secrets/PIPY_TOKEN --jq '{name,visibility,updated_at}'`
+and the equivalent `CARGO_REGISTRY_TOKEN` endpoint. This proves registration
+and repository visibility, not credential validity or registry ownership.
+The current protected-main workflow inventory contains only `nim-benchmark.yml`,
+`opencode-hourly-loop.yml`, `provider-catalog-sync.yml`, and `security.yml`;
+no package publisher was present there. Canonical release coordination was
+notified. Establish a protected, exact-revision package publishing path and
+registry acceptance before claiming automatic deployment; do not bypass review
+or publish the unmerged measurement candidate to test credential validity.
+
 ## Noema terminal failure attribution, 2026-09-09
 
 Two central `.github` runs completed bootstrap but failed their review request:
