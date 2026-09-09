@@ -1,5 +1,27 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Review gateway failure and existing timeout repair
+
+PR #1103 at `4776a970ed8bdef3406684aef84952740b476d88` has a terminal
+Noema 502 after 926 seconds. Its gateway bootstrap used CO `414f2297`,
+whose transport default is 90 seconds. Artifact attribution and the remaining
+causal uncertainty are recorded in
+[the incident investigation](doctoring/noema_gateway_failure_20260909.md).
+The existing repair owner is PR #1053 at
+`76c047585f54fcbe940fe168412f51627d3f79dd`, still Draft, with failures in all
+three CodeQL compatibility analyses on inspection. Older test claims in its
+description do not validate this head. Next work is repair and verification in
+#1053, followed by release and consumer adoption; no runtime recovery or buyer
+accuracy/decision-latency improvement is established by these observations.
+
+The linked central scan run `34122498232` reached status publication, where
+Python job `101756437515` received HTTP 403 with both configured credential
+paths. Current `opencode-agent` installation `141441800` covers all repos but
+has only `statuses: read` and `actions: read`; the app registration owned by
+`anomalyco` also requests only those read permissions. Central publisher
+identity/permission repair is required before validating the consumer gates.
+No missing-secret claim or successful-scan claim follows from this evidence.
+
 ## 2026-09-08 Psychometrics evidence boundary: research trace added
 
 PR #1103 head `19448d95` adds APA 7 references and implementation constraints
