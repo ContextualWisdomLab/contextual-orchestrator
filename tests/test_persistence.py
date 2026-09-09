@@ -16,6 +16,8 @@ from unittest.mock import patch
 import threading
 import time
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -121,17 +123,29 @@ def test_store_upserts_keyed_records_and_appends_streams() -> None:
         store.close()
 
 
-def test_failed_keyed_save_preserves_previous_committed_record() -> None:
+@pytest.mark.parametrize("failure_phase", ["insert", "commit"])
+def test_failed_keyed_save_preserves_previous_committed_record(failure_phase: str) -> None:
     """A failed replacement must not leak its deletion into the next commit."""
     with tempfile.TemporaryDirectory() as directory:
         store = _StateStore(os.path.join(directory, "state.db"))
         try:
+            store._conn.execute("PRAGMA foreign_keys = ON")
             store.save("workflow_run", "run_existing", {"version": 1})
-            store._conn.execute(
-                "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
-                "WHEN NEW.payload = '{\"version\": 2}' "
-                "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
-            )
+            if failure_phase == "insert":
+                store._conn.execute(
+                    "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
+                    "WHEN NEW.payload = '{\"version\": 2}' "
+                    "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+                )
+            else:
+                # Both writes succeed; the deferred constraint fails only at commit.
+                store._conn.execute(
+                    "CREATE TABLE linked_record (record_seq INTEGER REFERENCES "
+                    "orchestration_records(seq) DEFERRABLE INITIALLY DEFERRED)"
+                )
+                store._conn.execute(
+                    "INSERT INTO linked_record SELECT seq FROM orchestration_records"
+                )
             store._conn.commit()
             try:
                 store.save("workflow_run", "run_existing", {"version": 2})
