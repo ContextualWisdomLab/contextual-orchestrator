@@ -5,6 +5,17 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Executable reference inventory check
+
+At `9a9f1ab2`, run `python -m pytest tests/test_paper_contracts.py -k
+explicit_arxiv -q` in a Git checkout with the project test dependencies.
+Result: 1 passed, 4 deselected in 16.76s. An in-memory negative check removed
+`2601.17814` only from the inventory read; the test failed with that identifier
+and its source path as expected. No source file was modified by that check.
+The test uses tracked `.py`, `.rs`, `.md`, and `.toml` text and explicit arXiv
+identifiers. It detects discovery omissions, not title accuracy, version/license
+compliance, evidence quality, full-paper review, or DOI-only references.
+
 ### Expanded-population validity proposal
 
 Source inspection at CO `479bfe7e096832e1711c4d99b59621a66c3a2f59`:
