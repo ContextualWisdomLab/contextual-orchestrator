@@ -6866,12 +6866,12 @@ class TaskOrchestrator:
             {"role": "user", "content": task},
         ]
         effort_profile = self._role_effort_profile("planner")
-        record_initial_selection([planner.id], "generated_planner")
-        raw = (
-            self.client.chat(planner, planner_messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.chat(planner, planner_messages)
-        )
+        with observe_auxiliary_dispatch([planner.id], "generated_planner"):
+            raw = (
+                self.client.chat(planner, planner_messages, effort_profile=effort_profile)
+                if effort_profile is not None
+                else self.client.chat(planner, planner_messages)
+            )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:

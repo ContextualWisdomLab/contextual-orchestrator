@@ -10,6 +10,29 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+def test_generated_planner_is_auxiliary_until_worker_selection(tmp_path, monkeypatch):
+    """A planning provider does not freeze the task-execution route interval."""
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    measurement = DecisionMeasurement(orchestrator._store)
+    def plan_reply(agent, messages, **kwargs):
+        assert measurement.snapshot()["durable_ack_elapsed_ns"] is None
+        return json.dumps({"steps": [{"id": 0, "role": "worker", "agent_id": agent.id,
+                                      "subtask": "work", "access": []},
+                                     {"id": 1, "role": "synthesizer", "agent_id": agent.id,
+                                      "subtask": "answer", "access": [0]}]})
+    monkeypatch.setattr(orchestrator.client, "chat", plan_reply)
+    try:
+        orchestrator._plan_generated("answer")
+        assert measurement.snapshot()["status"] == "accepted"
+        assert measurement.snapshot()["first_provider_phase"] == "generated_planner"
+        assert not orchestrator._store.load("initial_decision")
+    finally:
+        measurement.close()
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("diagnostic_count", [16, 17])
 def test_diagnostic_window_cap_preserves_shared_admissions(tmp_path, diagnostic_count):
     """One noisy request cannot remove another admitted request from the export."""
@@ -38,17 +61,24 @@ def test_diagnostic_window_cap_preserves_shared_admissions(tmp_path, diagnostic_
         store.close()
 
 
-def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path):
+def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path, monkeypatch):
     """Answer reuse has its own terminal outcome, never a copied provider timing."""
     from contextual_orchestrator.decision_receipts import export_decision_receipts
     orchestrator = TaskOrchestrator(
         [ModelAgent("worker_one", "mock/worker")],
         state_db=tmp_path / "state.db", cache_ttl=60,
     )
+    original_chat = orchestrator.client.chat
+    provider_calls = []
+    def counted_chat(*args, **kwargs):
+        provider_calls.append(True)
+        return original_chat(*args, **kwargs)
+    monkeypatch.setattr(orchestrator.client, "chat", counted_chat)
     server = build_server(orchestrator, port=0, decision_receipts=True,
                           security=SecurityConfig(auth_token="test-token"))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
+    answers = []
     try:
         for _ in range(2):
             connection = http.client.HTTPConnection(*server.server_address)
@@ -57,7 +87,7 @@ def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path):
                 "messages": [{"role": "user", "content": "same answer"}],
             }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
             response = connection.getresponse()
-            response.read()
+            answers.append(json.loads(response.read())["choices"][0]["message"]["content"])
             assert response.status == 200
             connection.close()
         server.shutdown()
@@ -69,6 +99,8 @@ def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path):
         assert observations[1]["durable_ack_elapsed_ns"] is None
         assert observations[1]["first_provider_elapsed_ns"] is None
         assert len(orchestrator._store.load("provider_dispatch")) == 1
+        assert len(provider_calls) == 1
+        assert answers[0] == answers[1]
     finally:
         server.shutdown()
         worker.join()
