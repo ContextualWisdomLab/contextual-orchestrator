@@ -2,12 +2,26 @@
 
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
-PR #1105 candidate `8b82235e2b6db19682b0a255758c6796c41b3f55` connects HTTP
-error identity to seven provider diagnostic events (68 focused tests passed).
-The [runbook](doctoring/provider_request_correlation.md) records RED evidence,
-cleanup tests, limitations, and the central collector compatibility prerequisite.
-Not yet established: simultaneous HTTP isolation, full-suite/security gates,
-protected release, actual collector adoption, or customer KPI improvement.
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated candidate's full suite is a separate, still-pending verification.
+
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption; successful HTTP summaries remain outside that candidate's
+allowlist. The [runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
 
 ## 2026-09-08 error-response correlation repair
 
