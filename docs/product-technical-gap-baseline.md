@@ -3311,3 +3311,18 @@ supply the existing customer KPI. Require permitted-use provenance, a complete
 bounded ingress window, independent outcome adjudication and exact model/policy
 revisions before the first observed baseline. The linkage successor prepares
 that measurement; it does not itself establish its correctness or improvement.
+
+Capacity repair `c7345670e08f029ad3aa5dd1133037bb4b451d9b` now has terminal
+local full-suite evidence: **3452 passed, 2 skipped in 753.15s** (macOS,
+Python 3.14; execution 39067). Its isolated installed-wheel receipt and SSE
+identity slice passed **43 tests in 17.88s**. Independent saturated-capacity
+HTTP probes confirm zero classifier/provider calls with measurement enabled
+and disabled. These results do not establish hosted checks, protected merge,
+publication or customer accuracy.
+
+The separate linkage successor `4cf7feafd554fbbd65dfc3b790f1081623b0d05a`
+retains focused passing evidence, but its first full-suite attempt (28355)
+terminated during collection: missing `hypothesis`, exit 2 after 5.41s.
+This is an incomplete test environment, not a passing full regression. Repair
+the successor's isolated test dependencies without changing the base candidate's
+installed-wheel environment, then rerun against a frozen documented checkpoint.
