@@ -127,3 +127,52 @@ legible, code+tests untouched). Before and after long runs, record
 contextual_orchestrator/ tests/`; docs-only drift does not invalidate code
 evidence, but any code/test drift does. Prefer isolated worktrees for code
 experiments; never rebase or push another session's branch.
+
+## Autonomous KPI scope, 2026-09-09 (selected without asking)
+
+Goal: USD 20,000,000,000 sale quality and customer-felt gap closure.
+Scope is chosen under `docs/analytics_spec.md`; no KPI-scope question was
+asked. Primary engineering metric is `open_pr_count` (lower is better,
+`gh pr list --state open --json number | jq length`): 85 at loop start,
+87 on recount (concurrent-session growth, not this change). PR 0 only via
+merge or verified-successor full-delta inheritance; no force-push and no
+close without evidence (user-explicit, no valid delta, malicious change,
+or verified complete inheritance only).
+
+Product acceptance stays observed-only: delivered-correct fraction at
+least +1 point with the 95% difference interval wholly above zero, and
+routing-decision p95 at most 20 ms with at least 10% reduction and the
+95% candidate/baseline ratio interval wholly below 1, each with declared
+population, workload, failure denominators, and uncertainty. Synthetic
+true-parameter recovery is unit evidence only (family-wise aligned RMSE,
+no regression); never substitute it for buyer accuracy. Latency claims
+use accepted-request to durable-decision timestamps on one monotonic
+clock, including queueing, selection, and persistence; worker durations
+that include generation cannot supply this metric. Measured-local
+commercial signals (`commercial_readiness_pass_rate`,
+`buyer_evidence_completeness`, `security_control_pass_rate`,
+`trace_audit_completeness`) may advance; buyer/production warnings stay
+warnings until buyer or production evidence arrives.
+
+## Isolated verification evidence, 2026-09-09
+
+Head `0ea2a58d34fb07e15c12dfcfd65f7242b2a45c91`, base
+`origin/main`; `contextual_orchestrator/ tests/` diff since `origin/main`
+is `benchmark_priors.py` only (17 insertions, 20 deletions, docstrings
+and comments bounding the legacy heuristic; runtime unchanged).
+`tests/test_model_group.py` plus `tests/test_benchmark_priors.py`: 37
+passed in 25.82s, exit 0, on the primary checkout.
+
+PR #1108 head `4316be85` verified in isolated worktree
+`/tmp/co-verify-1108` (primary checkout untouched):
+`tests/test_persistence.py` 20 passed in 32.42s, exit 0. The
+`_save_sync` change uses the SQLite connection context under the writer
+lock so a failed keyed replacement rolls back instead of leaking its
+DELETE into the next commit; the added test covers insert-phase and
+deferred-commit-phase failures, closed-transaction state, and reopened
+persistence. Focused unit evidence only; no customer KPI, full-suite,
+release, or deployment claim. Merge test of loop HEAD `0ea2a58d` into
+PR #1108 auto-merged code but conflicted in
+`docs/product-technical-gap-baseline.md` (both sides append); restack is
+a normal merge with manual docs resolution by the PR owner, never a
+force-push. Worktrees removed after verification.

@@ -2856,3 +2856,43 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-09 Autoresearch loop: autonomous KPI scope, PR #1108 verification, hourly-prompt hardening
+
+PRD/Goal adjustment: KPI scope was selected autonomously under
+`docs/analytics_spec.md` without asking (see the runbook scope entry).
+Loop metric `open_pr_count` is 87 on recount (baseline 85; growth from
+concurrent sessions). PR 0 only via merge or verified-successor
+full-delta inheritance; single-writer deltas are integrated, never
+discarded; no force-push; close only on user instruction, no valid
+delta, malicious change, or verified complete inheritance.
+
+- **PR #1108 (fix(persistence): roll back failed state replacements):**
+  valid minimal root-cause fix. `_save_sync` now runs under the writer
+  lock plus the SQLite connection context so a failed keyed replacement
+  rolls back instead of leaking its DELETE into a later unrelated commit.
+  Isolated-worktree evidence at head `4316be85`:
+  `tests/test_persistence.py` 20 passed in 32.42s, exit 0 (insert-phase
+  and deferred-commit-phase failures, closed-transaction checks,
+  reopen persistence). Unit evidence only. The PR is `dirty` against
+  loop HEAD `0ea2a58d` because both sides appended to this baseline
+  file; code auto-merges. Action: owner restacks with a normal merge
+  and manual docs resolution; this loop does not push to that branch.
+- **Current HEAD `0ea2a58d` (`benchmark_priors.py` calibration bound):**
+  docstrings/comments only in effect; `tests/test_model_group.py` plus
+  `tests/test_benchmark_priors.py` 37 passed in 25.82s, exit 0. No
+  runtime, routing-default, or numerical-formula change; no customer KPI
+  claim.
+- **Actions concurrency (reviewed, no change):** `security.yml` groups by
+  `local-quality`-repository-event-PR/schedule/ref with same-group
+  cancel only, so distinct PRs stay independent and pushes/schedules
+  serialize on ref/schedule; the hourly loop uses its own
+  `opencode-hourly-loop` group with `cancel-in-progress: false` and never
+  cancels merge/release/deploy/migration. Renaming groups without an ADR
+  would churn CI for no functional gain; left as is.
+- **Hourly prompt:** `.github/opencode/hourly-loop-prompt.md` now records
+  the shared-checkout, live-handle, synthetic-vs-observed, and PR-0
+  rules so the next scheduled pass inherits them without re-derivation.
+  Follow-up: keep #1079 (main-protection stale job names) with the
+  owner; keep #1075 closure with the owner; re-observe #1108 after its
+  restack and hosted checks.

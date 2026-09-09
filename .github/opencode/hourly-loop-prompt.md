@@ -9,6 +9,17 @@ completion, explicit user/operator cancellation, and the hosting platform's own
 execution contract are the only time-based termination authorities available to
 this agent. Never post intermediate progress reports.
 
+PR 0 only via merge or verified-successor full-delta inheritance. Never
+force-push, never close without evidence (user-explicit, no valid delta,
+malicious change, or verified complete inheritance only). Single-writer
+deltas are integrated, never discarded. Before and after long runs record
+`git rev-parse HEAD` and `git diff --stat origin/main...HEAD --
+contextual_orchestrator/ tests/`; docs-only drift does not invalidate code
+evidence. Prefer isolated worktrees, preserve live execution handles, and
+never rebase or push another session's branch. Synthetic recovery is unit
+evidence only; customer accuracy and decision latency require observed
+outcomes with declared denominators and uncertainty.
+
 Before changing code, read `docs/product_planning.md`, the applicable PRD in
 `docs/model-group-product-technical-spec.md`, and
 `docs/product-technical-gap-baseline.md`. Treat current files and exact GitHub
