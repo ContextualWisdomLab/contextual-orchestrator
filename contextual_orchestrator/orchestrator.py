@@ -87,6 +87,7 @@ from .reasoning_effort_profile import (
     snapshot_role_effort_catalog,
 )
 from .token_counting import TokenCountUnavailable, build_token_counter
+from .decision_receipt import create_route_decision_receipt
 
 
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
@@ -4119,6 +4120,24 @@ class TaskOrchestrator:
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "items": items,
         }
+
+    def request_route_decision_receipt(
+        self, admission_id: str, decision_attempt: str
+    ) -> dict[str, Any]:
+        """Request one route decision receipt excluding generation time.
+
+        Delegate to :func:`.decision_receipt.create_route_decision_receipt`
+        with a selection probe over the current client boundary. The admitted
+        timestamps are taken after the probe completes on one monotonic clock,
+        so slow generation never inflates the acknowledged interval. A failed
+        probe yields an unavailable receipt, never a fabricated success.
+        """
+        probe_message_list = [{"role": "user", "content": admission_id}]
+        return create_route_decision_receipt(
+            admission_id=admission_id,
+            decision_attempt=decision_attempt,
+            selection_probe=lambda: self.client.chat(probe_message_list),
+        )
 
     def _reload_state(self) -> None:
         for observation in self._store.load("psychometric_observation"):
