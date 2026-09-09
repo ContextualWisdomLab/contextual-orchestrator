@@ -451,6 +451,59 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
     assert len(set(request_ids)) == 2
 
 
+def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
+    """Same-session HTTP requests need distinct identities before provider failure."""
+    import http.client
+    import threading
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    model_agent = ModelAgent("correlation_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        raise RuntimeError("controlled provider failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="test-correlation-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+    request_ids = []
+    try:
+        with caplog.at_level("DEBUG"):
+            for request_index in range(2):
+                first_record = len(caplog.records)
+                connection.request("POST", "/v1/chat/completions", json.dumps({
+                    "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+                }), {
+                    "Content-Type": "application/json", "Authorization": "Bearer test-correlation-token",
+                    "X-LineageWeave-Session-Id": "shared-private-session",
+                })
+                response = connection.getresponse()
+                assert response.status >= 400
+                response_body = json.loads(response.read())
+                request_id = response_body["error"]["detail"]["request_id"]
+                request_ids.append(request_id)
+                attempt_logs = [record.getMessage() for record in caplog.records[first_record:]
+                                if record.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+                assert len(attempt_logs) == 2, (request_index, attempt_logs)
+                assert all(f"request_id={request_id}" in message for message in attempt_logs)
+        assert len(set(request_ids)) == 2
+        assert "shared-private-session" not in "\n".join(attempt_logs)
+    finally:
+        connection.close()
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
+
+
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
     """Client cancellation cannot create a second error or leak path identifiers."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
