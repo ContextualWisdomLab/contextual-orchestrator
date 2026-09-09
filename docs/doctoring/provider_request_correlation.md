@@ -46,6 +46,16 @@ are unchanged by this patch. Browser rendering remains unverified.
 
 ## Independent second incident
 
+Follow-up at `6b24fe96` (local candidate, not the full-suite head): the success
+summary also carries the request ID. A socket-identity assertion proves actual
+keep-alive reuse; a two-party barrier followed by two distinct server-thread IDs
+proves overlapping same-session HTTP handling rather than merely submitting
+two tasks. Both requests retain distinct IDs and matching attempt/failure logs.
+`python -m pytest tests/test_telemetry.py tests/test_orchestrator_debug_logging.py
+tests/test_request_framing.py -q` passed 81 tests in 20.76s. This supersedes the
+earlier simultaneous-HTTP limitation for these controlled failure cases only;
+real provider integration and every orchestration worker path remain unverified.
+
 Run 34306399309/job 102324739644 used the same trusted workflow and CO pins.
 Artifact 10087151196 again records candidate_count=24, ready_count=1,
 deferred_count=8, rejected_count=7, and account diversity=3. The caller reported
