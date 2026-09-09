@@ -10,6 +10,44 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path):
+    """Answer reuse has its own terminal outcome, never a copied provider timing."""
+    from contextual_orchestrator.decision_receipts import export_decision_receipts
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker")],
+        state_db=tmp_path / "state.db", cache_ttl=60,
+    )
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        for _ in range(2):
+            connection = http.client.HTTPConnection(*server.server_address)
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "route",
+                "messages": [{"role": "user", "content": "same answer"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+            response = connection.getresponse()
+            response.read()
+            assert response.status == 200
+            connection.close()
+        server.shutdown()
+        observations = export_decision_receipts(orchestrator._store)["observations"]
+        assert len(observations) == 2
+        assert observations[0]["status"] == "acknowledged"
+        assert observations[1]["status"] == "cache_hit"
+        assert observations[1]["selection_elapsed_ns"] is None
+        assert observations[1]["durable_ack_elapsed_ns"] is None
+        assert observations[1]["first_provider_elapsed_ns"] is None
+        assert len(orchestrator._store.load("provider_dispatch")) == 1
+    finally:
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("endpoint,stream", [
     ("/v1/chat/completions", False), ("/v1/chat/completions", True),
     ("/v1/responses", True),

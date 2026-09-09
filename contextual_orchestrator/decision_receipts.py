@@ -162,6 +162,14 @@ def record_initial_selection(agent_ids, route_mode="unclassified", *, attempt_id
         measurement.select(agent_ids, route_mode, attempt_id=attempt_id)
 
 
+def record_answer_cache_hit():
+    """Retain answer-cache admissions without attributing cached provider timings."""
+    measurement = _CURRENT_DECISION.get()
+    if measurement is not None:
+        with measurement._lock:
+            measurement.receipt.record_cache_hit()
+
+
 @contextmanager
 def observe_auxiliary_dispatch(agent_ids, phase):
     """Use the request's native clock for an actual auxiliary provider call."""

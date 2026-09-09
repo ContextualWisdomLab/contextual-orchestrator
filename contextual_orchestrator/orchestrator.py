@@ -6,7 +6,7 @@ from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
-from .decision_receipts import observe_auxiliary_dispatch, record_initial_selection
+from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_initial_selection
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
@@ -5278,6 +5278,7 @@ class TaskOrchestrator:
         ):
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
+            record_answer_cache_hit()
             return result
         result = self._dispatch(messages, mode, model_name)
         try:

@@ -56,6 +56,15 @@ impl DecisionReceipt {
         self.elapsed_ns()
     }
 
+    /// Complete answer reuse without inventing a provider selection or acknowledgement.
+    fn record_cache_hit(&mut self) -> PyResult<()> {
+        if self.status != "accepted" {
+            return Err(PyValueError::new_err("cache hit requires accepted state"));
+        }
+        self.status = "cache_hit".into();
+        Ok(())
+    }
+
     /// Record the initial selection without allowing later attempts to replace it.
     fn record_selection(&mut self) -> PyResult<()> {
         if self.status != "accepted" {
