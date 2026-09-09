@@ -462,3 +462,21 @@ both succeeded. Use those direct read-only endpoints when workflow resolution
 fails; do not infer absent logs or an absent run from that error. Central CI
 coordination was notified. No duplicate dispatch, gate weakening, or source fix
 was justified by this observation alone.
+
+## Auxiliary/task interval visual receipt, 2026-09-09
+
+Directly viewed the actual GitHub-rendered `docs/analytics_spec.md` at
+`0ef13edcefcf562383dc5ef3391cbe46a38635cf`, fragment
+`#auxiliary-dispatch-and-task-route-decision`, in the in-app browser at
+1265 × 712, English. The complete section was visible and readable without
+overlap or horizontal clipping. Its text includes prior evidence acquisition
+and triage in the task-route interval, separates first-provider diagnostics,
+and forbids changing the cache mix to manufacture improvement. This is a
+bounded document inspection, not verification of the implementation, other
+viewports/locales, focus interactions, or product UI.
+
+The earlier PR #1108 re-observation above is historical: its current-head
+`129a665016ed1acd79ae12915c905b1020856fcc` Security run `34318012080`
+subsequently completed successfully, including 3400 passed and 2 skipped
+tests on merge checkout `9516d1d`. That evidence does not replace independent
+approval or establish a protected merge.
