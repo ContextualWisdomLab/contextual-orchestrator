@@ -97,6 +97,21 @@ configuration, not evidence for a universal production model timeout. No
 benchmark rerun, retry parity verification, or claimed score gain follows from
 this source reading.
 
+Independent read-only audit additionally covered pages 11–19; root directly
+cross-checked pages 13–14 and viewed Figure 6/Table 2 at 1132×1600. The table,
+legend, axes, and distinction between the mean and best-run curve were legible.
+The AutoResearch experiment runs 123 sequential experiments for each of three
+independent seeds, with a shared H100 task-compute budget. Thus the independent
+trajectory count is three per system, not 369 independent final results.
+Table 2 reports mean best validation BPB and standard deviation: Ultra
+0.9774 ± 0.0019 versus Model C 0.9781 ± 0.0011. These are not confidence
+intervals or an untouched-test result; this subsection supplies no significance
+test. The 0.0007 mean difference alone cannot establish a general improvement.
+CO must report trajectory-level uncertainty and reserve independent confirmation
+data after adaptive selection. Shared task-compute budgets also do not prove
+matched orchestration tokens, calls, or provider spend. No aggregate table is
+being converted into synthetic customer observations.
+
 Engineering inference: compare decision-only selection with generative triage
 under the same observed cohort, correctness guardrail, and resource accounting.
 Do not claim Fugu's results for a black-box API router without its trained
