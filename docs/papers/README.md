@@ -168,6 +168,11 @@ algorithms. They add validity, identification, and fair-comparison checks:
 - Reise, Ainsworth, and Haviland (2005) separate fit, parameter interpretation,
   and practical measurement. Report family-wise fit and uncertainty separately
   from route accuracy and latency, and fail closed when identification is absent.
+- Kim and Chung (2019) examine expanded test use using item DIF and subgroup
+  linking invariance. Their methods distinguish item-level behavior from
+  score-level comparability. Read scope: abstract and printed pages 1–8, not a
+  complete review of results. The [implementation proposal](../doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
+  is an engineering inference, not a demonstrated LLM-routing result.
 
 ## Batch execution / load balancing
 
@@ -214,3 +219,9 @@ Reise, S. P., Ainsworth, A. T., & Haviland, M. G. (2005). Item response theory:
 Fundamentals, applications, and promise in psychological research. *Current
 Opinion in Psychiatry, 18*(5), 611–616.
 https://doi.org/10.1097/01.yco.0000170421.57227.9b
+
+Kim, S., & Chung, S. (2019). *Psychometric evidence to assess expanded test
+use* (Research Memorandum No. RM-19-07). Educational Testing Service.
+https://www.ets.org/Media/Research/pdf/RM-19-07.pdf
+
+The report states all rights reserved. Link and citation only; no PDF vendored.

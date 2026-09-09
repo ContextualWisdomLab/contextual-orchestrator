@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Expanded-population validity research gap
+
+At source `479bfe7e096832e1711c4d99b59621a66c3a2f59`, the research inventory
+was extended with ETS RM-19-07 and a bounded read receipt. The
+[proposed evaluation design](doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
+separates item DIF, scale linking, and observed routing accuracy. CO owns
+evaluation context and outcome collection; fast-mlsirm remains the numerical
+owner. Released diagnostic-contract availability, observed-data support by
+language/domain/model revision, and any accuracy or latency gain remain
+unverified. This is a research proposal, not a production gate already shipped.
+
 ## 2026-09-09 Benchmark prior interpretation gap
 
 At `ef374defdf4037a829d4b4d6d61c5a8b314e8c05`,

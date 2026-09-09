@@ -5,6 +5,33 @@ request timing and delivered outcomes; fast-mlsirm for numerical estimators.
 
 ## Start and evidence boundaries
 
+### Expanded-population validity proposal
+
+Source inspection at CO `479bfe7e096832e1711c4d99b59621a66c3a2f59`:
+Kim and Chung (2019), ETS RM-19-07, abstract and printed pages 1–8.
+Their method checks item DIF and subgroup score-linking invariance separately;
+the report does not establish LLM routing performance. See the
+[source and APA reference](../papers/README.md#apa-7th-edition-references).
+
+Engineering proposal, not an implemented or validated estimator: treat a new
+language, task domain, or model revision as an explicitly declared evaluation
+population. CO records those evaluation conditions and observed outcomes;
+fast-mlsirm owns estimation, alignment, and diagnostic computation. A released
+owner contract should return the reference population, anchor-set revision,
+identification constraints, supported strata, uncertainty, and diagnostic status.
+Do not equate raw accuracy differences with DIF, or a nonsignificant diagnostic
+with proven equivalence. Missing support is unknown, not a passing result.
+
+For acceptance, report held-out correctness and failure denominators by declared
+stratum alongside the overall paired accuracy change. Estimate the cost of
+retrieving a versioned diagnostic with the same accepted-request-to-durable-
+decision clock; do not silently omit it from latency. Offline estimation may
+keep the request path small, but requires provenance and an expiry policy whose
+operational effect is tested. No new heuristic weights or production default
+change follows from this proposal. The next evidence gate is an owner-contract
+inventory and an observed-data evaluation design, not implementation copied
+into CO. No numerical effect or universal DIF cutoff is claimed.
+
 ### Paper inventory consistency check, 2026-09-09
 
 At `b031d3acecc89b29b35fdd769598aa3826615553`, the paper inventory correctly
