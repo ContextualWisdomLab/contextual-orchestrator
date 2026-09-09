@@ -2,8 +2,42 @@
 
 These papers ground the design of the LLM **cost review** ledger and the
 **sync-vs-batch / upstream** routing added in `feat/cost-review-and-batch-routing`.
-All three are arXiv preprints distributed under licenses that permit
-redistribution; each is cited below with its arXiv identifier.
+References below include arXiv preprints and other publications. Redistribution
+must be verified for the exact version of each PDF: arXiv's perpetual,
+non-exclusive license grants distribution rights to arXiv, not a blanket
+permission for this repository to redistribute it. See the
+[arXiv license guidance](https://info.arxiv.org/help/license/index.html).
+Version-page licenses are recorded below. Additional redistribution permission,
+where required, and the contents of release archives remain unverified.
+
+### Stored PDF version inventory
+
+First-page text inspection on 2026-09-09 identifies the following versions.
+This establishes document identity, not redistribution permission or a complete
+research review. License verification must use these versions, not whichever
+version the unversioned abstract page currently serves.
+
+| Stored paper | Embedded arXiv version | Embedded date |
+| --- | --- | --- |
+| FrugalGPT | 2305.05176v1 | 2023-05-09 |
+| RouteLLM | 2406.18665v4 | 2025-02-23 |
+| Hybrid LLM | 2404.14618v1 | 2024-04-22 |
+| HELM | 2211.09110v2 | 2023-10-01 |
+| The Art, Science, and Engineering of Fuzzing: A Survey | 1812.00140v4 | 2019-04-08 |
+
+Version-specific arXiv abstract pages were checked on 2026-09-09:
+
+| Version page | Declared license | Release implication |
+| --- | --- | --- |
+| [2305.05176v1](https://arxiv.org/abs/2305.05176v1) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+| [2406.18665v4](https://arxiv.org/abs/2406.18665v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+| [2404.14618v1](https://arxiv.org/abs/2404.14618v1) | CC BY-NC-ND 4.0 | Do not assume commercial redistribution rights. |
+| [2211.09110v2](https://arxiv.org/abs/2211.09110v2) | CC BY 4.0 | Preserve attribution and license requirements. |
+| [1812.00140v4](https://arxiv.org/abs/1812.00140v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+
+This checks the declared version-page licenses; byte-level identity and
+release-package inclusion still require verification. Existing files are
+retained during the audit.
 
 ## Cost optimisation
 
@@ -13,8 +47,9 @@ redistribution; each is cited below with its arXiv identifier.
   Motivates the **configurable price table + per-request cost accounting** and
   cost-optimising model selection: cost varies by orders of magnitude across
   providers/models, so a gateway should price each request and route to the
-  cheapest capable upstream. Distributed under arXiv's non-exclusive license to
-  distribute (arXiv perpetual, non-exclusive license 1.0).
+  cheapest capable upstream. Version-page license: arXiv non-exclusive;
+  additional redistribution basis unverified.
+  source: https://arxiv.org/abs/2305.05176.
 
 ## Query routing (which upstream / which tier)
 
@@ -30,7 +65,8 @@ redistribution; each is cited below with its arXiv identifier.
   `routellm-routing-2406.18665.pdf`
   Grounds the **routing decision** layer (`RoutingPolicy` + cost-aware upstream
   selection): route strong/weak model choices to hit a cost/quality target.
-  arXiv preprint; distributed under the arXiv non-exclusive distribution license.
+  Version-page license: arXiv non-exclusive; additional redistribution basis
+  unverified. Source: https://arxiv.org/abs/2406.18665.
 
 - **Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing** — Dujian Ding,
   Ankur Mallick, Chi Wang, Robert Sim, Subhabrata Mukherjee, Victor Rühle,
@@ -38,8 +74,8 @@ redistribution; each is cited below with its arXiv identifier.
   `hybrid-llm-query-routing-2404.14618.pdf`
   Grounds **latency-tolerant vs interactive routing** and the sync/batch split:
   route easy/bulk queries to the cheaper path, keep hard/interactive queries on
-  the responsive path. Distributed under the arXiv non-exclusive license /
-  CC BY as marked on arXiv.
+  the responsive path. Version-page license: CC BY-NC-ND 4.0;
+  source: https://arxiv.org/abs/2404.14618.
 
 ## Role reasoning-effort profiles
 
@@ -87,8 +123,8 @@ verified observed-task evidence and the protected release process.
   latency, cost) instead of a single leaderboard number; report incompleteness
   honestly (skipped/unsupported/rate-limited cells stay machine-readable rather
   than silently dropped); and standardize conditions across compared systems
-  (same tasks, scorers, caps, and budgets). Distributed under the arXiv
-non-exclusive license / CC BY as marked on arXiv.
+  (same tasks, scorers, caps, and budgets). Version-page license: CC BY 4.0;
+  source: https://arxiv.org/abs/2211.09110.
 
 ## Batch execution / load balancing
 
