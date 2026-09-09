@@ -3118,3 +3118,24 @@ follow-up and prohibits outcome leakage in the proposed joint-model comparison.
 The DOI discovery check caught its missing inventory entry (one failing test);
 after linking the source, all six paper contracts passed in 6.23 seconds.
 No observed-task accuracy or decision-latency improvement has been measured.
+
+### Decision-measurement pre-release review, 2026-09-09
+
+Candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` for
+[issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597096146)
+is not release-ready. Read-only call-site review found that server `_run`
+is called inside embedding retry loops and file-replica deletion. Admission
+inside that helper counts attempts as requests and starts some clocks after
+selection. Repair: one validated request-owned admission, explicit endpoint and
+measurement unit, separate attempts, and a first-failure/second-success regression
+that retains exactly one admission. File operations and evaluation batches must
+not silently become individual generation samples.
+
+The automatic proxy also acknowledged selection before file binding and effort
+configuration could reject the request. Move acknowledgement after those checks,
+immediately before transport, and prove rejection produces neither dispatch nor
+a committed decision. The existing persistence store does not bound the three
+new receipt kinds; all-record export is unbounded in memory. Cohort-aware export
+and explicit retention remain required. A successful isolated package test does
+not resolve these semantic findings. The assigned implementation agent is repairing
+them; no routing default or release was changed.
