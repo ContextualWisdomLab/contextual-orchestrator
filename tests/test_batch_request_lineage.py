@@ -241,7 +241,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit", "duplicate_ids", "backend_write_outage"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -278,7 +278,10 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     "different-deployment" if restarted and recovery_case == "deployment_mismatch"
                     else "unit-deployment-account")))
         if not restarted:
-            coordinator._batch_jobs = MissingRegistry()
+            if recovery_case == "backend_write_outage":
+                coordinator.batch_backend._jobs = MissingRegistry()
+            else:
+                coordinator._batch_jobs = MissingRegistry()
         elif recovery_case == "coordinator_hit":
             from contextual_orchestrator.batch_routing import BatchJob
             coordinator._batch_jobs[submitted["job_id"]] = BatchJob(**record["recovery_descriptor"]["job"])
@@ -301,7 +304,10 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     "owner-one", {"requests": [{"custom_id": "a", "model": "mock/worker",
                     "messages": [{"role": "user", "content": "Never persist this prompt."}]}]})
                 assert status == 201
-                assert submitted["registry_persistence_status"] == "write_failed"
+                assert submitted["registry_persistence_status"] == (
+                    "stored" if recovery_case == "backend_write_outage" else "write_failed")
+                if recovery_case == "backend_write_outage":
+                    assert submitted["backend_registry_persistence_status"] == "write_failed"
                 assert submitted["recovery_status"] == "durable_descriptor"
                 record = orchestrator._store.load("batch_request_link")[0]
                 assert "Never persist this prompt." not in str(record)
