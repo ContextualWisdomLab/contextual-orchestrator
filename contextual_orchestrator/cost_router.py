@@ -1325,6 +1325,9 @@ class CostRoutingCoordinator:
             job = None
         if job is not None and job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
+        if (job is not None and isinstance(self.batch_backend, PgLlmBatchBackend)
+                and self.batch_backend.has_job_metadata(job)):
+            return job
         if (owner_id is not None and self.orchestrator._store is not None
                 and (job is None or (isinstance(self.batch_backend, PgLlmBatchBackend)
                                      and self.batch_backend.recovery_enabled))):

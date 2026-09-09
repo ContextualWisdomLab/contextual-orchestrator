@@ -482,6 +482,17 @@ class PgLlmBatchBackend:
         """Whether the operator supplied a stable deployment/account binding."""
         return self._recovery_identity is not None
 
+    def has_job_metadata(self, job: BatchJob) -> bool:
+        """Check whether active registry metadata supports the existing job."""
+        try:
+            document = self._jobs.get(job.job_id)
+        except Exception:
+            return False
+        return (isinstance(document, dict)
+                and document.get("endpoint_alias") == self._endpoint_alias
+                and isinstance(document.get("requests"), dict)
+                and len(document["requests"]) == job.request_count)
+
     def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
         """Describe exact target and item metadata without submitted prompt text."""
         from .cost_ledger import AttributionDimensions
