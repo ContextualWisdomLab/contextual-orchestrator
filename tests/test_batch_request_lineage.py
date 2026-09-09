@@ -240,7 +240,7 @@ def test_valkey_job_snapshot_does_not_prove_lineage_commit(tmp_path):
         orchestrator.close()
 
 
-@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity"])
+@pytest.mark.parametrize("recovery_case", ["valid", "expired", "malformed", "backend_mismatch", "unexpected_item", "missing_usage", "registry_outage", "item_mismatch", "estimate_mismatch", "null_estimates", "boolean_count", "deployment_mismatch", "missing_identity", "coordinator_hit"])
 def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_path, recovery_case):
     """SQLite recovery binds the original owner without another remote submission."""
     class MissingRegistry(dict):
@@ -278,6 +278,9 @@ def test_http_batch_failed_registry_recovers_authorized_job_after_restart(tmp_pa
                     else "unit-deployment-account")))
         if not restarted:
             coordinator._batch_jobs = MissingRegistry()
+        elif recovery_case == "coordinator_hit":
+            from contextual_orchestrator.batch_routing import BatchJob
+            coordinator._batch_jobs[submitted["job_id"]] = BatchJob(**record["recovery_descriptor"]["job"])
         elif recovery_case == "registry_outage":
             class UnavailableRegistry(MissingRegistry):
                 """All reads and writes remain unavailable during recovery."""
