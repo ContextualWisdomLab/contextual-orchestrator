@@ -259,6 +259,29 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
     ]
 
 
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "http_status_500",
+        "http_status_429",
+        "timeout",
+        "transport_error",
+        "invalid_response",
+        "empty_provider_catalog",
+    ],
+)
+def test_refresh_evidence_retains_only_allowlisted_discovery_codes(
+    error_code: str,
+) -> None:
+    """Operators get actionable failure classes without provider response text."""
+    store = InMemoryProviderCatalogStore()
+    source = _source(provider="bytez", credential="BYTEZ_API_KEY")
+
+    store.record_failure(source, error_code=error_code)
+
+    assert store.refresh_evidence()[-1].error_code == error_code
+
+
 def test_last_known_good_restores_free_and_modality_evidence() -> None:
     """A catalog round trip cannot silently turn a free multimodal model unknown."""
     source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
