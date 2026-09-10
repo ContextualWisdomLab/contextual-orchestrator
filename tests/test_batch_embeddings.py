@@ -570,8 +570,8 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
-    config.set("routing", "embedding_max_tokens_per_request", 4)
-    config.set("routing", "embedding_max_chars_per_part", 200)
+    config.set("routing_config", "embedding_max_tokens_per_request", 4)
+    config.set("routing_config", "embedding_max_chars_per_part", 200)
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("acme-provider", "text-embedding-test", 1.0, 0.0))
     backend = _RecordingEmbeddingBackend()
@@ -626,8 +626,8 @@ def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
-    config.set("routing", "embedding_max_tokens_per_request", 100)
-    config.set("routing", "embedding_max_chars_per_part", 5)
+    config.set("routing_config", "embedding_max_tokens_per_request", 100)
+    config.set("routing_config", "embedding_max_chars_per_part", 5)
     backend = _RecordingEmbeddingBackend()
     coordinator = CostRoutingCoordinator(
         orchestrator,

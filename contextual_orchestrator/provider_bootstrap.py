@@ -33,6 +33,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    encode_image_generation_endpoint_tag,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
     refresh_price_book,
@@ -180,6 +181,9 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     return is_routable_discovered_model(model)
 
 
+_IMAGE_GENERATION_ENDPOINT_TAG_PREFIX = "image_generation_endpoint:"
+
+
 def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
     """Return only provider-declared capabilities, modalities, and cost evidence."""
     return tuple(
@@ -189,10 +193,26 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(("cost:free",) if model.is_free else ()),
                 *(("spend:blocked",) if not model.spend_admitted else ()),
                 *privacy_tags_for_discovered(model),
-                *model.capabilities,
+                # A provider-declared capability string is untrusted:
+                # dropping any that happens to collide with this module's
+                # own reserved image_generation_endpoint: prefix keeps a
+                # provider response from spoofing (or, more likely,
+                # coincidentally colliding with) the restored image-routing
+                # endpoint on the next catalog restore (CodeRabbit finding
+                # on #1017).
+                *(
+                    value
+                    for value in model.capabilities
+                    if not value.casefold().startswith(_IMAGE_GENERATION_ENDPOINT_TAG_PREFIX)
+                ),
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
+                *(
+                    (encode_image_generation_endpoint_tag(model.image_generation_endpoint),)
+                    if model.image_generation_endpoint
+                    else ()
+                ),
             )
         )
     )

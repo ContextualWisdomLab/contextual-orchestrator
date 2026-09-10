@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-import numpy as np
 from pathlib import Path
+
+import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.psychometric_routing import PsychometricRoutingEvidence
 
 
 def test_fast_mlsirm_fit_uses_judge_acceptance_item_for_context_score(monkeypatch) -> None:
-    """Criterion IRT rows inform one MLSRM fit; acceptance remains the route score."""
-    import fast_mlsirm
+    """Criterion IRT rows inform one MLSRM fit; acceptance remains the route score.
+
+    ``numpy`` and ``fast_mlsirm`` are optional, lazily-imported dependencies of
+    ``psychometric_routing.py`` itself (absence means "no psychometric
+    evidence", not an error) -- this is the only test in the module that
+    exercises that real code path, so it is the only one scoped to skip when
+    either package is unavailable, rather than failing collection for the
+    whole file.
+    """
+    np = pytest.importorskip("numpy")
+    fast_mlsirm = pytest.importorskip("fast_mlsirm")
 
     captured: dict[str, object] = {}
 

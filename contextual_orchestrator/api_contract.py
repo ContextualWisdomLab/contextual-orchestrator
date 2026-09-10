@@ -523,6 +523,12 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "stream_usage_supported": {"type": "boolean"},
+                                    "image_generation_endpoint": {
+                                        "anyOf": [
+                                            {"type": "string", "minLength": 1},
+                                            {"type": "null"},
+                                        ]
+                                    },
                                 },
                             },
                         },
