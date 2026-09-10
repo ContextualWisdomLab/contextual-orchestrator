@@ -867,6 +867,13 @@ TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+REQUEST_OUTCOME_ASSOCIATIONS_FIELD = "request_outcome_associations"
+"""Snapshot field connecting a retained admission cohort to workflow and batch IDs (#1114).
+
+Bounded and authorized: many workflows/items per admission stay explicit, and
+unmatched or unfinished deliveries are reported, never joined globally.
+"""
+
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     """Read and cache one bounded JSON error body for downstream classifiers."""
