@@ -1665,6 +1665,45 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
+    """Recognize a transport failure whose provider outcome is unknown.
+
+    A read or connect timeout, a reset or truncated connection, or a URL-level
+    failure that carries no HTTP status may follow provider acceptance, so a
+    passthrough request must fail closed on it and never be replayed on
+    another candidate (``test_ambiguous_timeout_is_not_replayed``). It is
+    still a failure *of this candidate*: the breaker must learn it and the
+    caller must receive the classified ``502 provider_connection_error`` that
+    ``classify_provider_failure`` already defines for these types -- not the
+    bare exception, which the HTTP handler could only answer with
+    ``500 internal_error`` (Strix run 33993155419: 83 such responses, ~90 s
+    apart, the same never-recorded first-ranked route every time; #1045).
+    A URLError around a DNS failure is not ambiguous (nothing was sent) and
+    keeps its existing handling.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, ConnectionError, http.client.HTTPException)):
+            return True
+        if (
+            isinstance(current, urllib.error.URLError)
+            and not isinstance(current, urllib.error.HTTPError)
+            and not isinstance(current.reason, socket.gaierror)
+        ):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
 def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
     """Recognize a structural capability mismatch, not a reliability failure.
 
@@ -4516,6 +4555,19 @@ class TaskOrchestrator:
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
                     if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="passthrough",
+                        ) from None
+                    if _is_ambiguous_passthrough_transport_failure(exc):
+                        # Fail closed without replay (the outcome is unknown),
+                        # but as a recorded failure of this candidate and as a
+                        # classified upstream error -- see the predicate.
+                        self._record_failure(candidate.id)
+                        if candidate.group_name:
+                            self._group_router.observe_failure(candidate.id)
                         raise classify_provider_failure(
                             exc,
                             agent_id=candidate.id,
