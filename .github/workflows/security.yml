@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
   schedule:
     - cron: "17 3 * * 1"
     - cron: "41 4 * * 2"
@@ -18,14 +18,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: local-quality-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.schedule || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.event.schedule || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tests:
     name: Tests and package quality
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -81,8 +83,10 @@ jobs:
 
   fuzz:
     name: Property and coverage-guided fuzzing
-    if: github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2'
-    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -134,8 +138,11 @@ jobs:
     name: CodeQL, supply chain, and SBOM
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1') &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+      (github.event_name != 'pull_request' ||
+        (github.event.action != 'closed' &&
+         github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -147,7 +154,7 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/init@v4.37.8
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/init@v4.37.9
         with:
           languages: python
           build-mode: none
@@ -176,6 +183,6 @@ jobs:
           path: cyclonedx-sbom.json
 
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/analyze@v4.37.8
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/analyze@v4.37.9
         with:
           category: "/language:python"

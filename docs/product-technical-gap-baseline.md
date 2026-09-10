@@ -1,5 +1,54 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-09 Request-to-provider diagnostic correlation
+
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
+
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
+
+## 2026-09-08 error-response correlation repair
+
+ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
+500 with request ID `175d6d59c5294b0e8a21548193b90482`. Its surviving artifact
+9969701340 contains gateway stderr but only generic request-failure messages;
+it cannot correlate that ID to an internal cause. The job installed CO source
+`2e414d15ba58f28597751b625a8a2f00fc9fadcf`. This is not proof of free-pool
+exhaustion, a disappeared run, or a currently released fix.
+
+The same correlation gap was reproduced on main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`: the common HTTP error response had
+a generated ID absent from its log. The proposed repair generates one ID for
+both response and warning, prevents detail fields from overriding it, and logs
+neither session values nor error details. RED: one missing-correlation failure;
+GREEN: 45 telemetry tests passed in 6.58 seconds. This improves future failure
+correlation only; it does not recover the historical exception, cover every
+streaming-error path, or prove immutable publication or deployed behavior.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -117,6 +166,30 @@ Focused and proportional verification run on the exact local head:
 
 Total exact local evidence for this unit: `163 passed` across the touched
 discovery, persistence, client-boundary, CLI, and contract surfaces.
+## 2026-09-04 Bytez discovery: filtered empty catalogs and upstream 5xx are distinct fail-closed states
+
+At `origin/main` `60c562de`, an authenticated, bounded live probe loaded only
+`BYTEZ_API_KEY` from the operator's local `.env` and emitted no token, response
+body, or upstream error text. The earlier `task=chat` HTTP 200 response with an
+empty `output` is a successful transport with no usable catalog, whereas an
+unfiltered HTTP 500 is an upstream server failure. A fresh probe found the
+upstream condition had widened: `chat`, `text-generation`, the other documented
+chat-completion-compatible task filters, and the unfiltered request all returned
+HTTP 500 with a small JSON object and empty `output`. Raw-token and `Key`-prefixed
+authorization produced the same status, so the prefix does not explain the
+failure.
+
+The canonical discovery boundary now queries only `task=chat` and then
+`task=text-generation`. Bytez documents both as compatible with its OpenAI-style
+chat-completions API; audio, image, and video task catalogs are intentionally not
+admitted to the ordinary text-chat pool. Discovery never uses the failing
+unfiltered endpoint as a fallback. A non-empty filtered catalog is parsed through
+the existing Bytez model contract. If both filtered catalogs are empty or fail,
+refresh records only task, outcome, model count, and an allowlisted error code;
+it retains the durable last-known-good catalog and fails closed when none exists.
+The current upstream 5xx therefore remains a first-bootstrap blocker, not a
+reason to fabricate usable models.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
