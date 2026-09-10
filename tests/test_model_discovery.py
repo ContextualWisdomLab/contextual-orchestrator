@@ -28,6 +28,8 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
+    DISCOVERY_TOOL_CALL_MULTI_TAG,
+    DISCOVERY_TOOL_CALL_SINGLE_TAG,
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ModelUnitPrice,
@@ -43,6 +45,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
+    _parallel_tool_call_evidence,
     _price_per_1k,
     _parse_openai_compatible,
     _positive_int_metadata,
@@ -51,6 +54,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     apply_openrouter_spend_admission,
     discover_all_models,
     discover_provider_models,
+    discovery_tool_call_tags,
     free_discovered_models,
     general_free_serving_candidates,
     is_routable_discovered_model,
@@ -3122,3 +3126,76 @@ def test_discover_all_models_logs_aggregate_summary_at_info() -> None:
     assert "discovery_complete providers=1" in output
     assert "models=" in output
     assert "errors=" in output
+
+
+def _tool_call_probe_base() -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name="openrouter",
+        model_id="x/model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+    )
+
+
+def test_discovery_tool_call_tags_cover_true_false_and_unknown() -> None:
+    """Parallel-tool-call evidence must map to owned tags, unknown to none."""
+    base = _tool_call_probe_base()
+    assert discovery_tool_call_tags(replace(base, supports_parallel_tool_calls=True)) == (
+        "tool_call:multi",
+        DISCOVERY_TOOL_CALL_MULTI_TAG,
+    )
+    assert discovery_tool_call_tags(replace(base, supports_parallel_tool_calls=False)) == (
+        "tool_call:single",
+        DISCOVERY_TOOL_CALL_SINGLE_TAG,
+    )
+    assert discovery_tool_call_tags(base) == ()
+
+
+def test_parse_openai_compatible_records_parallel_tool_call_evidence() -> None:
+    """Only an explicit parallel_tool_calls parameter is positive evidence."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "multi/model", "supported_parameters": ["tools", "parallel_tool_calls"]},
+            {"id": "tools-only/model", "supported_parameters": ["tools"]},
+            {"id": "malformed/model", "supported_parameters": "parallel_tool_calls"},
+            {"id": "unknown/model"},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["multi/model"].supports_parallel_tool_calls is True
+    assert by_id["tools-only/model"].supports_parallel_tool_calls is None
+    assert by_id["malformed/model"].supports_parallel_tool_calls is None
+    assert by_id["unknown/model"].supports_parallel_tool_calls is None
+
+
+def test_parallel_tool_call_evidence_rejects_non_list_input() -> None:
+    assert _parallel_tool_call_evidence("parallel_tool_calls") is None  # type: ignore[arg-type]
+    assert _parallel_tool_call_evidence(["tools"]) is None
+
+
+def test_tool_call_evidence_survives_agent_tags_and_restore() -> None:
+    """Evidence must round-trip through serving tags; conflicts stay unknown."""
+    from contextual_orchestrator.provider_catalog_store import _restore_model_semantics
+
+    multi = replace(_tool_call_probe_base(), supports_parallel_tool_calls=True)
+    tags = agent_from_discovered(multi).tags
+    assert "tool_call:multi" in tags
+    assert DISCOVERY_TOOL_CALL_MULTI_TAG in tags
+    assert _restore_model_semantics(multi, tags).supports_parallel_tool_calls is True
+
+    single = replace(_tool_call_probe_base(), supports_parallel_tool_calls=False)
+    single_tags = agent_from_discovered(single).tags
+    assert _restore_model_semantics(single, single_tags).supports_parallel_tool_calls is False
+
+    assert _restore_model_semantics(multi, ()).supports_parallel_tool_calls is None
+    conflicted = _restore_model_semantics(
+        multi, (*tags, "tool_call:single", DISCOVERY_TOOL_CALL_SINGLE_TAG)
+    )
+    assert conflicted.supports_parallel_tool_calls is None

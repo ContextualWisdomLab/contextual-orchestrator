@@ -513,6 +513,7 @@ class DiscoveredModel:
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
+    supports_parallel_tool_calls: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
@@ -1434,6 +1435,9 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     if isinstance(row.get("supports_no_prompt_retention"), bool)
                     else None
                 ),
+                supports_parallel_tool_calls=_parallel_tool_call_evidence(
+                    supported_parameters
+                ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
                 evidence_only=(
                     source.provider_name == "opencode_go"
@@ -1988,6 +1992,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("cost:free",) if discovered.is_free else ()),
             *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
+            *discovery_tool_call_tags(discovered),
             *discovered.capabilities,
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),

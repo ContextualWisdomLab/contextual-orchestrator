@@ -381,6 +381,7 @@ def normalize_discovered_model(
         supports_zero_data_retention=model.supports_zero_data_retention,
         supports_no_training=model.supports_no_training,
         supports_no_prompt_retention=model.supports_no_prompt_retention,
+        supports_parallel_tool_calls=model.supports_parallel_tool_calls,
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
         spend_admitted=bool(model.spend_admitted),
@@ -421,6 +422,15 @@ def _restore_model_semantics(
         ),
         supports_no_prompt_retention=(
             True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
+        ),
+        supports_parallel_tool_calls=(
+            True
+            if "tool_call:multi" in normalized and "tool_call:single" not in normalized
+            else (
+                False
+                if "tool_call:single" in normalized and "tool_call:multi" not in normalized
+                else None
+            )
         ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
