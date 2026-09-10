@@ -258,6 +258,47 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert "trace" not in inference_body["orchestration"]
 
 
+def test_inference_readiness_is_read_only_and_admin_refresh_stays_privileged() -> None:
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(
+            auth_token="", admin_token="admin_secret", inference_token="inference_secret"
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    def get(path: str, token: str) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            headers={"authorization": f"Bearer {token}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    try:
+        inference_status, inference_body = get(
+            "/api/v1/provider_readiness?refresh=true", "inference_secret"
+        )
+        admin_status, admin_body = get(
+            "/api/v1/provider_readiness/latest?refresh=false", "admin_secret"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert inference_status == 400
+    assert inference_body["error"]["code"] == "readiness_refresh_forbidden"
+    assert admin_status == 200
+    assert admin_body["probe"] == "none"
+
+
 def test_single_and_split_token_modes_cannot_be_combined() -> None:
     try:
         SecurityConfig(auth_token="shared_secret", admin_token="admin_secret", inference_token="inference_secret")

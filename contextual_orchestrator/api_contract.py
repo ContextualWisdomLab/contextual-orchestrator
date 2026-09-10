@@ -617,6 +617,20 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Provider readiness report"}},
             }
         },
+        "/api/v1/provider_readiness": {
+            "get": {
+                "operationId": "get_inference_provider_readiness",
+                "summary": "Read provider readiness without triggering a probe",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False, "enum": [False]},
+                }],
+                "responses": {"200": {"description": "Read-only provider readiness report"}},
+            }
+        },
         "/api/v1/analytics_snapshots/latest": {
             "get": {
                 "operationId": "get_latest_analytics_snapshot",
