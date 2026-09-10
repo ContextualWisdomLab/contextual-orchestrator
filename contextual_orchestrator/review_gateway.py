@@ -53,6 +53,9 @@ general-free serving contract enter the pool.
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
+REVIEW_READINESS_CONTRACT_VERSION = "1"
+"""Versioned owner readiness/admission contract for the free review pool."""
+
 
 def _validated_credential_names(
     credential_names: Sequence[str] | None,
