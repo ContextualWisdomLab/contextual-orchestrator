@@ -214,6 +214,29 @@ recovery heading, first paragraph, and full revision strings were readable
 without overlap or horizontal clipping in that viewport. The screenshot is
 inline in the validation task. Lower sections and other viewports/locales were
 not inspected; this does not constitute product UI acceptance.
+## 2026-09-09 State persistence integrity prerequisite
+
+PR [#1108](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1108)
+repairs a reproduced failed-replacement data-loss case in the common SQLite
+state writer. Code `d7bba88f3d711883a37effe49ab4f503c4fb8e01` rolls back failed
+writes under the existing lock. Test follow-up `f1abe1e3` checks that no
+transaction remains immediately after failure and that both the previous and
+unrelated subsequent records survive reopening the database. The persistence
+suite passed 19 tests in 9.28s; this is not a latency or customer-accuracy result.
+
+Full local suite at `877d5112ed470d851afaa2c746b94393cc768ee7`: 3,396 passed,
+2 skipped, exit 0 (883.03s). Test-only follow-up
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` covers a deferred commit failure
+with real SQLite constraints; persistence, workflow authorization, and governance
+tests pass together (29 passed, 4.89s). Full-suite evidence remains attached to
+the earlier head, not silently reassigned to the new regression.
+
+At the earlier PR head `aa674187b0341c7852f85c27fb696aec21f1a799`, GitHub
+reported zero check runs and two success statuses whose descriptions explicitly
+said reviews were skipped (Draft; expired trial/no credits). Those statuses do
+not establish review approval or security validation. Keep protected merge and
+release pending actual exact-head evidence. The root cause and reproduction are
+in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
 
 ## 2026-09-09 Stacked quality-trigger repair
 
@@ -484,6 +507,54 @@ inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
 This demonstrates the identification pitfall, not estimator accuracy or a
 latency improvement. It is a manual documentation check, not yet a hosted
 CI gate or a test of the released fast-mlsirm implementation.
+## 2026-09-09 Request-to-provider diagnostic correlation
+
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
+
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
+
+## 2026-09-08 error-response correlation repair
+
+ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
+500 with request ID `175d6d59c5294b0e8a21548193b90482`. Its surviving artifact
+9969701340 contains gateway stderr but only generic request-failure messages;
+it cannot correlate that ID to an internal cause. The job installed CO source
+`2e414d15ba58f28597751b625a8a2f00fc9fadcf`. This is not proof of free-pool
+exhaustion, a disappeared run, or a currently released fix.
+
+The same correlation gap was reproduced on main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`: the common HTTP error response had
+a generated ID absent from its log. The proposed repair generates one ID for
+both response and warning, prevents detail fields from overriding it, and logs
+neither session values nor error details. RED: one missing-correlation failure;
+GREEN: 45 telemetry tests passed in 6.58 seconds. This improves future failure
+correlation only; it does not recover the historical exception, cover every
+streaming-error path, or prove immutable publication or deployed behavior.
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 

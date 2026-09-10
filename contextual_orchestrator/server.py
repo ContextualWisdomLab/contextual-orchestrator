@@ -15,6 +15,7 @@ import mmap
 import secrets
 import socket
 import struct
+import sys
 import tempfile
 import threading
 import time
@@ -25,6 +26,7 @@ from typing import Any, Callable, Mapping
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
+from .decision_receipts import DecisionMeasurement, export_decision_receipts
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import (
@@ -65,6 +67,8 @@ from .telemetry import (
     attach_trace_context,
     configure_telemetry,
     current_session_id,
+    current_request_id,
+    request_identity,
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
@@ -5474,6 +5478,7 @@ def build_server(
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
     release_authority: Mapping[str, Any] | None = None,
+    decision_receipts: bool = False,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -5482,6 +5487,12 @@ def build_server(
     every completion is priced, recorded, and sync/batch routed.
     """
     security = security or SecurityConfig()
+    if type(decision_receipts) is not bool:
+        raise TypeError("decision_receipts must be a boolean")
+    if decision_receipts:
+        from ._decision_receipt import DecisionReceipt  # noqa: F401
+        if orchestrator._store is None:
+            raise ValueError("decision receipts require a durable state store")
     security.check_bind(host)
     release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
@@ -5498,6 +5509,7 @@ def build_server(
         """Handle authenticated orchestration, administration, and health routes."""
         _session_token = None
         _trace_token = None
+        _classification_slot_held = False
 
         def _bind_session(self, session_id: str | None) -> None:
             """Bind validated request correlation to this handler context."""
@@ -5627,11 +5639,20 @@ def build_server(
             self.command = None
             self.path = None
             self._request_started = None
-            try:
-                super().handle_one_request()
-            finally:
-                self._log_request_summary(self._request_started)
-                self._reset_session()
+            self._decision_measurement = None
+            self._decision_failure_reason = "unfinished"
+            self._classification_slot_held = False
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    if self._classification_slot_held:
+                        self._release_measured_slot()
+                    if self._decision_measurement is not None:
+                        self._decision_measurement.close(self._decision_failure_reason)
+                        self._decision_measurement = None
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -5689,13 +5710,15 @@ def build_server(
             if not method and not path and status is None:
                 return
             _LOGGER.info(
+                "%s request_id=%s",
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
                     status=status,
                     latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
-                )
+                ),
+                current_request_id() or "-",
             )
 
         def do_GET(self) -> None:  # noqa: N802
@@ -5976,7 +5999,10 @@ def build_server(
                     self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
-                    self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    snapshot = orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS)
+                    if decision_receipts:
+                        snapshot["initial_decision_measurements"] = export_decision_receipts(orchestrator._store)
+                    self._send(snapshot)
                     return
                 if path == "/api/v1/spend_analytics/latest":
                     self._send(orchestrator.spend_analytics())
@@ -7098,19 +7124,6 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
-                    )
-                    if route_stream:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use Responses streaming",
-                            )
-                        include_trace = False
-                    elif include_trace:
-                        self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(
@@ -7134,6 +7147,25 @@ def build_server(
                     # sampling/controls already validated before passthrough branch.
                     if "metadata" in body:
                         _validate_openai_metadata(body)
+                    if explicit_trace:
+                        self._authorize_trace_access()
+                    self._ensure_decision_measurement("validated_endpoint")
+                    if stream:
+                        self._acquire_measured_slot()
+                        self._classification_slot_held = True
+                    route_stream = bool(
+                        stream and orchestrator.would_route(messages, mode, model_name)
+                    )
+                    if route_stream:
+                        if explicit_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use Responses streaming",
+                            )
+                        include_trace = False
+                    elif include_trace and not explicit_trace:
+                        self._authorize_trace_access()
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
                     with model_client.request_settings(
@@ -7150,6 +7182,7 @@ def build_server(
                                 messages,
                                 model_name,
                                 include_usage=include_usage,
+                                slot_acquired=True,
                             )
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -7229,13 +7262,6 @@ def build_server(
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
-                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
-                    )
-                    embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        embedding_agents
-                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7285,6 +7311,12 @@ def build_server(
                         attribution["model_name"] = model_name
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
+                    self._ensure_decision_measurement("validated_endpoint")
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        orchestrator._capability_agents(
+                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        )
+                    )
                     started_at = time.perf_counter()
                     embedding_deadline = time.monotonic() + float(
                         orchestrator.client.timeout
@@ -7371,13 +7403,6 @@ def build_server(
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = orchestrator._capability_agents(
-                        "embedding",
-                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
-                    )
-                    embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        embedding_agents
-                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -7396,6 +7421,12 @@ def build_server(
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
+                    self._ensure_decision_measurement("validated_endpoint")
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        orchestrator._capability_agents(
+                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        )
+                    )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
@@ -7454,6 +7485,7 @@ def build_server(
                                 batch_requests,
                                 metadata=metadata,
                                 owner_id=security.principal_id(self.headers),
+                                request_id=current_request_id(),
                             )
                         )
                     except InvalidBatchModelError as exc:
@@ -7474,6 +7506,10 @@ def build_server(
                         "backend": job.backend,
                         "status": job.status,
                         "request_count": job.request_count,
+                        "request_link_status": job.request_link_status,
+                        "registry_persistence_status": job.registry_persistence_status,
+                        "recovery_status": job.recovery_status,
+                        "backend_registry_persistence_status": job.backend_registry_persistence_status,
                     }, 201)
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
@@ -8129,11 +8165,60 @@ def build_server(
             return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:
-            security.acquire_run_slot()
+            if not self._classification_slot_held:
+                self._acquire_measured_slot()
             try:
                 return callback()
             finally:
+                self._release_measured_slot()
+
+        def _acquire_measured_slot(self) -> None:
+            """Retain accepted admission before the nonblocking capacity decision."""
+            self._ensure_decision_measurement()
+            try:
+                security.acquire_run_slot()
+            except Exception:
+                self._decision_failure_reason = "capacity_rejected"
+                raise
+
+        def _ensure_decision_measurement(self, boundary="first_execution_slot") -> None:
+            """Open one request scope, with explicit timing eligibility at this boundary."""
+            if decision_receipts and self._decision_measurement is None:
+                endpoint = urllib.parse.urlsplit(self.path).path
+                if endpoint not in {
+                    "/v1/chat/completions", "/v1/completions", "/v1/responses",
+                    "/v1/embeddings", "/v1/batch/embeddings",
+                }:
+                    endpoint = "other_execution_endpoint"
+                try:
+                    self._decision_measurement = DecisionMeasurement(
+                        orchestrator._store, policy=orchestrator.policy,
+                        endpoint_path=endpoint, request_method=self.command,
+                        admission_boundary=boundary,
+                        request_id=current_request_id(),
+                    )
+                except RuntimeError:
+                    raise RequestError(
+                        503, "measurement_unavailable",
+                        "Request measurement is unavailable; retry after service recovery.",
+                        {"measurement_complete": False, "reconciliation_required": True},
+                    ) from None
+
+        def _release_measured_slot(self) -> None:
+            """Finalize measurement independently of releasing the execution slot."""
+            try:
+                measurement = self._decision_measurement if decision_receipts else None
+                if measurement is not None:
+                    active_error = sys.exc_info()[1]
+                    reason = self._decision_failure_reason
+                    if isinstance(active_error, (ConnectionError, BrokenPipeError, GeneratorExit)):
+                        reason = "cancelled"
+                    elif active_error is not None:
+                        reason = "selection_failed"
+                    self._decision_failure_reason = reason
+            finally:
                 security.release_run_slot()
+                self._classification_slot_held = False
 
         def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
             value = default if raw is None else int(raw)
@@ -8193,8 +8278,17 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            if decision_receipts and status >= 400:
+                measurement = self._decision_measurement
+                if (measurement is not None
+                    and measurement.receipt.status in ("accepted", "selected")
+                    and self._decision_failure_reason == "unfinished"):
+                    self._decision_failure_reason = "selection_failed"
+            request_id = current_request_id() or uuid.uuid4().hex
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, request_id
+            )
+            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
@@ -8243,6 +8337,8 @@ def build_server(
                 writer()
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
+                if decision_receipts:
+                    self._decision_failure_reason = "cancelled"
                 _LOGGER.debug("client_disconnected")
                 # `_send*`/`_begin_sse` writers record their *intended*
                 # status in `self._last_status` before calling this method
@@ -8438,7 +8534,10 @@ def build_server(
                         part={"type": "summary_text", "text": text},
                     )
 
-            security.acquire_run_slot()
+            if decision_receipts:
+                self._acquire_measured_slot()
+            else:
+                security.acquire_run_slot()
             try:
                 if not self._begin_sse():
                     return False
@@ -8486,21 +8585,24 @@ def build_server(
                             conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
                         result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
+                    self._decision_failure_reason = "cancelled"
                     raise
                 except ProviderUpstreamError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     failed = {
                         **created_response,
                         "status": "failed",
                         "error": _error_payload(
                             exc.error_code,
                             _provider_upstream_message(exc),
-                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                            {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                         )["error"],
                     }
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
                     return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
+                    self._decision_failure_reason = "selection_failed"
                     failed = {
                         **created_response,
                         "status": "failed",
@@ -8595,9 +8697,13 @@ def build_server(
                 self._write_sse("data: [DONE]\n\n")
                 return True
             except ConnectionAbortedError:
+                self._decision_failure_reason = "cancelled"
                 return False
             finally:
-                security.release_run_slot()
+                if decision_receipts:
+                    self._release_measured_slot()
+                else:
+                    security.release_run_slot()
 
         def _stream_route_completion(
             self,
@@ -8607,6 +8713,7 @@ def build_server(
             model_name: str,
             *,
             include_usage: bool = False,
+            slot_acquired: bool = False,
         ) -> None:
             """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
@@ -8643,7 +8750,11 @@ def build_server(
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-            security.acquire_run_slot()
+            if not slot_acquired:
+                if decision_receipts:
+                    self._acquire_measured_slot()
+                else:
+                    security.acquire_run_slot()
             try:
                 if not self._begin_sse() or not self._write_sse(
                     frame({"role": "assistant"})
@@ -8670,9 +8781,10 @@ def build_server(
                     ):
                         return
                 except ToolFallbackStoppedError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     detail = {
-                        "request_id": uuid.uuid4().hex,
                         **_tool_fallback_error_detail(exc),
+                        "request_id": current_request_id() or uuid.uuid4().hex,
                     }
                     payload = _error_payload(
                         TOOL_FALLBACK_STOPPED_CODE,
@@ -8686,10 +8798,11 @@ def build_server(
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 except ProviderUpstreamError as exc:
+                    self._decision_failure_reason = "selection_failed"
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
-                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                        {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -8698,11 +8811,15 @@ def build_server(
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                    self._decision_failure_reason = "selection_failed"
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")
             finally:
-                security.release_run_slot()
+                if slot_acquired or decision_receipts:
+                    self._release_measured_slot()
+                else:
+                    security.release_run_slot()
 
         def _send_security_headers(self) -> None:
             if getattr(self, "close_connection", False):

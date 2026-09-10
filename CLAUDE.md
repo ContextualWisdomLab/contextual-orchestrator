@@ -1,5 +1,12 @@
 # CLAUDE.md
 
+Batch request lineage evidence and unresolved registry failure semantics live
+in `docs/doctoring/batch_request_lineage.md`; HTTP 201 alone does not establish
+durable lineage. Preserve job-scoped item IDs and original submission identity.
+
+See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
+tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
@@ -26,6 +33,10 @@ deadline, cancellation/drain provenance, and honest duplicate-cost evidence.
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
 
 ## Common commands
+
+For missing provider/error correlation, run the focused telemetry and debug-log
+tests in `docs/doctoring/provider_request_correlation.md`. A green local producer
+test does not prove the central collector preserves the new field.
 
 ```bash
 # Install (pinned, hash-locked — always this two-step form)

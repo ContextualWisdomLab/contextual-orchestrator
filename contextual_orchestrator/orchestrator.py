@@ -6,6 +6,7 @@ from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
+from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_initial_selection
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
@@ -56,6 +57,7 @@ from .provider_errors import (
 )
 from .telemetry import (
     annotate_current_span,
+    current_request_id,
     inject_trace_context,
     record_provider_usage,
     traced,
@@ -1334,11 +1336,12 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
     """DEBUG-log one provider call attempt before it is made."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt agent_id=%s model=%s attempt=%d/%d",
+            "provider_attempt agent_id=%s model=%s attempt=%d/%d request_id=%s",
             agent.id,
             agent.model,
             attempt + 1,
             retry_limit + 1,
+            current_request_id() or "-",
         )
 
 
@@ -1348,12 +1351,13 @@ def _log_provider_attempt_failed(
     """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s",
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s request_id=%s error_message=%s",
             agent.id,
             agent.model,
             attempt + 1,
             type(exc).__name__,
             transient,
+            current_request_id() or "-",
             redact_text(str(exc))[:500],
         )
 
@@ -1362,10 +1366,11 @@ def _log_provider_backoff(agent: ModelAgent, attempt: int, delay: float) -> None
     """DEBUG-log one backoff sleep before the next retry attempt."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f",
+            "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f request_id=%s",
             agent.id,
             attempt + 1,
             delay,
+            current_request_id() or "-",
         )
 
 
@@ -1386,11 +1391,12 @@ def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Except
     first place" or "was never allowed to be retried at all".
     """
     _LOGGER.warning(
-        "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s",
+        "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
+        current_request_id() or "-",
     )
 
 
@@ -1415,12 +1421,13 @@ def _log_provider_no_retry_budget(
     from "this wouldn't have been retried anyway" from this one event name.
     """
     _LOGGER.warning(
-        "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
         transient,
+        current_request_id() or "-",
     )
 
 
@@ -1446,12 +1453,13 @@ def _log_provider_one_shot_call_failed(
     :func:`_log_provider_no_retry_budget`.
     """
     _LOGGER.warning(
-        "provider_one_shot_call_failed agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        "provider_one_shot_call_failed agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
         transient,
+        current_request_id() or "-",
     )
 
 
@@ -1467,11 +1475,12 @@ def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_erro
     for the separate case where no retry budget was configured at all.
     """
     _LOGGER.warning(
-        "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s",
+        "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
+        current_request_id() or "-",
     )
 
 
@@ -3644,6 +3653,7 @@ class _StateStore:
     _LEGACY_INDEX_NAME = "records_kind_seq"
     _INDEX_NAME = "orchestration_records_kind_seq"
     _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 256}
+    _MEASUREMENT_KINDS = ("accepted_request", "initial_decision", "decision_receipt", "selection_attempt")
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS orchestration_records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -3668,6 +3678,18 @@ class _StateStore:
             self._migrate_legacy_table()
             self._conn.execute(self._CREATE_RECORDS_SQL)
             self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS orchestration_records_kind_key_seq "
+                "ON orchestration_records(kind, key, seq)"
+            )
+            self._conn.execute(
+                "UPDATE orchestration_records SET key = json_extract(payload, '$.request_id') "
+                "WHERE kind IN (?, ?, ?, ?) AND key IS NULL "
+                "AND CASE WHEN json_valid(payload) THEN "
+                "json_type(payload, '$.request_id') = 'text' "
+                "AND length(json_extract(payload, '$.request_id')) > 0 ELSE 0 END",
+                self._MEASUREMENT_KINDS,
+            )
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -3723,16 +3745,76 @@ class _StateStore:
             return
         self._save_sync(kind, key, payload)
 
-    def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
-        blob = json.dumps(payload, ensure_ascii=False)
+    def load_decision_window(self, limit: int = 256) -> dict[str, Any]:
+        """Read a bounded shared admission cohort without deleting historical rows."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("decision window limit must be between 1 and 1000")
         with self._lock:
+            admissions = self._conn.execute(
+                "SELECT seq, key, payload FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?",
+                ("accepted_request", limit + 1),
+            ).fetchall()
+            truncated = len(admissions) > limit
+            admissions = list(reversed(admissions[:limit]))
+            accepted = [json.loads(payload) for _, _, payload in admissions]
+            if any(key != row.get("request_id") for (_, key, _), row in zip(admissions, accepted)):
+                raise ValueError("measurement admission identity mismatch")
+            request_ids = [row["request_id"] for row in accepted]
+            phases = []
+            diagnostics = []
+            if request_ids:
+                placeholders = ",".join("?" for _ in request_ids)
+                phases = self._conn.execute(
+                    "SELECT kind, key, payload FROM orchestration_records "
+                    "WHERE kind IN ('initial_decision', 'decision_receipt') "
+                    "AND key IN (" + placeholders + ") "
+                    "ORDER BY seq DESC LIMIT ?",
+                    (*request_ids, 2 * limit + 1),
+                ).fetchall()
+                diagnostics = self._conn.execute(
+                    "SELECT kind, key, payload FROM orchestration_records "
+                    "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
+                    "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
+                    (*request_ids, 8 * limit + 1),
+                ).fetchall()
+            diagnostic_truncated = len(diagnostics) > 8 * limit
+            diagnostics = list(reversed(diagnostics[:8 * limit]))
+            if any(key != json.loads(payload).get("request_id") for _, key, payload in diagnostics):
+                raise ValueError("measurement diagnostic identity mismatch")
+            phase_truncated = len(phases) > 2 * limit
+            phases = list(reversed(phases[:2 * limit]))
+            if any(key != json.loads(payload).get("request_id") for _, key, payload in phases):
+                raise ValueError("measurement phase identity mismatch")
+            unresolved_legacy = self._conn.execute(
+                "SELECT 1 FROM orchestration_records WHERE kind IN (?, ?, ?, ?) "
+                "AND key IS NULL LIMIT 1", self._MEASUREMENT_KINDS,
+            ).fetchone() is not None
+        return {
+            "accepted": accepted,
+            "decisions": [json.loads(payload) for kind, _, payload in phases if kind == "initial_decision"],
+            "receipts": [json.loads(payload) for kind, _, payload in phases if kind == "decision_receipt"],
+            "diagnostics": [{"record_kind": kind, **json.loads(payload)} for kind, _, payload in diagnostics],
+            "window": {"limit": limit, "truncated": truncated, "phase_truncated": phase_truncated,
+                       "diagnostic_limit": 8 * limit, "diagnostic_truncated": diagnostic_truncated,
+                       "unresolved_legacy_identity": unresolved_legacy,
+                       "first_admission_seq": admissions[0][0] if admissions else None,
+                       "last_admission_seq": admissions[-1][0] if admissions else None},
+        }
+
+    def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+        if kind in self._MEASUREMENT_KINDS:
+            request_id = payload.get("request_id")
+            if not isinstance(request_id, str) or not request_id or (key is not None and key != request_id):
+                raise ValueError("measurement record requires a consistent request identity")
+            key = request_id
+        blob = json.dumps(payload, ensure_ascii=False)
+        with self._lock, self._conn:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
             self._conn.execute(self._INSERT_SQL, (kind, key, blob))
             if kind in self._STREAM_LIMITS:
                 limit = self._STREAM_LIMITS[kind]
                 self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
-            self._conn.commit()
 
     def _drain_stream_queue(self) -> None:
         while True:
@@ -3780,6 +3862,15 @@ class _StateStore:
                 rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
+
+    def load_latest_key(self, kind: str, key: str) -> dict[str, Any] | None:
+        """Read one exact-key durable event using the existing identity index."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM orchestration_records WHERE kind = ? AND key = ? "
+                "ORDER BY seq DESC LIMIT 1", (kind, key),
+            ).fetchone()
+        return json.loads(row[0]) if row is not None else None
 
     def prune_keyed(self, kind: str, retained_keys: set[str]) -> None:
         """Delete keyed rows outside the caller's bounded in-memory set."""
@@ -4130,7 +4221,7 @@ class TaskOrchestrator:
                 observation.get("irt_row", ()),
             )
         for record in self._store.load("workflow_run"):
-            self._replace_workflow_run(record)
+            self._replace_workflow_run(record, restored=True)
             # A batch_route row persisted before judging (see batch_route's
             # own pending-record comment) carries an explicit
             # "pending_verification" marker and intentionally never reaches
@@ -4329,6 +4420,7 @@ class TaskOrchestrator:
                     agent, upstream, effort_profile, api_surface=api_surface
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
+            record_initial_selection([agent.id], "explicit_proxy")
             started_at = time.perf_counter()
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
@@ -4412,6 +4504,7 @@ class TaskOrchestrator:
                 send_once = getattr(self.client, "proxy_send_once", None)
                 if not callable(send_once):
                     send_once = self.client.proxy_send
+                record_initial_selection([candidate.id], "automatic_proxy")
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
@@ -5194,6 +5287,7 @@ class TaskOrchestrator:
         ):
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
+            record_answer_cache_hit()
             return result
         result = self._dispatch(messages, mode, model_name)
         try:
@@ -5255,6 +5349,7 @@ class TaskOrchestrator:
             stream_kwargs["effort_profile"] = effort_profile
         if include_usage:
             stream_kwargs["include_usage"] = True
+        record_initial_selection([agent.id], "stream_route")
         stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
@@ -5316,6 +5411,8 @@ class TaskOrchestrator:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
@@ -6780,11 +6877,12 @@ class TaskOrchestrator:
             {"role": "user", "content": task},
         ]
         effort_profile = self._role_effort_profile("planner")
-        raw = (
-            self.client.chat(planner, planner_messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.chat(planner, planner_messages)
-        )
+        with observe_auxiliary_dispatch([planner.id], "generated_planner"):
+            raw = (
+                self.client.chat(planner, planner_messages, effort_profile=effort_profile)
+                if effort_profile is not None
+                else self.client.chat(planner, planner_messages)
+            )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -7215,7 +7313,8 @@ class TaskOrchestrator:
         if embedding_member is None:
             return None
         try:
-            vectors = self.client.embed(self._agent(embedding_member), [text])
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(self._agent(embedding_member), [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -7242,9 +7341,10 @@ class TaskOrchestrator:
         if embedding_member is None:
             return None
         try:
-            vectors = self.client.embed(
-                self._agent(embedding_member), [self._agent_descriptor_text(agent)]
-            )
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(
+                    self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+                )
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -7330,7 +7430,8 @@ class TaskOrchestrator:
             {"role": "user", "content": text},
         ]
         try:
-            reply = self.client.chat(triage_agent, messages, temperature=0.0)
+            with observe_auxiliary_dispatch([triage_agent.id], "structured_triage"):
+                reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True
@@ -7614,6 +7715,8 @@ class TaskOrchestrator:
                     if agent.provider_name == "openrouter" and endpoint == "images/generations"
                     else endpoint
                 )
+                record_initial_selection([member.id for member in race_members], "capability_race",
+                                         attempt_id=decision_attempt_id)
                 return (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary else self.client.proxy_send(agent, provider_endpoint, payload)
@@ -7621,6 +7724,7 @@ class TaskOrchestrator:
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            decision_attempt_id = uuid.uuid4().hex
             try:
                 outcome = race_first_valid(
                     [
@@ -7672,6 +7776,7 @@ class TaskOrchestrator:
             )
             started_at = time.perf_counter()
             try:
+                record_initial_selection([agent.id], "capability_proxy")
                 result = (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary
@@ -7761,6 +7866,8 @@ class TaskOrchestrator:
 
             def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
+                    record_initial_selection([member.id for member in race_members], "text_race",
+                                             attempt_id=decision_attempt_id)
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
                         if effort_profile is not None
@@ -7771,6 +7878,7 @@ class TaskOrchestrator:
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            decision_attempt_id = uuid.uuid4().hex
             try:
                 outcome = race_first_valid(
                 [
@@ -7833,6 +7941,7 @@ class TaskOrchestrator:
                     single_attempt = getattr(self.client, "single_attempt_transport", None)
                     transport_scope = single_attempt() if callable(single_attempt) else nullcontext()
                     with transport_scope:
+                        record_initial_selection([agent.id], "invocation_" + role)
                         output = (
                             self.client.chat(agent, messages, effort_profile=effort_profile)
                             if effort_profile is not None
@@ -8692,7 +8801,7 @@ class TaskOrchestrator:
                 )
         return output_by_model, True
 
-    def _replace_workflow_run(self, record: dict[str, Any]) -> None:
+    def _replace_workflow_run(self, record: dict[str, Any], *, restored: bool = False) -> None:
         """Store one run and update its constant-time budget meter atomically."""
         model_by_agent = {agent.id: agent.model for agent in self.candidates}
         for step in record.get("trace", []):
@@ -8702,6 +8811,13 @@ class TaskOrchestrator:
         run_id = record["workflow_run_id"]
         with self._budget_spend_lock:
             previous = self._workflow_runs.get(run_id)
+            origin_request_id = (previous.get("request_id") if previous is not None
+                                 else record.get("request_id") if restored
+                                 else current_request_id())
+            if origin_request_id is not None:
+                record["request_id"] = origin_request_id
+            else:
+                record.pop("request_id", None)
             for sign, run in ((-1, previous), (1, record)):
                 if run is None:
                     continue

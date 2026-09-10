@@ -334,6 +334,45 @@ UI acceptance. Viewport dimensions, durable image export, responsive sizes,
 other locales, and error/loading states remain unverified. Do not mark the
 full visual-inspection requirement complete from this receipt.
 
+## State-write atomicity prerequisite (2026-09-09)
+
+At CO `ab8a7caa6c00a49eede17a03d0897865cfdce9f5`, `run()` calls
+`complete()` before saving its workflow record. Its duration includes generation
+and cannot represent accepted-request-to-decision latency. Analytics stream
+`save()` normally enqueues, whereas `durable=True` reaches the synchronous
+commit path. Neither queue acceptance nor final workflow storage is a substitute
+for a pre-invocation decision acknowledgement.
+
+Tracing that common synchronous path exposed an atomicity defect: a keyed
+replacement deletes the old row before inserting the new one. An insertion
+failure left the deletion in an open transaction, and a subsequent unrelated
+save committed it. A real SQLite trigger injecting an insertion failure reproduced
+the loss: the previous version disappeared. The new regression failed before
+the fix (1 failed, 18 deselected, 6.17s).
+
+Code commit `d7bba88f3d711883a37effe49ab4f503c4fb8e01` uses the existing
+connection's transaction context inside the existing lock. Success commits;
+failure rolls back before another writer acquires the lock. No new dependency,
+schema, numerical implementation, or production routing default was introduced.
+The same project-local Python environment ran `python -m pytest
+tests/test_persistence.py -q` from the isolated worktree: 19 passed in 16.38s.
+This establishes the tested SQLite failure case, not customer KPI improvement,
+full-suite success, protected merge, or production deployment. Next implement
+decision timing before provider invocation with explicit failure denominators;
+do not relabel existing response-generation timings.
+
+Follow-up validation: full `python -m pytest -q` at
+`877d5112ed470d851afaa2c746b94393cc768ee7` exited 0 with 3,396 passed and
+2 skipped in 883.03s. The quiet log does not identify the skip reasons; neither
+skip is counted as passed. Test-only commit
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` extends the regression to a real
+deferred foreign-key violation at commit, in addition to insertion failure.
+The existing transaction implementation is unchanged. At that commit,
+`python -m pytest tests/test_persistence.py
+tests/test_workflow_run_object_authorization.py tests/test_governance_runtime.py -q`
+exited 0: 29 passed in 4.89s. The new test head has not had a full-suite run;
+these local results do not establish hosted security checks or independent review.
+
 ## Break release cycles without copying implementation
 
 Minimum contract → owner RED test → owner implementation → exact-SHA/digest

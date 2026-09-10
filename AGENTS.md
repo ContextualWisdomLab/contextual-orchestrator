@@ -1,5 +1,12 @@
 # AGENTS.md
 
+Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
+HTTP reproduction, atomic submission-event projection, and remote/local failure
+boundary. Do not retry a remotely submitted job after local lineage failure.
+
+Workflow origin identity and persistence limitations are documented in
+`docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 
@@ -49,6 +56,10 @@ push or open a PR.
   Security **job results**; do not add tools to the `code_scanning` rule.
 
 ### Code exploration
+
+- Provider logs need server-generated per-request identity, not a session hash.
+  Preserve context cleanup and validate the central collector before adoption.
+  Reproduction and exact evidence: `docs/doctoring/provider_request_correlation.md`.
 
 - This repo has **no `.codegraph/` index**, so use normal search
   (grep/ripgrep/find, file reads) to locate and understand code. If a
