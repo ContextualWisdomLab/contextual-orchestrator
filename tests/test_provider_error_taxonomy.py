@@ -316,6 +316,60 @@ def test_binary_passthrough_classifies_provider_transport_failure() -> None:
             raise AssertionError("binary provider failure must be classified")
 
 
+def test_binary_passthrough_rejects_oversized_provider_body() -> None:
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("audio_agent", "audio-model", base_url="https://provider.example/v1")
+
+    class Headers:
+        def get(self, name: str) -> str | None:
+            assert name == "content-length"
+            return None
+
+        def get_content_type(self) -> str:
+            return "audio/mpeg"
+
+    class Response:
+        headers = Headers()
+
+        def read(self, _limit: int) -> bytes:
+            return b"x" * ((8 * 1024 * 1024) + 1)
+
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider"
+    ) as open_provider:
+        open_provider.return_value.__enter__.return_value = Response()
+        try:
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+        except ProviderResponseError as raised:
+            assert str(raised) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized binary provider response was accepted")
+
+
+def test_batch_raw_rejects_oversized_provider_body() -> None:
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("batch_agent", "gpt-x", base_url="https://provider.example/v1")
+
+    class Headers:
+        def get(self, _name: str) -> None:
+            return None
+
+    class Response:
+        headers = Headers()
+
+        def read(self, _limit: int) -> bytes:
+            return b"x" * ((8 * 1024 * 1024) + 1)
+
+    with patch.object(client, "_open_provider") as open_provider:
+        open_provider.return_value.__enter__.return_value = Response()
+        try:
+            client._batch_raw(agent, "/files/output/content")
+        except ProviderResponseError as raised:
+            assert str(raised) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized batch provider response was accepted")
+
+
 def test_detail_and_transport_are_preserved_for_callers() -> None:
     """The structured detail names agent/model/status/retryability/transport."""
     classified = classify_provider_failure(

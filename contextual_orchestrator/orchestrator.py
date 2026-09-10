@@ -3258,7 +3258,11 @@ class ModelClient:
             method="POST",
         )
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))["id"]
+            return json.loads(
+                self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
+                    "utf-8"
+                )
+            )["id"]
 
     def _batch_json(
         self,
@@ -3280,7 +3284,12 @@ class ModelClient:
             method=method,
         )
         with self._open_provider(request, destination) as response:
-            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
+            raw = self._read_bounded_response(
+                response,
+                MAX_PROVIDER_RESPONSE_BYTES
+                if max_response_bytes is None
+                else max_response_bytes,
+            )
             return json.loads(raw.decode("utf-8"))
 
     @staticmethod
@@ -3314,7 +3323,7 @@ class ModelClient:
             method="GET",
         )
         with self._open_provider(request, destination) as response:
-            return response.read()
+            return self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES)
 
 
 def _coerce_input_text(value: Any) -> str:
