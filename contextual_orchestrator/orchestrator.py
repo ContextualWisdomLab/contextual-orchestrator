@@ -2589,9 +2589,13 @@ class ModelClient:
         stream_usage: dict[str, Any] | None = None
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
+        response_bytes = 0
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
+                    response_bytes += len(raw)
+                    if response_bytes > MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderResponseError("provider response exceeds the configured limit")
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -2636,6 +2640,8 @@ class ModelClient:
             if _is_tool_execution_stopped(exc):
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            if isinstance(exc, ProviderResponseError):
                 raise
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
