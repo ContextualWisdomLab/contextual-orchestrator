@@ -258,7 +258,7 @@ ADMIN_TRANSLATIONS = {
         "confidence_low": "Review the response evidence, then rerun it or adjust the quality threshold.",
         "planner_capacity": "Planning capacity is nearly full; reduce queued work or add capacity.",
         "evaluation_hint": "Replay prompts against route or conduct mode before policy rollout.",
-        "golden_prompts": "Golden prompts",
+        "golden_prompts": "Reference cases",
         "security_reviews": "Security reviews",
         "research_tasks": "Research tasks",
         "production_ready": "Production ready",
@@ -521,7 +521,7 @@ ADMIN_TRANSLATIONS = {
         "confidence_low": "응답 근거를 검토한 다음 다시 실행하거나 품질 기준을 조정하세요.",
         "planner_capacity": "계획 용량이 거의 찼습니다. 대기 작업을 줄이거나 용량을 추가하세요.",
         "evaluation_hint": "정책 롤아웃 전에 route 또는 conduct 모드로 프롬프트를 재생합니다.",
-        "golden_prompts": "골든 프롬프트",
+        "golden_prompts": "참조 평가 사례",
         "security_reviews": "보안 리뷰",
         "research_tasks": "리서치 태스크",
         "production_ready": "프로덕션 준비",
@@ -1128,7 +1128,7 @@ Summarize this research thread and verify claims.</textarea>
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
-      {name: "golden_prompts", owner: "AI product", prompts: 42, policy: "route + conduct"},
+      {name: "reference_cases", owner: "AI product", prompts: 42, policy: "route + conduct"},
       {name: "security_reviews", owner: "Security", prompts: 28, policy: "conduct required"},
       {name: "research_tasks", owner: "Research", prompts: 35, policy: "verifier required"}
     ];
