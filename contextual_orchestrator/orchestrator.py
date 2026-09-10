@@ -1114,6 +1114,13 @@ LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 REQUEST_OUTCOME_ASSOCIATIONS_FIELD = "request_outcome_associations"
 """Reserved association field retained from PR #1126; export uses observations."""
 
+ROUTE_DECISION_LATENCY_FIELD = "decision_latency_ms"
+"""Trace-row field for the decision-only interval (#1110).
+
+Distinct from ``latency_ms``: selection/queueing/write cost only, never
+upstream generation. Until durable acknowledgement exists, report unavailable.
+"""
+
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     """Read and cache one bounded JSON error body for downstream classifiers."""
