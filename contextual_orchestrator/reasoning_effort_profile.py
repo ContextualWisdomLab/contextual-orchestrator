@@ -90,6 +90,9 @@ def apply_request_profile(
         payload["seed"] = validated.seed
     if supports_reasoning_effort:
         payload["reasoning_effort"] = validated.reasoning_effort
+    else:
+        # Omission must remove a value already present before capability fallback.
+        payload.pop("reasoning_effort", None)
     return payload
 
 
