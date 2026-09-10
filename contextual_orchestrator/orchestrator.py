@@ -164,6 +164,7 @@ ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
+MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
@@ -2733,8 +2734,12 @@ class ModelClient:
         )
         try:
             with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
-                return response.read(), response.headers.get_content_type()
+                return self._read_bounded_response(
+                    response, MAX_PROVIDER_RESPONSE_BYTES
+                ), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
+            if isinstance(exc, ProviderResponseError):
+                raise
             raise classify_provider_failure(
                 exc, agent_id=agent.id, model=agent.model, transport="passthrough"
             ) from None
