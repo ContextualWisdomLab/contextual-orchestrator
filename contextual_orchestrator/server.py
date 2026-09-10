@@ -65,6 +65,8 @@ from .telemetry import (
     attach_trace_context,
     configure_telemetry,
     current_session_id,
+    current_request_id,
+    request_identity,
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
@@ -5633,11 +5635,12 @@ def build_server(
             self.command = None
             self.path = None
             self._request_started = None
-            try:
-                super().handle_one_request()
-            finally:
-                self._log_request_summary(self._request_started)
-                self._reset_session()
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -5695,13 +5698,15 @@ def build_server(
             if not method and not path and status is None:
                 return
             _LOGGER.info(
+                "%s request_id=%s",
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
                     status=status,
                     latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
-                )
+                ),
+                current_request_id() or "-",
             )
 
         def do_GET(self) -> None:  # noqa: N802
@@ -8247,8 +8252,11 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            request_id = current_request_id() or uuid.uuid4().hex
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, request_id
+            )
+            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
@@ -8584,7 +8592,7 @@ def build_server(
                         "error": _error_payload(
                             exc.error_code,
                             _provider_upstream_message(exc),
-                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                            {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                         )["error"],
                     }
                     emit("response.failed", response=failed)
@@ -8766,8 +8774,8 @@ def build_server(
                         return
                 except ToolFallbackStoppedError as exc:
                     detail = {
-                        "request_id": uuid.uuid4().hex,
                         **_tool_fallback_error_detail(exc),
+                        "request_id": current_request_id() or uuid.uuid4().hex,
                     }
                     payload = _error_payload(
                         TOOL_FALLBACK_STOPPED_CODE,
@@ -8784,7 +8792,7 @@ def build_server(
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
-                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                        {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

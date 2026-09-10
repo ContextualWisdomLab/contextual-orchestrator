@@ -41,6 +41,10 @@ push or open a PR.
 
 ### Code exploration
 
+- Provider logs need server-generated per-request identity, not a session hash.
+  Preserve context cleanup and validate the central collector before adoption.
+  Reproduction and exact evidence: `docs/doctoring/provider_request_correlation.md`.
+
 - This repo has **no `.codegraph/` index**, so use normal search
   (grep/ripgrep/find, file reads) to locate and understand code. If a
   `.codegraph/` directory is ever added at the repo root, prefer CodeGraph

@@ -57,6 +57,7 @@ from .provider_errors import (
 )
 from .telemetry import (
     annotate_current_span,
+    current_request_id,
     inject_trace_context,
     record_provider_usage,
     traced,
@@ -1335,11 +1336,12 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
     """DEBUG-log one provider call attempt before it is made."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt agent_id=%s model=%s attempt=%d/%d",
+            "provider_attempt agent_id=%s model=%s attempt=%d/%d request_id=%s",
             agent.id,
             agent.model,
             attempt + 1,
             retry_limit + 1,
+            current_request_id() or "-",
         )
 
 
@@ -1349,12 +1351,13 @@ def _log_provider_attempt_failed(
     """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s",
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s request_id=%s error_message=%s",
             agent.id,
             agent.model,
             attempt + 1,
             type(exc).__name__,
             transient,
+            current_request_id() or "-",
             redact_text(str(exc))[:500],
         )
 
@@ -1363,10 +1366,11 @@ def _log_provider_backoff(agent: ModelAgent, attempt: int, delay: float) -> None
     """DEBUG-log one backoff sleep before the next retry attempt."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
         _LOGGER.debug(
-            "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f",
+            "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f request_id=%s",
             agent.id,
             attempt + 1,
             delay,
+            current_request_id() or "-",
         )
 
 
@@ -1387,11 +1391,12 @@ def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Except
     first place" or "was never allowed to be retried at all".
     """
     _LOGGER.warning(
-        "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s",
+        "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
+        current_request_id() or "-",
     )
 
 
@@ -1416,12 +1421,13 @@ def _log_provider_no_retry_budget(
     from "this wouldn't have been retried anyway" from this one event name.
     """
     _LOGGER.warning(
-        "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
         transient,
+        current_request_id() or "-",
     )
 
 
@@ -1447,12 +1453,13 @@ def _log_provider_one_shot_call_failed(
     :func:`_log_provider_no_retry_budget`.
     """
     _LOGGER.warning(
-        "provider_one_shot_call_failed agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        "provider_one_shot_call_failed agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
         transient,
+        current_request_id() or "-",
     )
 
 
@@ -1468,11 +1475,12 @@ def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_erro
     for the separate case where no retry budget was configured at all.
     """
     _LOGGER.warning(
-        "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s",
+        "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s request_id=%s",
         agent.id,
         agent.model,
         attempts,
         type(last_error).__name__,
+        current_request_id() or "-",
     )
 
 
