@@ -15,7 +15,12 @@ from contextual_orchestrator import (
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import (
+    ModelClient,
+    _REQUEST_ZDR_ONLY,
+    _request_endpoint_partition,
+)
+from contextual_orchestrator.response_cache import build_response_cache_key
 
 
 class _MemoryCache:
@@ -124,6 +129,114 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
     assert records[1]["prompt_tokens"] == 0
     assert records[1]["completion_tokens"] == 0
     assert records[1]["cost_amount"] == 0.0
+
+
+def test_orchestrator_free_auto_rejects_legacy_conduct_cache_entries() -> None:
+    """A pre-change FREE_MODEL auto cache entry must not outlive the route contract.
+
+    The hand-built legacy key below intentionally matches every current
+    ``_cache_key`` input (including the unrelated endpoint-partition fold)
+    except ``resolved_mode``, so a cache miss here isolates and proves the
+    ``resolved_mode`` differentiation this test targets rather than an
+    incidental partition mismatch.
+    """
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_free_worker",
+                "mock-free-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing", "cost:free"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator._triage_fn = lambda _text: True
+    messages = [{"role": "user", "content": "review and verify this legacy cache contract"}]
+    legacy_key = build_response_cache_key(
+        messages,
+        "auto",
+        model=TaskOrchestrator.FREE_MODEL,
+        parameters={
+            "temperature": getattr(orchestrator.client, "default_temperature", None),
+            "top_p": getattr(orchestrator.client, "default_top_p", None),
+            "presence_penalty": getattr(orchestrator.client, "default_presence_penalty", None),
+            "frequency_penalty": getattr(orchestrator.client, "default_frequency_penalty", None),
+            "max_output_tokens": getattr(orchestrator.client, "max_output_tokens", None),
+            "zdr_only": _REQUEST_ZDR_ONLY.get(),
+        },
+        partition=_request_endpoint_partition(),
+    )
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        legacy_key,
+        {
+            "mode": "conduct",
+            "answer": "stale conduct answer",
+            "trace": [{"role": "thinker"}],
+        },
+    )
+
+    result = orchestrator.complete(messages, mode="auto", model_name=TaskOrchestrator.FREE_MODEL)
+
+    assert client.calls == 1
+    assert result["cache_status"] == "miss"
+    assert result["mode"] == "route"
+    assert result["answer"] != "stale conduct answer"
+
+
+def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
+    """A warm cache entry for the default/auto path must not pay for triage.
+
+    Regression: folding ``resolved_mode`` into the cache key made ``complete()``
+    call ``would_route()`` -- and therefore the live, model-backed triage call
+    -- unconditionally *before* the cache lookup. For ``mode="auto"`` against
+    the gateway default model, that decision genuinely needs a real provider
+    call whenever the process-local triage cache is cold (a fresh replica, an
+    evicted entry), even when the distributed response cache already holds the
+    answer. A cache hit must short-circuit before that call ever happens.
+    """
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_worker",
+                "mock-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    triage_calls = 0
+
+    def _counting_triage(_text: str) -> bool:
+        nonlocal triage_calls
+        triage_calls += 1
+        return False
+
+    orchestrator._triage_fn = _counting_triage
+    messages = [{"role": "user", "content": "warm-cache default auto request"}]
+    key = orchestrator._cache_key(messages, "auto", TaskOrchestrator.GATEWAY_DEFAULT_MODEL, None)
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        key,
+        {"mode": "route", "answer": "warm answer", "trace": [{"role": "worker"}]},
+    )
+
+    result = orchestrator.complete(messages, mode="auto")
+
+    assert result["cache_status"] == "hit"
+    assert result["answer"] == "warm answer"
+    assert triage_calls == 0
+    assert client.calls == 0
 
 
 if __name__ == "__main__":  # pragma: no cover
