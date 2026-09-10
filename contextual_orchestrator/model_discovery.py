@@ -135,12 +135,15 @@ def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
         r"\b(?:accepts?|allows?)\s+only\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?\b",
         r"\bmax(?:imum)?\s+of\s+one\s+tool(?:-?calls?)?\b",
     )
-    if (
-        any(re.search(pattern, text) for pattern in single_tool_limit_patterns)
-        or (
-            "parallel_tool_calls" in text
-            and any(phrase in text for phrase in ("not supported", "unsupported"))
-        )
+    parallel_tool_calls_rejected = re.search(
+        r"(?:\bparallel[ _-]+tool[ _-]+calls?\b\s+(?:(?:is|are)\s+)?"
+        r"(?:not supported|unsupported)|\bparallel[ _-]+tool[ _-]+calls?\b\s+"
+        r"(?:isn't|aren't)\s+supported|\b(?:does not support|doesn't support)\s+"
+        r"parallel[ _-]+tool[ _-]+calls?\b)",
+        text,
+    )
+    if any(re.search(pattern, text) for pattern in single_tool_limit_patterns) or (
+        parallel_tool_calls_rejected
     ):
         return False
     return None
@@ -523,10 +526,16 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, error_code: str) -> None:
+    def __init__(
+        self, provider_name: str, error_code: str, credential_name: str | None = None
+    ) -> None:
         self.provider_name = provider_name
         self.error_code = error_code
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
+        self.credential_name = credential_name
+        account = f" account {credential_name!r}" if credential_name else ""
+        super().__init__(
+            f"model discovery failed for provider {provider_name!r}{account}: {error_code}"
+        )
 
 
 def _positive_int_metadata(value: object) -> int | None:
@@ -809,11 +818,17 @@ def _deduplicate_discovered_models(
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
             unit_prices=(),
+            capabilities=(),
+            input_modalities=(),
+            output_modalities=(),
+            privacy_policy_urls=(),
             is_free=False,
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
+            supports_parallel_tool_calls=None,
             zdr_capable=False,
+            spend_admitted=False,
         )
     return list(unique.values())
 
@@ -1605,8 +1620,11 @@ def _discover_bytez_task_catalog(
         raise ProviderDiscoveryError(
             source.provider_name,
             _provider_discovery_error_code(last_exc),
+            source.credential_name,
         ) from None
-    raise ProviderDiscoveryError(source.provider_name, "empty_provider_catalog")
+    raise ProviderDiscoveryError(
+        source.provider_name, "empty_provider_catalog", source.credential_name
+    )
 
 
 def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
@@ -1736,7 +1754,9 @@ def discover_provider_models(
                 type(last_exc).__name__,
                 redact_text(str(last_exc))[:500],
             )
-        raise ProviderDiscoveryError(source.provider_name, error_code) from None
+        raise ProviderDiscoveryError(
+            source.provider_name, error_code, source.credential_name
+        ) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             metadata = _fetch_models_dev_metadata(timeout=timeout)

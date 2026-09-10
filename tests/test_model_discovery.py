@@ -46,6 +46,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _parallel_tool_call_evidence,
+    _tool_call_parallelism_from_error,
     _price_per_1k,
     _parse_openai_compatible,
     _positive_int_metadata,
@@ -59,8 +60,10 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     general_free_serving_candidates,
     is_routable_discovered_model,
     openrouter_paid_inference_available,
+    privacy_tags_for_discovered,
     refresh_price_book,
     _response_contains_parallel_probe_tool_calls,
+    probe_discovered_model_tool_call_capability,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
@@ -408,6 +411,96 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
 
     assert len(discovered) == 1
     assert discovered[0].zdr_capable is False
+
+
+def test_duplicate_discovery_withholds_conflicting_parallel_tool_call_evidence() -> None:
+    """Conflicting duplicate rows must not preserve parallel-call evidence."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_parallel_tool_calls=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                supports_parallel_tool_calls=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].supports_parallel_tool_calls is None
+
+
+def test_duplicate_discovery_withholds_conflicting_capability_metadata() -> None:
+    """Conflicting duplicate rows must not preserve routing metadata from one row."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                capabilities=("chat",),
+                input_modalities=("text",),
+                output_modalities=("text",),
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                capabilities=("embedding",),
+                input_modalities=("text",),
+                output_modalities=("embedding",),
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].capabilities == ()
+    assert discovered[0].input_modalities == ()
+    assert discovered[0].output_modalities == ()
+
+
+def test_duplicate_discovery_withholds_conflicting_trust_metadata() -> None:
+    """Conflicting rows must fail closed on spend and privacy provenance."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                privacy_policy_urls=("https://gateway.example/privacy",),
+                spend_admitted=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                privacy_policy_urls=(),
+                spend_admitted=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].privacy_policy_urls == ()
+    assert discovered[0].spend_admitted is False
 
 
 def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
@@ -2092,6 +2185,7 @@ def test_discover_bytez_all_empty_is_explicit_fail_closed_evidence() -> None:
             discover_provider_models(source)
 
     assert excinfo.value.error_code == "empty_provider_catalog"
+    assert excinfo.value.credential_name == "BYTEZ_API_KEY"
 
 
 def test_discover_bytez_failure_telemetry_excludes_response_text(
@@ -2120,6 +2214,7 @@ def test_discover_bytez_failure_telemetry_excludes_response_text(
         discover_provider_models(source)
 
     assert excinfo.value.error_code == "http_status_500"
+    assert excinfo.value.credential_name == "BYTEZ_API_KEY"
     assert "task=chat outcome=failed error_code=http_status_500" in caplog.text
     assert (
         "task=text-generation outcome=failed error_code=http_status_500"
@@ -3180,6 +3275,82 @@ def test_parallel_tool_call_evidence_rejects_non_list_input() -> None:
     assert _parallel_tool_call_evidence(["tools"]) is None
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "parallel tool calls are not supported",
+        "parallel_tool_calls is unsupported",
+        "this model does not support parallel-tool-calls",
+        "parallel tool calls isn't supported by this model",
+    ],
+)
+def test_tool_call_probe_recognizes_explicit_parallel_rejection(message: str) -> None:
+    assert _tool_call_parallelism_from_error({"error": {"message": message}}) is False
+
+
+def test_tool_call_probe_keeps_ambiguous_parallel_error_unknown() -> None:
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "invalid tools payload"}}
+    ) is None
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "parallel tool calls are supported; image is not supported"}}
+    ) is None
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "image isn't supported"}}
+    ) is None
+
+
+def test_tool_call_capability_probe_requires_both_requested_calls() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    response = _Response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "probe_a"}},
+                            {"type": "function", "function": {"name": "probe_b"}},
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    with (
+        patch("contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()),
+        patch("contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=response),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_base()) is True
+
+
+def test_tool_call_capability_probe_maps_explicit_single_call_rejection_to_false() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    error = urllib.error.HTTPError(
+        "https://openrouter.ai/api/v1/chat/completions",
+        400,
+        "bad request",
+        None,
+        io.BytesIO(b'{"error":{"message":"parallel tool calls are not supported"}}'),
+    )
+    with (
+        patch("contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()),
+        patch("contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=error),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_base()) is False
+
+
+def test_tool_call_capability_probe_keeps_transport_failure_unknown() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with (
+        patch("contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=urllib.error.URLError("connection reset"),
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_base()) is None
+
+
 def test_tool_call_evidence_survives_agent_tags_and_restore() -> None:
     """Evidence must round-trip through serving tags; conflicts stay unknown."""
     from contextual_orchestrator.provider_catalog_store import _restore_model_semantics
@@ -3199,3 +3370,50 @@ def test_tool_call_evidence_survives_agent_tags_and_restore() -> None:
         multi, (*tags, "tool_call:single", DISCOVERY_TOOL_CALL_SINGLE_TAG)
     )
     assert conflicted.supports_parallel_tool_calls is None
+
+
+def test_privacy_tags_emit_only_explicit_evidence_and_legacy_zdr_marker() -> None:
+    base = _tool_call_probe_base()
+    assert privacy_tags_for_discovered(base) == ()
+    assert privacy_tags_for_discovered(
+        replace(
+            base,
+            supports_zero_data_retention=True,
+            supports_no_training=False,
+            supports_no_prompt_retention=True,
+        )
+    ) == ("privacy:zdr", "privacy:training_only", "privacy:no_retention")
+    assert privacy_tags_for_discovered(replace(base, zdr_capable=True)) == ("privacy:zdr",)
+
+
+def test_privacy_tags_do_not_coerce_malformed_capability_values() -> None:
+    malformed = replace(
+        _tool_call_probe_base(),
+        supports_zero_data_retention="true",  # type: ignore[arg-type]
+        supports_no_training=1,  # type: ignore[arg-type]
+        supports_no_prompt_retention="false",  # type: ignore[arg-type]
+    )
+
+    assert privacy_tags_for_discovered(malformed) == ()
+
+
+def test_restore_model_semantics_fails_closed_on_malformed_zdr_capability() -> None:
+    from contextual_orchestrator.provider_catalog_store import _restore_model_semantics
+
+    restored = _restore_model_semantics(
+        replace(_tool_call_probe_base(), zdr_capable="false"), ()
+    )
+
+    assert restored.zdr_capable is False
+    assert privacy_tags_for_discovered(restored) == ()
+
+
+@pytest.mark.parametrize("malformed", ["false", 0, None])
+def test_model_agent_config_fails_closed_on_malformed_disabled_flag(
+    malformed: object,
+) -> None:
+    agent = ModelAgent.from_dict(
+        {"id": "configured_agent", "model": "model-a", "disabled": malformed}
+    )
+
+    assert agent.disabled is True

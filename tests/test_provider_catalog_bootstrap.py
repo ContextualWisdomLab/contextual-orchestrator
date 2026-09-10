@@ -120,6 +120,41 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         set_backend(None)
 
 
+def test_provider_error_isolated_when_two_credentials_share_provider_name() -> None:
+    """One account failure must not withdraw a healthy sibling account."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        first = _source("shared", "OPENAI_API_KEY")
+        second = _source("shared", "OPENROUTER_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        bootstrap_provider_catalog_runtime(
+            environ={"OPENAI_API_KEY": "a", "OPENROUTER_API_KEY": "b"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: ([_model(first, "first-live"), _model(second, "second-live")], []),
+            model_limit=4,
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ={"OPENAI_API_KEY": "a", "OPENROUTER_API_KEY": "b"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: (
+                [_model(second, "second-new")],
+                [ProviderDiscoveryError("shared", "http_status_500", "OPENAI_API_KEY")],
+            ),
+            model_limit=4,
+        )
+
+        assert report.providers_with_errors == ("shared",)
+        assert report.last_known_good_model_count == 1
+        assert set(report.selected_agent_ids) == {"shared_second_new", "shared_first_live"}
+    finally:
+        set_backend(None)
+
+
 def test_failed_refresh_persists_safe_http_status_and_keeps_last_known_good() -> None:
     """Bytez HTTP failures retain LKG and a response-text-free status code."""
     set_backend(InMemoryCredentialBackend())

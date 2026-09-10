@@ -434,26 +434,42 @@ def refresh_persisted_provider_catalog(
     # every real caller (discover_all_models) raises at most one
     # ProviderDiscoveryError per source, so this only matters for adversarial
     # test doubles.
-    raw_error_code_by_provider = {error.provider_name: error.error_code for error in errors}
-    failed_names = set(raw_error_code_by_provider)
+    raw_error_code_by_account = {
+        (error.provider_name, error.credential_name): error.error_code for error in errors
+    }
+    raw_error_code_by_provider = {
+        error.provider_name: error.error_code
+        for error in errors
+        if error.credential_name is None
+    }
     effective: list[DiscoveredModel] = []
     last_known_good_count = 0
     refresh_failures = 0
-    providers_with_errors: set[str] = set(failed_names)
+    providers_with_errors: set[str] = {
+        error.provider_name for error in errors
+    }
     error_classifications: dict[str, str] = {
         provider_name: _classify_discovery_error_code(raw_code)
         for provider_name, raw_code in raw_error_code_by_provider.items()
     }
+    for error in errors:
+        error_classifications.setdefault(
+            error.provider_name, _classify_discovery_error_code(error.error_code)
+        )
 
     for source in sources:
         if source.credential_name not in registered:
             continue
         account_models = live_by_account.get(_source_key(source), [])
-        failed = source.provider_name in failed_names
+        error_key = (source.provider_name, source.credential_name)
+        error_code = raw_error_code_by_account.get(error_key)
+        if error_code is None:
+            error_code = raw_error_code_by_provider.get(source.provider_name)
+        failed = error_code is not None
         if failed:
             store.record_failure(
                 source,
-                error_code=raw_error_code_by_provider[source.provider_name],
+                error_code=error_code,
             )
             refresh_failures += 1
         elif not account_models:
