@@ -2795,8 +2795,12 @@ class ModelClient:
         )
         try:
             with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
-                return response.read(), response.headers.get_content_type()
+                return self._read_bounded_response(
+                    response, MAX_PROVIDER_RESPONSE_BYTES
+                ), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
+            if isinstance(exc, ProviderResponseError):
+                raise
             raise classify_provider_failure(
                 exc, agent_id=agent.id, model=agent.model, transport="passthrough"
             ) from None

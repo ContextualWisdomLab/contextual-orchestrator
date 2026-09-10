@@ -24,7 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderResponseError,
+    is_transient_error,
+)
 from contextual_orchestrator.provider_errors import (  # noqa: E402
     MAX_PROVIDER_ERROR_BODY_BYTES,
     MAX_SAFE_MESSAGE_CHARS,
