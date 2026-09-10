@@ -40,11 +40,35 @@ def _workflow_text() -> str:
     return SECURITY_WORKFLOW.read_text(encoding="utf-8")
 
 
+def _job_name_values(workflow: str) -> list[str]:
+    """Extract job-level ``name:`` values from the ``jobs:`` mapping.
+
+    Only lines indented with exactly four spaces count: job ids sit at two
+    spaces and their ``name:`` at four, while step names (``- name:``) sit
+    deeper and comments never match. Surrounding single/double quotes are
+    stripped so ``name: "X"`` and ``name: X`` compare equal.
+    """
+    names: list[str] = []
+    in_jobs = False
+    for line in workflow.splitlines():
+        if line == "jobs:":
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if line.startswith("    name:"):
+            value = line.split(":", 1)[1].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            names.append(value)
+    return names
+
+
 def test_required_check_names_are_declared_exactly_once() -> None:
     """Each protection-required context must come from exactly one job name."""
-    workflow = _workflow_text()
+    job_names = _job_name_values(_workflow_text())
     for name in REQUIRED_CHECK_NAMES:
-        assert workflow.count(f"name: {name}") == 1, (
+        assert job_names.count(name) == 1, (
             f"expected exactly one job named {name!r} in security.yml "
             "(rename requires the owner protection update from #1079)"
         )
@@ -52,9 +76,9 @@ def test_required_check_names_are_declared_exactly_once() -> None:
 
 def test_retired_check_names_are_absent() -> None:
     """Pre-#1054 job names must not reappear in the workflow."""
-    workflow = _workflow_text()
+    job_names = _job_name_values(_workflow_text())
     for name in RETIRED_CHECK_NAMES:
-        assert f"name: {name}" not in workflow, (
+        assert name not in job_names, (
             f"retired check name {name!r} found in security.yml"
         )
 
