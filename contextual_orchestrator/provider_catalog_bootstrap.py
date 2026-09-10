@@ -87,6 +87,20 @@ _TRANSIENT_HTTP_STATUS_CODES = frozenset(
 )
 
 
+def _merge_error_classifications(current: str | None, incoming: str) -> str:
+    """Combine every classification recorded for one provider.
+
+    A provider can carry several account rows at once. When every row agrees,
+    the provider summary is that single classification; mixed evidence is
+    ambiguous, so it collapses to ``UNKNOWN_FAILURE_CLASSIFICATION``
+    (hard-fail) rather than letting a transient sibling's code excuse an
+    authentication or persistent failure.
+    """
+    if current is None or current == incoming:
+        return incoming
+    return UNKNOWN_FAILURE_CLASSIFICATION
+
+
 def _classify_discovery_error_code(error_code: object) -> str:
     """Bucket one raw discovery error code into the report-safe vocabulary.
 
@@ -109,6 +123,16 @@ def _classify_discovery_error_code(error_code: object) -> str:
     return UNKNOWN_FAILURE_CLASSIFICATION
 
 
+def _account_classification_map(
+    entries: Sequence[tuple[str, str, str]],
+) -> dict[str, dict[str, str]]:
+    """Nest account classifications as provider -> credential -> classification."""
+    nested: dict[str, dict[str, str]] = {}
+    for provider_name, credential_name, classification in entries:
+        nested.setdefault(provider_name, {})[credential_name] = classification
+    return nested
+
+
 @dataclass(frozen=True)
 class ProviderCatalogSnapshot:
     """Effective persisted model snapshot after provider-isolated refresh."""
@@ -119,6 +143,7 @@ class ProviderCatalogSnapshot:
     refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
     provider_error_classifications: tuple[tuple[str, str], ...]
+    provider_account_error_classifications: tuple[tuple[str, str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -143,6 +168,7 @@ class ProviderCatalogBootstrapReport:
     catalog_refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
     provider_error_classifications: tuple[tuple[str, str], ...]
+    provider_account_error_classifications: tuple[tuple[str, str, str], ...]
     priced_model_count: int
     privacy_assessment_count: int
     catalog_refreshes: tuple[CatalogRefreshEvidence, ...]
@@ -163,6 +189,9 @@ class ProviderCatalogBootstrapReport:
             "catalog_refresh_failure_count": self.catalog_refresh_failure_count,
             "providers_with_errors": list(self.providers_with_errors),
             "provider_error_classifications": dict(self.provider_error_classifications),
+            "provider_account_error_classifications": _account_classification_map(
+                self.provider_account_error_classifications
+            ),
             "priced_model_count": self.priced_model_count,
             "privacy_assessment_count": self.privacy_assessment_count,
             "catalog_refreshes": [
@@ -228,7 +257,12 @@ def evaluate_provider_credential_inventory(
       shape), an unparseable response, or an unrecognized code. Defaulting
       to hard-fail here (rather than allow-listing only authentication
       failures) matters because a permanently broken integration is just as
-      capable of silently passing forever as an invalid credential is;
+      capable of silently passing forever as an invalid credential is. Each
+      credential is judged by its own account-level classification in
+      ``provider_account_error_classifications`` first, so a sibling
+      account's transient code can never excuse this account's rollback; the
+      provider-level ``provider_error_classifications`` summary is only a
+      fallback for legacy reports and provider-wide errors;
     - more than ``max_tolerated_missing_providers`` independently discovered
       provider accounts affected at once -- a broad outage, not the
       isolated single-provider blip this tolerance exists for, and reason
@@ -282,7 +316,39 @@ def evaluate_provider_credential_inventory(
     providers_with_errors = {
         name for name in report.get("providers_with_errors", ()) if isinstance(name, str)
     }
-    error_classifications = dict(report.get("provider_error_classifications", {}) or {})
+    raw_error_classifications = report.get("provider_error_classifications", {}) or {}
+    error_classifications = (
+        dict(raw_error_classifications)
+        if isinstance(raw_error_classifications, Mapping)
+        else {}
+    )
+    account_error_classifications = report.get(
+        "provider_account_error_classifications", {}
+    ) or {}
+    if not isinstance(account_error_classifications, Mapping):
+        account_error_classifications = {}
+
+    def classification_for(credential_name: str) -> str:
+        """Prefer this credential account's own classification, then provider-wide.
+
+        Account-specific entries exist for every error that named a
+        credential, so a sibling account's transient code can never justify
+        this account's rollback. The provider-level fallback covers legacy
+        reports and provider-wide errors (``credential_name is None``), which
+        by construction have no account key to look up.
+        """
+        provider_name = provider_by_credential.get(credential_name, "")
+        accounts = account_error_classifications.get(provider_name)
+        if isinstance(accounts, Mapping):
+            account_value = accounts.get(credential_name)
+            if isinstance(account_value, str):
+                return account_value
+        provider_value = error_classifications.get(provider_name)
+        return (
+            provider_value
+            if isinstance(provider_value, str)
+            else UNKNOWN_FAILURE_CLASSIFICATION
+        )
 
     unconfigured = sorted(
         name for name in to_evaluate if not (environ.get(name) or "").strip()
@@ -309,16 +375,10 @@ def evaluate_provider_credential_inventory(
     non_transient = sorted(
         name
         for name in to_evaluate
-        if error_classifications.get(provider_by_credential.get(name, ""))
-        != TRANSIENT_FAILURE_CLASSIFICATION
+        if classification_for(name) != TRANSIENT_FAILURE_CLASSIFICATION
     )
     if non_transient:
-        observed = {
-            name: error_classifications.get(
-                provider_by_credential.get(name, ""), UNKNOWN_FAILURE_CLASSIFICATION
-            )
-            for name in non_transient
-        }
+        observed = {name: classification_for(name) for name in non_transient}
         return ProviderCredentialInventoryVerdict(
             False,
             "credential inventory mismatch: not a tolerated transient outage "
@@ -448,14 +508,23 @@ def refresh_persisted_provider_catalog(
     providers_with_errors: set[str] = {
         error.provider_name for error in errors
     }
-    error_classifications: dict[str, str] = {
-        provider_name: _classify_discovery_error_code(raw_code)
-        for provider_name, raw_code in raw_error_code_by_provider.items()
-    }
+    # Credential-specific failures are keyed by (provider_name,
+    # credential_name) so one account's classification can never stand in for
+    # a sibling account's different failure. The provider-level summary is
+    # still reported for the workflow contract, but it is a merge: mixed
+    # evidence collapses to the non-tolerable unknown bucket instead of
+    # letting a transient sibling mask an authentication failure.
+    error_classifications: dict[str, str] = {}
+    account_error_classifications: dict[tuple[str, str], str] = {}
     for error in errors:
-        error_classifications.setdefault(
-            error.provider_name, _classify_discovery_error_code(error.error_code)
+        classification = _classify_discovery_error_code(error.error_code)
+        error_classifications[error.provider_name] = _merge_error_classifications(
+            error_classifications.get(error.provider_name), classification
         )
+        if error.credential_name is not None:
+            account_error_classifications[
+                (error.provider_name, error.credential_name)
+            ] = classification
 
     for source in sources:
         if source.credential_name not in registered:
@@ -483,8 +552,12 @@ def refresh_persisted_provider_catalog(
             # with zero eligible models) as a self-resolving blip. Default
             # it to the same non-tolerable bucket rather than assuming
             # transient.
-            error_classifications.setdefault(
-                source.provider_name, UNKNOWN_FAILURE_CLASSIFICATION
+            error_classifications[source.provider_name] = _merge_error_classifications(
+                error_classifications.get(source.provider_name),
+                UNKNOWN_FAILURE_CLASSIFICATION,
+            )
+            account_error_classifications.setdefault(
+                _source_key(source), UNKNOWN_FAILURE_CLASSIFICATION
             )
         else:
             eligible_ids = {
@@ -520,6 +593,13 @@ def refresh_persisted_provider_catalog(
         refresh_failure_count=refresh_failures,
         providers_with_errors=tuple(sorted(providers_with_errors)),
         provider_error_classifications=tuple(sorted(error_classifications.items())),
+        provider_account_error_classifications=tuple(
+            sorted(
+                (provider_name, credential_name, classification)
+                for (provider_name, credential_name), classification in
+                account_error_classifications.items()
+            )
+        ),
     )
 
 
@@ -595,13 +675,28 @@ def bootstrap_provider_catalog_runtime(
             if analyze_privacy_policies
             else 0
         )
-        failed_provider_names = {error.provider_name for error in errors}
+        # Roll back only the accounts that actually failed. An error labeled
+        # with a credential_name revokes that account alone; without one, the
+        # provider-level fallback still covers every account of that provider
+        # (the error cannot be attributed to a specific account). A healthy
+        # sibling account must keep the value this run just registered.
+        account_error_keys = {
+            (error.provider_name, error.credential_name)
+            for error in errors
+            if error.credential_name is not None
+        }
+        provider_error_names = {
+            error.provider_name
+            for error in errors
+            if error.credential_name is None
+        }
         failed_credentials = {
             source.credential_name
             for source in source_tuple
             if source.credential_name in registered
             and (
-                source.provider_name in failed_provider_names
+                _source_key(source) in account_error_keys
+                or source.provider_name in provider_error_names
                 or not any(
                     _model_key(model) == _source_key(source)
                     for model in live_models
@@ -673,6 +768,9 @@ def bootstrap_provider_catalog_runtime(
             catalog_refresh_failure_count=snapshot.refresh_failure_count,
             providers_with_errors=snapshot.providers_with_errors,
             provider_error_classifications=snapshot.provider_error_classifications,
+            provider_account_error_classifications=(
+                snapshot.provider_account_error_classifications
+            ),
             priced_model_count=priced_count,
             privacy_assessment_count=privacy_assessment_count,
             catalog_refreshes=catalog_refreshes,
