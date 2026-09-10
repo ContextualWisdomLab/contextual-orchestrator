@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
   schedule:
     - cron: "17 3 * * 1"
     - cron: "41 4 * * 2"
@@ -18,13 +18,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: local-quality-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.schedule || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.event.schedule || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tests:
     name: Tests and package quality
-    if: github.event_name != 'schedule'
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -81,7 +83,9 @@ jobs:
 
   fuzz:
     name: Property and coverage-guided fuzzing
-    if: github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2'
+    if: >-
+      (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -134,7 +138,10 @@ jobs:
     name: CodeQL, supply chain, and SBOM
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1') &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event_name != 'pull_request' ||
+        (github.event.action != 'closed' &&
+         github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     permissions:
       actions: read
