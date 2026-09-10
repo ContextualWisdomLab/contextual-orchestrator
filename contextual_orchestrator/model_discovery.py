@@ -195,6 +195,12 @@ def probe_discovered_model_tool_call_capability(
     This is real runtime evidence, not a model-name heuristic. It is deliberately
     separate from :func:`discover_all_models` so callers decide when the extra
     latency and token cost are justified.
+
+    Both the success body and the 400 error body are untrusted network input,
+    so each read is capped at :data:`MAX_DISCOVERY_RESPONSE_BYTES` (plus one
+    byte to detect an overage) exactly like the sibling discovery fetches; an
+    oversized body is treated as ambiguous evidence and returns ``None``
+    rather than being buffered whole.
     """
     api_key = get_credential(discovered.credential_name)
     if not api_key:
@@ -260,11 +266,14 @@ def probe_discovered_model_tool_call_capability(
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with client._open_provider(request, destination, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            body = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
             return None
-        body = exc.read().decode("utf-8", errors="replace")
+        error_body = exc.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+        if len(error_body) > MAX_DISCOVERY_RESPONSE_BYTES:
+            return None
+        body = error_body.decode("utf-8", errors="replace")
         try:
             error_payload = json.loads(body)
         except json.JSONDecodeError:
@@ -272,6 +281,9 @@ def probe_discovered_model_tool_call_capability(
         return _tool_call_parallelism_from_error(error_payload)
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
+    if len(body) > MAX_DISCOVERY_RESPONSE_BYTES:
+        return None
+    body = body.decode("utf-8", errors="replace")
     try:
         response_payload = json.loads(body)
     except json.JSONDecodeError:
