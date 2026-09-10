@@ -37,6 +37,7 @@ RETIRED_CHECK_NAMES = (
 
 
 def _workflow_text() -> str:
+    """Read the Security workflow file as text."""
     return SECURITY_WORKFLOW.read_text(encoding="utf-8")
 
 
