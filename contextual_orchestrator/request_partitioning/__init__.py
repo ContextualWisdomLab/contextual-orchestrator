@@ -276,6 +276,10 @@ class PartitionExecutor:
             self.store.complete(plan_id, call, result)
         else:
             self._validate(result, limits)
+        # Preserve an acknowledged response for resume, but do not publish success
+        # after cancellation arrived during the provider call or checkpoint read.
+        if cancelled is not None and cancelled():
+            raise PartitionError("cancelled")
         return _Record(call.operation_id, result.text, call.unit_ids)
 
     def run(self, scope: RequestScope, task: str, units: tuple[EvidenceUnit, ...],
