@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import socket
@@ -21,6 +22,7 @@ from contextual_orchestrator import (
 from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
+    _is_ambiguous_passthrough_transport_failure,
     _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -1290,7 +1292,15 @@ def test_only_temporary_dns_failures_advance(
 
 
 def test_ambiguous_timeout_is_not_replayed() -> None:
-    """A timeout may follow provider acceptance, so passthrough fails closed."""
+    """A timeout may follow provider acceptance, so passthrough fails closed.
+
+    Failing closed means no replay on another candidate. It does not mean the
+    bare ``TimeoutError`` escapes: that left the HTTP handler answering
+    ``500 internal_error`` and the breaker never hearing about the stalled
+    candidate (Strix run 33993155419, ContextualWisdomLab/.github#1812, #1045).
+    The caller now receives the classified ``502 provider_connection_error``
+    and the candidate is a breaker observation.
+    """
     failure = TimeoutError("provider outcome unknown")
     client = SequencedProxyClient(
         {
@@ -1298,11 +1308,18 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
             "fallback_agent": {"model": "fallback-model"},
         }
     )
+    orchestrator = _build(client)
 
-    with pytest.raises(TimeoutError, match="outcome unknown"):
-        _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert caught.value.client_status == 502
+    assert caught.value.error_code == "provider_connection_error"
+    assert caught.value.retryable is True
+    assert caught.value.transport == "passthrough"
+    assert caught.value.__cause__ is None
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "primary_agent" in orchestrator._circuit
 
 
 def test_virtual_effort_profile_selects_a_supported_provider() -> None:
@@ -1538,3 +1555,94 @@ def test_json_object_contract_rejects_non_json_and_non_object_values() -> None:
     assert _structured_output_error("not json", response_format) == "invalid_json"
     assert _structured_output_error("[]", response_format) == "invalid_json_object"
     assert _structured_output_error('{"status":"synthetic_ok"}', response_format) is None
+
+
+def _wrapped_url_error(cause: OSError) -> urllib.error.URLError:
+    """Raise ``cause`` the way urllib does, so it becomes the URLError's context."""
+    try:
+        raise cause
+    except OSError as err:
+        try:
+            raise urllib.error.URLError(err)
+        except urllib.error.URLError as wrapped:
+            return wrapped
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("read timed out"),
+        ConnectionResetError(104, "connection reset by peer"),
+        http.client.IncompleteRead(b""),
+        http.client.RemoteDisconnected("remote end closed connection"),
+        _wrapped_url_error(TimeoutError("connect timed out")),
+    ],
+    ids=["read-timeout", "reset", "incomplete-read", "remote-disconnected", "connect-timeout"],
+)
+def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseException) -> None:
+    """Every ambiguous transport failure fails closed the same way: classified, recorded, not replayed."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert caught.value.client_status == 502
+    assert caught.value.error_code == "provider_connection_error"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "primary_agent" in orchestrator._circuit
+    assert _is_ambiguous_passthrough_transport_failure(failure)
+
+
+def test_ambiguous_transport_predicate_excludes_status_and_dns_failures() -> None:
+    """HTTP statuses and DNS failures are not ambiguous: nothing reached the provider or a status came back."""
+    assert _is_ambiguous_passthrough_transport_failure(_http_error(401)) is False
+    assert _is_ambiguous_passthrough_transport_failure(_http_error(503)) is False
+    dns = _wrapped_url_error(socket.gaierror(socket.EAI_NONAME, "name not known"))
+    assert _is_ambiguous_passthrough_transport_failure(dns) is False
+    assert _is_ambiguous_passthrough_transport_failure(ValueError("bad body")) is False
+
+
+def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
+    """A grouped candidate's ambiguous failure reaches its group's stability record too."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": TimeoutError("read timed out"),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, group_name="provider-group") for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+
+    assert orchestrator._group_router.member_observation_count("primary_agent") == 1
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
+    """A chain deeper than the walk limit with no transport failure inside is not ambiguous."""
+    error: BaseException = ValueError("layer 0")
+    for depth in range(1, 12):
+        try:
+            raise error
+        except ValueError as inner:
+            try:
+                raise ValueError(f"layer {depth}") from inner
+            except ValueError as outer:
+                error = outer
+    assert _is_ambiguous_passthrough_transport_failure(error) is False

@@ -71,6 +71,62 @@ def test_http_chat_accepts_padded_tool_choice_none_auto() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_forwards_normalized_tool_choice_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "normalized choice"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_item",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "tool_choice": "\tAUTO\n",
+            },
+        )
+
+        assert status == 200, body
+        assert body["echo"]["tool_choice"] == "auto"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_forwards_normalized_tool_choice_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "normalized response choice",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup_item",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+                "tool_choice": "\tAUTO\n",
+            },
+        )
+
+        assert status == 200, body
+        assert body["echo"]["tool_choice"] == "auto"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_padded_function_call_none_auto() -> None:
     server, thread, port = _server()
     try:
