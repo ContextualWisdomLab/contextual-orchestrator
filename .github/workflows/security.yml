@@ -27,7 +27,7 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -86,7 +86,7 @@ jobs:
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -142,7 +142,7 @@ jobs:
         (github.event.action != 'closed' &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
