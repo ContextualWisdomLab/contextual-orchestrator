@@ -144,6 +144,48 @@ class CheckpointStore:
             PRIMARY KEY (plan_key, operation_key)
         )""")
 
+        connection.execute("""CREATE TABLE IF NOT EXISTS partition_manifest (
+            plan_key TEXT NOT NULL,
+            partition_key TEXT NOT NULL,
+            manifest_digest TEXT NOT NULL,
+            PRIMARY KEY (plan_key, partition_key)
+        )""")
+
+    def bind_partition(self, plan_id: str, partition_key: str,
+                       calls: tuple[Invocation, ...]) -> None:
+        """Seal each map/reduction layout before any of its calls can execute.
+
+        Compaction or a changed counter must not regroup previously completed
+        evidence under fresh operation identifiers. Legacy rows without a map
+        manifest require reconciliation; they cannot be retroactively attested.
+        """
+        manifest_digest = _digest([
+            [call.operation_id, _digest(call.prompt), call.unit_ids,
+             call.max_output_tokens] for call in calls
+        ])
+        db = self.connection
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            row = db.execute(
+                "SELECT manifest_digest FROM partition_manifest "
+                "WHERE plan_key=? AND partition_key=?", (plan_id, partition_key),
+            ).fetchone()
+            if row is not None:
+                if row[0] != manifest_digest:
+                    raise PartitionError("checkpoint_partition_changed")
+            else:
+                if calls[0].stage == "map" and db.execute(
+                    "SELECT 1 FROM partition_call WHERE plan_key=? LIMIT 1", (plan_id,),
+                ).fetchone() is not None:
+                    raise PartitionError("checkpoint_manifest_required")
+                db.execute("INSERT INTO partition_manifest VALUES (?, ?, ?)",
+                           (plan_id, partition_key, manifest_digest))
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+
     def claim(self, plan_id: str, call: Invocation, input_tokens: int,
               limits: Limits) -> Completion | None:
         """Return a committed response, or atomically reserve one new invocation."""
@@ -151,7 +193,7 @@ class CheckpointStore:
         db.execute("BEGIN IMMEDIATE")
         try:
             row = db.execute(
-                "SELECT prompt_digest, run_state, response_text, output_tokens "
+                "SELECT prompt_digest, run_state, response_text, output_tokens, reserved_tokens "
                 "FROM partition_call WHERE plan_key=? AND operation_key=?",
                 (plan_id, call.operation_id),
             ).fetchone()
@@ -159,6 +201,8 @@ class CheckpointStore:
             if row is not None:
                 if row[0] != digest:
                     raise PartitionError("checkpoint_identity_mismatch")
+                if row[4] != input_tokens + limits.output_tokens:
+                    raise PartitionError("checkpoint_accounting_changed")
                 if row[1] != "completed":
                     raise PartitionError("reconciliation_required")
                 db.execute("COMMIT")
@@ -249,6 +293,10 @@ class PartitionExecutor:
             if self._tokens(self._call(plan_id, stage, task, current, limits)) + limits.output_tokens > limits.context_tokens:
                 raise PartitionError("atomic_unit_too_large" if stage == "map" else "reduction_not_progressing")
         groups.append(current)
+        self.store.bind_partition(
+            plan_id, _digest([stage, [record.reference for record in records]]),
+            tuple(self._call(plan_id, stage, task, group, limits) for group in groups),
+        )
         return tuple(groups)
 
     @staticmethod
