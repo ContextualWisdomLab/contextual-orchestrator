@@ -20,13 +20,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- Passthrough attempt receipts no longer infer public provider labels from
-  endpoint hostnames. Ambiguous timeout/connection failures now report the
-  neutral `transport` phase and remain sticky even for `orchestrator/free`,
-  preventing duplicate completion and unreported upstream usage. Generic
-  HTTP 500/502/504 and non-standard 529 responses are sticky as well: an HTTP
-  retry classification alone does not prove that a non-idempotent completion
-  request was never applied.
+- Virtual `orchestrator/free` structured completions (`response_format`, no
+  tools/stream) fail over a retryable synthesizer 502/429 onto the next
+  eligible free worker and attach request-scoped eligible/attempted
+  receipts. Concrete model pins stay sticky. Default model timeout remains
+  null (issue #1045; Inkspan Noema job 101628090366 on base `414f2297`).
+- Review-sidecar `orchestrator/free` admission now treats a CI-seeded
+  `OPENCODE_ZEN_API_KEY` as an authorized free-pool source. Honest-free
+  OpenCode Zen and OpenCode Go rows can enter `G ∩ P ∩ R`; `OPENAI_API_KEY`
+  remains registered for global discovery and is still excluded from the
+  review free pool (Noema 429 on `google/gemma-4-31b-it:free` in PR #1094
+  while Zen/Go evidence was dropped before routing).
+- `OPENCODE_ZEN_API_KEY` is documented as the shared KV credential for both
+  OpenCode Zen and OpenCode Go catalogs; registering it once discovers both
+  accounts.
+- Virtual selectors (`orchestrator/free`, `orchestrator/auto`,
+  `contextual-orchestrator`) keep tools and streaming on Fugu route /
+  TRINITY-Conductor conduct. A tools array no longer ejects those calls into
+  single-agent passthrough, so a failed worker is re-selected on the control
+  plane (incident: ContextualWisdomLab/.github run 34079284863, Strix step 23).
+  A worker `tool_calls` payload is returned as Chat Completions `tool_calls`
+  instead of being treated as missing assistant text. Concrete model ids
+  remain a debug pin. Psychometric θ̂/RMSE stays an equal-budget score of
+  those paper paths, not a separate router.
+- Streamed `/v1/responses` now emits OpenAI `response.reasoning_text.*`
+  events for TRINITY thinker/worker/verifier and Conductor step outputs,
+  while `response.reasoning_summary_*` stays the paper-role stage summary.
+  The synthesizer answer remains `output_text`. Chat Completions, audio,
+  image, video, embeddings, and rerank use the same worker re-selection
+  but cannot emit those reasoning events, so only the modality result is
+  returned.
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.

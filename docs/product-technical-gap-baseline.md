@@ -1,98 +1,53 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
-## 2026-09-04 Autonomous Commercialization Loop: issue #1045 root-cause fix for orchestrator/free passthrough 502 evidence
+## 2026-09-09 Request-to-provider diagnostic correlation
 
-Observation time: 2026-09-04 Asia/Seoul.
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
 
-GitHub authentication was re-verified first with `gh api user`. The primary
-checkout was dirty, so work continued in a clean linked worktree at
-`.worktrees/commercial-loop-20260904-issue1045`. Open PR heads and prior
-`commercial-loop-*` worktrees were re-fetched before editing. No existing
-open PR head covered this exact contract: PR [#1046](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1046)
-was only queued behind hosted checks for an unrelated EgressWeave SSRF change,
-while the active `orchestrator/free` queue items [#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
-and [#993](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/993)
-were preserved as distinct in-flight contracts. The highest-leverage
-independent unit was therefore issue
-[#1045](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1045):
-typed attempt evidence and bounded failover for long `orchestrator/free`
-tool-loop transport failures.
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
 
-### Root cause confirmed on current `main`
+## 2026-09-08 error-response correlation repair
 
-The live Noema review incidents in issue `#1045` reproduced the single-agent
-tool-loop path, not `route_once()`. `/v1/chat/completions` tool-bearing
-requests call `proxy_completion(..., single_agent=True)`, which performs
-virtual-model passthrough failover inside `TaskOrchestrator.proxy_completion`.
+ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
+500 with request ID `175d6d59c5294b0e8a21548193b90482`. Its surviving artifact
+9969701340 contains gateway stderr but only generic request-failure messages;
+it cannot correlate that ID to an internal cause. The job installed CO source
+`2e414d15ba58f28597751b625a8a2f00fc9fadcf`. This is not proof of free-pool
+exhaustion, a disappeared run, or a currently released fix.
 
-Current-head RCA:
-
-- raw HTTP passthrough failures were already classified and could participate
-  in bounded failover, but raw provider transport exceptions such as
-  `TimeoutError`, `urllib.error.URLError`, `ConnectionError`, and wrapped DNS
-  failures were not classified inside the multi-candidate passthrough loop;
-- `classify_provider_failure()` already mapped those raw exceptions to bounded
-  typed 502 surfaces, but `proxy_completion()` only invoked the classifier for
-  `HTTPError` and already-classified `ProviderUpstreamError` instances;
-- raw transport failures had no request-scoped attempt receipt explaining why
-  the gateway stopped. They remain non-replayable because a timeout or generic
-  connection failure does not prove that the provider rejected the request
-  before accepting work or usage.
-
-### Local fix completed
-
-The worktree change makes one surgical contract extension:
-
-- `proxy_completion()` now classifies every caught passthrough provider
-  exception before deciding whether failover is permitted;
-- `orchestrator/free` virtual passthrough advances only after evidence that
-  proves non-acceptance, such as an RFC-defined request rejection or temporary
-  pre-request DNS failure. RFC 9110 section 9.2.2 does not authorize automatic
-  replay of a non-idempotent request from retryability alone. Generic
-  500/502/504 responses and the non-standard 529 therefore remain sticky,
-  alongside raw timeout and generic transport failures, to prevent duplicate
-  completion and unreported usage;
-- sticky failures now record the distinct failover decision
-  `sticky_candidate_failure` instead of incorrectly reusing
-  `eligible_candidates_exhausted`, while explicit concrete-model requests
-  remain single-provider sticky.
-
-The public error detail remains bounded and secret-safe: no credentials, raw
-provider bodies, prompt text, or inferred endpoint hostnames are emitted.
-Unclassified connection/timeout outcomes use lifecycle phase `transport`;
-only explicit TLS failures use `connecting`.
-
-### Exact local verification
-
-The 2026-09-08 current-head review repair added three explicit acceptance
-boundaries: no replay after an ambiguous transport outcome, no inferred
-endpoint hostname in public attempt evidence, and no invented `connecting`
-phase for an outcome whose lifecycle stage is unknown. The revised tests first
-failed as expected (`3 failed, 61 passed`) and then passed after the minimal
-owner fix.
-
-- Added focused regressions proving ambiguous raw/classified transport errors
-  remain sticky in both the in-process free-model loop and real
-  `/v1/chat/completions` HTTP path. A follow-up RED contract found that HTTP
-  500 still replayed; the repair also keeps 502, 504, and 529 sticky while
-  retaining bounded failover for explicit rejection and temporary pre-request
-  DNS evidence.
-- `.venv/bin/python -m pytest tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
-  -> `98 passed in 10.64s`
-- `.venv/bin/python -m pytest tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py -q`
-  -> `119 passed in 11.61s`
-- `uvx ruff check --select E4,E7,E9,F contextual_orchestrator/orchestrator.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py`
-  and `git diff --check` -> success.
-
-### Branch-local quality note
-
-- `uv run ruff check contextual_orchestrator/orchestrator.py tests/test_passthrough_provider_failover.py tests/test_openai_passthrough.py`
-  could not run in this worktree because the pinned environment does not
-  currently expose a `ruff` executable (`No such file or directory`).
-
-Hosted exact-head checks, protected merge, and the unchanged LifeOS/Noema
-consumer canary remain future steps because this invocation stopped at one
-completed local root-cause work unit, per the hourly-loop boundary.
+The same correlation gap was reproduced on main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`: the common HTTP error response had
+a generated ID absent from its log. The proposed repair generates one ID for
+both response and warning, prevents detail fields from overriding it, and logs
+neither session values nor error details. RED: one missing-correlation failure;
+GREEN: 45 telemetry tests passed in 6.58 seconds. This improves future failure
+correlation only; it does not recover the historical exception, cover every
+streaming-error path, or prove immutable publication or deployed behavior.
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
@@ -211,6 +166,30 @@ Focused and proportional verification run on the exact local head:
 
 Total exact local evidence for this unit: `163 passed` across the touched
 discovery, persistence, client-boundary, CLI, and contract surfaces.
+## 2026-09-04 Bytez discovery: filtered empty catalogs and upstream 5xx are distinct fail-closed states
+
+At `origin/main` `60c562de`, an authenticated, bounded live probe loaded only
+`BYTEZ_API_KEY` from the operator's local `.env` and emitted no token, response
+body, or upstream error text. The earlier `task=chat` HTTP 200 response with an
+empty `output` is a successful transport with no usable catalog, whereas an
+unfiltered HTTP 500 is an upstream server failure. A fresh probe found the
+upstream condition had widened: `chat`, `text-generation`, the other documented
+chat-completion-compatible task filters, and the unfiltered request all returned
+HTTP 500 with a small JSON object and empty `output`. Raw-token and `Key`-prefixed
+authorization produced the same status, so the prefix does not explain the
+failure.
+
+The canonical discovery boundary now queries only `task=chat` and then
+`task=text-generation`. Bytez documents both as compatible with its OpenAI-style
+chat-completions API; audio, image, and video task catalogs are intentionally not
+admitted to the ordinary text-chat pool. Discovery never uses the failing
+unfiltered endpoint as a fallback. A non-empty filtered catalog is parsed through
+the existing Bytez model contract. If both filtered catalogs are empty or fail,
+refresh records only task, outcome, model count, and an allowlisted error code;
+it retains the durable last-known-good catalog and fails closed when none exists.
+The current upstream 5xx therefore remains a first-bootstrap blocker, not a
+reason to fabricate usable models.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
