@@ -8,6 +8,8 @@ happy-path tests cannot reach.
 
 from __future__ import annotations
 
+import io
+import json
 import ssl
 import urllib.error
 from dataclasses import replace
@@ -33,6 +35,7 @@ from contextual_orchestrator.model_discovery import (
     _valid_price_component,
     agent_from_discovered,
     discover_provider_models,
+    probe_discovered_model_tool_call_capability,
     refresh_price_book,
     select_bootstrap_discovered_agents,
     select_top_n_cheapest_discovered_agents,
@@ -210,6 +213,157 @@ def test_fetch_json_rejects_oversized_response_body() -> None:
         with pytest.raises(ValueError, match="model discovery response exceeds maximum size"):
             _fetch_json("https://provider.example/v1/models", timeout=1)
     assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def _tool_call_probe_model() -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name="openrouter",
+        model_id="probe-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.example/v1",
+        auth_scheme="Bearer",
+    )
+
+
+def test_tool_call_probe_caps_success_body_read() -> None:
+    """The capability probe reads the success body through the shared size bound.
+
+    Regression for the unbounded ``response.read()`` in
+    :func:`probe_discovered_model_tool_call_capability`: a compromised or
+    misbehaving provider could stream an arbitrarily large body into memory
+    before JSON parsing ever runs. The probe must request at most
+    ``MAX_DISCOVERY_RESPONSE_BYTES + 1`` bytes, exactly like its sibling
+    fetches, and still return its evidence on a normal body.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    reads: list[int | None] = []
+    response = _Response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "probe_a"}},
+                            {"type": "function", "function": {"name": "probe_b"}},
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    original_read = response.read
+
+    def bounded_read(amt: int | None = None) -> bytes:
+        reads.append(amt)
+        return original_read(amt)
+
+    response.read = bounded_read  # type: ignore[method-assign]
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            return_value=response,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is True
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_rejects_oversized_success_body_without_buffering_it() -> None:
+    """An oversized probe body is fail-closed to ``None``, never fully buffered."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            return_value=OversizedResponse(),
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is None
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_caps_single_call_rejection_body_read() -> None:
+    """A 400 body is read through the same bound before the negative verdict.
+
+    The explicit single-tool-call rejection is the one 400 the probe trusts;
+    its body is still untrusted network input and must not be buffered whole.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedHTTPError(urllib.error.HTTPError):
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    error = OversizedHTTPError(
+        "https://openrouter.example/v1/chat/completions",
+        400,
+        "bad request",
+        None,
+        None,
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is None
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_still_maps_in_budget_single_call_rejection_to_false() -> None:
+    """The new read bound must not swallow a normal explicit rejection body."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    error = urllib.error.HTTPError(
+        "https://openrouter.example/v1/chat/completions",
+        400,
+        "bad request",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {"error": {"message": "this model only supports a single tool call"}}
+            ).encode()
+        ),
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is False
 
 
 def test_malformed_json_maps_to_invalid_response_code() -> None:

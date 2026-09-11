@@ -19,7 +19,10 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderResponseError,
+)
 
 
 def _completion(content: str, usage: dict | None = None) -> dict:
@@ -80,6 +83,38 @@ def test_send_real_http_round_trip_and_usage_capture() -> None:
         result = client._send(_agent(provider.base_url), {"model": "gpt-x"})
     assert result == "live answer"  # real POST + JSON parse over the wire
     assert client._local.usage == usage  # provider-reported usage captured from a real response
+
+
+def test_send_rejects_provider_response_above_configured_limit() -> None:
+    oversized = "x" * ((8 * 1024 * 1024) + 1)
+    with _FakeProvider([(200, _completion(oversized))]) as provider:
+        client = ModelClient()
+        try:
+            client._send(_agent(provider.base_url), {"model": "gpt-x"})
+        except ProviderResponseError as exc:
+            assert str(exc) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized provider response was accepted")
+
+
+def test_bounded_provider_response_rejects_invalid_content_length() -> None:
+    class Headers:
+        def get(self, name: str) -> str:
+            assert name == "content-length"
+            return "not-a-number"
+
+    class Response:
+        headers = Headers()
+
+        def read(self, _limit: int) -> bytes:
+            return b"{}"
+
+    try:
+        ModelClient._read_bounded_response(Response(), 8 * 1024 * 1024)
+    except ProviderResponseError as exc:
+        assert str(exc) == "provider returned an invalid content length"
+    else:
+        raise AssertionError("invalid provider content length was accepted")
 
 
 def test_open_provider_uses_validated_destination_without_dns_relookup() -> None:

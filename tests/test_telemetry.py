@@ -1442,9 +1442,16 @@ def test_passthrough_response_records_provider_telemetry(monkeypatch) -> None:
         credential_key="",
     )
 
+    class FakePassthroughResponse(io.BytesIO):
+        """Faithful HTTP-response double: bytes plus a real Content-Length."""
+
+        @property
+        def headers(self) -> dict[str, str]:
+            return {"content-length": str(len(self.getvalue()))}
+
     @contextmanager
     def fake_open(request, destination):  # noqa: ARG001
-        yield io.BytesIO(
+        yield FakePassthroughResponse(
             json.dumps(
                 {
                     "model": "gpt-x-served",
