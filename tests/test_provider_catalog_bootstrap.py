@@ -120,6 +120,41 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         set_backend(None)
 
 
+def test_provider_error_isolated_when_two_credentials_share_provider_name() -> None:
+    """One account failure must not withdraw a healthy sibling account."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        first = _source("shared", "OPENAI_API_KEY")
+        second = _source("shared", "OPENROUTER_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        bootstrap_provider_catalog_runtime(
+            environ={"OPENAI_API_KEY": "a", "OPENROUTER_API_KEY": "b"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: ([_model(first, "first-live"), _model(second, "second-live")], []),
+            model_limit=4,
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ={"OPENAI_API_KEY": "a", "OPENROUTER_API_KEY": "b"},
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: (
+                [_model(second, "second-new")],
+                [ProviderDiscoveryError("shared", "http_status_500", "OPENAI_API_KEY")],
+            ),
+            model_limit=4,
+        )
+
+        assert report.providers_with_errors == ("shared",)
+        assert report.last_known_good_model_count == 1
+        assert set(report.selected_agent_ids) == {"shared_second_new", "shared_first_live"}
+    finally:
+        set_backend(None)
+
+
 def test_failed_refresh_persists_safe_http_status_and_keeps_last_known_good() -> None:
     """Bytez HTTP failures retain LKG and a response-text-free status code."""
     set_backend(InMemoryCredentialBackend())
@@ -292,6 +327,132 @@ def test_privacy_analysis_success_persists_and_empty_failure_preserves_lkg() -> 
         )
         assert second.privacy_assessment_count == 1
         assert store.privacy_assessments(source) == (evidence,)
+    finally:
+        set_backend(None)
+
+
+def test_failed_credential_rollback_preserves_healthy_sibling_rotation() -> None:
+    """A failed account rolls back alone; a healthy sibling keeps its new value.
+
+    Under the provider-keyed rollback this regresses, both accounts were put in
+    ``failed_credentials`` whenever any account of the provider failed, so the
+    healthy sibling's newly rotated value was rewound to ``previous_credentials``.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        first = _source("shared", "OPENAI_API_KEY")
+        second = _source("shared", "OPENROUTER_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        bootstrap_provider_catalog_runtime(
+            environ={
+                "OPENAI_API_KEY": "old-openai",
+                "OPENROUTER_API_KEY": "old-openrouter",
+            },
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: (
+                [_model(first, "first-old"), _model(second, "second-old")],
+                [],
+            ),
+            model_limit=4,
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ={
+                "OPENAI_API_KEY": "new-openai",
+                "OPENROUTER_API_KEY": "new-openrouter",
+            },
+            require_all_credentials=False,
+            catalog_store=store,
+            sources=(first, second),
+            discovery=lambda _sources: (
+                [_model(second, "second-new")],
+                [ProviderDiscoveryError("shared", "http_status_500", "OPENAI_API_KEY")],
+            ),
+            model_limit=4,
+        )
+
+        assert report.restored_credentials == ("OPENAI_API_KEY",)
+        assert get_credential("OPENAI_API_KEY") == "old-openai"
+        assert get_credential("OPENROUTER_API_KEY") == "new-openrouter"
+        payload = report.as_dict()
+        assert payload["provider_account_error_classifications"] == {
+            "shared": {"OPENAI_API_KEY": TRANSIENT_FAILURE_CLASSIFICATION}
+        }
+        verdict = evaluate_provider_credential_inventory(
+            payload,
+            {
+                "OPENAI_API_KEY": "new-openai",
+                "OPENROUTER_API_KEY": "new-openrouter",
+            },
+            provider_model_sources=(first, second),
+            expected_credential_names=("OPENAI_API_KEY", "OPENROUTER_API_KEY"),
+        )
+        assert verdict.ok is True
+        assert verdict.hard_fail_reason is None
+        assert verdict.warning_message is not None
+    finally:
+        set_backend(None)
+
+
+def test_sibling_transient_error_cannot_mask_authentication_failure() -> None:
+    """A transient sibling error must not excuse the other account's auth failure.
+
+    Provider-keyed classification with a first-write-wins merge would report
+    ``shared`` as transient (whichever error iterated first) and tolerate the
+    rollback as a warning, silently excusing a credential the provider rejected.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        first = _source("shared", "OPENAI_API_KEY")
+        second = _source("shared", "OPENROUTER_API_KEY")
+        healthy = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")
+        environ = {
+            "OPENAI_API_KEY": "a",
+            "OPENROUTER_API_KEY": "b",
+            "OPENCODE_ZEN_API_KEY": "c",
+        }
+        report = bootstrap_provider_catalog_runtime(
+            environ=environ,
+            require_all_credentials=False,
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(first, second, healthy),
+            discovery=lambda _sources: (
+                [_model(healthy, "zen-live")],
+                [
+                    ProviderDiscoveryError(
+                        "shared", "http_status_500", "OPENROUTER_API_KEY"
+                    ),
+                    ProviderDiscoveryError(
+                        "shared", "http_status_401", "OPENAI_API_KEY"
+                    ),
+                ],
+            ),
+            model_limit=4,
+        )
+
+        assert dict(report.provider_error_classifications) == {
+            "shared": UNKNOWN_FAILURE_CLASSIFICATION
+        }
+        payload = report.as_dict()
+        assert payload["provider_account_error_classifications"] == {
+            "shared": {
+                "OPENAI_API_KEY": AUTHENTICATION_FAILURE_CLASSIFICATION,
+                "OPENROUTER_API_KEY": TRANSIENT_FAILURE_CLASSIFICATION,
+            }
+        }
+
+        verdict = evaluate_provider_credential_inventory(
+            payload,
+            environ,
+            provider_model_sources=(first, second),
+            expected_credential_names=("OPENAI_API_KEY", "OPENROUTER_API_KEY"),
+        )
+        assert verdict.ok is False
+        assert verdict.warning_message is None
+        assert "not a tolerated transient outage" in verdict.hard_fail_reason
+        assert "'OPENAI_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
     finally:
         set_backend(None)
 

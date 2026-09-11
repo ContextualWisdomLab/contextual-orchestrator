@@ -706,7 +706,11 @@ class ModelAgent:
             credential_key=value.get("credential_key", "OPENAI_API_KEY"),
             tags=tuple(value.get("tags", ())),
             priority=int(value.get("priority", 0)),
-            disabled=bool(value.get("disabled", False)),
+            disabled=(
+                value.get("disabled", False)
+                if type(value.get("disabled", False)) is bool
+                else True
+            ),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
