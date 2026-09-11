@@ -4,6 +4,12 @@ Batch is the cheap path (~50% provider discount, 24h window) for eval/benchmark
 workloads. These drive ModelClient._batch_run against a local fake Batch server:
 multipart JSONL upload, batch creation, in_progress -> completed polling, JSONL
 result parsing with usage, and terminal-failure handling. Mock path stays sync.
+
+Also covers batch_chat()'s own real-vs-emulated routing gate: only an agent
+explicitly declaring ``batch_endpoint_supported=True`` may reach the real
+Batch API above; every other remote agent (unproven -- ``None``/``False``)
+must fall back to the same per-item emulation local providers already use,
+never guess-route into a provider that may not implement /v1/batches at all.
 """
 
 from __future__ import annotations
@@ -11,8 +17,10 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import socket
 import sys
 import threading
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -21,12 +29,14 @@ from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
 class _FakeBatchProvider:
-    """Implements /files, /batches, /batches/{id}, /files/{id}/content."""
+    """Implements /files, /batches, /batches/{id}, /files/{id}/content, /chat/completions."""
 
     def __init__(self, fail_status: str | None = None, polls_before_done: int = 2) -> None:
         outer = self
         self.uploaded_jsonl: bytes = b""
         self.poll_count = 0
+        self.batches_post_count = 0
+        self.chat_completions_count = 0
 
         class Handler(BaseHTTPRequestHandler):
             def _json(self, payload: dict, status: int = 200) -> None:
@@ -44,7 +54,21 @@ class _FakeBatchProvider:
                     outer.uploaded_jsonl = body  # multipart wrapper included; checked via 'in'
                     self._json({"id": "file_input_1"})
                 elif self.path == "/batches":
+                    outer.batches_post_count += 1
                     self._json({"id": "batch_1", "status": "validating"})
+                elif self.path == "/chat/completions":
+                    # The emulation fallback's target: one ordinary chat completion
+                    # per batch item, echoing the prompt so per-item routing is provable.
+                    outer.chat_completions_count += 1
+                    payload = json.loads(body)
+                    last_user = next(
+                        (m["content"] for m in reversed(payload["messages"]) if m.get("role") == "user"),
+                        "",
+                    )
+                    self._json({
+                        "choices": [{"message": {"role": "assistant", "content": f"emulated: {last_user}"}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    })
                 else:
                     self._json({"error": "not found"}, 404)
 
@@ -148,6 +172,64 @@ def test_mock_path_answers_synchronously() -> None:
     assert set(results) == {"task_a", "task_b"}
     assert results["task_a"]["content"].startswith("[general_agent:")
     assert results["task_a"]["usage"] is None
+
+
+def _remote_agent(base_url: str, **overrides: object) -> ModelAgent:
+    # credential_key="" keeps chat()'s NotConfigured pre-check out of the way
+    # (no KV credential is registered in tests); base_url is real HTTP so
+    # _validate_provider's https/public-IP checks are bypassed per-test below,
+    # exactly like the destination-pinning pattern already proven in
+    # test_provider_integration.py::test_open_provider_uses_validated_destination_without_dns_relookup.
+    fields: dict[object, object] = {
+        "id": "worker_agent",
+        "model": "gpt-x",
+        "base_url": base_url,
+        "credential_key": "",
+    }
+    fields.update(overrides)
+    return ModelAgent(**fields)  # type: ignore[arg-type]
+
+
+def _pinned_destination(provider: "_FakeBatchProvider") -> tuple[int, tuple[str, int]]:
+    return (socket.AF_INET, ("127.0.0.1", provider._server.server_address[1]))
+
+
+def test_batch_chat_routes_batch_capable_agent_to_real_batch_endpoint() -> None:
+    """(a) batch_endpoint_supported=True still takes the real Batch API path."""
+    with _FakeBatchProvider(polls_before_done=2) as provider:
+        agent = _remote_agent(provider.base_url, batch_endpoint_supported=True)
+        client = _client()
+        with patch.object(client, "_validate_provider", return_value=_pinned_destination(provider)):
+            results = client.batch_chat(agent, REQUESTS, poll_interval=0.01, poll_timeout=30)
+
+        assert results["task_a"]["content"] == "answer A"
+        assert results["task_b"]["usage"]["completion_tokens"] == 2
+        assert provider.batches_post_count == 1  # the real Batch API was used
+        assert provider.chat_completions_count == 0  # emulation never triggered
+
+
+def test_batch_chat_falls_back_to_emulation_when_batch_endpoint_unproven() -> None:
+    """(b) an unproven agent (None/False) still returns a correct aggregated
+    result, via emulation -- and (c) that emulation path is real, not stubbed:
+    every request actually crosses the wire as one /chat/completions call.
+    """
+    for unsupported_value in (None, False):
+        with _FakeBatchProvider() as provider:
+            agent = _remote_agent(provider.base_url, batch_endpoint_supported=unsupported_value)
+            client = _client()
+            with patch.object(client, "_validate_provider", return_value=_pinned_destination(provider)):
+                results = client.batch_chat(agent, REQUESTS)
+
+            assert set(results) == {"task_a", "task_b"}
+            assert results["task_a"]["content"] == "emulated: question A"
+            assert results["task_b"]["content"] == "emulated: question B"
+            assert results["task_a"]["usage"]["completion_tokens"] == 1
+            # One real chat completion per request -- the emulation path was
+            # actually exercised, not just asserted from a mocked return value.
+            assert provider.chat_completions_count == 2
+            # The real Batch API was never touched: no misroute, no hard failure.
+            assert provider.batches_post_count == 0
+            assert provider.uploaded_jsonl == b""
 
 
 if __name__ == "__main__":
