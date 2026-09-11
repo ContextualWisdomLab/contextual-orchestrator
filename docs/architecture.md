@@ -63,8 +63,9 @@ record out of internal roles with provider exclusions until the runtime has a
 bounded, authenticated recursion protocol; it is not administratively disabled.
 
 - `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
-- `TaskOrchestrator.route_once`: the low-latency routing path.
-- `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `TaskOrchestrator.route_once`: the low-latency routing path (Fugu).
+- `TaskOrchestrator.conduct`: the workflow path with TRINITY thinker/worker/verifier roles and Conductor steps plus access lists.
+- Virtual selectors (`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) keep every inference surface on that control plane: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/videos`, `/v1/audio/*`, and `/v1/rerank`. Tools, `stream=true`, or a non-text modality do not eject a virtual request into a sticky single-agent pin; a concrete model id remains a debug pin. Chat Completions and media endpoints cannot emit Responses `reasoning_text` events, so paper-role process output stays internal and only the modality result is returned.
 - `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
   request-time failure of the primary provider call — 5xx, 429, network, a
   413 request-size rejection, or a non-retryable 4xx such as 401/403/404
@@ -90,6 +91,11 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   submission through status and result retrieval; mismatched owners receive
   the same not-found response before backend access. Results require the
   separate trace purpose in addition to inference authorization.
+- Streamed `/v1/responses` emits OpenAI reasoning items: stage summaries on
+  `response.reasoning_summary_*`, and TRINITY thinker/worker/verifier plus
+  Conductor step outputs on `response.reasoning_text.*`. Fugu `route_once`
+  has no separate process stream; its worker answer is `output_text`. The
+  synthesizer answer is also `output_text`.
 - Streamed `/v1/responses` workflow runs preserve optional provider usage on
   each trace step and record one `stream` cost-ledger row per completed step.
   Missing provider counts remain `unavailable`; the gateway never derives
@@ -103,13 +109,16 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   admission boundary, returning 503 without waiting when saturated. See the
   [k6 web-concurrency baseline](benchmarks/2026-08-25-web-concurrency-k6.md).
 - `contextual_orchestrator.reasoning_effort_profile`: versioned per-role
-  compute profiles (issue #568). Fugu's latency-versus-quality split, TRINITY
-  roles, and Conductor steps/access lists become an explicit catalog. Sampling
-  temperature is not reasoning effort. Production route/conduct defaults stay
-  locked until `production_default_change_allowed` passes a true-θ RMSE gate.
-  The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
-  Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
-  and keep live defaults unchanged while that gate is false.
+  compute profiles (issue #568). Psychometric θ̂ and RMSE(θ̂, θ) score
+  equal-budget variants of the same Fugu route versus Fugu-Ultra conduct
+  split, the same TRINITY roles, and the same Conductor steps/access lists.
+  They do not add a fourth dispatcher, a passthrough chain, or a
+  name-inferred model family. Sampling temperature is not reasoning effort.
+  Production route/conduct defaults stay locked until
+  `production_default_change_allowed` is true. A rank constant is not an
+  estimate. Buyer next action: run
+  `python -m pytest -q tests/test_reasoning_effort_profile.py` and keep live
+  defaults unchanged while that gate is false.
 
 Agent-pool administration resolves `agent_pool_id` and `worker_agent_id`
 together at the resource boundary. The current persistence model has one

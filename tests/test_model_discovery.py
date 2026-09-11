@@ -734,6 +734,118 @@ def test_models_dev_merge_preserves_limit_metadata() -> None:
     assert merged["data"][0]["max_output_tokens"] == 32768
 
 
+def test_models_dev_merge_preserves_model_protocol_override() -> None:
+    payload = {"data": [{"id": "chat-model"}, {"id": "messages-model"}]}
+    metadata = {
+        "openrouter": {
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "chat-model": {"cost": {"input": 0, "output": 0}},
+                "messages-model": {
+                    "cost": {"input": 0, "output": 0},
+                    "provider": {"npm": "@ai-sdk/anthropic"},
+                },
+            },
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openrouter")
+
+    assert [row["_models_dev_npm"] for row in merged["data"]] == [
+        "@ai-sdk/openai-compatible",
+        "@ai-sdk/anthropic",
+    ]
+
+
+def test_models_dev_merge_unions_fields_instead_of_clobbering_provider_evidence() -> None:
+    """Neither source may silently erase the other's field-level evidence.
+
+    Free-model classification stays Models.dev-authoritative (ADR 0041's
+    cost-safety argument: a compromised provider must never be able to
+    self-report "free"). Modality and capacity metadata carry no such safety argument, so
+    they are a field-level union: two partial records, each missing what the
+    other supplies, must combine rather than have the later source blank out
+    the earlier one's evidence.
+    """
+    # The provider's own catalog row reports real architecture/capacity
+    # evidence that Models.dev does not have for this model at all.
+    payload = {
+        "data": [
+            {
+                "id": "vendor/only-provider-knows-capacity",
+                "context_window": 128000,
+                "max_output_tokens": 4096,
+                "architecture": {
+                    "input_modalities": ["text", "image"],
+                    "output_modalities": ["text"],
+                    "tokenizer": "provider-tokenizer",
+                },
+                "pricing": {"prompt": "0.000001", "image": "0.02"},
+            }
+        ]
+    }
+    metadata = {
+        "openai": {
+            "models": {
+                # Matched by id, but Models.dev only has cost evidence here --
+                # no "modalities" or "limit" key at all for this model.
+                "vendor/only-provider-knows-capacity": {"cost": {"input": 0, "output": 0}},
+            }
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openai")
+    row = merged["data"][0]
+
+    # Models.dev's cost evidence is applied (is_free is third-party-verified)...
+    assert row["is_free"] is True
+    # ...while the provider's own architecture/capacity evidence, which
+    # Models.dev is silent on, survives instead of being blanked to None.
+    assert row["architecture"] == {
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "tokenizer": "provider-tokenizer",
+    }
+    assert row["pricing"] == {
+        "prompt": "0",
+        "completion": "0",
+        "image": "0.02",
+    }
+    assert row["context_window"] == 128000
+    assert row["max_output_tokens"] == 4096
+
+    # And when Models.dev *does* report a field, its value still wins over a
+    # provider's own (e.g. stale) value for that same field.
+    payload_with_stale = {
+        "data": [
+            {
+                "id": "vendor/models-dev-knows-more",
+                "context_window": 8000,
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            }
+        ]
+    }
+    metadata_with_fresh = {
+        "openai": {
+            "models": {
+                "vendor/models-dev-knows-more": {
+                    "cost": {"input": 0, "output": 0},
+                    "modalities": {"input": ["text", "audio"], "output": ["text"]},
+                    "limit": {"context": 200000},
+                }
+            }
+        }
+    }
+    merged_fresh = _merge_models_dev_metadata(payload_with_stale, metadata_with_fresh, "openai")
+    row_fresh = merged_fresh["data"][0]
+    assert row_fresh["context_window"] == 200000
+    assert row_fresh["architecture"]["input_modalities"] == ["text", "audio"]
+    # Models.dev did not report max_output_tokens for this model: the
+    # provider's own catalog row had none either, so the field stays absent
+    # rather than being fabricated.
+    assert row_fresh["max_output_tokens"] is None
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
@@ -1919,6 +2031,98 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert discovered[0].completion_price_per_1k is None
     # Real, nonzero GPU-second pricing must not be misread as free.
     assert discovered[0].is_free is False
+
+
+def test_discover_bytez_falls_back_to_chat_compatible_task_catalogs() -> None:
+    """An empty chat filter must not hide text-generation chat candidates."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    seen_urls: list[str] = []
+
+    def urlopen(request, timeout=None, **_kwargs):
+        seen_urls.append(request.full_url)
+        if request.full_url.endswith("task=chat"):
+            return _Response({"error": None, "output": []})
+        if request.full_url.endswith("task=text-generation"):
+            return _Response(
+                {
+                    "error": None,
+                    "output": [
+                        {
+                            "modelId": "Qwen/Qwen3-4B",
+                            "task": "text-generation",
+                            "meterPrice": "0 / sec",
+                        }
+                    ],
+                }
+            )
+        raise AssertionError(f"unexpected Bytez task request: {request.full_url}")
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert [model.model_id for model in discovered] == ["Qwen/Qwen3-4B"]
+    assert seen_urls == [
+        "https://api.bytez.com/models/v2/list/models?task=chat",
+        "https://api.bytez.com/models/v2/list/models?task=text-generation",
+    ]
+
+
+def test_discover_bytez_all_empty_is_explicit_fail_closed_evidence() -> None:
+    """Successful empty task catalogs are not a healthy zero-model refresh."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=_Response({"error": None, "output": []}),
+    ):
+        with pytest.raises(ProviderDiscoveryError) as excinfo:
+            discover_provider_models(source)
+
+    assert excinfo.value.error_code == "empty_provider_catalog"
+
+
+def test_discover_bytez_failure_telemetry_excludes_response_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Task fallback telemetry exposes only allowlisted failure classes."""
+    source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "bytez"
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+            side_effect=urllib.error.HTTPError(
+                source.list_url,
+                500,
+                "upstream-secret-detail",
+                hdrs=None,
+                fp=None,
+            ),
+        ),
+        caplog.at_level(logging.INFO),
+        pytest.raises(ProviderDiscoveryError) as excinfo,
+    ):
+        discover_provider_models(source)
+
+    assert excinfo.value.error_code == "http_status_500"
+    assert "task=chat outcome=failed error_code=http_status_500" in caplog.text
+    assert (
+        "task=text-generation outcome=failed error_code=http_status_500"
+        in caplog.text
+    )
+    assert "upstream-secret-detail" not in caplog.text
+    assert "bytez-secret" not in caplog.text
 
 
 def test_discover_bytez_marks_zero_meter_price_as_free() -> None:

@@ -236,6 +236,22 @@ def test_batch_results_must_be_a_mapping() -> None:
 # -- local provider slot concurrency ------------------------------------------
 
 
+def test_default_model_timeout_is_unbounded() -> None:
+    """Model and repair requests inherit no application wall-clock cap."""
+    assert ModelClient().timeout is None
+
+
+def test_local_slot_accepts_unbounded_waits() -> None:
+    """The local-agent coordinator preserves the shared unbounded default."""
+    agent = ModelAgent(
+        id="unbounded_slot_agent",
+        model="unbounded-slot-model",
+        base_url="local://127.0.0.1:59343/v1",
+    )
+    with _local_provider_slot(agent, 1, None):
+        pass
+
+
 def test_slot_shrinks_capacity_for_same_model_and_resets_when_empty() -> None:
     """Concurrent same-model holders shrink capacity; last release resets."""
     url = "local://127.0.0.1:59341/v1"

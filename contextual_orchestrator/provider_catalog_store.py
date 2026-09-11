@@ -203,8 +203,16 @@ class ProviderCatalogStore(Protocol):
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _ALLOWED_REFRESH_ERROR_CODES = frozenset(
-    {"provider_discovery_error", "empty_provider_catalog", "unknown_error"}
+    {
+        "provider_discovery_error",
+        "empty_provider_catalog",
+        "invalid_response",
+        "timeout",
+        "transport_error",
+        "unknown_error",
+    }
 )
+_HTTP_REFRESH_ERROR_CODE = re.compile(r"^http_status_[45][0-9]{2}$")
 
 
 def provider_account_id(source: ProviderModelSource) -> str:
@@ -300,7 +308,11 @@ def _normalize_error_code(value: object) -> str:
     if not isinstance(value, str):
         return "unknown_error"
     normalized = value.strip().casefold()
-    return normalized if normalized in _ALLOWED_REFRESH_ERROR_CODES else "unknown_error"
+    if normalized in _ALLOWED_REFRESH_ERROR_CODES or _HTTP_REFRESH_ERROR_CODE.fullmatch(
+        normalized
+    ):
+        return normalized
+    return "unknown_error"
 
 
 def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
