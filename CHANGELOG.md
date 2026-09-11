@@ -914,6 +914,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Versioned inference-only review preflight requests and HTTP conformance tests
+  document free/ZDR policy enforcement, JSON/schema and tool capabilities, and
+  safe evidence limits without requiring administrator credentials or adding an
+  endpoint. The contract remains unreleased pending protected review.
+
 - Verbose/debug logging (ADR 0005): a new stdlib-only `debug_logging.py`
   module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
   `--verbose`/`--debug` shorthand (default unchanged: `WARNING`), and new

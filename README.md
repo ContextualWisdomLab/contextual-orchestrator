@@ -24,7 +24,6 @@ chmod 700 .secrets
 printf '%s' 'replace-with-a-long-random-admin-token' > .secrets/admin-token
 printf '%s' 'replace-with-a-long-random-inference-token' > .secrets/inference-token
 chmod 600 .secrets/admin-token .secrets/inference-token
-export INFERENCE_TOKEN="$(cat .secrets/inference-token)"
 export CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD='replace-with-a-database-password'
 export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE='replace-with-an-encryption-passphrase'
 docker compose up --build --wait
@@ -35,11 +34,15 @@ Register provider keys separately with `register-credential`; do not put them
 in `compose.yaml` or the gateway runtime environment.
 
 For orchestration with OpenAI Responses-native reasoning summaries, select
-`orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`:
+`orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`.
+
+The request reads its bearer from the private token file through stdin, keeping
+it out of exported variables and process arguments.
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/responses \
-  -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
+{ printf 'Authorization: Bearer '; cat .secrets/inference-token; printf '\n'; } |
+  curl -N http://127.0.0.1:8000/v1/responses \
+  -H @- -H 'Content-Type: application/json' \
   -d '{"model":"orchestrator/free","input":"Research and verify this","reasoning":{"summary":"auto"},"stream":true}'
 ```
 
@@ -72,6 +75,10 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 ```
 
 HTTP serving is hardened for local lab use:
+
+Review consumers can verify free-model JSON and tool requests using an inference
+credential with the [versioned review preflight contract](docs/review-inference-preflight.md).
+This does not require administrator readiness access or provider credentials.
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
