@@ -363,6 +363,25 @@ unauthorised mirror must not be counted as the original. The Goal therefore
 remains open for both publisher-original attachments until a byte-verified
 parent attachment or a documented, authorised retrieval route is available.
 
+Revalidation on 2026-09-05 re-ran both official endpoints and reproduced the
+recorded blocks with identical signatures, so the blocked reasons above remain
+current rather than stale: the Jones--Loe PDF URL again returned HTTP `403`
+(5,549 bytes of anti-bot page, not a document), and the Iannario endpoint again
+returned HTTP `202` with a zero-byte body. Neither is a transient failure that
+a retry has cleared in the 24 days since the previous revalidation.
+
+One distinction is worth recording so a future revalidation does not misread
+it. A direct fetch of the archived Iannario snapshot returned HTTP `429 Too
+Many Requests` from this host, which is client-side rate limiting, not a
+publisher block; the Wayback availability API concurrently reported that
+snapshot as `"status": "200", "available": true`. That does **not** move the
+Goal: this ADR already excludes "an unauthorised mirror" from counting as the
+original, and an archived copy satisfies neither the publisher-original
+provenance bar nor the Zotero attachment-parent check. It is recorded only so
+that a `429` on the mirror is not later mistaken for evidence that the source
+itself has disappeared — the blocking condition is still the publisher WAF, and
+the mirror's status is irrelevant to the criteria as written.
+
 An Internet Archive capture of the canonical De Gruyter PDF was also
 revalidated on 2026-08-12 as a 19-page PDF (1,074,249 bytes, MD5
 `263d2effa1d7cc5bdc2748878e7f32d4`) captured from the publisher URL on
