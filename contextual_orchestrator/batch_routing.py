@@ -190,6 +190,7 @@ class BatchRequest:
     attribution: Dict[str, Any] = field(default_factory=dict)
     mode: str = "auto"
     zdr_only: bool = False
+    parameters: Dict[str, Any] = field(default_factory=dict)
 
     def to_jsonl_line(self, endpoint: str = "/v1/chat/completions") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API JSONL line."""
@@ -199,7 +200,11 @@ class BatchRequest:
             "url": endpoint,
             # ``zdr_only`` is a contextual-orchestrator selection policy, not
             # an upstream provider request field.
-            "body": {"model": self.model, "messages": self.messages},
+            "body": {
+                **self.parameters,
+                "model": self.model,
+                "messages": self.messages,
+            },
         }
 
 
@@ -324,13 +329,17 @@ class BatchBackend(Protocol):
         """Retrieve completed results for a batch job."""
         ...
 
+    def cancel(self, job: BatchJob) -> Dict[str, Any]:
+        """Request backend cancellation without inventing a terminal state."""
+        ...
+
 
 class LocalBatchBackend:
     """In-process batch backend that runs each request via an injected runner.
 
     Preserves the mock/local path: no external service, no Postgres. The runner
-    is any callable ``(messages, mode, model) -> {"answer": str, "mode": str}`` — the
-    orchestrator's own ``complete`` fits directly. Results are computed eagerly
+    is any callable ``(messages, mode, model[, parameters]) -> result``; the fourth
+    argument is used only when an SDK batch line carries provider options. Results are computed eagerly
     on submit and returned verbatim on retrieve, so the batch lifecycle is fully
     observable in tests.
     """
@@ -368,7 +377,12 @@ class LocalBatchBackend:
                 else nullcontext()
             )
             with context:
-                result = self._runner(request.messages, request.mode, request.model)
+                if request.parameters:
+                    result = self._runner(
+                        request.messages, request.mode, request.model, request.parameters
+                    )
+                else:
+                    result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
             # The runner (typically orchestrator.complete()) has no top-level
             # "usage" key -- real provider usage is nested per-step inside
@@ -429,6 +443,10 @@ class LocalBatchBackend:
     def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
         """Return the results computed at submit time."""
         return self._results.get(job.job_id, [])
+
+    def cancel(self, job: BatchJob) -> Dict[str, Any]:
+        """Report the already-terminal local job; no cancellation is fabricated."""
+        return {"accepted": False, **self.poll(job)}
 
 
 class PgLlmBatchBackend:
@@ -580,6 +598,25 @@ class PgLlmBatchBackend:
                 )
             )
         return items
+
+    def cancel(self, job: BatchJob) -> Dict[str, Any]:
+        """Ask pg-llm-batch to cancel and return its authoritative status."""
+        cancel_batch_job = getattr(self._client, "cancel_batch_job", None)
+        if not callable(cancel_batch_job):
+            return {"accepted": False, **self.poll(job)}
+
+        async def _cancel() -> Dict[str, Any]:
+            return await cancel_batch_job(job.job_id, self._endpoint_alias)
+
+        result = self._run(_cancel())
+        status = result.get("status")
+        accepted = result.get("accepted") is True or status in {"cancelling", "cancelled"}
+        return {
+            "accepted": accepted,
+            "job_id": job.job_id,
+            "status": status,
+            "is_complete": status in {"completed", "failed", "expired", "cancelled"},
+        }
 
 
 def _extract_answer(body: Dict[str, Any]) -> str:

@@ -272,6 +272,14 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+- **Standard OpenAI Batch API.** `POST /v1/batches`, `GET /v1/batches/{id}`,
+  `GET /v1/batches`, and `POST /v1/batches/{id}/cancel` wrap the same batch
+  machinery above in the real `client.batches.create/retrieve/list/cancel()`
+  shape the stock OpenAI SDK expects: `input_file_id` is a file already
+  uploaded through `POST /v1/files` with `purpose=batch` (an OpenAI Batch
+  input-line JSONL), and a completed batch's `output_file_id` downloads
+  through the same `client.files.content()` call. Only
+  `endpoint: "/v1/chat/completions"` is wired today.
 - **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
   (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls

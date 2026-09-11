@@ -1,4 +1,10 @@
-"""Chat Completions modalities honesty over HTTP (text-only gateway)."""
+"""Chat Completions modalities honesty over HTTP.
+
+Text-only unless a caller opts into OpenAI's audio-output shape
+(``modalities: ["text", "audio"]`` + ``audio: {voice, format}``), which
+routes to single-agent passthrough exactly like ``/v1/audio/generations``
+(see ``test_openai_sdk_compat.py`` for a real SDK round trip through that
+path)."""
 
 from __future__ import annotations
 
@@ -87,7 +93,8 @@ def test_http_chat_rejects_modalities_audio() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_modalities_text_and_audio() -> None:
+def test_http_chat_rejects_modalities_text_and_audio_without_audio_object() -> None:
+    """Opting into audio output still requires audio.voice and audio.format."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -99,7 +106,32 @@ def test_http_chat_rejects_modalities_text_and_audio() -> None:
             },
         )
         assert status == 400, body
-        assert "invalid_modalities" in json.dumps(body)
+        assert "invalid_audio" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_audio_output_modalities_reach_the_audio_capability_route() -> None:
+    """A well-shaped audio-output request is not rejected outright.
+
+    modalities=["text","audio"] + audio{voice,format} fails closed on
+    capability availability (no audio-tagged agent here), not on
+    modalities/audio shape.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "speak"}],
+                "modalities": ["text", "audio"],
+                "audio": {"voice": "alloy", "format": "wav"},
+            },
+        )
+        assert status == 503, body
+        assert "capability_unavailable" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -160,7 +192,8 @@ def test_http_chat_accepts_modalities_omitted() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_modalities_text_only()
     test_http_chat_rejects_modalities_audio()
-    test_http_chat_rejects_modalities_text_and_audio()
+    test_http_chat_rejects_modalities_text_and_audio_without_audio_object()
+    test_http_chat_audio_output_modalities_reach_the_audio_capability_route()
     test_http_chat_accepts_empty_modalities_as_omit()
     test_http_chat_rejects_modalities_non_array()
     test_http_chat_accepts_modalities_omitted()
