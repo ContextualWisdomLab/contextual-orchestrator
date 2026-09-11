@@ -2934,6 +2934,8 @@ class ModelClient:
             ) from None
         if last_error is None:  # pragma: no cover - the loop always attempts once
             raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
         if not allow_transient_retries:
             raise last_error
         raise classify_provider_failure(
@@ -2962,7 +2964,11 @@ class ModelClient:
         )
         started = time.monotonic()
         with self._open_provider(request, destination) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(
+                self._read_bounded_response(
+                    response, MAX_PROVIDER_RESPONSE_BYTES
+                ).decode("utf-8")
+            )
         _record_provider_response_telemetry(data, started)
         return data
 
