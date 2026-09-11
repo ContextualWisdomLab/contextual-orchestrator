@@ -8046,7 +8046,7 @@ def build_server(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
-                    exc.detail,
+                    getattr(exc, "detail", None),
                 )
             except FileContractError:
                 self._send_error(
