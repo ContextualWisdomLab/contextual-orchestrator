@@ -65,6 +65,25 @@ redistribution is unclear.
 Buyer next action: call `run_equal_budget_ablation` and read
 `production_default_change_allowed` before changing live defaults.
 
+## Psychometric routing accuracy-time frontier
+
+- Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
+  R. (2025). *IRT-Router: Effective and interpretable multi-LLM routing via
+  item response theory* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2506.01048
+  Grounds held-out response prediction by model ability and query properties;
+  exact-query and semantic warm-start evidence must be evaluated separately.
+- He, Y., & Qi, Y. (2023). Using response time in multidimensional
+  computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
+  697–738. https://doi.org/10.1111/jedm.12373
+  Grounds a joint accuracy-time KPI: maximize information per unit time rather
+  than treating latency as a tie-breaker after accuracy.
+
+The current gateway does not claim either paper's estimator. Candidate changes
+must report held-out prediction quality or true-parameter RMSE together with
+route-decision latency; faster Python preparation alone is a latency result,
+not an accuracy improvement.
+
 ## Evaluation methodology (NIM cost-quality benchmark)
 
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
@@ -110,3 +129,12 @@ Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
 M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
 data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
+
+He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
+adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
+https://doi.org/10.1111/jedm.12373
+
+Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
+(2025). *IRT-Router: Effective and interpretable multi-LLM routing via item
+response theory* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2506.01048
