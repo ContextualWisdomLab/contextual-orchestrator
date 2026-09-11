@@ -171,7 +171,7 @@ def build_review_orchestrator(
         )
     return TaskOrchestrator(
         agents,
-        client=ModelClient(max_output_tokens=32768),
+        client=ModelClient(),
     )
 
 
