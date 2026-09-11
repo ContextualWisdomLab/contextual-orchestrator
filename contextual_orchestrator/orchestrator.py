@@ -448,9 +448,11 @@ class _FastMLSIJudgeAdapter:
             "model": agent.model,
             "messages": messages,
             "temperature": self.orchestrator.client.temperature,
-            "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
         }
+        output_cap = self.orchestrator.client.effective_max_output_tokens(agent)
+        if output_cap is not None:
+            request["max_tokens"] = output_cap
         effort_profile = self.orchestrator._role_effort_profile("judge")
         if effort_profile is not None:
             request = self.orchestrator.client.apply_effort_profile(
@@ -1823,7 +1825,7 @@ class ModelClient:
     def __init__(
         self,
         timeout: float | None = None,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int | None = None,
         max_retries: int = 2,
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
@@ -1836,6 +1838,12 @@ class ModelClient:
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
+        if max_output_tokens is not None and (
+            type(max_output_tokens) is not int or max_output_tokens <= 0
+        ):
+            raise ValueError("max_output_tokens must be a positive integer or None")
+        # ``None`` keeps the ceiling unknown so the selected model's published
+        # maximum (or the provider default) governs instead of a fixed cap.
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1928,6 +1936,22 @@ class ModelClient:
             if key in scoped:
                 snapshot[key] = scoped[key]
         return snapshot
+
+    def effective_max_output_tokens(self, agent: ModelAgent | None = None) -> int | None:
+        """Resolve the output ceiling with request scope winning over model metadata.
+
+        Priority: an explicit request-scoped value, then an explicit client-level
+        value, then the selected agent's provider-published ``max_output_tokens``.
+        ``None`` means no ceiling is known anywhere, so callers must leave the
+        provider default in place rather than impose a fixed cap.
+        """
+        scoped = getattr(self._local, "request_settings", {})
+        value = scoped.get("max_output_tokens")
+        if value is None:
+            value = self.max_output_tokens
+        if value is None and agent is not None:
+            value = agent.max_output_tokens
+        return value
 
     @contextmanager
     def suppress_request_tools(self):
@@ -2089,8 +2113,10 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": settings["max_output_tokens"],
         }
+        output_cap = self.effective_max_output_tokens(agent)
+        if output_cap is not None:
+            payload["max_tokens"] = output_cap
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
@@ -2137,10 +2163,11 @@ class ModelClient:
             payload,
             profile,
             supports_reasoning_effort=supports,
-            default_max_output_tokens=self.max_output_tokens,
+            default_max_output_tokens=self.effective_max_output_tokens(agent),
         )
         if api_surface == "responses":
-            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "max_tokens" in applied:
+                applied["max_output_tokens"] = applied.pop("max_tokens")
             if "reasoning_effort" in applied:
                 applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
         return applied
@@ -2506,8 +2533,10 @@ class ModelClient:
             "messages": messages,
             "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
-            "max_tokens": settings["max_output_tokens"],
         }
+        output_cap = self.effective_max_output_tokens(agent)
+        if output_cap is not None:
+            payload["max_tokens"] = output_cap
         if agent.stream_usage_supported:
             payload["stream_options"] = {"include_usage": True}
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
@@ -2695,10 +2724,9 @@ class ModelClient:
                 # Preserve caller ownership while supplying the configured cap
                 # that local OpenAI-compatible servers require when SDKs omit it.
                 payload = dict(payload)
-                payload.setdefault(
-                    "max_tokens",
-                    self.request_settings_snapshot()["max_output_tokens"],
-                )
+                local_cap = self.effective_max_output_tokens(agent)
+                if local_cap is not None:
+                    payload.setdefault("max_tokens", local_cap)
             if normalized_endpoint == "responses" and (
                 _is_local_provider_url(agent.base_url)
                 or agent.provider_name == "opencode_go"
@@ -2711,7 +2739,9 @@ class ModelClient:
                     raise ValueError(
                         "selected model does not support the requested response format"
                     )
-                chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
+                local_cap = self.effective_max_output_tokens(agent)
+                if local_cap is not None:
+                    chat_payload.setdefault("max_tokens", local_cap)
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -3137,6 +3167,18 @@ class ModelClient:
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         settings = self.request_settings_snapshot()
+
+        def batch_body(messages: list[ChatMessage]) -> dict[str, Any]:
+            body = {
+                "model": agent.model,
+                "messages": messages,
+                "temperature": settings["temperature"] if temperature is None else temperature,
+            }
+            output_cap = self.effective_max_output_tokens(agent)
+            if output_cap is not None:
+                body["max_tokens"] = output_cap
+            return body
+
         lines = [
             json.dumps({
                 "custom_id": custom_id,
@@ -3144,12 +3186,7 @@ class ModelClient:
                 "url": "/v1/chat/completions",
                 "body": self._clamp_agent_token_budget(
                     agent,
-                    self.apply_effort_profile(agent, {
-                        "model": agent.model,
-                        "messages": messages,
-                        "temperature": settings["temperature"] if temperature is None else temperature,
-                        "max_tokens": settings["max_output_tokens"],
-                    }, effort_profile),
+                    self.apply_effort_profile(agent, batch_body(messages), effort_profile),
                 ),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
