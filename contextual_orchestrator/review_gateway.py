@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
@@ -54,7 +54,89 @@ general-free serving contract enter the pool.
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
 REVIEW_READINESS_CONTRACT_VERSION = "1"
-"""Versioned owner readiness/admission contract for the free review pool."""
+"""Versioned owner readiness/admission contract for the free review pool.
+
+Consumers pin this version to know exactly which readiness/admission
+predicates the owner applied. It is bumped whenever a predicate, its
+evidence source, or the returned provenance shape changes, so a leaf
+caller can delete its own duplicated routing preflight instead of guessing
+which owner contract is live.
+"""
+
+
+REVIEW_OUTPUT_ENVELOPE_FALLBACK = 32768
+"""Bootstrap transport envelope used only when no admitted model declares a
+catalog output maximum.
+
+This is not a per-model capacity claim. When any admitted model publishes its
+own catalog maximum, the client envelope is raised to the largest declared
+value, and each request is still clamped to the serving model's own catalog
+maximum by ``ModelClient._clamp_agent_token_budget``. The fallback exists only
+so bootstrap can start before a provider catalog exposes output limits.
+"""
+
+
+@dataclass(frozen=True)
+class ReviewModelAdmission:
+    """Typed, request-scoped provenance for one admitted review-pool model.
+
+    Every field is owner-produced evidence about *why* the candidate is
+    admitted, so a consumer never has to re-derive eligibility, re-probe
+    readiness, or apply its own provider/model/fallback heuristics.
+    """
+
+    contract_version: str
+    model_id: str
+    provider_name: str
+    credential_key: str
+    tags: tuple[str, ...]
+    max_output_tokens: int | None
+    context_window: int | None
+
+
+def review_model_admission(
+    model: DiscoveredModel,
+    *,
+    tags: Sequence[str] = (),
+) -> ReviewModelAdmission:
+    """Return typed provenance for one already-admitted review-pool model.
+
+    Admission itself happened in :func:`build_review_orchestrator`; this only
+    serializes the owner's evidence so a consumer can consume it directly
+    instead of re-deriving eligibility, readiness, or ordering.
+    """
+    return ReviewModelAdmission(
+        contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+        model_id=model.model_id,
+        provider_name=model.provider_name,
+        credential_key=model.credential_name,
+        tags=tuple(tags),
+        max_output_tokens=model.max_output_tokens,
+        context_window=model.context_window,
+    )
+
+
+def review_pool_admissions(
+    agents: Sequence[Any],
+) -> list[ReviewModelAdmission]:
+    """Project a built review pool into versioned, consumer-readable provenance.
+
+    The owner exposes this so a caller can send only the gateway token and
+    ``model: orchestrator/free`` -- no provider/model/fallback parameters,
+    no credential eligibility, no candidate catalog, no probing.
+    """
+    return [
+        ReviewModelAdmission(
+            contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+            model_id=str(getattr(agent, "model", "")),
+            provider_name=str(getattr(agent, "provider_name", "") or ""),
+            credential_key=str(getattr(agent, "credential_key", "") or ""),
+            tags=tuple(getattr(agent, "tags", ()) or ()),
+            max_output_tokens=getattr(agent, "max_output_tokens", None),
+            context_window=getattr(agent, "context_window", None),
+        )
+        for agent in agents
+    ]
 
 
 def _validated_credential_names(
@@ -172,9 +254,15 @@ def build_review_orchestrator(
                 priority=0,
             )
         )
+    declared_maxima = [
+        agent.max_output_tokens
+        for agent in agents
+        if type(agent.max_output_tokens) is int and agent.max_output_tokens > 0
+    ]
+    output_envelope = max(declared_maxima, default=REVIEW_OUTPUT_ENVELOPE_FALLBACK)
     return TaskOrchestrator(
         agents,
-        client=ModelClient(max_output_tokens=32768),
+        client=ModelClient(max_output_tokens=output_envelope),
     )
 
 
