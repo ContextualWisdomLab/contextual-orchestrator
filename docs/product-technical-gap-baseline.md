@@ -2753,3 +2753,115 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+**Correction (2026-09-03): the "overall deadline on `_invoke`'s
+candidate/retry loop" recommendation directly above is STALE and
+contradicts binding org policy — do not implement it as written.**
+`docs/product-goal-directive.md` section 8 is this org's binding
+no-fixed-inference-cap policy (no common timeout ceiling across the
+application/agent/gateway stack; the default stays null/unbounded, and a
+real communication failure is left to end via the upstream provider's own
+timeout or error, not an artificial cutoff). This policy already produced a
+concrete precedent since this entry was written:
+`docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`
+reverted job-level timeouts added around two other synchronous model calls
+for exactly this reason. An overall wall-clock deadline on the
+candidate/retry loop, as recommended above, is exactly such a fixed
+inference-time cap and must not be added on this entry's authority alone.
+A follow-up investigation (`.github#1804`, root-causing the same `_invoke`
+serial-failover mechanism via four cross-repo stalls measured at
+649.5s/1332.6s/1462.9s/2161.9s) found the correct fix direction requires
+either (a) a separate, not-yet-built durable candidate-exclusion/skip
+mechanism that consumes the still-unmerged `contextual-orchestrator#911`'s
+EWMA-based candidate-ranking observation data once #911 lands — #911
+itself only reorders candidates by an EWMA score and does not add
+exclusion/skip logic, so landing #911 alone would not let a known-failing
+candidate be skipped — or (b) a documented, owner-approved policy
+exception if deliberately racing non-equivalent endpoints is ever
+authorized. Neither is done as of this correction, and (b) is constrained
+by this org's `endpoint_equivalence` racing invariant
+(`docs/doctoring/equivalent-endpoint-racing.md`; this repo's own
+`CLAUDE.md` header: "Equivalent model-group endpoints may race only
+through the normalized, explicit endpoint-equivalence contract") — racing
+genuinely different, non-equivalent models to dodge a slow candidate would
+itself be an undocumented production routing/quality change, not a safe
+default. The measured stall durations and root cause recorded above remain
+accurate; only the "add a deadline" recommendation is superseded.
+
+**Amendment (2026-09-06): option (a) above is missing a second half, and
+the existing circuit breaker is not the exclusion mechanism it looks
+like.** Read at pin `414f2297`, `TaskOrchestrator` already carries a
+per-agent breaker — `_record_failure` (`contextual_orchestrator/orchestrator.py:8048`)
+counts failures and opens at `circuit_failure_threshold = 3`, and
+`_circuit_open` (`:8031`) gates admission. Two measured properties stop it
+from excluding a stalled candidate:
+
+1. **The tool-bearing passthrough path never reaches it.** Noema's
+   no-tools `_invoke` route-walk recorded timeouts as `circuit_failure`
+   and failed over (9 of 14 and 10 of 15 in two samples), while Strix's
+   passthrough recorded **0 of 21, 0 of 48, 0 of 63 and 0 of 65** across
+   four samples. A bare `TimeoutError` is re-raised as a
+   `500 internal_error` before `_record_failure` runs, so the breaker
+   never sees the failure it exists to count. That is exactly the scope
+   of the still-open `#1082`.
+2. **`circuit_reset_seconds = 30.0` is short relative to one stalled
+   attempt.** `_circuit_open` sets `state["failures"] = 0.0` once
+   `circuit_reset_seconds` have elapsed since `opened_at` (`:8036-8038`),
+   so the counter is cleared, not merely the open flag. Against the ~90 s
+   attempts these stalls actually take, a route is re-admitted after 30 s
+   and needs three fresh failures — up to another ~270 s of wall clock —
+   to be excluded again. The breaker suppresses roughly a tenth of the
+   time spent on a known-bad route; it does not skip it.
+
+So landing `#1082` is necessary but not sufficient for option (a): it
+makes the failures countable, and a durable exclusion still needs a reset
+policy scaled to the observed attempt duration rather than a fixed 30 s.
+**Third gap, found the same day and the strongest of the three: a single
+success erases the count.** `_record_success`
+(`contextual_orchestrator/orchestrator.py:8073-8077` at the same pin) does not
+decrement the failure counter — it pops the agent's circuit state outright:
+
+```python
+def _record_success(self, agent_id: str) -> None:
+    with self._circuit_lock:
+        cleared = self._circuit.pop(agent_id, None)
+```
+
+With `circuit_failure_threshold = 3`, any one success therefore zeroes the
+accumulated count. A route that alternates failure and success — which is what
+an overloaded provider does — never reaches three and is never excluded at all,
+regardless of how much wall clock each failure burns. Reproduced three times on
+2026-09-06 across three separate pull requests, each on the single ready route
+the post-`.github#1957` preflight had found:
+
+| PR | failure | `circuit_cleared` | failure again, from zero |
+|---|---|---|---|
+| this PR (`#1043`) | 16:07:49.665 | 16:07:57.361 | 16:08:46.896 |
+| `.github#1938` | 17:59:55.035 | 18:00:36.785 | 18:01:55.884 |
+| `.github#1913` | (same sequence) | | |
+
+Three runs, one mechanism: this is a property of the breaker, not a reading of
+one log.
+
+`#911` remains unmerged as of this amendment (verified 2026-09-06), and it is
+further from merged than "unmerged" suggests: its base is not `main` but
+`codex/nim-evidence-successor`, which is itself `#1068` (open), based in turn on
+`codex/stacked-security-successor`. "Once `#911` lands" therefore requires that
+whole stack to land first.
+
+None of this changes the conclusion above — a fixed wall-clock deadline on the
+candidate/retry loop is still barred by section 8 — it only records that the
+"not-yet-built" mechanism has **three** independent missing pieces, not one.
+
+**No-heuristics boundary (2026-09-07): these observations are diagnostics, not
+automatic exclusion authority.** Neither #911's EWMA observations nor an
+observed-attempt-duration scale identifies a reset, failure count, window,
+weight, or admission decision. Until the canonical routing owner supplies an
+executable mathematical/statistical availability model, an identified
+loss/utility and preregistered validation design with uncertainty, or an
+authoritative standard governing this exact path, automatic candidate
+exclusion remains unset and must fail closed or use an explicit
+operator-supplied decision. Do not replace 3/30 seconds with different
+repository-authored values. #1000 owns the broad routing repair; #911's
+observations can remain evidence but are not by themselves a production
+policy.
