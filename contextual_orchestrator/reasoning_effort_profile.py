@@ -63,7 +63,7 @@ def apply_request_profile(
     profile: ReasoningEffortProfile | None,
     *,
     supports_reasoning_effort: bool,
-    default_max_output_tokens: int,
+    default_max_output_tokens: int | None,
 ) -> dict[str, Any]:
     """Apply one validated profile to an upstream request body.
 
@@ -72,9 +72,16 @@ def apply_request_profile(
     ``omit`` sends only the independently valid sampling and output-token
     controls. The helper never writes prompts, credentials, or private
     reasoning traces.
+
+    ``default_max_output_tokens`` is the caller-resolved output ceiling for the
+    selected model (the request-scoped/client cap, else the agent's published
+    maximum). ``None`` means no ceiling is known anywhere, so the caller's own
+    payload and the provider default are preserved instead of imposing a fixed
+    cap.
     """
     if profile is None:
-        payload.setdefault("max_tokens", default_max_output_tokens)
+        if default_max_output_tokens is not None:
+            payload.setdefault("max_tokens", default_max_output_tokens)
         return payload
     if not isinstance(profile, ReasoningEffortProfile):
         raise EffortProfileError("effort profile must be a ReasoningEffortProfile")

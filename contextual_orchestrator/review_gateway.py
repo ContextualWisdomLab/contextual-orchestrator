@@ -64,18 +64,6 @@ which owner contract is live.
 """
 
 
-REVIEW_OUTPUT_ENVELOPE_FALLBACK = 32768
-"""Bootstrap transport envelope used only when no admitted model declares a
-catalog output maximum.
-
-This is not a per-model capacity claim. When any admitted model publishes its
-own catalog maximum, the client envelope is raised to the largest declared
-value, and each request is still clamped to the serving model's own catalog
-maximum by ``ModelClient._clamp_agent_token_budget``. The fallback exists only
-so bootstrap can start before a provider catalog exposes output limits.
-"""
-
-
 @dataclass(frozen=True)
 class ReviewModelAdmission:
     """Typed, request-scoped provenance for one admitted review-pool model.
@@ -254,15 +242,9 @@ def build_review_orchestrator(
                 priority=0,
             )
         )
-    declared_maxima = [
-        agent.max_output_tokens
-        for agent in agents
-        if type(agent.max_output_tokens) is int and agent.max_output_tokens > 0
-    ]
-    output_envelope = max(declared_maxima, default=REVIEW_OUTPUT_ENVELOPE_FALLBACK)
     return TaskOrchestrator(
         agents,
-        client=ModelClient(max_output_tokens=output_envelope),
+        client=ModelClient(),
     )
 
 

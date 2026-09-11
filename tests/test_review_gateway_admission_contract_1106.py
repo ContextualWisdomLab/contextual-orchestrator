@@ -128,8 +128,10 @@ def test_single_model_provenance_helper_matches_pool_projection():
     assert admission.contract_version == review_gateway.REVIEW_READINESS_CONTRACT_VERSION
 
 
-def test_client_envelope_rises_to_largest_declared_catalog_maximum(monkeypatch):
-    """The envelope is catalog-derived, not a fixed hidden cap."""
+def test_client_imposes_no_fixed_global_output_cap(monkeypatch):
+    """The gateway never injects a hidden fixed cap; each request resolves its
+    own serving model's published ceiling (issue #1134 superseded the old
+    single transport envelope)."""
     discovered = [
         _discovered(
             "openrouter",
@@ -148,19 +150,38 @@ def test_client_envelope_rises_to_largest_declared_catalog_maximum(monkeypatch):
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-    assert orchestrator.client.max_output_tokens == 200000
+    assert orchestrator.client.max_output_tokens is None
+    assert (
+        orchestrator.client.effective_max_output_tokens(
+            next(a for a in orchestrator.agents if a.model == "large-review")
+        )
+        == 200000
+    )
 
 
-def test_client_envelope_uses_documented_fallback_without_catalog_maxima(monkeypatch):
-    """With no declared maxima the client uses the documented bootstrap envelope."""
+def test_pool_admission_preserves_each_published_ceiling(monkeypatch):
+    """Per-model published ceilings survive as typed provenance, so a consumer
+    never has to re-derive or impose its own token budget."""
     discovered = [
-        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        _discovered(
+            "openrouter",
+            "small-review",
+            "OPENROUTER_API_KEY",
+            max_output_tokens=4096,
+        ),
+        _discovered(
+            "openrouter",
+            "large-review",
+            "OPENROUTER_API_KEY",
+            max_output_tokens=200000,
+        ),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-    assert (
-        orchestrator.client.max_output_tokens
-        == review_gateway.REVIEW_OUTPUT_ENVELOPE_FALLBACK
-    )
+    ceilings = {
+        admission.model_id: admission.max_output_tokens
+        for admission in review_gateway.review_pool_admissions(orchestrator.agents)
+    }
+    assert ceilings == {"small-review": 4096, "large-review": 200000}
