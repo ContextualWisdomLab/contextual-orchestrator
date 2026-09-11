@@ -2213,7 +2213,9 @@ class ModelClient:
                         registry_request, destination, timeout=probe_timeout
                     ) as registry_response:
                         registry = json.loads(
-                            registry_response.read().decode("utf-8")
+                            self._read_bounded_response(
+                                registry_response, MAX_PROVIDER_RESPONSE_BYTES
+                            ).decode("utf-8")
                         )
                     model_ids = {
                         item.get("id")
