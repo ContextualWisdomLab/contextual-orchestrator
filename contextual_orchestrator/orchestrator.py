@@ -51,6 +51,7 @@ from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
+    MAX_PROVIDER_ERROR_BODY_BYTES,
     ProviderUpstreamError,
     classify_provider_failure,
     provider_error_body,
@@ -2436,7 +2437,7 @@ class ModelClient:
             )
             response = connection.getresponse()
             if response.status >= 400:
-                body = response.read()
+                body = response.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[:MAX_PROVIDER_ERROR_BODY_BYTES]
                 status = response.status
                 reason = response.reason
                 headers = response.headers
