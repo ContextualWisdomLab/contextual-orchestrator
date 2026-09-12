@@ -87,6 +87,7 @@ def test_free_review_candidates_exclude_openai_source_even_when_globally_discove
         _discovered("openrouter", "OPENROUTER_API_KEY"),
         _discovered("opencode_zen", "OPENCODE_ZEN_API_KEY"),
         _discovered("opencode_go", "OPENCODE_ZEN_API_KEY"),
+        _discovered("experiential_labs", "EXPERIENTAL_LABS_API_KEY"),
         _discovered("openai", "OPENAI_API_KEY"),
     ]
 
@@ -102,6 +103,7 @@ def test_free_review_candidates_exclude_openai_source_even_when_globally_discove
         "openrouter",
         "opencode_zen",
         "opencode_go",
+        "experiential_labs",
     }
     assert all(model.credential_name != "OPENAI_API_KEY" for model in admitted)
 
@@ -244,6 +246,7 @@ def test_register_review_credentials_rejects_unknown_array_entries() -> None:
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
         "OPENCODE_ZEN_API_KEY",
+        "EXPERIENTAL_LABS_API_KEY",
     ],
 )
 def test_register_review_credentials_allows_each_individual_credential_to_be_absent(
@@ -257,6 +260,7 @@ def test_register_review_credentials_allows_each_individual_credential_to_be_abs
         "OPENROUTER_API_KEY": "router-secret",
         "OPENAI_API_KEY": "openai-secret",
         "OPENCODE_ZEN_API_KEY": "zen-secret",
+        "EXPERIENTAL_LABS_API_KEY": "experiential-secret",
     }
     requested = list(environment)
     environment.pop(missing_name)
