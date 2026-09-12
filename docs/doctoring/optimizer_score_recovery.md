@@ -123,6 +123,31 @@ that revision, not current-repair full-suite acceptance.
 
 ## Frozen repair acceptance: 85580612
 
+### Subsequent review boundaries (2026-09-12)
+
+PR #1137 comment 5645316918 reports a local batch-cardinality repair with
+218 passing tests but supplies no commit or worktree. The reviewed remote
+head is `bf4561b541a1d6f3194ac807d96f5038bc7a8163`; the PR is Draft.
+Our refs/reflog and registered-worktree search did not locate that descendant.
+At local `f8cdaa413b8ce07d378ce933767e2638ccda10c0`, the shared evaluator still
+uses unchecked `zip(tasks, records)`. Do not treat the comment's unpublished
+test count as current-source acceptance. Request the exact patch provenance
+before integrating; preserve both the existing usage repair and valid delta.
+
+The reproduced boundary is a custom batch engine returning fewer records than
+tasks, not evidence that the real `TaskOrchestrator.batch_route` drops outputs.
+That implementation already validates provider results. Missing and extra
+custom-engine records must be rejected before callbacks can rank partial data,
+while retaining incurred usage through the shared exception path.
+
+Calibration is a separate contract question: `_model_judge` resolves the
+fast-mlsirm owner and fails closed if unavailable; the generic optimizer
+callback does not itself carry calibration provenance. A bounded callback
+score is not a calibrated psychometric outcome or production-policy authority.
+Retain deterministic experimental evaluation while specifying released owner
+evidence for production eligibility. Do not claim this scalar guard removed
+an existing mandatory callback-calibration gate without source evidence.
+
 At `855806125a640d238850e575c1118bf4379f7e2d`, the full source suite passed
 **3785 tests, 2 skipped in 200.11s**, exit 0 (session 78573;
 `/tmp/co-quality-full-85580612.log`). Source and environment remained unchanged.
