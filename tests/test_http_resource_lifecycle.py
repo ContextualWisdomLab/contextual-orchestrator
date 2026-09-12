@@ -17,7 +17,8 @@ from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
 @pytest.mark.parametrize("status_code", [401, 429, 413, 409])
-def test_retry_boundary_closes_final_response(monkeypatch, status_code):
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_fails):
     """Final classification preserves meaning before releasing its response."""
     response_body = io.BytesIO(
         b'{"error":{"code":"tool_execution_stopped"}}'
@@ -27,6 +28,13 @@ def test_retry_boundary_closes_final_response(monkeypatch, status_code):
         "https://provider.example/v1", status_code, "error", {}, response_body
     )
     client = ModelClient(max_retries=0)
+    original_close = response_error.close
+    if cleanup_fails:
+        def failing_close():
+            """A cleanup failure must not replace the safe classified error."""
+            original_close()
+            raise OSError("private cleanup diagnostic")
+        monkeypatch.setattr(response_error, "close", failing_close)
 
     def raise_response(*args, **kwargs):
         """Simulate the transport handing ownership to the retry boundary."""
@@ -42,7 +50,49 @@ def test_retry_boundary_closes_final_response(monkeypatch, status_code):
             )
         assert response_body.closed
     finally:
-        response_error.close()
+        original_close()
+
+
+@pytest.mark.parametrize("second_fails", [False, True])
+def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails):
+    """Retry delay starts only after consuming and closing the failed response."""
+    first_error = urllib.error.HTTPError("https://provider.example/v1", 429, "retry", {}, io.BytesIO(b"{}"))
+    final_error = urllib.error.HTTPError("https://provider.example/v1", 401, "stop", {}, io.BytesIO(b"{}"))
+    client = ModelClient(max_retries=1)
+    attempted_calls = []
+    observed_delays = []
+
+    def send_attempt(*args, **kwargs):
+        """Return a success or distinct terminal error on the second attempt."""
+        attempted_calls.append(len(attempted_calls) + 1)
+        if len(attempted_calls) == 1:
+            raise first_error
+        if second_fails:
+            raise final_error
+        return "delivered answer"
+
+    def check_backoff(delay):
+        """Assert closure before waiting without an actual wall-clock delay."""
+        observed_delays.append(delay)
+        assert first_error.closed
+
+    monkeypatch.setattr(client, "_send", send_attempt)
+    monkeypatch.setattr(client, "_backoff_delay", lambda attempt: 0.125)
+    monkeypatch.setattr(client, "_sleep", check_backoff)
+    try:
+        agent = ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1")
+        if second_fails:
+            with pytest.raises(ProviderUpstreamError) as captured:
+                client._send_with_retry(agent, {})
+            assert captured.value.provider_status == 401
+            assert final_error.closed
+        else:
+            assert client._send_with_retry(agent, {}) == "delivered answer"
+        assert attempted_calls == [1, 2]
+        assert observed_delays == [0.125]
+    finally:
+        first_error.close()
+        final_error.close()
 
 
 @pytest.mark.parametrize("provider_type", [_FakeSSEProvider, _CapturingSSEProvider])

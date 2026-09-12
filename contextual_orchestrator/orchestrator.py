@@ -2295,6 +2295,11 @@ class ModelClient:
                 _log_provider_attempt_failed(agent, attempt, exc, transient)
                 if attempt >= retry_limit or not transient:
                     break
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:  # noqa: BLE001 - preserve the retry decision on cleanup failure
+                        pass
                 delay = self._backoff_delay(attempt)
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
