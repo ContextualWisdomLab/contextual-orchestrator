@@ -106,23 +106,6 @@ def test_http_responses_rejects_non_integer_max_tokens() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_oversize_max_completion_tokens() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "hi",
-                "max_completion_tokens": 2_000_000,
-            },
-        )
-        assert status == 400, body
-        assert "invalid_max_completion_tokens" in json.dumps(body)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
 
 def test_http_responses_rejects_boolean_max_completion_tokens() -> None:
     server, thread, port = _server()
@@ -147,6 +130,5 @@ if __name__ == "__main__":
     test_http_responses_accepts_valid_max_completion_tokens()
     test_http_responses_rejects_zero_max_tokens()
     test_http_responses_rejects_non_integer_max_tokens()
-    test_http_responses_rejects_oversize_max_completion_tokens()
     test_http_responses_rejects_boolean_max_completion_tokens()
     print("ok")

@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Generation-token inputs retain positive-integer validation without an
+  arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
+  aliases to `max_output_tokens` before provider forwarding, preserving caller
+  budgets and native-field precedence (issue #1151). Model-specific limits remain.
 - Virtual `orchestrator/free` structured completions (`response_format`, no
   tools/stream) fail over a retryable synthesizer 502/429 onto the next
   eligible free worker and attach request-scoped eligible/attempted
