@@ -64,7 +64,6 @@ def test_http_max_tokens_applies_and_restores() -> None:
         server.shutdown()
         thread.join(timeout=5)
 
-
 def test_http_rejects_non_positive_max_tokens() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -110,23 +109,6 @@ def test_http_rejects_bool_max_tokens() -> None:
         status, body = _post(
             port,
             {"model": "mock-planner", "prompt": "hello", "max_tokens": True},
-        )
-        assert status == 400, body
-        assert body["error"]["code"] == "invalid_max_tokens"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_rejects_oversized_max_tokens() -> None:
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = server.server_address[1]
-    try:
-        status, body = _post(
-            port,
-            {"model": "mock-planner", "prompt": "hello", "max_tokens": 2_000_000},
         )
         assert status == 400, body
         assert body["error"]["code"] == "invalid_max_tokens"

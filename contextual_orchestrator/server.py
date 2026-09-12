@@ -1589,7 +1589,7 @@ def _validate_chat_model(body: dict[str, Any]) -> str:
     return model
 
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
-    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    """Validate legacy Completions ``max_tokens`` as a positive integer."""
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
@@ -1602,17 +1602,11 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
         return None
     if max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
-    if max_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_tokens",
-            "max_tokens must be at most 1048576",
-        )
     body["max_tokens"] = max_tokens
     return max_tokens
 
 def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
-    """Chat Completions ``max_completion_tokens`` — positive integer capped at 1_048_576.
+    """Validate Chat Completions ``max_completion_tokens`` as a positive integer.
 
     OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
     ``max_completion_tokens`` wins so clients get a single honest budget.
@@ -1633,12 +1627,6 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_completion_tokens",
             "max_completion_tokens must be a positive integer",
         )
-    if max_completion_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_completion_tokens",
-            "max_completion_tokens must be at most 1048576",
-        )
     body["max_completion_tokens"] = max_completion_tokens
     return max_completion_tokens
 
@@ -1649,32 +1637,28 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     Official Responses clients send ``max_output_tokens`` rather than chat-era
     ``max_tokens``. Accept and type-check so the field is not opaque
     ``unknown_fields``; value is left on the body for provider passthrough.
-    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
-    floats (JS JSON) coerce.
+    Normalize aliases with precedence: native, completion, then legacy tokens.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
-    if "max_output_tokens" not in body:
-        return None
-    value = _coerce_optional_int(
+    output_token_limit = _coerce_optional_int(
         body.get("max_output_tokens"),
         error_code="invalid_max_output_tokens",
         message="max_output_tokens must be a positive integer",
     )
-    if value is None:
+    if output_token_limit is None:
+        output_token_limit = _validate_chat_max_completion_tokens(body)
+    if output_token_limit is None:
+        output_token_limit = _validate_completions_max_tokens(body)
+    if output_token_limit is None:
         return None
-    body["max_output_tokens"] = value
-    if value < 1:
+    body["max_output_tokens"] = output_token_limit
+    if output_token_limit < 1:
         raise RequestError(
             400,
             "invalid_max_output_tokens",
             "max_output_tokens must be a positive integer",
         )
-    if value > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_output_tokens",
-            "max_output_tokens must be at most 1048576",
-        )
-    return value
+    return output_token_limit
 
 
 
@@ -7590,8 +7574,7 @@ def build_server(
                         _validate_completions_max_tokens(body)
                     if "max_completion_tokens" in body:
                         _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")

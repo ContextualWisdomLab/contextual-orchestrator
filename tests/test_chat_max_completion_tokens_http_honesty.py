@@ -107,24 +107,6 @@ def test_http_chat_rejects_max_completion_tokens_bool() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_max_completion_tokens_too_large() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "huge budget"}],
-                "max_completion_tokens": 1_048_577,
-            },
-        )
-        assert status == 400, body
-        assert "invalid_max_completion_tokens" in json.dumps(body)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
 
 def test_http_chat_prefers_max_completion_tokens_when_both_set() -> None:
     """When both budgets are present, request must still succeed (max_completion wins)."""
@@ -187,7 +169,6 @@ if __name__ == "__main__":
     test_http_chat_accepts_max_completion_tokens()
     test_http_chat_rejects_max_completion_tokens_zero()
     test_http_chat_rejects_max_completion_tokens_bool()
-    test_http_chat_rejects_max_completion_tokens_too_large()
     test_http_chat_prefers_max_completion_tokens_when_both_set()
     test_http_chat_rejects_invalid_max_tokens_when_only_legacy()
     test_http_chat_accepts_max_completion_tokens_omitted()

@@ -68,7 +68,6 @@ def test_http_responses_accepts_valid_max_output_tokens() -> None:
         server.shutdown()
         thread.join(timeout=5)
 
-
 def test_http_responses_accepts_omit_max_output_tokens() -> None:
     server, thread, port = _server()
     try:
@@ -127,24 +126,6 @@ def test_http_responses_rejects_boolean_max_output_tokens() -> None:
                 "model": "mock-planner",
                 "input": "bool budget",
                 "max_output_tokens": True,
-            },
-        )
-        assert status == 400, body
-        assert "invalid_max_output_tokens" in json.dumps(body)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_responses_rejects_oversize_max_output_tokens() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "huge budget",
-                "max_output_tokens": 2_000_000,
             },
         )
         assert status == 400, body
