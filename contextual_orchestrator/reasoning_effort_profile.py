@@ -102,8 +102,16 @@ def apply_request_profile(
     if supports_reasoning_effort is True:
         payload["reasoning_effort"] = validated.reasoning_effort
     else:
-        # Omission must remove a value already present before capability fallback.
+        # Remove both native spellings without mutating shared nested options.
         payload.pop("reasoning_effort", None)
+        reasoning_options = payload.get("reasoning")
+        if isinstance(reasoning_options, dict) and "effort" in reasoning_options:
+            remaining_options = dict(reasoning_options)
+            remaining_options.pop("effort")
+            if remaining_options:
+                payload["reasoning"] = remaining_options
+            else:
+                payload.pop("reasoning", None)
     return payload
 
 
@@ -395,7 +403,7 @@ def estimate_theta_rmse(
     """Return RMSE of a deterministic θ estimator against known true parameters.
 
     Error shrinks with provider-neutral effort rank, extra Conductor steps,
-    recursion depth, and access-list scope. Temperature is accepted so callers
+    recursion depth, and access-list scope increase. Temperature is accepted so callers
     can prove it is not a substitute for effort: it does not enter θ̂.
     Neither a lower RMSE from ``high`` effort nor a temperature comparison
     establishes model performance: no observed responses enter this function.
