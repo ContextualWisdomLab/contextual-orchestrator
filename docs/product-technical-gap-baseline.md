@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 residual diagnostic acceptance gap
+
+Research follow-up `e9d51ac7` identifies an owner-contract requirement: declare
+whether uncertainty in estimated response-time residuals is propagated or held
+fixed, and fit preprocessing within training partitions. Posterior-predictive
+model checks do not establish observed accuracy or decision latency. The
+[primary-method intake](doctoring/lart_measurement_review.md#nonparametric-diagnostic-follow-up-2026-09-13)
+records the read scope and failed PDF rendering; no estimator or production
+policy is changed. Owner implementation and observed evaluation remain open.
+
 ## 2026-09-12 Title-only psychometric citation gap
 
 Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
