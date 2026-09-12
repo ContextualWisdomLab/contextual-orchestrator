@@ -10,10 +10,10 @@ then failed because the admin export returned 404 (1 failed, 2.38s).
 
 `7541ca11` restores the archive's exporter delta relative to `73404f89`, not a
 whole-file replacement. Export, workflow-link, persistence and API suites passed
-71 tests in 21.00s. This uses a read-only isolated native namespace with the source
-checkout; installed combined-wheel, full-suite, current rendered-document checks,
-protected review, merge and release are still outstanding. Historical screenshot
-claims below are not current-head visual acceptance.
+71 tests in 21.00s. This used a read-only isolated native namespace with the source
+checkout. At that historical checkpoint, installed/full/rendered verification was
+outstanding; subsequent scoped evidence is recorded below. Protected review, merge
+and release are not established. Historical screenshots are not current acceptance.
 
 PR #1126's exported field constant and its test remain available for compatibility.
 It was only a reserved name, not an implemented analytics projection. The new
@@ -57,6 +57,32 @@ remain unique. `4e89529c` verifies legacy-index upgrade, retained rows, uniquene
 and repeat startup. The five focused suites completed **74 passed, 8.43s** at
 that exact head, process 66371. Full and installed results above precede this fix
 and do not prove its final acceptance; both must be repeated before delivery.
+
+### Integrated frozen checkpoint aae29136
+
+Ordinary merge of research head `dcaf2b29` produced
+`aae29136f9ff8dbba892db81c9ca2f9140fad8de`. Its full source run 73193 completed
+**1 failed, 3,723 passed, 2 skipped, 166.90s**, log
+`/tmp/co-export-full-final-20260912.log`. The failure is the paper inventory
+contract: the newly merged LART review references arXiv `2512.07019` without an
+inventory entry. This is not full-suite GREEN; the research owner must repair
+the inventory before renewed verification.
+
+Independent installed acceptance at the same exact archive completed **74 passed,
+8.47s**, root process 42305. Both package imports resolved under
+`/tmp/co-export-package-aae29136.DnIyXx/installed` using `python -I` from `/tmp`.
+Core SHA-256: `419d6bcc7fe5d77493b917d77bbd7207612253179901886bb7bd9e1ff883f5f7`.
+Native SHA-256 remains `8dfee5d228a28733136e25c6006f77006bcba095863a667e0f2a3e71ca8c7c04`;
+its source is unchanged from the native build checkpoint.
+
+The root reviewer directly inspected three screenshots in the actual browser at
+`http://127.0.0.1:18767`, 1265 × 712, English, frozen `aae29136`: runbook top,
+complete sequence diagram, and ADR top after navigating its visible link.
+All four actors, admission/association/audit commits, batch note, cutoff read,
+reply and continuation were legible without overlap or cutoff. ADR title and
+Proposed frontmatter were visible. Images are in tool output, not saved files.
+Other document sections, lower ADR, mobile widths, other locales and other links
+remain uninspected. These scoped checks do not establish a full UI audit.
 
 ## PRD: operator job and acceptance
 
