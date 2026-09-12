@@ -118,3 +118,52 @@ def test_real_client_responses_omit_preserves_independent_options(
         assert result_body["reasoning"] == remaining_options
     else:
         assert "reasoning" not in result_body
+
+
+class HostileAgentCapability:
+    """ModelAgent capability validation must not execute caller hooks."""
+
+    def __bool__(self) -> bool:
+        """Expose accidental truth-value coercion."""
+        raise AssertionError("capability truth hook executed")
+
+    def __eq__(self, other: object) -> bool:
+        """Expose equality-based type admission."""
+        raise AssertionError("capability equality hook executed")
+
+    def __repr__(self) -> str:
+        """Expose accidental rendering of untrusted capability data."""
+        raise AssertionError("capability rendering hook executed")
+
+
+@pytest.mark.parametrize(
+    "capability_evidence",
+    [
+        pytest.param(1, id="integer-one"),
+        pytest.param(1.0, id="float-one"),
+        pytest.param(HostileAgentCapability(), id="hostile-hooks"),
+    ],
+)
+def test_model_agent_rejects_malformed_capability_before_client_mutation(
+    capability_evidence: object,
+) -> None:
+    """The real agent/client path rejects non-booleans before request mutation."""
+    from contextual_orchestrator import reasoning_effort_profile as production_effort
+    from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
+
+    request_body = {"reasoning": {"effort": "high"}, "max_output_tokens": 17}
+    original_body = deepcopy(request_body)
+    with pytest.raises(TypeError, match="reasoning_effort_supported must be"):
+        selected_agent = ModelAgent(
+            id="response_worker",
+            model="unit_test_model",
+            base_url="https://provider.invalid/v1",
+            reasoning_effort_supported=capability_evidence,  # type: ignore[arg-type]
+        )
+        ModelClient().apply_effort_profile(
+            selected_agent,
+            request_body,
+            explicit_profile(production_effort, "omit"),
+            api_surface="responses",
+        )
+    assert request_body == original_body
