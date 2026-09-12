@@ -144,3 +144,8 @@ alone does not establish that a consumer's hosted review now passes.
 References (retrieved September 12, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
 [API reference](https://platform.experientiallabs.ai/docs/reference), and
 [Models](https://platform.experientiallabs.ai/docs/models).
+
+The review gateway accepts this credential as a free-pool source, but admits
+only models already satisfying its explicit zero-cost serving contract. Paid
+and unknown-price models remain excluded, as do credentials absent from the
+current bootstrap. This source authorization is not live pricing evidence.
