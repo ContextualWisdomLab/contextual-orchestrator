@@ -61,7 +61,7 @@ def apply_request_profile(
     payload: dict[str, Any],
     profile: ReasoningEffortProfile | None,
     *,
-    supports_reasoning_effort: bool,
+    supports_reasoning_effort: bool | None,
     default_max_output_tokens: int,
 ) -> dict[str, Any]:
     """Apply one validated profile to an upstream request body.
@@ -69,8 +69,10 @@ def apply_request_profile(
     Sampling controls remain separate from provider-native reasoning effort.
     When provider support is not proven, ``abstain`` and ``error`` fail closed;
     ``omit`` sends only the independently valid sampling and output-token
-    controls. The helper never writes prompts, credentials, or private
-    reasoning traces.
+    controls. Only literal ``True`` is positive capability evidence; ``None``
+    means unknown. Other types fail before mutation, without truth/equality
+    coercion or rendering caller-controlled values. The helper never writes
+    prompts, credentials, or private reasoning traces.
     """
     if profile is None:
         payload.setdefault("max_tokens", default_max_output_tokens)
@@ -78,7 +80,9 @@ def apply_request_profile(
     if not isinstance(profile, ReasoningEffortProfile):
         raise EffortProfileError("effort profile must be a ReasoningEffortProfile")
     validated = parse_reasoning_effort_profile(profile.as_dict())
-    if not supports_reasoning_effort and validated.unsupported_provider_fallback != "omit":
+    if supports_reasoning_effort is not None and type(supports_reasoning_effort) is not bool:
+        raise EffortProfileError("supports_reasoning_effort must be a boolean or null")
+    if supports_reasoning_effort is not True and validated.unsupported_provider_fallback != "omit":
         raise EffortProfileError(
             "provider reasoning_effort support is unproven; profile requested "
             f"{validated.unsupported_provider_fallback!r}"
@@ -88,7 +92,7 @@ def apply_request_profile(
     payload["top_p"] = validated.top_p
     if validated.seed is not None:
         payload["seed"] = validated.seed
-    if supports_reasoning_effort:
+    if supports_reasoning_effort is True:
         payload["reasoning_effort"] = validated.reasoning_effort
     else:
         # Omission must remove a value already present before capability fallback.
