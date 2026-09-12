@@ -220,6 +220,13 @@ quality trigger unfiltered and validate `tests/test_repository_security_metadata
 plus actionlint. After a new head, verify actual hosted execution; previous-head
 results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
 
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
+
 ## Tool-call handoffs
 
 Return worker tool calls before text-answer judging or later workflow roles;

@@ -161,6 +161,13 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
 
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
+
 ## Tool-call handoffs
 
 Return worker tool calls before text-answer judging or later workflow roles;
