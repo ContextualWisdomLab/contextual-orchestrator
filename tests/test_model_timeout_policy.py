@@ -137,18 +137,20 @@ def test_timeout_history_cursor_preserves_model_scope_and_new_insertions(tmp_pat
     assert newest["restored_from_revision"] == first["model_timeout_revision"]
 
 
-def test_model_timeout_policy_accepts_large_finite_seconds(tmp_path: Path) -> None:
-    """Valid seconds must not accidentally use SQLite's signed integer binding."""
+def test_model_timeout_policy_accepts_socket_safe_maximum(tmp_path: Path) -> None:
+    """The largest admitted policy remains representable by CPython sockets."""
     model_agent = ModelAgent("timeout_agent", "example-model")
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
-    orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 2**63})
+    orchestrator.patch_agent(
+        "default", model_agent.id, {"model_timeout_seconds": 2_147_483_647}
+    )
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?", (model_agent.id,)
-        ).fetchone() == (float(2**63),)
+        ).fetchone() == (2_147_483_647.0,)
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
-    assert restored._agent(model_agent.id).model_timeout_seconds == float(2**63)
+    assert restored._agent(model_agent.id).model_timeout_seconds == 2_147_483_647.0
 
 
 def test_model_timeout_policy_migrates_existing_pool(tmp_path: Path) -> None:
@@ -189,7 +191,10 @@ def test_model_timeout_policy_survives_restart_and_rediscovery(tmp_path: Path) -
     assert restarted._agent(model_agent.id).to_config()["model_timeout_seconds"] is None
 
 
-@pytest.mark.parametrize("invalid_limit", [True, False, 0, -1, "90", float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "invalid_limit",
+    [True, False, 0, -1, "90", float("nan"), float("inf"), 2_147_483_648],
+)
 def test_model_timeout_policy_rejects_invalid_patch(invalid_limit: object) -> None:
     """Invalid administrator limits must be rejected without changing the model."""
     model_agent = ModelAgent("timeout_agent", "example-model")

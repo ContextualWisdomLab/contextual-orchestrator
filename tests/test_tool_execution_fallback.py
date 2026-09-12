@@ -17,7 +17,7 @@ from dataclasses import replace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, _LocalProviderAdmissionTimeout
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
@@ -122,6 +122,41 @@ def test_non_idempotent_timeout_fails_closed_for_ambiguous_outcome() -> None:
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
     assert decision.retry_safe is False
     assert decision.circuit_failure is False
+
+
+def test_local_admission_timeout_fails_over_before_any_provider_send() -> None:
+    """A pre-send local queue timeout is safe to fail over without same-agent retry."""
+
+    class AdmissionClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list[dict], **kwargs: object) -> str:  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            if agent.id == "primary_agent":
+                raise _LocalProviderAdmissionTimeout("slot expired before send")
+            return "fallback answer"
+
+    agents = [
+        ModelAgent("primary_agent", "primary", tags=("reasoning",)),
+        ModelAgent("fallback_agent", "fallback", tags=("reasoning",)),
+    ]
+    client = AdmissionClient()
+    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=3)
+
+    answer, served_id, _served_model, _usage = orchestrator._invoke(
+        agents[0],
+        [{"role": "user", "content": "safe request"}],
+        text="safe request",
+        role="worker",
+        allowed_agent_ids={"primary_agent", "fallback_agent"},
+    )
+
+    assert answer == "fallback answer"
+    assert served_id == "fallback_agent"
+    assert client.calls == ["primary_agent", "fallback_agent"]
 
 
 def test_explicit_unknown_outcome_overrides_other_structured_failure_metadata() -> None:

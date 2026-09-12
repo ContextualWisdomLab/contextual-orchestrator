@@ -297,7 +297,9 @@ def test_chat_applies_only_the_selected_model_timeout(monkeypatch) -> None:
     assert client.chat(limited, [{"role": "user", "content": "x"}]) == "ok"
     assert client.chat(unbounded, [{"role": "user", "content": "x"}]) == "ok"
     assert slot_timeouts == [12.0, None]
-    assert open_timeouts == [12.0, None]
+    assert open_timeouts[0] is not None
+    assert 0 < open_timeouts[0] <= 12.0
+    assert open_timeouts[1] is None
     assert 90 not in slot_timeouts + open_timeouts
     assert 900 not in slot_timeouts + open_timeouts
     assert 10800 not in slot_timeouts + open_timeouts
