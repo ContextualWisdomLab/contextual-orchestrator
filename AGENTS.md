@@ -1,5 +1,9 @@
 # AGENTS.md
 
+Preserve ordered `score_observations` in optimizer results: equal means can
+hide different task outcomes. This additive field does not approve the existing
+selection policy; keep its psychometric evidence gap explicit in the runbook.
+
 Optimizer batch results must match the complete task count before callbacks;
 retain usage on rejection. Explicitly select route mode in batch regressions.
 Installed tests may need their sibling test-helper directory, never the source

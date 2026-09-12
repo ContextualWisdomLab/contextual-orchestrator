@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+Optimizer means must not replace ordered `score_observations`. Reuse the shared
+scoring boundary and preserve existing selection semantics until the separate
+applicable-evaluator contract is resolved; see the optimizer recovery runbook.
+
 For optimizer batch validation and installed-test setup, read
 `docs/doctoring/optimizer_score_recovery.md`. Match task/result counts before
 scoring and preserve usage on failure; batch fixtures must select route mode.

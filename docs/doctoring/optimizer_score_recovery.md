@@ -307,3 +307,40 @@ section in a real browser at `http://127.0.0.1:18775/optimizer`, English,
 1265 × 712. Long identifiers and paragraphs wrapped without observed clipping
 or overlap. This screenshot remains in task output; other sections, mobile,
 locales and link destinations were not covered by this capture.
+
+## Ordered observation preservation and unresolved selection policy
+
+The [exact-head review](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1137#discussion_r3996145891)
+on `b4436b847dd6b2c0795f4b28074efab2eb6e0f0f` identifies decision effects in
+recommendation and evolutionary selection, not just numeric-domain checking.
+A read-only probe at that head returned identical public results for task
+scores `[0, 1]` and `[0.5, 0.5]` (session 95797). That probe's recommendation
+was null; it proves loss of task-score detail, not an incorrect recommendation.
+
+Local candidate `4225cae4` withheld selection; six legacy tests then failed.
+Changing those expectations produced 224 passing tests at `a7323f23`, but that
+was an intentional public behavior change, not compatibility evidence.
+Protected main `012beaacd0631f8cd3391c77744eeb626269b5de` explicitly documents
+automatic recommendation and fitness selection. The candidate remains on an
+unpublished branch through `e818eb36`; it is not part of this repair series.
+
+The additive replacement at `c79d6852cd0eca9ff55a8ee573956f29100fc4a8` keeps
+selection, result order, Pareto output, history and generation semantics intact.
+The shared scorer returns its existing display mean plus ordered, unrounded
+float scores. Both public optimizers expose these as `score_observations`.
+No prompts or answers are newly included. Existing float conversion remains;
+this is not preservation of arbitrary callback object types or raw responses.
+Four new serial/batch tests verify distinct equal-mean vectors while requiring
+all other public result fields to be identical between those vectors.
+All four related suites, including unchanged six selection expectations,
+passed 226 tests with warnings as errors in 14.05s (session 52271).
+This is local mock-provider evidence, not full-suite, installed-wheel, hosted,
+statistical accuracy or decision-latency acceptance.
+
+Released fast-mlsirm 0.9.1 validates paired categorical judge/reference labels,
+not arbitrary configuration fitness. Owner PR #1737 at
+`6a0e43e10192895703cf18c5f50fdfb0fa73cc76` repairs registration chronology;
+its profile metadata is not production approval. An owner evidence-admission
+test must reject an artifact belonging to another model/rubric/item-bank/use
+identity before any applicability claim. No CO-local approval wrapper or
+package-import gate was added. The decision-policy P1 remains unresolved.

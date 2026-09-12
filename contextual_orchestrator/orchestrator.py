@@ -16435,6 +16435,9 @@ def optimize_orchestration(
       budget, else the cheapest; with no budget, highest quality then cheapest.
 
     Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
+    Each result also retains ``score_observations`` in input-task order, before
+    mean rounding. This descriptive evidence does not establish calibration or
+    applicability of the existing selection policy.
     """
     results: list[dict[str, Any]] = []
     usage_receipts: list[dict[str, Any]] = []
@@ -16492,6 +16495,8 @@ def evolve_orchestration(
     Fitness maximizes measured quality, then minimizes measured cost; configs whose cost
     exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
     caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
+    Per-config ``score_observations`` retain input-task order before mean rounding.
+    Their availability does not qualify the existing fitness policy psychometrically.
     """
     rng = random.Random(seed)
     params = sorted(search_space)
