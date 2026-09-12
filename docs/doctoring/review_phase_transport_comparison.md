@@ -130,3 +130,17 @@ cleanup. Provider responses were test doubles; no credentials or provider
 requests were used. This did not reinstall dependencies or execute the full
 provisioning shell. It proves this bounded startup contract, not hosted CI,
 registry release, live discovery, or recovery of the original incident.
+
+### Rendered-document inspection
+
+Source `49362265` was rendered at `http://127.0.0.1:18773/transport` in the
+actual in-app browser, English, 1265 × 712 viewport. Four successive viewport
+captures were directly opened: introduction/evidence boundary, source
+comparison table, existing repair/limitations, and exact-merge startup proof.
+Table cells, long hashes/paths, paragraph spacing, contrast and vertical
+scrolling were legible without observed clipping or overlap. The captures
+are retained in this task's visual tool results, not as repository image
+files. This supersedes only the earlier uninspected-document statement;
+mobile, other locales, application UI states and live deployment remain
+outside this bounded inspection. No Figma artifact was supplied for this
+diagnostic document.
