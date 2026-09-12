@@ -100,6 +100,15 @@ identity and unavailable analytics (`/tmp/co-quality-usage-green-final-20260912.
 Current-repair full-suite, installed-wheel and rendered-document checks remain
 pending; the earlier receipts above apply only to their stated revisions.
 
+Independent follow-up review found two compatibility edges, reproduced at
+`6597712f` (2 failed, 3.36s): custom engines may return only the previously
+required `totals.cost_usd`, and custom exceptions may expose a read-only
+`optimizer_usage` property. Missing optional totals now remain null. For a
+read-only exception attribute, the same safe receipt is retained as a JSON
+`optimizer_usage=` exception note, with the original exception preserved.
+The compatibility-focused full optimizer selection passed 216 tests in the
+run recorded at `/tmp/co-quality-usage-compat-green.log`.
+
 Obtain protected current-head CI and formal independent approval before
 merge/release; local review does not satisfy GitHub approval rules.
 Real accuracy and decision-latency KPIs still require an observed

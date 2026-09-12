@@ -16381,9 +16381,9 @@ def _optimizer_usage_snapshot(orchestrator: Any, evaluation_index: int) -> dict[
         "evaluation_index": evaluation_index,
         "scope": "cumulative_engine_snapshot",
         "snapshot_status": "available",
-        "totals": {key: totals[key] for key in (
+        "totals": {key: totals.get(key) for key in (
             "run_count", "prompt_tokens", "output_tokens", "prompt_tokens_source", "cost_usd", "currency"
-        )},
+        )} | {"cost_usd": totals["cost_usd"]},
     }
 
 
@@ -16409,7 +16409,11 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
         except Exception:
             failed_usage = {"evaluation_index": len(usage_receipts), "scope": "cumulative_engine_snapshot",
                             "snapshot_status": "unavailable", "totals": None}
-        evaluation_error.optimizer_usage = tuple([*usage_receipts, failed_usage])
+        completed_usage = tuple([*usage_receipts, failed_usage])
+        try:
+            evaluation_error.optimizer_usage = completed_usage
+        except Exception:
+            BaseException.add_note(evaluation_error, "optimizer_usage=" + json.dumps(completed_usage))
         raise
 
 
