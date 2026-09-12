@@ -296,8 +296,10 @@ upstream estimation or prove a customer KPI gain.
 The separate `codex/lart-preprocessing-contract-20260912` branch preserves
 all four preprocessing-document commits from research head `b4887c28`.
 Both affected documentation files compared byte-identically after cherry-pick
-at `83f12d54`. This is local succession only: no successor PR or runtime
-repair is verified, so the predecessor documents must not yet be reverted.
+at `83f12d54`. This was a local succession receipt, not runtime repair proof.
+Draft [CO PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139)
+now stacks on #1107; complete visual/delta succession remains pending, so the
+predecessor documents must not yet be reverted.
 
 Root independently read the pinned estimator's lines 413–517 and the
 item-efficiency loader's first 85 lines. The estimator takes the logarithm
@@ -310,10 +312,11 @@ describes stored token counts with applications adding one; the
 exports `cot_tokens` without a unit shift. These support a raw-count artifact
 contract, not proof of historical intent or a paper-mandated pseudocount.
 
-The canonical defective artifact/export belongs to the upstream LaRT project,
-not CO's router. Prefer restoring raw-count export while retaining exactly one
-application pseudocount; alternatively preserve the historical artifact with
-explicit shifted semantics and repair both consuming loaders. Either change
+The artifact/export contract belongs to the upstream LaRT project, not CO's
+router. The alternatives considered were restoring raw-count export with one
+application pseudocount, or preserving the historical artifact with explicit
+shifted semantics and repairing both consuming loaders. The latter was selected
+in the handoff below; the historical intent remains unknown. Either change
 needs upstream patch provenance and source-backed regression expectations,
 including zero, missing, transformed-input and row-alignment boundaries.
 Do not create a CO subtraction workaround or copy the estimator. Actual
@@ -359,4 +362,10 @@ statistical effects and release are unverified. Research PR #1107's document
 delta remains preserved until the separate CO successor is published and
 fully compared; the existence of the upstream PR alone does not authorize its
 revert. Earlier source-only status above is superseded only by these explicitly
-bounded loading checks. New handoff text still requires visual inspection.
+bounded loading checks. At `0a2745d71b8f6a4771efdb1f7b0366d6e6acbe32`, root
+directly inspected the complete handoff body in GitHub's browser preview at
+1265 × 712, English, with the file tree collapsed. Text, command spans and
+links wrapped without observed clipping or overlap. The heading, preceding
+owner-contract section, AGENTS, CLAUDE and Gap baseline were not covered by
+that screenshot; full successor visual acceptance remains pending. This
+receipt does not cover the subsequent chronology clarification above.
