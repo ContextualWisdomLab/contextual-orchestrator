@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, replace
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
 from .model_discovery import (

@@ -34,6 +34,15 @@ ADMIN_TRANSLATIONS = {
         "models_table_scroll_hint": "Model details table. Scroll horizontally to review latency and success.",
         "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
+        "audit_timeout_changed": "Model time limit updated",
+        "audit_timeout_restored": "Model time limit restored",
+        "audit_model_reference": "Model",
+        "audit_revision_reference": "Revision",
+        "audit_restored_reference": "Restored from revision",
+        "audit_date_unknown": "Date unavailable",
+        "audit_event_heading": "Event",
+        "audit_detail_heading": "Detail",
+        "audit_created_heading": "Created",
         "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
         "no_recent_errors": "No current alerts. Open Audit to review recent changes.",
         "prompt_placeholder": "Describe the task you want to route, then run the trace.",
@@ -297,6 +306,15 @@ ADMIN_TRANSLATIONS = {
         "models_table_scroll_hint": "모델 상세 표입니다. 지연 시간과 성공률을 보려면 가로로 스크롤하세요.",
         "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
+        "audit_timeout_changed": "모델 시간 제한 변경",
+        "audit_timeout_restored": "모델 시간 제한 복원",
+        "audit_model_reference": "모델",
+        "audit_revision_reference": "변경 버전",
+        "audit_restored_reference": "복원한 버전",
+        "audit_date_unknown": "날짜 확인 불가",
+        "audit_event_heading": "변경 내용",
+        "audit_detail_heading": "상세",
+        "audit_created_heading": "기록 시각",
         "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
         "no_recent_errors": "현재 알림이 없습니다. 최근 변경 사항을 검토하려면 감사를 여세요.",
         "prompt_placeholder": "라우팅할 작업을 설명한 다음 트레이스를 실행하세요.",
@@ -879,6 +897,9 @@ ADMIN_HTML = r"""<!doctype html>
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; }
     }
+    .audit-table { min-width: 0; table-layout: fixed; }
+    .audit-table th, .audit-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+    .audit-table th:nth-child(2) { width: 45%; }
   </style>
 </head>
 <body>
@@ -1067,7 +1088,7 @@ Summarize this research thread and verify claims.</textarea>
       <section class="detail-grid view" data-view="audit" hidden>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="audit_compliance">Audit &amp; Compliance</h1><span class="chip">Evidence</span></div>
-          <table><thead><tr><th>Event</th><th>Detail</th><th>Created</th></tr></thead><tbody id="auditRows"></tbody></table>
+          <table class="audit-table"><thead><tr><th data-i18n="audit_event_heading">Event</th><th data-i18n="audit_detail_heading">Detail</th><th data-i18n="audit_created_heading">Created</th></tr></thead><tbody id="auditRows"></tbody></table>
         </section>
       </section>
       <section class="detail-grid view" data-view="settings" hidden>
@@ -1616,9 +1637,24 @@ Summarize this research thread and verify claims.</textarea>
     }
     function renderAudit() {
       const events = state.recent_audit_events || [];
-      els.auditRows.innerHTML = events.map(event => `
-        <tr><td>${escapeHtml(event.event_type)}</td><td><pre>${escapeHtml(JSON.stringify(event.event_detail))}</pre></td><td>${escapeHtml(event.created_at)}</td></tr>
-      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
+      els.auditRows.innerHTML = events.map(event => {
+        let label = event.event_type;
+        let detail = JSON.stringify(event.event_detail);
+        if (event.event_type === "model_timeout_policy_changed") {
+          const data = event.event_detail || {};
+          const restored = Number.isSafeInteger(data.restored_from_revision) && data.restored_from_revision > 0;
+          label = t(restored ? "audit_timeout_restored" : "audit_timeout_changed");
+          const references = [];
+          if (typeof data.worker_agent_id === "string") references.push(`${t("audit_model_reference")}: ${data.worker_agent_id}`);
+          if (Number.isSafeInteger(data.revision) && data.revision > 0) references.push(`${t("audit_revision_reference")}: ${data.revision}`);
+          if (restored) references.push(`${t("audit_restored_reference")}: ${data.restored_from_revision}`);
+          detail = references.join(" · ");
+        }
+        const date = typeof event.created_at === "number" && Number.isFinite(event.created_at)
+          ? new Date(event.created_at * 1000) : new Date(NaN);
+        const created = Number.isNaN(date.getTime()) ? t("audit_date_unknown") : date.toLocaleString(currentLang);
+        return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(detail)}</td><td>${escapeHtml(created)}</td></tr>`;
+      }).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
     }
     function renderSecondaryViews() {
       if (!state.policy) return;

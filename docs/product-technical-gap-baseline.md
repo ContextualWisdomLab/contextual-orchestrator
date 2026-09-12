@@ -1,5 +1,136 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+
+PR #1053's valid default-null timeout and administrator-policy delta was 169
+commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`
+and conflicted in five files. A non-force merge preserves both histories. The
+RED merge-result regression had seven failures: ambiguous transport exceptions
+were typed as `provider_outcome_unknown` on one path without updating circuit
+evidence, while newer tests expected the older retryable
+`provider_connection_error`; the concrete-model HTTP path leaked the raw
+exception into a retrying 500 response. The reconciled contract records the
+candidate and group failure once, returns non-retryable
+`provider_outcome_unknown`, omits provider-controlled diagnostics, and emits
+`x-should-retry: false` for both concrete and virtual passthrough. The focused
+timeout, passthrough, telemetry, policy, pool, and admin suite passes 287 tests.
+Protected-main reconciliation also exposed a duplicate DNS preflight in the NIM
+benchmark evaluation adapter: the pinned benchmark transport was never reached,
+so 180 evaluation cells collapsed into local failures after capability probing.
+The adapter now keeps URL and KV credential validation while delegating address
+resolution exclusively to its pinned transport; the malformed-evaluation
+contract again fails before artifact publication. Four focused regression and
+stale-contract tests pass; five additional adapter tests cover the delegated,
+valid injected, unsafe-URL, and missing-credential boundaries. Pytest's
+asynchronous fixture-loop scope is now
+explicit rather than inherited from a deprecated plugin default.
+
+Five review-discovered timeout paths are also repaired on the same Proposed
+successor. Finite model policies now create one monotonic deadline before local
+admission and spend the remaining budget on connection, retries, and every
+stream read. A timeout caused by that explicit policy returns non-retryable
+`model_timeout`; a connection reset remains the distinct non-replayable
+`provider_outcome_unknown`. A local admission expiry occurs before any send and
+therefore moves directly to an eligible sibling without consuming the
+same-agent retry budget. Synchronous embeddings resolve the selected embedding
+agent's timeout instead of the client-wide default. Policy writes and OpenAPI
+now reject values above the socket-safe 2,147,483,647-second maximum. Focused
+tests cover post-send no-replay, streaming lifetime, pre-send failover,
+embedding selection, and the numeric boundary.
+
+The reconciled tree's local full suite reports `3686 passed, 3 skipped, 1
+deselected`; the deselected owner-contract test requires the released
+`fast-mlsirm` native extension, while this runner has neither that artifact nor
+a Rust toolchain. Public-object docstring coverage is 100%, Ruff and compileall
+are clean. Aggregate branch-aware coverage is 94%, so no full-repository 100%
+coverage claim is made and the PR remains Proposed pending hosted exact-head
+evidence.
+
+This remains Proposed exact-tree evidence. Protected merge, immutable release,
+consumer pin update, and a live `orchestrator/free` recovery remain required.
+The triggering `.github` #2106 model gates therefore remain nonpassing even
+though its exact-head CodeQL run has subsequently settled successfully.
+
+## 2026-09-07 per-model serving timeout and HTTP policy writes
+
+PR #1053 now applies an administrator-owned `model_timeout_seconds` value on
+the selected model's serving path. The client default remains null. There is
+no shared application ceiling. Authenticated timeout-only PATCH writes are
+admitted and recorded with the opaque principal digest. GET
+`timeout_policy` still reports a stale serving snapshot when another process
+wrote the durable row; that cross-process refresh remains open. HTTP restore
+and administrator UI remain unfinished. This is local regression evidence,
+not a protected merge or live-provider recovery claim.
+
+## 2026-09-07 timeout audit visibility repair
+
+On PR #1053 base `1ccc9599415096433214cd9ad0df611eddfc8fbb`, successful
+timeout set, clear, and restore operations had durable policy history but no
+operator audit event. A local regression reproduced the missing events; the
+repair adds committed revision references to the existing audit stream.
+History GET access now uses the existing durable replay-authorization path.
+An authenticated loopback HTTP regression reproduced missing access auditing
+and now checks both successful access and HTTP 503 when audit recording fails.
+
+The timeout-policy and agent-pool suites passed 73 tests in 12.30s before this
+documentation update. No live provider, protected merge, or deployment is
+claimed. The HTTP test spies on the durable audit call; it does not prove
+storage survival after a crash. Policy history remains atomic with the policy
+update; the separate operator event is not a new cross-store transaction.
+Default-null model timeout and explicit administrator control are unchanged.
+
+## 2026-09-06 model-specific timeout policy: local, not delivered
+
+PR #1053's remote `661ce8db` has a completed 3400-pass/2-skip regression suite
+for removing the implicit client timeout. The subsequent local durable-policy
+implementation at `439da2e5` has 31 related passes, but does not yet enforce
+model-specific execution limits. HTTP write admission and UI controls remain
+closed for the new setting. Neither result proves deployment or buyer latency.
+
+A new failure-injection test at `6236e982` demonstrates an unresolved audit
+atomicity gap: the update reports an audit error while both memory and a
+restarted instance retain the new 7200-second policy. Policy change/history
+was subsequently moved into one local pool transaction at `4e839ce1`;
+`c3879439` has 37 related passes, including history-insertion rollback for
+new/existing rows and rejection of a stale different-value writer. This does
+not yet cover authenticated actor evidence or cross-process serving refresh.
+Subsequent `d911a38e` adds history-revision comparisons for ABA conflicts;
+`e5e9c96f` reads values and revisions in one database snapshot. Their committed
+RED cases reproduced stale-value acceptance and mixed revisions respectively;
+the latter head has 39 related passes.
+Actor evidence is now stored as an optional opaque principal digest at local
+`c08a5fd5`; this is not yet authenticated HTTP policy-write E2E and null
+historical actors remain unknown. Static-token identity is deployment-scoped.
+Local `37bca9ca` adds revision-checked restoration as a new, source-linked
+history entry; `62ba3c3b` has 54 related passes including foreign-model and
+audit-failure rejection. Authenticated HTTP restore,
+precedence, cancellation semantics, released Rust runtime integration and
+actual administrator visual/E2E evidence also remain open.
+
+Local `9701dec2` guards ordinary pool saves against stale policy value/revision
+overwrites (60 focused passes). `befe04ce` additionally delays removal and
+group-change serving publication until durable saves succeed, following three
+reproduced failures; 103 related tests passed in 15.34 seconds. Multi-model
+batch rollback and cross-process serving refresh remain unproven. Neither
+change supplies model deadline enforcement or a new full-suite result.
+
+Subsequent `ad337e18` reproduced partial persistence in all three group/discovery
+batch paths when the second model conflicted. `36fc35df` now commits each batch
+in one transaction using the existing normalized writes; 122 related tests
+passed in 5.04 seconds. Cross-process refresh and end-to-end timeout delivery
+remain open; separate bootstrap operations are not one atomic batch.
+
+`a2951f67` adds actual authenticated HTTP evidence: stale ordinary edits fail
+without overwriting the other writer's policy, invalid credentials get 401,
+and the unfinished timeout write field remains rejected (1 focused pass,
+4.01 seconds). This is rejection-boundary evidence, not successful policy
+activation or inference enforcement.
+
+See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
+revisions, retained failures, corrected test-evidence limitations, owner
+boundaries and the full remaining acceptance gates. Local configuration work
+must not be represented as released enforcement or psychometric accuracy gain.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
@@ -58,7 +189,7 @@ the recorded retryable upstream error first. Caller-selected endpoint, model, fr
 file-replica, and ambiguous-tool-replay restrictions remain unchanged.
 Both ordered regression cases failed before the fix and pass afterward.
 See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
-Protected merge and post-change live gateway evidence are still required;
+ Protected merge and post-change live gateway evidence are still required;
 head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
 (`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
 correction below and does not verify it.
@@ -99,7 +230,7 @@ usage evidence; all 60 focused cases pass. The interrupted full run on
 - **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
 - **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
 - **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
-- **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
+ - **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
@@ -2786,7 +2917,7 @@ failed after the verdict was already correctly published and enforced —
 a downstream status-publish step, not the review pipeline itself; not yet
 investigated.
 
-**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+**Historical incident, not current-runtime proof** (traced via `.github#1276`'s
 `noema-review` run, flagged by the user as "still not working" after the
 above fixes landed): `TaskOrchestrator._invoke()`
 (`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
@@ -2801,7 +2932,44 @@ nothing is truly hung, just still working through an unbounded internal
 retry chain. Reproduced once (`.github` run `33312258611`, job
 `99259327051`); org-wide evidence since the pingora/Strix fixes landed
 shows this is now occasional, not the dominant failure mode (most
-`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
-is an overall deadline on `_invoke`'s candidate/retry loop, not another
-timeout increase on the sidecar's client side — deferred rather than
-rushed into this heavily-tested core file without dedicated validation.
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed in that historical
+observation). The earlier proposed universal deadline is superseded by the
+explicit model-timeout requirement: model execution defaults to null, and only
+an administrator-configured model limit may bound its complete execution.
+Readiness probes have a separate finite operational contract. The old run does
+not prove current deployment behavior or justify imposing a global inference cap.
+
+### Read-only timeout policy visibility — local, not runtime activation
+
+Source `6774dab4` exposes an admin-only timeout-policy GET that separates fresh
+configured seconds/revision from the local serving snapshot. It reports seconds
+and `enforcement_available=false`; reads do not activate limits or refresh
+routing. The actual HTTP and related pool/policy/security checks pass 88 tests
+in 9.52 seconds. Source `f9505a5c` adds model-scoped audit history with stable
+older-revision cursors and at most 100 records per read; 96 related tests pass
+in 7.70 seconds, including HTTP authorization and invalid-bound checks. HTTP
+set/clear/restore, released Rust runtime integration and actual administrator
+UI acceptance remain open. See
+[policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).
+
+### Unknown request outcome — local error-contract repair
+
+At `76d1caab`, a passthrough timeout or connection failure with unknown
+acceptance no longer escapes as a generic internal error. The existing
+single-attempt/no-fallback decision is retained, with a caller-safe
+`provider_outcome_unknown` response, `retryable=false` and an explicit
+SDK no-retry header. No tool execution is inferred from a model timeout.
+OpenAI SDK 2.54.0 → actual loopback HTTP → orchestrator → mock provider
+verifies one primary call, no fallback, and no raw diagnostic disclosure.
+The SDK-enabled related run passes 212 tests in 14.63 seconds. This is
+local evidence, not a protected release or live-provider result; full-suite
+verification of these new commits remains pending. Higher-level Strix
+retries, SSE errors, default-null full-response lifetime and UI acceptance
+remain open. See [incident and SDK evidence](doctoring/model-timeout-policy-evidence.md).
+
+The separate Naruon Noema 429 incident lacks per-attempt upstream status;
+final gateway status alone cannot establish every candidate's failure cause.
+Local `0b949aa2` adds bounded numeric status to the existing common failed-
+attempt log without reading provider text or bodies (89 related tests pass,
+15.28 seconds). Full verification and release of this diagnostic addition
+remain pending; provider availability itself is not repaired by better logs.

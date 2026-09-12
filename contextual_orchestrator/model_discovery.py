@@ -33,7 +33,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
-from .credentials import get_credential
+from .credentials import NotConfigured, get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,

@@ -57,7 +57,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import ProviderUpstreamError
+from .provider_errors import PROVIDER_OUTCOME_UNKNOWN_CODE, ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -285,7 +285,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
     "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
-    "context_window",
+    "context_window", "model_timeout_seconds",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -6249,6 +6249,27 @@ def build_server(
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
+                    if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6:] == ["timeout_policy", "history"]):
+                        page_size = self._parse_positive_int(
+                            (query.get("page_size") or [None])[0], "page_size", 20, 100,
+                        )
+                        before_revision = self._parse_optional_int(query, "before_revision")
+                        try:
+                            self._send(orchestrator.list_model_timeout_history(
+                                segments[3], segments[5], page_size=page_size,
+                                before_revision=before_revision,
+                            ))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
+                    if (len(segments) == 7 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6] == "timeout_policy"):
+                        try:
+                            self._send(orchestrator.get_model_timeout_policy(segments[3], segments[5]))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
@@ -6311,7 +6332,12 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent patch path missing worker agent")
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_AGENT_PATCH_KEYS)
-                    updated = orchestrator.patch_agent(segments[3], segments[-1], body)
+                    patch_kwargs: dict[str, Any] = {}
+                    if "model_timeout_seconds" in body:
+                        patch_kwargs["actor_id"] = security.principal_id(self.headers)
+                    updated = orchestrator.patch_agent(
+                        segments[3], segments[-1], body, **patch_kwargs
+                    )
                     self._send(updated, 200)
                     return
                 if path.startswith("/api/v1/model_groups/"):
@@ -7338,34 +7364,29 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    configured_timeout = orchestrator.client.timeout
-                    embedding_deadline = (
-                        None
-                        if configured_timeout is None
-                        else time.monotonic() + float(configured_timeout)
-                    )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
-                        remaining_timeout = (
-                            None
-                            if embedding_deadline is None
-                            else embedding_deadline - time.monotonic()
+                        wait_timeout = orchestrator.client._resolved_model_timeout(
+                            embedding_agent
                         )
-                        if remaining_timeout is not None and remaining_timeout <= 0:
-                            break
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent, wait_timeout=remaining_timeout: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                                zdr_only=zdr_only,
-                                agent_id=agent.id,
-                                wait_timeout=wait_timeout,
-                                owner_id=security.principal_id(self.headers),
-                            ))
+                            document = self._run(
+                                lambda agent=embedding_agent, wait_timeout=wait_timeout: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata={
+                                        "actor_scope": "inference",
+                                        "endpoint_alias": "embeddings",
+                                    },
+                                    zdr_only=zdr_only,
+                                    agent_id=agent.id,
+                                    wait_timeout=wait_timeout,
+                                    owner_id=security.principal_id(self.headers),
+                                )
+                            )
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
@@ -8077,6 +8098,11 @@ def build_server(
         @staticmethod
         def _admin_purpose(path: str) -> str:
             """Select the least-privileged purpose for an admin GET route."""
+            segments = [part for part in path.split("/") if part]
+            if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                    and segments[4] == "worker_agents"
+                    and segments[6:] == ["timeout_policy", "history"]):
+                return "audit_replay"
             if (
                 path == "/admin/state"
                 or path == "/api/v1/workflow_runs"
@@ -8261,10 +8287,16 @@ def build_server(
             detail: dict[str, Any] | None = None,
         ) -> None:
             request_id = current_request_id() or uuid.uuid4().hex
+            error_detail = {**(detail or {}), "request_id": request_id}
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id
             )
-            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
+            payload = _error_payload(code, message, error_detail)
+            if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
+                # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
+                self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            else:
+                self._send(payload, status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.

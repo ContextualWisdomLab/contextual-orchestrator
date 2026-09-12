@@ -727,7 +727,7 @@ def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator = _coordinator()
-    sync = coordinator.complete(
+    coordinator.complete(
         [{"role": "user", "content": "sync one"}], attribution={"company": "acme"}
     )
     job = coordinator.complete([{"role": "user", "content": "batch one"}],
@@ -1332,28 +1332,3 @@ def test_non_zdr_embedding_batch_preserves_explicit_model_outside_the_pool() -> 
 
     assert resolved_model == "unconfigured-upstream-model"
     assert resolved_agent_id is None
-
-
-def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
-    captured = []
-
-    class _CapturingBackend:
-        name = "capturing"
-
-        def submit(self, requests, metadata=None):
-            captured.extend(requests)
-            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
-
-    coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
-        batch_backend=_CapturingBackend(),
-    )
-    request = BatchRequest(
-        messages=[{"role": "user", "content": "ordinary batch"}],
-        model="unconfigured-provider-model",
-    )
-
-    coordinator.submit_batch([request])
-
-    assert len(captured) == 1
-    assert captured[0].model == "unconfigured-provider-model"

@@ -21,6 +21,73 @@ def build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
 
 
+def test_concurrent_error_responses_share_only_their_own_log_id(caplog) -> None:
+    """Concurrent HTTP failures correlate without logging credentials or bodies."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="private_test_credential"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with (
+            patch.object(server.RequestHandlerClass, "_authorize", side_effect=RuntimeError("test failure")),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            responses = list(executor.map(
+                lambda _: request_json(
+                    f"{base}/v1/models", "GET",
+                    headers={"authorization": "Bearer private_test_credential"},
+                ),
+                range(2),
+            ))
+        request_ids = []
+        for status, payload, _ in responses:
+            assert status == 500
+            assert payload["error"]["code"] == "internal_error"
+            request_id = payload["error"]["detail"]["request_id"]
+            assert payload["error_detail"]["request_id"] == request_id
+            assert len(request_id) == 32
+            request_ids.append(request_id)
+        assert len(set(request_ids)) == 2
+        records = [record.getMessage() for record in caplog.records if "request_failed" in record.getMessage()]
+        assert sorted(records) == sorted(
+            f"request_failed status=500 code=internal_error request_id={request_id}"
+            for request_id in request_ids
+        )
+        assert "private_test_credential" not in caplog.text
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_error_log_bounds_existing_response_request_ids(caplog) -> None:
+    """Diagnostics survive while one trusted correlation ID binds body and log."""
+    server = build_server(build(), port=0)
+    handler = object.__new__(server.RequestHandlerClass)
+    try:
+        for request_id in ("a" * 32, "secret\nforged_log", "g" * 32, 42, None):
+            caplog.clear()
+            detail = {"request_id": request_id, "diagnostic": "private_diagnostic"}
+            with patch.object(handler, "_send") as send:
+                handler._send_error(400, "invalid_request", "invalid request", detail)
+            sent_detail = send.call_args.args[0]["error_detail"]
+            assert sent_detail["diagnostic"] == "private_diagnostic"
+            trusted_id = sent_detail["request_id"]
+            assert len(trusted_id) == 32
+            assert all(character in "0123456789abcdef" for character in trusted_id)
+            assert send.call_args.args[0]["error"]["detail"]["request_id"] == trusted_id
+            assert send.call_args.args[1] == 400
+            assert caplog.records[-1].getMessage() == (
+                f"request_failed status=400 code=invalid_request request_id={trusted_id}"
+            )
+            assert "private_diagnostic" not in caplog.text
+            assert "forged_log" not in caplog.text
+    finally:
+        server.server_close()
+
+
 def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     seen: list[tuple[str, str]] = []
 
