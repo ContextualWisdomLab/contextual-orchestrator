@@ -10,10 +10,21 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import evolve_orchestration, _space_size  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _exercise_unreleased_optimizer_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy arithmetic tests internal while the public API fails closed."""
+    monkeypatch.setattr(
+        orchestrator_module, "_require_released_optimizer_selection_contract", lambda: None
+    )
 
 
 class _ExactCounter:

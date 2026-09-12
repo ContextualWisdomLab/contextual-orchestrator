@@ -12,6 +12,15 @@ from test_batch_optimizer import _CountingClient, _orch
 from contextual_orchestrator.orchestrator import evolve_orchestration, optimize_orchestration
 
 
+@pytest.fixture(autouse=True)
+def _exercise_unreleased_optimizer_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep score-domain tests internal while the public API fails closed."""
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator._require_released_optimizer_selection_contract",
+        lambda: None,
+    )
+
+
 @pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
 @pytest.mark.parametrize("record_count", [0, 1, 3])
 def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count):
