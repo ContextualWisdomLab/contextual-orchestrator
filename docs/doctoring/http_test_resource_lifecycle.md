@@ -1,5 +1,46 @@
 # HTTP test resource lifecycle
 
+## Trace HTTP fixture successor, 2026-09-13
+
+Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.
+Candidate: `e88562187b7ab3bf681b306ab98d2ca821ae82ed`.
+An inventory of 96 open PRs found no target-file overlap before editing.
+The original trace-purpose singleton failed with warnings-as-errors (1 failed,
+1.03s, exit 1; `/tmp/co-trace-successor-red-38c0603a.log`).
+Regression checkpoint `a9de9de5` retained HTTPError handles and failed all eight
+GET/POST, valid/malformed JSON, cleanup-OSError cases (1.08s, exit 1;
+`/tmp/co-trace-helper-explicit-red.log`).
+
+Ownership path: test `_post`/`_get` invokes urllib against the local server;
+trace authorization raises RequestError, which the server serializes as 401.
+urllib creates the client-side HTTPError consumed by the test helper. Closing
+production provider responses cannot close this separate client object.
+The helpers now close after decoding in `finally`; cleanup OSError cannot
+replace decoded diagnostics or the primary JSON decoding exception. All 23
+test-owned listener teardowns now call `server_close()` after shutdown/join.
+Production authentication, routing, retries and response bodies are unchanged.
+No global cleanup, warning suppression or forced collection is used.
+
+At the unchanged candidate above:
+
+| Check | Result | Log |
+| --- | --- | --- |
+| Trace module, strict | 31 passed, 1.77s, exit 0 | `/tmp/co-trace-helper-green.log` |
+| Trace + HTTP lifecycle + passthrough + provider taxonomy, strict | 126 passed, 6.17s, exit 0 | `/tmp/co-trace-related-e8856218.log` |
+| Full default | 3670 passed, 2 skipped, 157.76s, exit 0 | `/tmp/co-trace-full-default-e8856218.log` |
+| Full strict | 1173 failed, 2494 passed, 2 skipped, 13 errors, 304.38s, exit 1 | `/tmp/co-trace-full-strict-e8856218.log` |
+
+Use the shared interpreter documented below with `-m pytest tests -q --tb=short`;
+strict adds `-W error`. Worktree: `/tmp/co-trace-http-resource-successor-20260913`.
+Independent read-only review found no actionable issue and reproduced 31 strict
+passes in 2.28s, exit 0. Cleanup injection covers OSError after underlying close,
+not arbitrary exception classes or an underlying close that cannot complete.
+The full strict failure list contains no target-module failures; this does not
+prove every remaining failure's cause. Aggregate counts are not a latency KPI
+or a causal percentage improvement. Full strict acceptance, hosted review,
+protected merge and deployment remain unproven. Later documentation commits
+must not relabel these tests as executed at a different head.
+
 ## Expanded repair checkpoint (unpublished)
 
 ### Final frozen-candidate verification

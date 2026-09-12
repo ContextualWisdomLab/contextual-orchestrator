@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -46,7 +49,13 @@ def _post(
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        try:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+        finally:
+            try:
+                exc.close()
+            except OSError:
+                pass  # Preserve the response or primary decoding failure.
 
 
 def _get(port: int, path: str, token: str) -> tuple[int, dict]:
@@ -58,7 +67,53 @@ def _get(port: int, path: str, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        try:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+        finally:
+            try:
+                exc.close()
+            except OSError:
+                pass  # Preserve the response or primary decoding failure.
+
+
+@pytest.mark.parametrize("request_method", ["GET", "POST"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize("response_body", [b'{"error":"unauthorized"}', b'invalid JSON'])
+def test_error_response_cleanup_preserves_diagnostics(
+    monkeypatch, request_method, cleanup_fails, response_body,
+) -> None:
+    """Consumed helper errors close without replacing returned or failed decoding."""
+    response_error = urllib.error.HTTPError(
+        "http://127.0.0.1/", 401, "Unauthorized", {}, io.BytesIO(response_body),
+    )
+    original_close = response_error.close
+
+    def close_response():
+        original_close()
+        if cleanup_fails:
+            raise OSError("cleanup failed")
+
+    def raise_response(*args, **kwargs):
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", close_response)
+    monkeypatch.setattr(urllib.request, "urlopen", raise_response)
+    try:
+        if response_body == b'invalid JSON':
+            with pytest.raises(json.JSONDecodeError):
+                if request_method == "GET":
+                    _get(1, "/", _TEST_AUTH_TOKEN)
+                else:
+                    _post(1, {})
+        else:
+            result = (
+                _get(1, "/", _TEST_AUTH_TOKEN)
+                if request_method == "GET" else _post(1, {})
+            )
+            assert result == (401, {"error": "unauthorized"})
+        assert response_error.closed
+    finally:
+        original_close()
 
 
 def _server():
@@ -105,6 +160,7 @@ def test_trace_requires_a_verified_trace_purpose() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 401
     assert body["error"]["code"] == "unauthorized"
 
@@ -126,6 +182,7 @@ def test_trace_access_is_audited_before_response_release() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 200
     assert "orchestration" in body
     events = list(orchestrator._audit_events)
@@ -166,6 +223,7 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 503
     assert body["error"]["code"] == "trace_audit_unavailable"
     assert "orchestration" not in body
@@ -193,6 +251,7 @@ def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tool_passthrough_rejects_non_boolean_trace_flag() -> None:
@@ -213,6 +272,7 @@ def test_http_chat_tool_passthrough_rejects_non_boolean_trace_flag() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tool_passthrough_rejects_null_trace_flag() -> None:
@@ -233,6 +293,7 @@ def test_http_chat_tool_passthrough_rejects_null_trace_flag() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_include_orchestration_trace_null() -> None:
@@ -252,6 +313,7 @@ def test_http_chat_rejects_include_orchestration_trace_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
@@ -273,6 +335,7 @@ def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
@@ -294,6 +357,7 @@ def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 400, body
     assert body["error"]["code"] == "unsupported_trace_disclosure"
     assert not any(
@@ -320,6 +384,7 @@ def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 200, body
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
@@ -346,6 +411,7 @@ def test_structured_chat_server_trace_default_still_rejects_trace_disclosure() -
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 400, body
     assert body["error"]["code"] == "unsupported_trace_disclosure"
     assert not any(
@@ -378,6 +444,7 @@ def test_tool_passthrough_ignores_server_trace_default_when_flag_is_omitted() ->
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 200, body
     assert "choices" in body
 
@@ -401,6 +468,7 @@ def test_fast_route_stream_rejects_explicit_trace_before_provider_work() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 400, body
     assert body["error"]["code"] == "unsupported_trace_disclosure"
 
@@ -433,6 +501,7 @@ def test_fast_route_stream_ignores_server_trace_default_when_flag_is_omitted() -
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
@@ -462,6 +531,7 @@ def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 400, body
     assert body["error"]["code"] == "unsupported_trace_disclosure"
 
@@ -500,6 +570,7 @@ def test_access_report_disclosure_fails_closed_when_audit_fails() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 503, body
     assert body["error"]["code"] == "trace_audit_unavailable"
 
@@ -522,6 +593,7 @@ def test_invalid_chat_does_not_audit_trace_disclosure() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 400
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
@@ -548,6 +620,7 @@ def test_batched_chat_does_not_audit_trace_disclosure() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 202, body
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
@@ -572,6 +645,7 @@ def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> None:
@@ -600,6 +674,7 @@ def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == hidden_status == 200
     trace = disclosed["orchestration"]["trace"]
@@ -640,6 +715,7 @@ def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 400
     assert body["error"]["code"] == "trace_unavailable"
@@ -661,6 +737,7 @@ def test_http_chat_accepts_include_orchestration_trace_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_include_orchestration_trace_omitted() -> None:
@@ -678,6 +755,7 @@ def test_http_chat_accepts_include_orchestration_trace_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
