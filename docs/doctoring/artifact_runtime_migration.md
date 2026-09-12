@@ -48,3 +48,14 @@ Fresh main already uses workflow/repository/PR concurrency with cancellation
 only for PR events; earlier local-quality naming observations came from the
 older #1090 stack. NIM has only manual/schedule triggers and keeps its
 non-cancelling serialization. Neither rule is rewritten here.
+
+## Hosted metadata regression
+
+Run 34706255388, job 103586722915, failed with 1 failed, 3,600 passed,
+2 skipped in 149.43s. The repository security metadata test still expected
+the old upload version comment; the earlier eight-test selection omitted it.
+Update that expectation to the actual verified uses SHA, not the comment.
+Include tests/test_repository_security_metadata.py alongside the NIM workflow
+contracts in subsequent validation. This missed consumer assertion does not
+justify reverting the runtime pin or suppressing the check. Running sibling
+jobs were not restarted.
