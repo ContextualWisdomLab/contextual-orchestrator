@@ -38,6 +38,27 @@ the current object store; their full-test log is not current-head acceptance.
 
 ## Remaining acceptance
 
+### Verified checkpoint at 321409b0
+
+The full source suite completed with **3645 passed, 2 skipped in 266.32s**
+(exit 0; `/tmp/co-quality-recovery-full-321409b0.log`). Independent read-only
+review found no actionable implementation defect; invalid auto/conduct scores
+and post-rejection usage assertions remain explicit coverage gaps.
+
+The exact Git archive built successfully with `uv build --wheel` and installed
+non-editably into `/tmp/co-quality-package-321409b0.RRwUQQ/installed` after
+hash-locked dependency installation. Wheel SHA-256:
+`c0992936db4e8a82b76ae5685964bd4793612614374e04b62cf1107d1e538e47`.
+The first build attempt used an old build environment without the `build`
+module and failed before building; the isolated `uv build` replaced that path.
+Installation alone is not installed behavioral acceptance; those tests remain.
+
+Visual inspection: directly viewed the local browser rendering at
+`http://127.0.0.1:18765/`, revision 321409b0, English, 1265 × 712 viewport.
+Overlapping top/bottom captures showed readable headings, wrapped command and
+revision text, and no horizontal clipping or overlap. This is a documentation
+preview only; narrow viewports, other locales and product UI were not inspected.
+
 Run full checks and isolated installed-package tests, inspect the rendered
 documentation, obtain independent current-head review and protected CI before
 merge/release. Real accuracy and decision-latency KPIs still require an observed
