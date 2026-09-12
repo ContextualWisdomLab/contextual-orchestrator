@@ -56,7 +56,9 @@ and #1135 at `c7ed3939` alter only the later passthrough response double in this
 test module. Their valid Content-Length delta is disjoint and must be retained.
 The new repair worktree is based on #1158 rather than changing its live CI head.
 
-Status: proposed in PR #1105; not deployed. Runtime owner: CO. Log collector
+## Historical provider-correlation candidate
+
+Historical status: proposed in PR #1105; not deployed. Runtime owner: CO. Log collector
 owner: ContextualWisdomLab/.github.
 
 Central run 34299034731/job 102308769876 used trusted workflow revision
