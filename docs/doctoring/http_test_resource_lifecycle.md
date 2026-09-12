@@ -2,6 +2,19 @@
 
 ## Expanded repair checkpoint (unpublished)
 
+### Final frozen-candidate verification
+
+Candidate `345ee6b2b2ba2cdf6d415c9af8e47e5b715600e8` remained unchanged during
+all three runs. Focused strict: **275 passed in 5.64s**, session 53191, exit 0.
+Full default: **3662 passed, 2 skipped in 136.95s**, session 9331, exit 0.
+Full strict: **1188 failed, 2470 passed, 2 skipped, 13 errors in 313.62s**,
+session 7712, exit 1. Logs are `/tmp/co-resource-final-focused.log`,
+`/tmp/co-resource-final-default-345ee6b2.log` and
+`/tmp/co-resource-final-strict-345ee6b2.log` respectively. This final receipt
+is a documentation-only follow-up; it does not relabel prior tests as executed
+at its own later commit. The strict result remains unresolved. Draft publication
+must not imply full strict acceptance, protected merge or deployment.
+
 ### Current checkpoint: 2026-09-13
 
 At `69a5c26b52601832b5faa6ee23a8f7251816038c`, the eight-module strict

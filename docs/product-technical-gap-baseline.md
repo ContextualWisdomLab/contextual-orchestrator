@@ -2,6 +2,11 @@
 
 ## 2026-09-13 Response lifecycle repair candidate
 
+Final frozen validation candidate `345ee6b2` passed 275 focused strict tests and
+3662 default tests (2 skipped), both exit 0. Its complete strict suite remains
+RED: 1188 failed, 2470 passed, 2 skipped, 13 errors, exit 1. Later documentation
+receipts do not change the tested source or turn this result into acceptance.
+
 PR #1140's unpublished local candidate `dc88b2f3` closes consumed chat, raw,
 binary and synthesis HTTP error responses after classification, and before
 retry/backoff where applicable. Caller-owned raw-error handoff remains intact.
