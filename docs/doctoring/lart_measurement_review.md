@@ -78,6 +78,27 @@ proposal establishes LLM transfer or the existing accuracy/decision-p95 KPI.
 
 ## Executable marginal-uncertainty check
 
+### Nonparametric diagnostic follow-up, 2026-09-13
+
+At research head `b0844bd8`, additional primary-text inspection covered the
+two-step procedure and posterior-predictive diagnostic (published pages 5–6)
+in the [university-hosted final article](https://pure.uva.nl/ws/files/30670439/fpsyg_09_01525.pdf).
+The nonparametric approach treats estimated standardized log-time residuals as
+observed covariates. Its linearity check compares an observed deviation statistic
+with replicated values under the fitted linear model. This is a model-fit
+diagnostic, not a held-out accuracy or routing-latency result.
+
+CO acceptance implication (our inference): the fast-mlsirm contract must declare
+whether residual-estimation uncertainty is propagated or conditioned away.
+Fit residual preprocessing inside training partitions; no full-cohort residual
+fit may silently enter a held-out policy comparison. Posterior-predictive
+replications are diagnostic/unit evidence only under this project's synthetic
+data restriction, never the observed customer KPI denominator. Do not implement
+a second estimator in CO. Full equations, supplements and transfer remain open.
+
+The PDF screenshot tool timed out; the actual browser PDF rendered blank.
+Consequently equation-level visual inspection is unverified, not passed.
+
 Root read §5.2, including equation (7), on 2026-09-12. That equation reports
 the ability diagonal of joint posterior precision as inverse variance. For
 finite joint Gaussian uncertainty with unknown speed, marginal variance instead
