@@ -4051,7 +4051,8 @@ class _StateStore:
                 if phases and not invalid_phase:
                     measurement.update(phase)
                 for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
-                    field_value = measurement.get(field_name)
+                    field_value = (phase.get(field_name) if field_name == "durable_ack_elapsed_ns"
+                                   else measurement.get(field_name))
                     row[field_name] = field_value if type(field_value) is int and 0 <= field_value <= 2**64 - 1 else None
                     if field_value is not None and row[field_name] is None:
                         row["invalid_association_count"] += 1
