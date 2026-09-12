@@ -136,7 +136,15 @@ the installed package, asserted its site-packages location, and ran
 15.05s**, exit 0 (session 38230). Wheel SHA-256:
 `d62e05d3d32dde50ba9f6687b03319a4661dafa5650b25301d4b132061527593`.
 These are mock-provider behavioral checks, not observed customer KPI evidence.
-Python 3.10 execution remains unverified.
+Python 3.10.20 installed-wheel follow-up also passed all 216 tests in 13.64s
+(session 58812, exit 0). The same frozen wheel was installed in
+`/tmp/co-quality-package-85580612.OnW9XK/installed310`; execution from `/tmp`
+used `-I` and asserted the installed import path. This environment resolved the
+wheel's declared runtime dependencies plus pytest 9.1.1, rather than syncing
+the Python 3.14 acceptance lock; it is not lock-parity or full-suite evidence.
+Resolved differences included cryptography 50.0.1, protobuf 7.36.1,
+googleapis-common-protos 1.75.3, idna 3.19 and typing-extensions 4.16.0.
+No runtime or test files changed between frozen 85580612 and a9134aee.
 
 Visual follow-up inspected the actual browser rendering of `bf4561b5` at
 `http://127.0.0.1:18769/optimizer`, English, 1265 × 712. Three overlapping
