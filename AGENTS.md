@@ -1,5 +1,10 @@
 # AGENTS.md
 
+Trace HTTP test helpers own urllib-created error responses, independently of
+production provider cleanup. Preserve decoding failures when closing them and
+close listeners after shutdown/join. See the trace successor receipt in the
+existing HTTP resource runbook; its full strict suite is still nonclean.
+
 HTTP test owners must close error responses and listening sockets, not merely
 stop serving. Keep warnings-as-errors enabled; see
 `docs/doctoring/http_test_resource_lifecycle.md` for reproductions and the separate
