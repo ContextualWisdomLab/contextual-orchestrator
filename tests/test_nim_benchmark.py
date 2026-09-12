@@ -1601,16 +1601,82 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
 
 def test_paired_bootstrap_requires_pairs_and_is_deterministic() -> None:
     with pytest.raises(nb.BenchmarkContractError):
-        nb.paired_bootstrap_mean_difference([])
+        nb.paired_bootstrap_mean_difference(
+            [],
+            resample_count=2000,
+            confidence_level=0.95,
+            seed=11,
+        )
     first = nb.paired_bootstrap_mean_difference(
-        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11
+        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)],
+        resample_count=2000,
+        confidence_level=0.95,
+        seed=11,
     )
     second = nb.paired_bootstrap_mean_difference(
-        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11
+        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)],
+        resample_count=2000,
+        confidence_level=0.95,
+        seed=11,
     )
     assert first == second
     assert first["ci_low"] <= first["mean_difference"] <= first["ci_high"]
     assert first["pair_count"] == 3
+    assert first["iterations"] == 2000
+    assert first["confidence_level"] == 0.95
+    assert first["method"] == "paired_bootstrap_percentile"
+
+
+def test_paired_bootstrap_rejects_undeclared_or_invalid_coverage() -> None:
+    """Resample count and coverage are operator declarations, not hidden defaults."""
+    pairs = [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)]
+    with pytest.raises(nb.BenchmarkContractError, match="resample_count"):
+        nb.paired_bootstrap_mean_difference(pairs, seed=11)
+    with pytest.raises(nb.BenchmarkContractError, match="confidence_level"):
+        nb.paired_bootstrap_mean_difference(pairs, resample_count=2000, seed=11)
+    with pytest.raises(nb.BenchmarkContractError, match="seed"):
+        nb.paired_bootstrap_mean_difference(
+            pairs, resample_count=2000, confidence_level=0.95
+        )
+    for invalid_count in (True, False, 0, -1, 1.5, "2000"):
+        with pytest.raises(nb.BenchmarkContractError, match="resample_count"):
+            nb.paired_bootstrap_mean_difference(
+                pairs,
+                resample_count=invalid_count,
+                confidence_level=0.95,
+                seed=11,
+            )
+    for invalid_coverage in (True, 0.0, 1.0, 1.5, float("nan"), float("inf"), "0.95"):
+        with pytest.raises(nb.BenchmarkContractError, match="confidence_level"):
+            nb.paired_bootstrap_mean_difference(
+                pairs,
+                resample_count=2000,
+                confidence_level=invalid_coverage,
+                seed=11,
+            )
+    with pytest.raises(nb.BenchmarkContractError, match="seed"):
+        nb.paired_bootstrap_mean_difference(
+            pairs,
+            resample_count=2000,
+            confidence_level=0.95,
+            seed=True,
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="cannot be represented"):
+        nb.paired_bootstrap_mean_difference(
+            pairs,
+            resample_count=2,
+            confidence_level=0.95,
+            seed=11,
+        )
+    declared = nb.paired_bootstrap_mean_difference(
+        pairs,
+        resample_count=3,
+        confidence_level=0.5,
+        seed=11,
+    )
+    assert declared["iterations"] == 3
+    assert declared["confidence_level"] == 0.5
+    assert declared["method"] == "paired_bootstrap_percentile"
 
 
 def test_pareto_frontier_excludes_dominated_rows() -> None:
@@ -1622,6 +1688,45 @@ def test_pareto_frontier_excludes_dominated_rows() -> None:
     ]
     frontier = nb.pareto_frontier(rows, "quality", "cost")
     assert [row["name"] for row in frontier] == ["good_cheap", "bad_cheap"]
+
+
+# Fixture-declared measurement settings. These are not runtime defaults.
+DECLARED_RESAMPLE_COUNT = 2000
+DECLARED_CONFIDENCE_LEVEL = 0.95
+DECLARED_COMPARISON_PAIRS = (("conduct_bounded", "route_once"),)
+
+
+def _declared_comparison_kwargs(**overrides: object) -> dict:
+    """Return explicit comparison declarations for unit fixtures."""
+    payload: dict = {
+        "seed": 3,
+        "comparison_pairs": DECLARED_COMPARISON_PAIRS,
+        "resample_count": DECLARED_RESAMPLE_COUNT,
+        "confidence_level": DECLARED_CONFIDENCE_LEVEL,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _declared_run_kwargs(**overrides: object) -> dict:
+    """Return explicit measurement declarations for benchmark runs."""
+    payload: dict = {
+        "resample_count": DECLARED_RESAMPLE_COUNT,
+        "confidence_level": DECLARED_CONFIDENCE_LEVEL,
+        "comparison_pairs": DECLARED_COMPARISON_PAIRS,
+    }
+    payload.update(overrides)
+    return payload
+
+
+CLI_MEASUREMENT_FLAGS = [
+    "--bootstrap-resample-count",
+    "2000",
+    "--confidence-level",
+    "0.95",
+    "--comparison-pair",
+    "conduct_bounded,route_once",
+]
 
 
 def _synthetic_cell(
@@ -1787,7 +1892,7 @@ def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
             "conduct_bounded",
         )
     ]
-    comparisons = nb.paired_policy_comparisons(cells, seed=3)
+    comparisons = nb.paired_policy_comparisons(cells, **_declared_comparison_kwargs())
     assert len(comparisons) == 1
     assert comparisons[0]["policy_a"] == "conduct_bounded"
     assert comparisons[0]["policy_b"] == "route_once"
@@ -1798,7 +1903,7 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_two", 0.0),
     ]
-    assert nb.paired_policy_comparisons(disjoint, seed=3) == []
+    assert nb.paired_policy_comparisons(disjoint, **_declared_comparison_kwargs()) == []
     cells = [
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_one", 0.0),
@@ -1806,10 +1911,59 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         # A task observed for only one policy cannot form a pair.
         _synthetic_cell("route_once", "task_three", None, outcome="failure"),
     ]
-    comparisons = nb.paired_policy_comparisons(cells, seed=3)
+    comparisons = nb.paired_policy_comparisons(
+        cells,
+        **_declared_comparison_kwargs(
+            comparison_pairs=(
+                ("conduct_bounded", "route_once"),
+                ("route_once", "direct_single_worker:vendor/model-a"),
+                ("cheapest_eligible_worker", "route_once"),
+            )
+        ),
+    )
     pairs = {(row["policy_a"], row["policy_b"]) for row in comparisons}
     assert ("conduct_bounded", "route_once") in pairs
     assert ("route_once", "direct_single_worker:vendor/model-a") in pairs
+    assert ("cheapest_eligible_worker", "route_once") not in pairs
+
+
+def test_paired_policy_comparisons_reject_undeclared_or_invalid_pairs() -> None:
+    """Policy pairs are operator declarations, not a baked-in subset."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 0.0),
+    ]
+    with pytest.raises(nb.BenchmarkContractError, match="comparison_pairs"):
+        nb.paired_policy_comparisons(cells, seed=3, resample_count=2000, confidence_level=0.95)
+    with pytest.raises(nb.BenchmarkContractError, match="comparison_pairs"):
+        nb.paired_policy_comparisons(
+            cells, **_declared_comparison_kwargs(comparison_pairs=())
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="two policy names"):
+        nb.paired_policy_comparisons(
+            cells, **_declared_comparison_kwargs(comparison_pairs=(("route_once",),))
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="distinct nonempty"):
+        nb.paired_policy_comparisons(
+            cells,
+            **_declared_comparison_kwargs(
+                comparison_pairs=(("route_once", "route_once"),)
+            ),
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="duplicate comparison pair"):
+        nb.paired_policy_comparisons(
+            cells,
+            **_declared_comparison_kwargs(
+                comparison_pairs=(
+                    ("conduct_bounded", "route_once"),
+                    ("conduct_bounded", "route_once"),
+                )
+            ),
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="resample_count"):
+        nb.paired_policy_comparisons(
+            cells, **_declared_comparison_kwargs(resample_count=None)
+        )
 
 
 @pytest.mark.parametrize("failure_outcome", ["failure", "timeout"])
@@ -1826,7 +1980,7 @@ def test_paired_comparisons_retain_failed_delivery_and_elapsed_time(
     ]
     for cell, latency in zip(cells, [100.0, 150.0, 2000.0, 50.0, 5.0]):
         cell["end_to_end_latency_ms"] = latency
-    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    comparison = nb.paired_policy_comparisons(cells, **_declared_comparison_kwargs())[0]
     assert comparison["pair_count"] == 2
     assert comparison["mean_difference"] == -0.5
     assert (comparison["ci_low"], comparison["ci_high"]) == (-1.0, 0.0)
@@ -1849,7 +2003,7 @@ def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> 
     ]
     cells[0]["end_to_end_latency_ms"] = 900.0
     cells[1]["end_to_end_latency_ms"] = 700.0
-    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    comparison = nb.paired_policy_comparisons(cells, **_declared_comparison_kwargs())[0]
     assert comparison["pair_count"] == 1
     assert comparison["mean_difference"] == 0.0
     assert (comparison["ci_low"], comparison["ci_high"]) == (0.0, 0.0)
@@ -1876,11 +2030,13 @@ def test_paired_comparisons_exclude_exploratory_tasks_and_reject_duplicate_cells
         _synthetic_cell("route_once", "exploratory_task", 1.0),
     ]
     cells[2]["task_split"] = cells[3]["task_split"] = "exploratory"
-    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    comparison = nb.paired_policy_comparisons(cells, **_declared_comparison_kwargs())[0]
     assert comparison["pair_count"] == 1
     assert comparison["mean_difference"] == 0.0
     with pytest.raises(nb.BenchmarkContractError, match="duplicate policy/task"):
-        nb.paired_policy_comparisons([*cells, cells[0]], seed=3)
+        nb.paired_policy_comparisons(
+            [*cells, cells[0]], **_declared_comparison_kwargs()
+        )
 
 
 @pytest.mark.parametrize(
@@ -1908,7 +2064,7 @@ def test_paired_comparisons_reject_invalid_observations(
     ]
     cells[0][field_name] = invalid_value
     with pytest.raises(nb.BenchmarkContractError, match=field_name):
-        nb.paired_policy_comparisons(cells, seed=3)
+        nb.paired_policy_comparisons(cells, **_declared_comparison_kwargs())
 
 
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
@@ -2002,6 +2158,24 @@ def test_report_schema_validation_reports_missing_paths() -> None:
             ),
             "unknown cheapest worker skip reason",
         ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "bootstrap_resample_count", 0
+            ),
+            "resample_count",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "confidence_level", 1.0
+            ),
+            "confidence_level",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "comparison_pairs", []
+            ),
+            "comparison_pairs",
+        ),
     ],
 )
 def test_report_schema_rejects_invalid_evaluation_contract(
@@ -2021,6 +2195,7 @@ def _dry_report(output_dir: str) -> dict:
         PRICING_SCENARIO_PATH,
         output_dir,
         max_total_requests=900,
+        **_declared_run_kwargs(),
     )
 
 
@@ -2062,12 +2237,14 @@ def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Pa
     ]
     cells[0]["end_to_end_latency_ms"] = 900.0
     cells[1]["end_to_end_latency_ms"] = 700.0
-    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(cells, 3)
+    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(
+        cells, **_declared_comparison_kwargs()
+    )
     summary = nb.render_markdown_summary(report)
     assert "-1.0 [-1.0, -1.0]" in summary
     assert "200.0 [200.0, 200.0] ms" in summary
     assert "successful outcomes A/B 0/1 and 1/1" in summary
-    assert report["benchmark_schema_version"] == "3.0.0"
+    assert report["benchmark_schema_version"] == "4.0.0"
     report["benchmark_schema_version"] = "1.0.0"
     with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
         nb.validate_report_schema(report)
@@ -2107,6 +2284,7 @@ def test_evaluation_contract_failure_publishes_no_artifacts(
             git_sha="e" * 40,
             workflow_run_id="run-contract-failure",
             transport=malformed_during_evaluation,
+            **_declared_run_kwargs(),
         )
 
     assert list(tmp_path.iterdir()) == []
@@ -2255,6 +2433,7 @@ def test_run_benchmark_rejects_output_cap_before_egress() -> None:
             "unused",
             max_output_tokens=0,
             transport=transport,
+            **_declared_run_kwargs(),
         )
     assert calls == 0
 
@@ -2314,6 +2493,16 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
         assert first["evaluation"]["best_single_worker_hindsight"] is None
         assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
         assert first["evaluation"]["paired_comparisons"]
+        assert first["provenance"]["benchmark_parameters"][
+            "bootstrap_resample_count"
+        ] == 2000
+        assert first["provenance"]["benchmark_parameters"]["confidence_level"] == 0.95
+        assert first["provenance"]["benchmark_parameters"]["comparison_pairs"] == [
+            ["conduct_bounded", "route_once"]
+        ]
+        assert first["evaluation"]["paired_comparisons"][0]["method"] == (
+            "paired_bootstrap_percentile"
+        )
         # Deterministic artifacts: identical reports across runs.
         with open(os.path.join(tmp, "one", "benchmark_report.json"), "rb") as handle:
             first_bytes = handle.read()
@@ -2341,6 +2530,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
             tmp,
             max_total_requests=900,
             transport=nb.build_dry_run_transport(),
+            **_declared_run_kwargs(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
         assert (
@@ -2362,6 +2552,7 @@ def test_live_run_fails_closed_without_credential(
             tmp,
             git_sha="a" * 40,
             workflow_run_id="run-1",
+            **_declared_run_kwargs(),
         )
 
 
@@ -2384,6 +2575,7 @@ def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
                 git_sha="b" * 40,
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
+                **_declared_run_kwargs(),
             )
     finally:
         ModelClient._validate_provider = original_validate
@@ -2419,6 +2611,7 @@ def test_live_run_uses_default_transport_builder_when_none_given(
                 max_total_requests=900,
                 git_sha="c" * 40,
                 workflow_run_id="run-43",
+                **_declared_run_kwargs(),
             )
     finally:
         nb.build_default_transport = original_builder
@@ -2463,6 +2656,7 @@ def test_cli_dry_run_succeeds() -> None:
                     tmp,
                     "--max-total-requests",
                     "900",
+                    *CLI_MEASUREMENT_FLAGS,
                 ]
             )
         assert exit_code == 0
@@ -2475,7 +2669,12 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(
-            ["--dry-run", "--task-manifest", "does/not/exist.json"]
+            [
+                "--dry-run",
+                "--task-manifest",
+                "does/not/exist.json",
+                *CLI_MEASUREMENT_FLAGS,
+            ]
         )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
@@ -2494,6 +2693,7 @@ def test_cli_live_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -
                 "d" * 40,
                 "--workflow-run-id",
                 "run-1",
+                *CLI_MEASUREMENT_FLAGS,
             ]
         )
     assert exit_code == 1
@@ -2510,10 +2710,28 @@ def test_cli_failure_redacts_resolved_bearer(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(nb, "run_benchmark", fail)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exit_code = nb.run_benchmark_cli(["--dry-run"])
+        exit_code = nb.run_benchmark_cli(["--dry-run", *CLI_MEASUREMENT_FLAGS])
     assert exit_code == 1
     assert secret not in stdout.getvalue()
     assert "[REDACTED]" in stdout.getvalue()
+
+
+def test_cli_fails_closed_without_measurement_declaration() -> None:
+    """CLI cannot invent a 2,000-resample 95% interval or policy subset."""
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = nb.run_benchmark_cli(["--dry-run", "--task-manifest", TASK_MANIFEST_PATH])
+    assert exit_code == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["benchmark_failed_closed"] is True
+    assert payload["error_class"] == "BenchmarkContractError"
+    with pytest.raises(nb.BenchmarkContractError, match="two policy names"):
+        nb._comparison_pairs_from_cli(["route_once"])
+    with pytest.raises(nb.BenchmarkContractError, match="two policy names"):
+        nb._comparison_pairs_from_cli([123])
+    assert nb._comparison_pairs_from_cli(["conduct_bounded,route_once"]) == (
+        ("conduct_bounded", "route_once"),
+    )
 
 
 if __name__ == "__main__":

@@ -18,14 +18,22 @@ The detailed engineering and evidence record is
 # no network calls and never receives NVIDIA_NIM_API_KEY.
 python -m contextual_orchestrator nim-benchmark --dry-run \
   --pricing-scenario examples/nim_pricing_scenario.json \
-  --output-dir benchmark_artifacts
+  --output-dir benchmark_artifacts \
+  --bootstrap-resample-count 2000 \
+  --confidence-level 0.95 \
+  --comparison-pair conduct_bounded,route_once
 
 # Live CI run: the workflow injects NVIDIA_NIM_API_KEY only into the live step.
 # The process bootstraps it into the credential registry and runtime access
-# resolves the credential by name.
+# resolves the credential by name. Resample count, coverage, and comparison
+# pairs are required declarations; the values below are this run's choices,
+# not hidden code defaults.
 python -m contextual_orchestrator nim-benchmark \
   --max-total-requests 2000 \
   --max-output-tokens 264 \
+  --bootstrap-resample-count 2000 \
+  --confidence-level 0.95 \
+  --comparison-pair conduct_bounded,route_once \
   --git-sha "$GITHUB_SHA" \
   --workflow-run-id "$GITHUB_RUN_ID"
 ```
@@ -207,18 +215,27 @@ failure record retains `task_score: null`; zero delivery reward is not an
 estimate of an unobserved answer's correctness or a psychometric response.
 
 Each comparison reports A-minus-B mean delivered-score and elapsed-time
-differences with paired 95% bootstrap intervals, successful outcome counts on
-the shared tasks, and unmatched task counts. Elapsed time ends at the recorded
-terminal outcome, including a failure or timeout. A fast failure is therefore
-visible alongside its zero delivery reward; lower elapsed time alone is not an
-improvement in service. The intervals condition on the common task set and the
-selected policies, including the explicitly labelled hindsight worker.
-When direct workers tie for the highest quality, no unique hindsight worker
-is selected and its comparisons are omitted. The observations and other policy
-comparisons remain available; model names never break a quality tie.
+differences with paired percentile bootstrap intervals, successful outcome
+counts on the shared tasks, and unmatched task counts. Coverage, resample
+count, and the compared policy pairs are declared in provenance; they are not
+hidden 2,000-resample or 95% defaults and not a baked-in conduct/route subset.
+Elapsed time ends at the recorded terminal outcome, including a failure or
+timeout. A fast failure is therefore visible alongside its zero delivery
+reward; lower elapsed time alone is not an improvement in service. The
+intervals condition on the common task set and the declared policy pairs.
+Hindsight worker identity remains a separate measurement field; comparing
+against it requires an explicit pair declaration.
+
+### Comparison report version 4
+
+Version 4 requires declared `bootstrap_resample_count`, `confidence_level`,
+and `comparison_pairs` in report provenance. The percentile method name is
+`paired_bootstrap_percentile`; coverage is a separate numeric field. A
+declared coverage that cannot be represented with the resample count fails
+closed. Older reports must be regenerated.
 
 Reports using version 1 compared only jointly successful tasks. Their values
-must not be pooled with version 2 or 3, and the validator rejects old schemas.
+must not be pooled with version 2, 3, or 4, and the validator rejects old schemas.
 Version 2 observations require their independently preserved evaluation plan
 before migration; do not infer a complete plan from surviving observations.
 No task-count or completion-fraction threshold authorizes production promotion.

@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+Benchmark restacking requires the actual target branch SHA, not only PR base
+metadata. Reproduce strict resource warnings independently before blaming
+later tests. The 2026-09-13 receipt in
+`docs/doctoring/nim-benchmark-evidence-grade.md` records commands and limits.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first

@@ -1,5 +1,38 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 current-parent bootstrap restack — Proposed
+
+Merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090 and the
+current #1074 target, including both prior Gap sections. Strict selected
+checks remain RED: 235 passed, 3 failed. Two HTTPError cleanup failures also
+reproduce on the parent; the later profile test passes alone. The
+[restack receipt](doctoring/nim-benchmark-evidence-grade.md#current-parent-restack-2026-09-13--proposed)
+records exact revisions, commands, logs, the inherited PDF rights decision and
+remaining limits. This is integration work, not measured accuracy or latency
+improvement. Fresh hosted checks and independent review remain required.
+
+## 2026-09-07 declared paired-bootstrap coverage (proposed)
+
+Child successor of [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+removes the hidden 2,000-resample 95% interval and the baked-in
+`conduct_bounded` / `route_once` / cheapest / hindsight comparison subset from
+`contextual_orchestrator/nim_benchmark.py`. Resample count, exclusive-unit-interval
+coverage, seed, and policy pairs are required declarations. Missing, boolean,
+non-positive, non-finite, empty, duplicate, or degenerate declarations fail
+closed. The percentile method name no longer embeds 95. Report schema 4.0.0
+records the declarations in provenance. The workflow and CLI must pass them
+explicitly; 2,000 and 0.95 in those files are run declarations, not code
+defaults.
+
+Local three-file coverage on this working tree: NIM statements/branches 100%,
+interrogate 100%, 175 related tests passed. This is not buyer-held-out
+accuracy, p95 latency, or protected merge evidence. Production route/conduct
+defaults stay locked. Repository-authored inference/token/workflow budgets
+(`MAX_WORKFLOW_DEPTH`, `DEFAULT_MAX_OUTPUT_TOKENS`) and the psychometric
+held-out harness's 2,000-sample interval remain later no-heuristics work.
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-08 integrated psychometric evidence repair (proposed)
 
 PR #1074 source `d7e9d9a240854f9b06c891290d5d249bec8833ce` normally integrates

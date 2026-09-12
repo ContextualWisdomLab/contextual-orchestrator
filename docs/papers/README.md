@@ -551,6 +551,15 @@ psychometric evidence", never a portable ability rank.
   unobserved psychometric response. Mean intervals do not establish p95
   performance. Citation and summary only; redistribution was not established.
 
+- Efron, B., & Tibshirani, R. J. (1993). *An introduction to the bootstrap*.
+  Chapman & Hall. https://doi.org/10.1201/9780429246593
+  Grounds the percentile interval: ordered bootstrap replications, with
+  coverage α taken from the operator declaration rather than a hidden 95%
+  constant, and resample count B as a Monte Carlo precision declaration.
+  NIM report version 4 records both values in provenance and fails closed
+  when coverage cannot be represented with B. Citation and summary only;
+  redistribution was not established.
+
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
   `helm-holistic-evaluation-2211.09110.pdf`

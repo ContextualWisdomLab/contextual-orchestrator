@@ -85,7 +85,7 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-BENCHMARK_SCHEMA_VERSION = "3.0.0"
+BENCHMARK_SCHEMA_VERSION = "4.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
@@ -2337,32 +2337,125 @@ def evaluate_policies(
 # --------------------------------------------------------------------------
 
 
+def _require_declared_positive_int(value: object, field_name: str) -> int:
+    """Reject missing, boolean, or non-positive integer declarations."""
+    if type(value) is not int or value < 1:
+        raise BenchmarkContractError(f"{field_name} must be a declared positive integer")
+    return value
+
+
+def _require_declared_confidence_level(value: object) -> float:
+    """Reject missing or non-exclusive-unit-interval coverage declarations."""
+    if type(value) is not float or not math.isfinite(value) or not 0.0 < value < 1.0:
+        raise BenchmarkContractError(
+            "confidence_level must be a declared finite exclusive unit interval"
+        )
+    return value
+
+
+def _require_declared_seed(value: object) -> int:
+    """Reject missing or boolean bootstrap seeds."""
+    if type(value) is not int:
+        raise BenchmarkContractError("seed must be a declared integer")
+    return value
+
+
+def _require_declared_comparison_pairs(
+    value: object,
+) -> tuple[tuple[str, str], ...]:
+    """Reject missing, empty, malformed, or duplicate policy-pair declarations."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise BenchmarkContractError(
+            "comparison_pairs must declare a sequence of policy pairs"
+        )
+    if not value:
+        raise BenchmarkContractError(
+            "comparison_pairs must declare at least one policy pair"
+        )
+    normalized: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise BenchmarkContractError(
+                "each comparison pair must contain two policy names"
+            )
+        policy_a, policy_b = pair
+        if (
+            not isinstance(policy_a, str)
+            or not isinstance(policy_b, str)
+            or not policy_a
+            or not policy_b
+            or policy_a == policy_b
+        ):
+            raise BenchmarkContractError(
+                "comparison pair policies must be distinct nonempty names"
+            )
+        key = (policy_a, policy_b)
+        if key in seen:
+            raise BenchmarkContractError("duplicate comparison pair")
+        seen.add(key)
+        normalized.append(key)
+    return tuple(normalized)
+
+
+def _comparison_pairs_from_cli(values: list[str] | None) -> tuple[tuple[str, str], ...]:
+    """Parse repeated ``policy_a,policy_b`` flags into declared comparison pairs."""
+    if not values:
+        raise BenchmarkContractError(
+            "comparison_pairs must declare at least one policy pair"
+        )
+    parsed: list[tuple[str, str]] = []
+    for raw in values:
+        parts = raw.split(",") if isinstance(raw, str) else ()
+        if len(parts) != 2:
+            raise BenchmarkContractError(
+                "each comparison pair must contain two policy names"
+            )
+        parsed.append((parts[0], parts[1]))
+    return _require_declared_comparison_pairs(parsed)
+
+
 def paired_bootstrap_mean_difference(
     paired_scores: list[tuple[float, float]],
-    iterations: int = 2000,
-    seed: int = 7,
+    *,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
-    """Paired bootstrap CI for mean(score_a - score_b) over shared tasks."""
+    """Paired percentile interval for mean(score_a - score_b) on shared tasks.
+
+    ``resample_count``, ``confidence_level``, and ``seed`` are required
+    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
+    """
     if not paired_scores:
         raise BenchmarkContractError(
             "paired bootstrap requires at least one score pair"
         )
+    iterations = _require_declared_positive_int(resample_count, "resample_count")
+    coverage = _require_declared_confidence_level(confidence_level)
+    declared_seed = _require_declared_seed(seed)
     differences = [a - b for a, b in paired_scores]
-    rng = random.Random(seed)
+    rng = random.Random(declared_seed)
     resampled_means = sorted(
         sum(rng.choice(differences) for _ in differences) / len(differences)
         for _ in range(iterations)
     )
-    lower_index = int(0.025 * (iterations - 1))
-    upper_index = int(0.975 * (iterations - 1))
+    tail_mass = (1.0 - coverage) / 2.0
+    lower_index = int(tail_mass * (iterations - 1))
+    upper_index = int((1.0 - tail_mass) * (iterations - 1))
+    if lower_index >= upper_index:
+        raise BenchmarkContractError(
+            "declared coverage cannot be represented with the resample count"
+        )
     return {
         "mean_difference": round(sum(differences) / len(differences), 6),
         "ci_low": round(resampled_means[lower_index], 6),
         "ci_high": round(resampled_means[upper_index], 6),
         "iterations": iterations,
-        "seed": seed,
+        "confidence_level": coverage,
+        "seed": declared_seed,
         "pair_count": len(differences),
-        "method": "paired_bootstrap_percentile_95",
+        "method": "paired_bootstrap_percentile",
     }
 
 
@@ -2461,9 +2554,22 @@ def best_single_worker_hindsight(
 
 
 def paired_policy_comparisons(
-    cells: list[dict[str, Any]], seed: int
+    cells: list[dict[str, Any]],
+    *,
+    seed: int | None = None,
+    comparison_pairs: object = None,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Compare delivered score and terminal-outcome time on all shared tasks."""
+    """Compare delivered score and terminal-outcome time on declared policy pairs.
+
+    Comparison pairs, resample count, coverage, and seed are required
+    declarations. Unobserved or disjoint pairs are omitted rather than imputed.
+    """
+    declared_pairs = _require_declared_comparison_pairs(comparison_pairs)
+    declared_seed = _require_declared_seed(seed)
+    _require_declared_positive_int(resample_count, "resample_count")
+    _require_declared_confidence_level(confidence_level)
     policy_cells: dict[str, dict[str, dict[str, Any]]] = {}
     locked_cells = [cell for cell in cells if cell["task_split"] == "locked"]
     for cell in locked_cells:
@@ -2484,17 +2590,13 @@ def paired_policy_comparisons(
             if type(task_score) not in (int, float) or not 0 <= task_score <= 1:
                 raise BenchmarkContractError("invalid successful task_score observation")
         task_cells[cell["task_id"]] = cell
-    summaries = summarize_policies(locked_cells)
-    hindsight = best_single_worker_hindsight(summaries)
-    comparison_pairs = [
-        ("conduct_bounded", "route_once"),
-        ("cheapest_eligible_worker", "route_once"),
-    ]
-    if hindsight is not None:
-        comparison_pairs.append(("route_once", hindsight["policy_name"]))
-        comparison_pairs.append(("conduct_bounded", hindsight["policy_name"]))
     comparisons = []
-    for policy_a, policy_b in comparison_pairs:
+    bootstrap_declaration = {
+        "resample_count": resample_count,
+        "confidence_level": confidence_level,
+        "seed": declared_seed,
+    }
+    for policy_a, policy_b in declared_pairs:
         tasks_a, tasks_b = policy_cells.get(policy_a), policy_cells.get(policy_b)
         if not tasks_a or not tasks_b:
             continue
@@ -2527,9 +2629,9 @@ def paired_policy_comparisons(
                 ),
                 "policy_a_unpaired_task_count": len(tasks_a) - len(shared_tasks),
                 "policy_b_unpaired_task_count": len(tasks_b) - len(shared_tasks),
-                **paired_bootstrap_mean_difference(score_pairs, seed=seed),
+                **paired_bootstrap_mean_difference(score_pairs, **bootstrap_declaration),
                 "end_to_end_latency_ms": paired_bootstrap_mean_difference(
-                    latency_pairs, seed=seed
+                    latency_pairs, **bootstrap_declaration
                 ),
             }
         )
@@ -2743,6 +2845,9 @@ _REPORT_REQUIRED_PATHS = (
     "evaluation.worker_count",
     "evaluation.cheapest_worker_skip_reason",
     "provenance.benchmark_parameters.max_eval_models",
+    "provenance.benchmark_parameters.bootstrap_resample_count",
+    "provenance.benchmark_parameters.confidence_level",
+    "provenance.benchmark_parameters.comparison_pairs",
     "evaluation.policy_summaries",
     "evaluation.paired_comparisons",
     "evaluation.pareto_frontiers",
@@ -2812,6 +2917,12 @@ def validate_report_schema(report: dict[str, Any]) -> None:
     model_limit = report["provenance"]["benchmark_parameters"]["max_eval_models"]
     if type(model_limit) is not int or model_limit < 1:
         raise BenchmarkContractError("evaluation model limit must be a positive integer")
+    parameters = report["provenance"]["benchmark_parameters"]
+    _require_declared_positive_int(
+        parameters["bootstrap_resample_count"], "resample_count"
+    )
+    _require_declared_confidence_level(parameters["confidence_level"])
+    _require_declared_comparison_pairs(parameters["comparison_pairs"])
     workers = build_worker_agents(
         report["catalog_snapshot"]["probed_models"], "mock://plan-validation", model_limit
     )
@@ -2919,7 +3030,11 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "## Paired comparisons (95% bootstrap CI)",
+        (
+            "## Paired comparisons "
+            f"({report['provenance']['benchmark_parameters']['confidence_level']:g} "
+            "percentile bootstrap interval)"
+        ),
         "",
         (
             "Differences are A minus B on all shared locked tasks. Failed delivery "
@@ -3044,7 +3159,6 @@ def assemble_benchmark_report(
     evaluation: dict[str, Any],
     request_budget: RequestBudget,
     provenance_inputs: dict[str, Any],
-    seed: int,
 ) -> dict[str, Any]:
     """Assemble and validate the complete evidence-grade benchmark report."""
     cells = evaluation["evaluation_cells"]
@@ -3083,7 +3197,19 @@ def assemble_benchmark_report(
             "planned_evaluation_cells": evaluation["planned_evaluation_cells"],
             "policy_summaries": summaries,
             "best_single_worker_hindsight": best_single_worker_hindsight(summaries),
-            "paired_comparisons": paired_policy_comparisons(cells, seed=seed),
+            "paired_comparisons": paired_policy_comparisons(
+                cells,
+                seed=provenance_inputs["benchmark_parameters"]["seed"],
+                comparison_pairs=provenance_inputs["benchmark_parameters"][
+                    "comparison_pairs"
+                ],
+                resample_count=provenance_inputs["benchmark_parameters"][
+                    "bootstrap_resample_count"
+                ],
+                confidence_level=provenance_inputs["benchmark_parameters"][
+                    "confidence_level"
+                ],
+            ),
             "pareto_frontiers": build_pareto_frontiers(summaries),
             "cheapest_worker_skip_reason": evaluation["cheapest_worker_skip_reason"],
             "locked_task_count": evaluation["locked_task_count"],
@@ -3259,6 +3385,9 @@ def run_benchmark(
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     max_eval_models: int = 7,
     seed: int = 7,
+    resample_count: int | None = None,
+    confidence_level: float | None = None,
+    comparison_pairs: object = None,
     git_sha: str = "",
     workflow_run_id: str = "",
     transport: ProviderTransport | None = None,
@@ -3283,6 +3412,9 @@ def run_benchmark(
             by ``MAX_WORKFLOW_DEPTH``.
         max_eval_models: Maximum chat-eligible workers in policy evaluation.
         seed: Deterministic bootstrap seed.
+        resample_count: Declared paired-bootstrap resample count.
+        confidence_level: Declared exclusive-unit-interval percentile coverage.
+        comparison_pairs: Declared ordered policy pairs to compare.
         git_sha: Exact source revision, required live.
         workflow_run_id: Workflow provenance identifier, required live.
         transport: Optional injected provider transport for deterministic tests.
@@ -3298,6 +3430,12 @@ def run_benchmark(
         raise BenchmarkContractError(
             f"run_mode must be 'dry_run' or 'live', not {run_mode!r}"
         )
+    declared_resample_count = _require_declared_positive_int(
+        resample_count, "resample_count"
+    )
+    declared_confidence_level = _require_declared_confidence_level(confidence_level)
+    declared_comparison_pairs = _require_declared_comparison_pairs(comparison_pairs)
+    declared_seed = _require_declared_seed(seed)
     if (
         isinstance(max_output_tokens, bool)
         or not isinstance(max_output_tokens, int)
@@ -3364,7 +3502,10 @@ def run_benchmark(
         "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
         "minimum_paired_task_count": None,
         "required_completion_fraction": None,
-        "seed": seed,
+        "seed": declared_seed,
+        "bootstrap_resample_count": declared_resample_count,
+        "confidence_level": declared_confidence_level,
+        "comparison_pairs": [list(pair) for pair in declared_comparison_pairs],
         "task_manifest_version": manifest["manifest_version"],
         "pricing_scenario_version": (
             pricing_scenario["scenario_version"] if pricing_scenario else None
@@ -3443,7 +3584,6 @@ def run_benchmark(
             "benchmark_parameters": benchmark_parameters,
             "request_plan": request_plan,
         },
-        seed,
     )
     report["artifact_paths"] = write_benchmark_artifacts(report, output_dir)
     return report
@@ -3494,6 +3634,25 @@ def run_benchmark_cli(argv: list[str]) -> int:
     parser.add_argument("--max-eval-models", type=int, default=7)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
+        "--bootstrap-resample-count",
+        type=int,
+        default=None,
+        help="Declared paired-bootstrap resample count. Required; there is no hidden default.",
+    )
+    parser.add_argument(
+        "--confidence-level",
+        type=float,
+        default=None,
+        help="Declared exclusive-unit-interval percentile coverage. Required.",
+    )
+    parser.add_argument(
+        "--comparison-pair",
+        action="append",
+        dest="comparison_pairs",
+        default=None,
+        help="Declared policy pair as policy_a,policy_b. Repeat to compare more pairs.",
+    )
+    parser.add_argument(
         "--git-sha",
         default="",
         help="Provenance: the exact commit under benchmark (required live).",
@@ -3521,6 +3680,9 @@ def run_benchmark_cli(argv: list[str]) -> int:
             max_output_tokens=args.max_output_tokens,
             max_eval_models=args.max_eval_models,
             seed=args.seed,
+            resample_count=args.bootstrap_resample_count,
+            confidence_level=args.confidence_level,
+            comparison_pairs=_comparison_pairs_from_cli(args.comparison_pairs),
             git_sha=args.git_sha,
             workflow_run_id=args.workflow_run_id,
         )

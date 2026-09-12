@@ -88,6 +88,9 @@ def test_scheduled_live_budget_covers_the_reviewed_current_catalog_scale() -> No
 
     assert 'echo "max_requests=2000" >> "$GITHUB_OUTPUT"' in workflow
     assert 'echo "max_requests=300" >> "$GITHUB_OUTPUT"' not in workflow
+    assert "--bootstrap-resample-count 2000" in workflow
+    assert "--confidence-level 0.95" in workflow
+    assert "--comparison-pair conduct_bounded,route_once" in workflow
 
 
 def test_monthly_schedule_starts_inside_the_reviewed_evidence_window() -> None:
