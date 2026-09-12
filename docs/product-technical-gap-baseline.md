@@ -1,5 +1,43 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Response lifecycle repair candidate
+
+Final frozen validation candidate `345ee6b2` passed 275 focused strict tests and
+3662 default tests (2 skipped), both exit 0. Its complete strict suite remains
+RED: 1188 failed, 2470 passed, 2 skipped, 13 errors, exit 1. Later documentation
+receipts do not change the tested source or turn this result into acceptance.
+
+PR #1140's unpublished local candidate `dc88b2f3` closes consumed chat, raw,
+binary and synthesis HTTP error responses after classification, and before
+retry/backoff where applicable. Caller-owned raw-error handoff remains intact.
+Test-owned listeners and SQLite connections are closed at their owning boundary.
+The customer-relevant gap is reliable recovery without accumulating abandoned
+responses; no live-load resource or decision-latency gain has yet been measured.
+
+At production head `69a5c26b52601832b5faa6ee23a8f7251816038c`, the default
+suite passed 3661 tests with 2 skipped (152.37s, exit 0), but strict warnings
+produced 1193 failures and 11 errors (2467 passed, 2 skipped; exit 1). These are
+not comparable to a different worktree's test population. Test-only follow-up
+`dc88b2f3` passed 275 focused strict tests, including synthesis cleanup ordering
+and preservation of the final HTTP 413 when cleanup raises. Production review
+found no semantic blocker; this does not satisfy remaining hosted gates.
+
+Remaining work: independently reproduce and attribute residual resource roots;
+verify complete current-head checks/reviews; finish document visual evidence;
+integrate under branch protection and verify release/runtime behavior. Keep this
+candidate Proposed and unreleased. No model selection default, psychometric
+validity claim or actual accuracy/latency KPI is changed by this repair. See the
+[single owner runbook](doctoring/http_test_resource_lifecycle.md) for commands,
+exact-head evidence, rejected approaches and visual-inspection limits.
+
+Next separate test-resource gap: the trace HTTP honesty authorization singleton
+fails independently at `f598d982` with an unclosed 401 response and listener
+(1.85s, exit 1). The test file is unchanged from #1140 remote `eeed2d98`;
+latest file history includes `0906ee80`, `1287da2e`, `5f2753ac`. A live inventory
+of 95 open PRs returned no matching file. This is bounded ownership evidence,
+not a blanket claim that all remaining strict failures are pre-existing. Keep
+the source repair outside #1140; its runbook records the exact reproduction.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
@@ -2805,3 +2843,23 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+### HTTP resource lifecycle follow-up — local candidate, 2026-09-12
+
+Owner: CO transport, stacked on #1135 exact
+`c7ed39397bd8771b44250a61ab0ee8818889152a`; test cleanup is inherited as
+`87dcc53fb868bfa615c27c42fdc73aa69c4f1875`. Customer outcome sought: release failed
+stream resources while preserving the actionable error, terminal tool stop and
+response-size limit. No routing score or model timeout changes are included.
+
+The HTTP 500 cleanup defect was reproduced before repair. The local candidate
+closes its error response after classification; closer failures cannot replace
+the safe primary error. Three affected test files passed 56 cases with warnings
+as errors. Expanded parent/successor suites remain nonclean. All 25 observed
+failure nodes were run independently on both trees: 50 processes had matching
+per-node exits and core warning/error signatures (addresses/ephemeral ports
+excluded). This bounds the observed order-dependent baseline limitation; it
+does not relabel the suite as GREEN. Full-suite, hosted review,
+protected merge, deployment, real accuracy and latency gains remain unverified.
+See [the lifecycle runbook](doctoring/http_test_resource_lifecycle.md) for RED
+receipts, the rejected unsafe closer behavior, parent lineage and remaining gates.
