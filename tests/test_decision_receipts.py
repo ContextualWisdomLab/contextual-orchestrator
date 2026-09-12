@@ -188,7 +188,16 @@ def test_http_typed_stream_failure_before_selection_is_retained(tmp_path, monkey
 
 def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monkeypatch):
     """Routing evidence calls occur only cold and remain before task acknowledgement."""
-    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, _CURRENT_DECISION, export_decision_receipts
+    receipt_closed = threading.Event()
+    original_close = DecisionMeasurement.close
+
+    def close_and_signal(measurement, reason="unfinished"):
+        """Observe real durable finalization without treating response bytes as a join."""
+        original_close(measurement, reason)
+        receipt_closed.set()
+
+    monkeypatch.setattr(DecisionMeasurement, "close", close_and_signal)
     orchestrator = TaskOrchestrator([
         ModelAgent("worker_one", "mock/worker", tags=("writing",)),
         ModelAgent("embedding_one", "mock-embedding", tags=("embedding",)),
@@ -209,6 +218,7 @@ def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monk
     try:
         counts = []
         for _ in range(2):
+            receipt_closed.clear()
             connection = http.client.HTTPConnection(*server.server_address)
             connection.request("POST", "/v1/chat/completions", json.dumps({
                 "model": "orchestrator/auto", "mode": "route",
@@ -219,6 +229,7 @@ def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monk
             response.read()
             assert response.status == 200
             connection.close()
+            assert receipt_closed.wait(5), "request measurement did not finalize"
             counts.append(len(embedding_snapshots))
         server.shutdown()
         assert counts[0] > 0
