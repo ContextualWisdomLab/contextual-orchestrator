@@ -1,5 +1,26 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Optimizer score-domain recovery
+
+Current main `012beaacd0631f8cd3391c77744eeb626269b5de` still accepts NaN,
+infinity and out-of-range per-task quality into configuration ranking. Recovery
+test commit `40290df6` reproduced 28 failures and 16 valid-case passes (5.89s).
+The shared guard at `982b553345623e006698950bd560d94b4038ed33` passed all 76
+focused optimizer tests (11.65s), covering both public optimizers and serial/batch
+route evaluation. Invalid pairs whose average is valid are rejected individually;
+valid endpoints, fractional values and Boolean predicates retain their meaning.
+
+This restores a measurement-integrity prerequisite, not observed accuracy or
+latency improvement. Calls finish before score validation; no saved spend or
+early cancellation is claimed. Current-head full-suite, installed-package,
+independent review, visual inspection and protected-release evidence remain
+pending at the initial focused checkpoint. At code/document revision 321409b0,
+the full source suite subsequently passed 3645 tests (2 skipped), installed
+public-API acceptance passed 44 cases, and desktop documentation was visually
+inspected. Protected CI, formal approval, release and real KPI evidence remain
+pending. Historical September 9 artifacts do not prove this revision passed.
+See [the recovery runbook](doctoring/optimizer_score_recovery.md).
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
@@ -2805,3 +2826,32 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-12 Optimizer cardinality acceptance and calibration boundary
+
+Frozen `090b4ec841cfc78b45248b561f1cef6396b57429` rejects incomplete/extra
+custom batch outputs before callbacks, preserving incurred usage. Corrected
+route-mode RED has six actual batch failures; full source **3,791 passed,
+2 skipped**, separate installed core **222 passed**. Earlier fixture failures
+are corrected, not counted as product reproductions. Exact commands, hashes
+and failed attempts are in [the recovery runbook](doctoring/optimizer_score_recovery.md).
+The PR remains Draft: this repair does not supply calibrated production
+ranking or observed accuracy/latency gains. Reuse fast-mlsirm's existing
+validation-profile owner successor #1737 rather than create a parallel consumer
+manifest; it is not in the inspected v0.9.1 release.
+
+The historical overall-deadline recommendation above is not current policy:
+model timeouts default to null, and a terminal 502 alone does not justify a
+new application-wide timeout or caller-side provider fallback. Trace the
+actual eligible candidates and request phases before changing owner behavior.
+
+Production approval boundary audit at `d43e08c7`: generic optimizer callback
+scores and recommendations are not calibration approval. No production
+approval adapter was identified in this checkout's runtime call graph; external
+callers remain outside that audit. Preserve descriptive/checkable-answer APIs
+and do not invent a purpose/profile layer in this repair. The canonical owner
+follow-up must define released applicable evidence, verification and lifecycle
+checks, and fail-closed production recommendation tests before an actual
+production caller adopts it. See the
+[adapter audit](doctoring/optimizer_score_recovery.md#production-approval-adapter-audit--2026-09-12).
+This gap remains open independently of the repaired cardinality/usage defects.

@@ -1,5 +1,14 @@
 # CLAUDE.md
 
+Optimizer means must not replace ordered `score_observations`. Reuse the shared
+scoring boundary and preserve existing selection semantics until the separate
+applicable-evaluator contract is resolved; see the optimizer recovery runbook.
+
+For optimizer batch validation and installed-test setup, read
+`docs/doctoring/optimizer_score_recovery.md`. Match task/result counts before
+scoring and preserve usage on failure; batch fixtures must select route mode.
+Passing this boundary does not establish psychometric calibration eligibility.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
@@ -126,6 +135,11 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   executable uniqueness contract lands in PR #848.
 
 ## Tool-call handoffs
+
+Optimizer score validation is shared by both public optimizers: reject nonfinite
+or out-of-range per-task values before aggregation, preserve valid predicates
+and completed-call usage. See `docs/doctoring/optimizer_score_recovery.md` for
+RED/GREEN, isolated-package evidence and remaining coverage boundaries.
 
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
