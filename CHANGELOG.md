@@ -20,6 +20,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Local SSE provider test fixtures now close their listening sockets after shutdown, preventing `ResourceWarning` / `PytestUnraisableExceptionWarning` failures under warnings-as-errors execution.
 - Virtual `orchestrator/free` structured completions (`response_format`, no
   tools/stream) fail over a retryable synthesizer 502/429 onto the next
   eligible free worker and attach request-scoped eligible/attempted
