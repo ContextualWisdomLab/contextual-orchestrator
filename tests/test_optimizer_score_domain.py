@@ -39,6 +39,17 @@ def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count)
     assert caught_error.value.optimizer_usage[0]["totals"]["cost_usd"] == 0.1
 
 
+@pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
+@pytest.mark.parametrize("use_batch", [False, True])
+def test_equal_means_preserve_distinct_observations(optimizer_kind, use_batch):
+    """Retain task scores while leaving all prior public decision fields unchanged."""
+    first_result = _evaluate_scores([0.0, 1.0], optimizer_kind, use_batch)
+    second_result = _evaluate_scores([0.5, 0.5], optimizer_kind, use_batch)
+    assert first_result["results"][0].pop("score_observations") == [0.0, 1.0]
+    assert second_result["results"][0].pop("score_observations") == [0.5, 0.5]
+    assert first_result == second_result
+
+
 def _evaluate_scores(score_values, optimizer_kind, use_batch, execution_mode="route"):
     """Evaluate mock answers through the public serial and batch optimizer APIs."""
     task_rows = [{"prompt": "reference task", "score_value": value} for value in score_values]

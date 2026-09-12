@@ -16388,8 +16388,8 @@ def _optimizer_usage_snapshot(orchestrator: Any, evaluation_index: int) -> dict[
 
 
 def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool,
-                  usage_receipts: list[dict[str, Any]]) -> float:
-    """Mean quality of one config over the task set; route configs may evaluate via Batch."""
+                  usage_receipts: list[dict[str, Any]]) -> tuple[float, list[float]]:
+    """Return the existing mean and ordered task scores without changing selection policy."""
     try:
         if use_batch and mode == "route":
             records = orchestrator.batch_route([task["prompt"] for task in tasks])
@@ -16404,7 +16404,7 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
         if any(not math.isfinite(score) or not 0.0 <= score <= 1.0 for score in scores):
             raise ValueError("quality scores must be finite and in [0, 1]")
         usage_receipts.append(_optimizer_usage_snapshot(orchestrator, len(usage_receipts)))
-        return sum(scores) / len(scores) if scores else 0.0
+        return (sum(scores) / len(scores) if scores else 0.0), scores
     except Exception as evaluation_error:
         try:
             failed_usage = _optimizer_usage_snapshot(orchestrator, len(usage_receipts))
@@ -16441,12 +16441,13 @@ def optimize_orchestration(
     for candidate in candidates:
         orchestrator = candidate["orchestrator"]
         mode = candidate.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        quality, score_observations = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
         cost = usage_receipts[-1]["totals"]["cost_usd"]
         results.append({
             "name": candidate["name"],
             "mode": mode,
             "quality": round(quality, 4),
+            "score_observations": score_observations,
             "cost_usd": round(cost, 6) if cost is not None else None,
             "quality_per_usd": (
                 round(quality / cost, 2) if cost is not None and cost > 0 else None
@@ -16517,12 +16518,13 @@ def evolve_orchestration(
             return evaluated[config_key]
         orchestrator = build_orchestrator(config)
         mode = config.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        quality, score_observations = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
         cost = usage_receipts[-1]["totals"]["cost_usd"]
         result = {
             "name": config_key,
             "config": dict(config),
             "quality": round(quality, 4),
+            "score_observations": score_observations,
             "cost_usd": round(cost, 6) if cost is not None else None,
             "quality_per_usd": (
                 round(quality / cost, 2) if cost is not None and cost > 0 else None
