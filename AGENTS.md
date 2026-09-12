@@ -1,7 +1,32 @@
 # AGENTS.md
 
+Cache reuse is an item observation, not a request terminal until close. Preserve
+mixed-batch selection timing, explicit failures and ContextVar cleanup. See
+`docs/doctoring/kpi_stack_integration.md` for the RED cases and separate source
+versus installed-core verification commands; do not weaken the native invariant.
+
+Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
+HTTP reproduction, atomic submission-event projection, and remote/local failure
+boundary. Do not retry a remotely submitted job after local lineage failure.
+
+Workflow origin identity and persistence limitations are documented in
+`docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
+
+## Autonomous research handoff
+
+Identifier checks do not discover title-only citations. Verify their persistent
+identifier and register it in both the citing document and paper inventory;
+retain read-depth and reuse limits. See the KPI runbook's citation reconciliation.
+
+Read [the KPI runbook](docs/doctoring/autonomous_kpi_runbook.md) before numerical
+experiments and update its verified evidence before handoff. Choose KPI scope
+autonomously under `docs/analytics_spec.md`. Preserve live execution handles;
+high host load and silent numerical work are not proof of deadlock. Synthetic
+recovery is unit evidence, not customer accuracy. Break owner/consumer release
+cycles with isolated exact-revision contracts, never production source copies.
 
 <!-- BEGIN cwl-agent-guidance -->
 ## Agent guidance (CWL governance)
@@ -180,6 +205,20 @@ push or open a PR.
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
+
+## Stacked quality checks
+
+For Noema incidents, `caller attempts=1` does not count internal provider
+attempts. Match request identifiers and deployed revision before attributing
+fallback; preflight failures are not review-request evidence. Keep ambiguous
+timeout/502 replay separate from explicit rejection. See the
+[attribution runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+Zero check runs on a stacked PR can mean its base was excluded by
+`pull_request.branches: [main]`, not that checks passed. Keep the repository
+quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
+plus actionlint. After a new head, verify actual hosted execution; previous-head
+results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
 
 ## Tool-call handoffs
 

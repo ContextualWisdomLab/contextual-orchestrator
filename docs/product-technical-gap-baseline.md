@@ -1,5 +1,566 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 request-decision export candidate
+
+[PR #1158](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1158)
+implements request-scoped milliseconds on export owner #1138 at base
+`1881ef06ed90ee72eb7209434db366c851cd68dc`. Source
+`45cc666f9fd52aedf6484b345f30857d7f9d72bf` also repairs admission metadata
+incorrectly supplying missing final acknowledgement or selection evidence.
+This preserves the intent of #1125 without claiming its per-step trace contract
+fully inherited; neither predecessor is closed. No new timer or routing policy
+is introduced. Focused strict contracts passed 69 tests; default full regression
+passed 3,764 with 2 skipped. Isolated noneditable macOS ARM64/Python 3.12 wheels
+passed the same 69 strict contracts. These are controlled test results, not an
+observed correctness cohort or decision-latency improvement.
+
+Candidate head `0a2626867c0baa6a95ad40f3f00e40008359cca2` has a real
+[manual Security run](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34708859235)
+whose three jobs were observed running, not completed. Draft PR automatic jobs
+were skipped by their explicit Draft condition; that is not secret absence.
+Protected review, merge-result verification, publication, ingress-denominator
+reconciliation and observed KPI comparison remain open. Actual GitHub
+screenshots covered the two changed production files and both changed test
+files at 1265 x 712 English without observed clipping or overlap; this is not
+the complete product UI/locale matrix. The default full-test log's isolated
+request-log fragment remains unresolved: strict standalone telemetry tests
+passed 50 in 3.26s without reproducing it. Detailed receipts remain in the
+[candidate runbook](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/0a2626867c0baa6a95ad40f3f00e40008359cca2/docs/doctoring/request_outcome_export_validation.md).
+
+## 2026-09-13 residual diagnostic acceptance gap
+
+Research follow-up `e9d51ac7` identifies an owner-contract requirement: declare
+whether uncertainty in estimated response-time residuals is propagated or held
+fixed, and fit preprocessing within training partitions. Posterior-predictive
+model checks do not establish observed accuracy or decision latency. The
+[primary-method intake](doctoring/lart_measurement_review.md#nonparametric-diagnostic-follow-up-2026-09-13)
+records the read scope and failed PDF rendering; no estimator or production
+policy is changed. Owner implementation and observed evaluation remain open.
+
+## 2026-09-12 Title-only psychometric citation gap
+
+Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
+so passing identifier checks missed its absence from the paper inventory.
+The verified DOI and APA entry now connect that lead to the existing guard.
+The [reproduction record](doctoring/autonomous_kpi_runbook.md#title-only-citation-reconciliation-2026-09-12)
+records RED and six passing citation contracts. This closes one known discovery
+omission, not complete paper coverage. Full-method review, owner implementation,
+observed accuracy/latency improvement and protected delivery remain unverified.
+
+## 2026-09-12 Nonlinear response-process evidence gap
+
+Follow-up classification repair: RED `c8b358ad` reproduced a dry-run report
+being labelled for production-candidate review (1 failed, 1.87s). Runtime
+`383b4a1e` marks assembled dry-run reports `synthetic_diagnostic_only` and
+`benchmark_smoke_only`, preserving live sufficiency logic and the null routing
+recommendation. Both benchmark test suites passed: 126 tests in 8.65s,
+session 70083, exit 0. Independent read-only tracing found the misleading
+classification in published JSON/Markdown but no inspected deployment consumer
+that uses it to activate policy. This repairs evidence classification, not a
+demonstrated promotion bypass or measured accuracy/latency gain. Full suite,
+installed artifacts, rendered output and hosted review remain unverified for
+this repair; earlier research-branch runtime acceptance does not cover it.
+
+Evaluation readiness probe at `4359401f` ran the documented NIM command with
+`--dry-run --pricing-scenario examples/nim_pricing_scenario.json` and isolated
+output `/tmp/co-kpi-readiness-20260912.r1sYeS` (session 75417, exit 0).
+It completed 589 simulated requests, with 30 paired tasks and no production
+recommendation. All policy scores were zero and reported latency was the
+fixed 1 ms test value: neither is an observed KPI baseline. The generated
+report labels `decision_use=production_candidate_review` despite dry-run mode;
+admission semantics require audit before this label can support any decision.
+The readiness command proves harness execution only. No provider egress,
+observed cohort, independent adjudication, initial-decision p95, or production
+promotion was verified by this probe.
+
+Research baseline `60ee94c2e941d2883aca623867138798e2ba9bc9`, PR #1107:
+[external psychometrics intake](doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake)
+adds a diagnostic alternative to monotonic token-length assumptions. Proposed
+owner work belongs in fast-mlsirm; CO consumes a released calibration contract.
+Keep post-response observations out of the same request's initial routing
+features, and separate decision latency from generation and queueing time.
+No estimator, production default, observed KPI, or protected-main delivery is
+established by this literature addition. Remaining work includes full method
+audit, lawful observed data, held-out diagnostic comparison and frozen-policy
+accuracy/decision-latency measurement. Rendering of this addition is unverified.
+
+## 2026-09-09 Optimizer score-domain repair finding
+
+Independent exact-source probing at
+`204e306c046797b812589b9b66062296beaa1c8d` found that the shared
+`_score_config` boundary accepts nonfinite and out-of-range callback scores
+despite its public `[0,1]` contract. In both serial and batch mock paths,
+NaN, infinity, and 1.1 could recommend an invalid candidate over a valid 0.9
+candidate. The 0.44-second probe used AST-extracted functions, not installed
+package or real-provider execution. Subsequent public optimize/evolve RED
+at `98153df6` produced 20 failed invalid-score cases and 20 passed compatibility
+cases. Shared repair `db700768` rejects each invalid score before aggregation.
+Frozen review checkpoint `22246762e3ce0b7e8624d457d8905835565d6a5a`
+passed 86 focused tests in 3.04 seconds, including invalid observations whose
+mean is valid. Preserve valid
+fractional scores; reject invalid evidence rather than clamping or omitting it.
+This protects recommendation integrity, not a measured customer accuracy gain.
+
+Isolated wheel execution `22123` passed 48 public score-domain tests in
+0.93 seconds outside the checkout, using Python `-I`. Root independently
+confirmed the installed import and wheel SHA-256
+`8dea451f3722dc91b3f4e9c10bfc9b55ab3372e39a2f49aeb5a027d67fce28f3`.
+The installed environment resolves declared dependencies; the separate live
+full suite `78368` uses the frozen project lock. Those environments are not
+claimed identical. Full-suite, hosted acceptance, protected merge, and release
+remain pending. The guard does not claim early provider-call cancellation or
+recovery of spend already incurred before score validation.
+
+The separate provider-truncation hypothesis was rejected: `batch_route` returns
+the ordered input cardinality or raises, and existing missing/content tests
+preserve incurred spend. Merged PR #961 owns that earlier provider repair;
+a short-list test double alone would not establish an actual provider defect.
+
+## 2026-09-09 Batch recovery PR delivery
+
+[PR #1115](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1115)
+is Ready/Open at `73404f89d7a90f7a6b98caf514af859b02a375dd`, based on
+#1113 `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`, delivered without force.
+Full-suite execution `82637` completed with **3,491 passed, 2 skipped in
+757.78 seconds**, supplementing the separate **69 installed-package tests**.
+Root verified the live head/base and empty review inventory. Hosted Security
+run **34333545448** completed all three jobs successfully on tested merge
+`138fa7aca0554d5695137a1cfa6b74a48b26715d`. Linux/Python 3.12.14 hosted
+full suite: **3,491 passed, 2 skipped in 785.64 seconds**; benchmark/docstring
+checks: **134 passed in 10.85 seconds**; installed wheel checks: **40 passed
+in 15.85 seconds**. Hosted core wheel SHA-256:
+`4c34fdc911270ab07297fdd7bbf782e8ee4368547e879f288cf9c3805ed3798e`.
+Current PR head/base still match the above revisions, Ready/Open with no reviews.
+No independent approval,
+protected merge, release, remote-provider integration, or observed KPI gain is
+established. The untracked local native extension was not committed.
+
+## 2026-09-09 Request-outcome export gap
+
+[Issue #1114](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1114)
+records an installed-wheel HTTP probe at frozen `73404f89`: batch submission
+returned 201 with durable lineage and one committed association, while the
+200 analytics snapshot omitted the submitted batch job ID. Execution `83174`
+completed successfully as an observation probe, not a passing assertion that
+the proposed export exists. Its script is
+`/tmp/co-batch-export-probe.s0ytig/probe_export.py` on the validation host.
+The correct `measurement_complete=false` remains unchanged.
+
+Independent source review confirms associations currently support internal
+recovery, not an operator outcome-link export. The next delta is a bounded,
+prompt-free, purpose-authorized join preserving many-to-one links, cache
+provenance and unmatched/failed admissions. Existing admissions are not
+owner-filtered; do not expose a global join through owner-scoped replay or
+infer ownership from request IDs. Recovery descriptors and private payloads
+must stay excluded. This operational capability is needed before collecting
+the requested observed KPI cohort; it does not supply adjudicated outcomes.
+
+Successor `codex/request-outcome-export-20260909`, based on `73404f89`,
+established actual HTTP RED at `3e14dfbbb87e8cc22a98ddd9e6ebb8ed576c0021`:
+**1 failed in 5.37 seconds**, terminal execution `24161`. After successful
+workflow/batch requests, an invalid admission, and SQLite restart, the proposed
+admin export returned 404; an inference principal was denied with 401.
+This is not installed-successor evidence. Design review found keyed workflow
+replacement deletes prior versions, so a high-water query alone cannot promise
+historical reproducibility. The successor must retain the necessary prompt-free
+association revisions in the same journal transaction or otherwise prove the
+claimed snapshot semantics; missing legacy history cannot be fabricated.
+
+Successor checkpoint `f0304d7bab409823ab17f8b0d3f08f69701441d0` now has
+**68 focused tests passed in 23.08 seconds** (execution `55267`) and a clean
+bounded independent source review of persistence/privacy. Root review found a
+separate HTTP parsing gap: default query parsing discards empty values before
+unknown/duplicate validation. Blank-query RED/fix is pending after the live
+frozen full-suite execution `50159`; no source or environment mutation during
+that execution is authorized by this receipt. Proposed ADR 0131 and the
+runbook record the service-wide admin boundary; no independent purpose-claim
+verification is supplied by the existing external verifier.
+
+Direct browser inspection of the temporary local runbook first viewport
+(`1265×712`, English) found its heading and PRD text legible. The ADR preview
+(`1129×1022`, English) exposed a renderer defect: YAML frontmatter became
+merged prose/list content. This is being repaired in the temporary renderer,
+not hidden by changing the source ADR. Whole-document and rendered UML
+acceptance remain pending. Neither inspection establishes deployed UI quality.
+
+## 2026-09-09 Installed batch recovery validation
+
+Frozen `73404f89d7a90f7a6b98caf514af859b02a375dd` produced separately built
+core and native wheels. Isolated installed-package execution `31999` completed
+**69 batch-lineage and decision-receipt tests in 44.46 seconds**, exit 0,
+on macOS arm64/Python 3.14.6. Root independently verified outside-checkout
+imports resolve under `/private/tmp/co-batch-installed-73404f89.cX4GMN/venv`
+for both the core package and native extension. No editable source import is
+used in this receipt. Core SHA-256:
+`d51ea2844064a5f5674791c6ef7789a0a277d1eae43fe49d506f4ccaa120a18c`;
+native SHA-256:
+`fb0a88ff477f422d496720d551f051a06172c848d2a6bc95d7caaa5e95bc87ea`.
+
+At this installed-package checkpoint the separate full-suite execution `82637`
+was live; it subsequently passed as recorded in the delivery section above.
+Installed focused success alone does
+not prove full-suite or hosted success, real remote integration, review
+approval, protected merge, publishing, or customer KPI improvement.
+
+## 2026-09-09 Hosted outcome-link acceptance receipt
+
+PR #1113 head `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`, based on
+`c7345670e08f029ad3aa5dd1133037bb4b451d9b`, completed repository Security
+run **34329594602** successfully. Its tested merge was
+`e127f7a0aef94949a4a8f3eb16371e155f370fb1`, not a protected-main merge.
+Linux CPython **3.12.14** tests/package job **102394807283** reports
+**3,462 passed, 2 skipped in 756.10 seconds**, benchmark/public-docstring
+checks **134 passed in 10.00 seconds**, and installed-wheel checks
+**40 passed in 15.72 seconds**. The built core wheel SHA-256 is
+`e705cec46453123eae92b0c7979b6bde13a479afb5e021978c2defe849e995d8`.
+CodeQL/supply-chain/SBOM job **102394807100** and fuzz job **102394807264**
+also completed successfully. Evidence: [terminal run and job logs](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34329594602).
+
+The current-head review inventory remains empty. These hosted results supplement
+the separately recorded local installed-wheel request/outcome tests; they do not
+replace independent approval, protected merge, publisher acceptance, or measured
+customer accuracy/latency. The unpushed batch recovery successor is a different
+revision and does not inherit this test result.
+
+## 2026-09-09 Batch restart recovery checkpoint
+
+The isolated batch successor, based on #1113, retains the failed restart
+experiment `d71bcc0a`: **1 failed in 1.96 seconds**. Remote submission succeeded,
+but after registry failure and restart the authenticated owner received 404;
+another owner correctly received 404 without a remote download. Runtime
+`853e860946d2d55a06d824e042057806c3ad79d8` then passed **73 focused tests in
+21.17 seconds** (terminal execution `86930`). Documentation checkpoint
+`b4abdd660b0ee44fd1a5b7a8b8c7a7ad5d1e1f92` remains unpushed.
+
+The candidate reuses an indexed durable submission event for an owner-bound,
+expiring, prompt-free recovery descriptor. Focused cases cover target mismatch,
+malformed descriptors, unexpected result IDs, missing usage, and no resubmission.
+This is not acceptance: independent review and additional RED cases must check
+registry reads/writes that remain unavailable during recovery, and consistency
+between submission-envelope item IDs and restored descriptor IDs. Full-suite,
+installed-package, hosted, protected-merge, and release evidence remain absent
+for this candidate. Simultaneous durable-store and registry failure cannot be
+reported as recoverable. No observed customer KPI improvement is established.
+
+Follow-up checkpoint `e372bc542f8fbec8d047a9affae15c018698d48a`
+reproduced **3 failures in 3.59 seconds**: continuing registry outage, inconsistent
+submission/item identities, and inconsistent estimate keys. At
+`7fb1a71ce1b4c14d1ba29e12501ba22fb589cca9`, **19 tests passed in 14.94 seconds**
+(terminal execution `37121`). Recovery metadata now travels with the authorized
+request instead of requiring another registry write. Independent source review
+found no additional silent usage/model-attribution defect in this diff: absent
+prompt estimates do not fall through to estimating an empty reconstructed prompt.
+That review does not cover all existing attribution behavior. Remaining checks
+include coordinator-registry hits with missing backend metadata, malformed job
+field types, and a changed deployment using the same backend alias. A backend
+alias or API path alone cannot establish service/account identity.
+
+At `aaa9b133`, the focused suite reports **82 passed in 31.21 seconds**
+(terminal execution `6240`), and independent source review clears the preceding
+typed-identity and partial-registry findings within its inspected scope. Root
+end-to-end review nevertheless identified two remaining paths before full-suite
+acceptance: the Pg adapter writes its own registry after remote acceptance but
+before returning the handle to the coordinator, and healthy registry reads
+refresh retention whereas recovery descriptors use a fixed expiry. Reproduce
+backend-registry submission failure without losing the accepted handle; also
+ensure an expired recovery descriptor does not invalidate otherwise healthy,
+authorized, complete registry state. Expired recovery with missing registry
+state must remain denied. These findings supersede any bounded recommendation
+to freeze the candidate for full-suite verification.
+
+Those paths were reproduced independently: backend submission checkpoint
+`17cfa611` failed once in **0.95 seconds**, and its `8ddfeb9f` repair passed
+the focused case in **1.79 seconds**. Healthy-expired checkpoint `df638d6c`
+failed once in **1.51 seconds**; `a6b94855` then passed **84 tests in 32.63
+seconds**. Review found its healthy fast path skipped the new deployment
+binding. Checkpoint `08a660dc` reproduced that regression (**1 failed in 1.41
+seconds**); `cd38d9c4811deb6e9fde9c0c11a78869d9f39dcf` passed **85 tests in
+34.48 seconds** after persisting and checking the binding. Full-suite acceptance
+is still deferred: healthy metadata must also preserve the endpoint comparison
+already required by descriptor recovery. This is a demonstrated contract
+inconsistency, not demonstrated cross-service data disclosure. Legacy unbound
+jobs must have an explicit compatibility test; they cannot count as validated
+deployment-bound recovery.
+
+Endpoint checkpoint `c06615ab` reproduced the healthy-path mismatch (**1 failed
+in 2.09 seconds**). Runtime `450667593285679c92d1d0a698f35eadb2b2c879`
+passed **86 focused tests in 36.58 seconds** (terminal execution `63908`).
+Independent read-only review confirms endpoint equality now applies to new
+bound metadata; missing endpoints remain compatible only for explicitly unbound
+legacy records. Documentation head `73404f89d7a90f7a6b98caf514af859b02a375dd`
+is frozen for full-suite and separate installed-package verification. Neither
+has a completed result yet; this checkpoint is not hosted or released evidence.
+
+Visual receipt: the GitHub-rendered document at
+`aee00ac9da1e7f17ddfaec4ad3ebbafc06dee01f` was opened in the actual browser,
+and its screenshot directly inspected at **1265 × 712**, English. The title,
+recovery heading, first paragraph, and full revision strings were readable
+without overlap or horizontal clipping in that viewport. The screenshot is
+inline in the validation task. Lower sections and other viewports/locales were
+not inspected; this does not constitute product UI acceptance.
+## 2026-09-09 State persistence integrity prerequisite
+
+PR [#1108](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1108)
+repairs a reproduced failed-replacement data-loss case in the common SQLite
+state writer. Code `d7bba88f3d711883a37effe49ab4f503c4fb8e01` rolls back failed
+writes under the existing lock. Test follow-up `f1abe1e3` checks that no
+transaction remains immediately after failure and that both the previous and
+unrelated subsequent records survive reopening the database. The persistence
+suite passed 19 tests in 9.28s; this is not a latency or customer-accuracy result.
+
+Full local suite at `877d5112ed470d851afaa2c746b94393cc768ee7`: 3,396 passed,
+2 skipped, exit 0 (883.03s). Test-only follow-up
+`716e012dcb50857000b0fc53c89c6434fdf7e7c2` covers a deferred commit failure
+with real SQLite constraints; persistence, workflow authorization, and governance
+tests pass together (29 passed, 4.89s). Full-suite evidence remains attached to
+the earlier head, not silently reassigned to the new regression.
+
+At the earlier PR head `aa674187b0341c7852f85c27fb696aec21f1a799`, GitHub
+reported zero check runs and two success statuses whose descriptions explicitly
+said reviews were skipped (Draft; expired trial/no credits). Those statuses do
+not establish review approval or security validation. Keep protected merge and
+release pending actual exact-head evidence. The root cause and reproduction are
+in the [canonical runbook](doctoring/autonomous_kpi_runbook.md).
+
+## 2026-09-09 Stacked quality-trigger repair
+
+Correction: PR #1066 at `59a8f4eadfe0e0dcc5ff47cf1acfb80403e241ad` already
+owns this repair and its Ready/closed admission checks. The partial local repair
+described below missed that lineage. Its full branch was integrated at `d721e04b`
+without force, with the extra filter/permission assertions consolidated into
+the owner's `tests/test_repository_security_metadata.py`. The duplicate test
+file is removed after preserving those assertions. #1066 and #1060 stay open;
+integration is not protected delivery. The #1108 hosted run
+`34316962950` at `c11df645` completed with **1 failed, 3,399 passed, 2 skipped
+in 737.97 seconds**. The single failure was the existing metadata assertion
+for the old concurrency key, omitted by the partial repair. Fuzz and
+CodeQL/supply-chain/SBOM jobs passed. This was a contract-update omission,
+not a flaky test. Full #1066 inheritance repairs that assertion.
+
+The non-force integrated #1108 head `129a665016ed1acd79ae12915c905b1020856fcc`
+passed **42 metadata, NIM workflow, and persistence tests in 4.19 seconds**;
+actionlint and diff-check also passed. New hosted run `34318012080` was queued
+at the latest observation. Neither the historical full-suite result nor focused
+success proves current-head hosted completion, independent approval, or release.
+
+At `035b58c252cd4f4a79e712d028e8265264326c94`, the repository-owned
+Security and Quality workflow filters pull requests to `main`. PR #1108 targets
+another PR branch, so its zero check-run count is consistent with this trigger
+exclusion, not a successful Security run. The repair removes the base filter
+without changing job permissions or switching to privileged `pull_request_target`.
+It also keys cancellation by workflow, repository, and PR number. Central review
+and security ownership is unchanged; this does not repair or replace their gates.
+
+The regression assertion failed on the old filter. After repair, the new contract
+and existing benchmark workflow contracts passed (9 tests), and actionlint emitted
+no findings. An initial test collection failed because PyYAML is not installed;
+the test instead uses the existing stdlib text-contract pattern, with actionlint
+checking YAML syntax. No dependency was added. A new synchronize event must still
+demonstrate hosted execution on the actual stacked merge revision. Trigger syntax
+and local tests alone are not that execution evidence. GitHub documents that PR
+branch filters match the [target branch](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+## 2026-09-09 Integrated rollback regression receipt
+
+PR #1108 at `fbb933cbcaa1f1695c6cc305657f450f22b3be4c` includes the
+non-force base integration and transaction rollback repair. Its clean, pinned
+worktree completed the full local suite: **3,399 passed, 2 skipped in 823.46
+seconds**, exit 0. The focused persistence, workflow-object authorization, and
+governance checks separately passed **30 tests in 10.06 seconds**. The full log
+is `/tmp/co-rollback-integrated-fbb933cb.log` on the validation host; it is a
+local receipt, not a hosted artifact or release attestation. At the subsequent
+GitHub check, this exact head had **zero check runs and zero reviews**. Status
+contexts alone do not satisfy the Security job or independent review gates;
+protected merge and release remain unverified.
+
+The analytics specification at `ddf087da136dbb5f2110aba6db20dd9bd384db7c`
+was opened in the actual browser and its screenshots directly inspected at
+1265 × 712, English locale. The opening context and autonomous-target table
+were readable; the table's three columns and three rows had no overlap or
+horizontal clipping in that view. Images are inline in the validation task,
+linked by [the PR inspection receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1107#issuecomment-5596505419).
+This is bounded document evidence, not responsive, multilingual, Figma, or
+product-interaction verification. No customer accuracy or latency gain follows
+from either receipt.
+
+## 2026-09-09 Decision-latency durable acknowledgement gap
+
+[Issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110)
+tracks the accepted-request-to-durable-decision interval required by
+[the analytics specification](analytics_spec.md). At
+`b2c09930a8d335952e4f4d8de5371460cb14fcd6`, `route_once` still times the upstream
+invocation, not that interval. `conduct` persists a completed workflow after
+generation. Neither is a measured initial-decision receipt.
+
+The existing state store has synchronous `durable=True` writes and best-effort
+queued stream writes. Reuse that owner; a successful queue operation, a later
+flush-on-read, or an audit append without configured storage is not a durable
+acknowledgement. Three retention tests now explicitly exercise the synchronous
+path. An additional test prevents background draining and verifies committed
+records through an independent SQLite connection before any store read.
+All 19 persistence tests passed in 7.19 seconds. An in-memory mutation forcing
+asynchronous writes fails the new assertion. This proves commit visibility in
+the tested SQLite configuration, not power-loss survival or customer latency.
+
+Next implementation must connect validated admission, selection completion and
+successful commit acknowledgement within one monotonic clock domain; distinguish
+initial/failover decisions and retain failed/unfinished requests in accounting.
+PR #1108 owns transaction rollback repair and remains open; its valid delta must
+be retained during integration. No measured p95 or accuracy improvement is yet
+established, and no production routing default changes follow from these tests.
+
+## 2026-09-09 LSIRM model-selection source reconciliation
+
+At source `1b31166024a20b5ab5be6547a0cfd95a7099a7f1`, direct visual inspection
+of the NSF-hosted Springer-formatted LSIRM PDF confirmed the same mixture/event
+description discrepancy previously found in arXiv v2. The
+[version-specific receipt](doctoring/measured-routing-evidence.md#lsirm-identification-and-version-discrepancy-2026-09-09)
+records the PDF hash and inspected page. Before publishing a model-selection
+contract, fast-mlsirm must reconcile the decision event and prior parameterization
+against the current publisher copy and supplementary implementation. CO must
+not copy the ambiguous threshold into routing or count this investigation as
+an accuracy improvement. No current fast-mlsirm implementation defect has been
+demonstrated by this source comparison.
+
+## 2026-09-09 Expanded-population validity research gap
+
+At source `479bfe7e096832e1711c4d99b59621a66c3a2f59`, the research inventory
+was extended with ETS RM-19-07 and a bounded read receipt. The
+[proposed evaluation design](doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
+separates item DIF, scale linking, and observed routing accuracy. CO owns
+evaluation context and outcome collection; fast-mlsirm remains the numerical
+owner. Released diagnostic-contract availability, observed-data support by
+language/domain/model revision, and any accuracy or latency gain remain
+unverified. This is a research proposal, not a production gate already shipped.
+
+## 2026-09-09 Benchmark prior interpretation gap
+
+At `ef374defdf4037a829d4b4d6d61c5a8b314e8c05`,
+`contextual_orchestrator/benchmark_priors.py` labels an equal-weight composite
+of median/MAD-normalized Arena and Quality Index scores as a measured success
+probability. Inspection of the cited Chatbot Arena v1 metadata and sections 3–4
+does not justify that cross-instrument calibration. The docstrings now identify
+the legacy heuristic and correct the paper's author list; runtime behavior is
+unchanged. Outstanding work: authenticate archived rating snapshots, define
+the target outcome and model-version mapping, fit/calibrate against observed
+held-out tasks in the numerical owner, and validate accuracy/decision latency
+before protected adoption. A bounded score and constant prior mass do not prove
+measurement validity. No customer KPI gain is claimed.
+
+## 2026-09-09 Paper inventory consistency
+
+`34bf2f3f5925a84630edfccaf608e06f5e3192ae` removes a stale blanket
+redistribution assurance that contradicted the version-specific license audit.
+All five stored PDF fingerprints verify, but publisher-byte equivalence and
+additional redistribution rights remain unverified. Browser inspection of this
+revision could not proceed because the Mac was locked; no visual pass is claimed.
+See the [runbook evidence](doctoring/autonomous_kpi_runbook.md).
+
+## 2026-09-09 Numerical candidate and rendered KPI evidence
+
+The [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md) records a
+completed owner baseline scoring-filtered run (41 passed, 1 ignored), finite-case
+bitwise cross-version parity, and an unfavorable candidate unit p95. The candidate
+remains experimental: candidate scoring-filtered tests now pass (42 passed,
+1 ignored), but full-suite tests, observed customer outcomes, durable
+decision timing, protected release, and consumer adoption are not established.
+The exact-revision KPI table received a partial desktop screenshot inspection;
+this does not complete responsive, multilingual, or product UI verification.
+
+The live REST PR inventory still includes correction PR #1043 at
+`05fe7178c12f37206458e256e468f498e9a5ce20`. Its proposed correction supersedes
+the historical blanket `_invoke` deadline recommendation below in intent, but
+is not merged evidence. Current policy remains default-null model timeouts;
+do not implement the historical overall-cap recommendation. Keep #1043's delta
+in its owner PR rather than duplicating its patch in this research branch.
+
+## 2026-09-09 Autoresearch loop: KPI baseline, #1075 closure evidence, main-protection blocker
+
+Loop branch `autoresearch/20260909-kpi-loop` (code+tests identical to
+`origin/main@414f2297`; branch diff is docs-only). KPI baseline: **85 open
+PRs** (`gh pr list --state open`, lower-is-better toward 0 via merge or
+verified-successor full-delta inheritance only; no force-push, no close
+without evidence).
+
+- **Issue #1075 (nim_benchmark 100% branch coverage): gap already closed.**
+  The issue's exact gate block passes on unmodified code: 134 passed,
+  `nim_benchmark.py 1205 stmts / 436 branches / 0 miss / 0 partial = 100%`
+  (coverage 7.15.0, `--fail-under=100` exit 0), no `pragma: no cover` in the
+  module. Former gaps `434`, `645`, branch `671->682` are covered by
+  `EqualBudgetModelClient` + `_BudgetDelegate` cases (including `usage=None`)
+  in `tests/test_nim_benchmark_release_acceptance.py` that landed after filing
+  (e.g. `7ba5fefc`, `a080297d`). Evidence comment posted on #1075; issue left
+  open for owner close. No code change (experiment 1: discard, unit evidence).
+- **Issue #1079 (main branch protection): owner-action blocker confirmed live.**
+  Protection still requires stale `Hypothesis property tests`,
+  `Atheris coverage-guided`, `CodeQL analysis`, `Python supply chain`
+  (API-verified); every post-#1054 PR to `main` is unmergeable via protection
+  (e.g. #1094 `MERGEABLE` but `BLOCKED`). Not bypassed; documented for owner.
+- **PR #1094 RCA:** `opencode-review` failure is reviewer-verdict wait, not a
+  code defect. The wait does not stop independent work.
+- **Mergeable path:** non-main-base stacked PRs (e.g. #1104→#1101:
+  `MERGEABLE`/`CLEAN`, core checks green) but Draft — no readiness flip
+  attempted (owner process boundary).
+
+## 2026-09-09 Autonomous KPI targets and verified unit execution
+
+`docs/analytics_spec.md` now sets an observed delivered-correct improvement
+target of at least one percentage point and decision p95 at most 20 ms with
+at least 10% reduction, subject to stated uncertainty and non-regression gates.
+These are selected targets, not results. The
+[single experiment runbook](doctoring/autonomous_kpi_runbook.md) records owner
+boundaries, isolated contract bootstrapping, and reproducible commands.
+AGENTS.md and CLAUDE.md link to it; the existing hourly automation was updated
+without adding a duplicate. PR #1067 exact head
+`84a6052369a7bf8b6faae5db475bb68a5ad54a91` passed all 51 focused routing and
+benchmark-boundary tests in 744.99 seconds on a heavily loaded host. No customer
+accuracy, decision p95, full-suite, protected merge, or deployment follows from
+that unit result.
+
+## 2026-09-09 Existing research attribution repaired
+
+Audit of `279f7e03` found an incorrect Jeon et al. title/DOI in
+[measured routing evidence](doctoring/measured-routing-evidence.md), plus claims
+that per-member ledgers prevent atomistic fallacy and JSON structure establishes
+judge reliability. The corrected citation identifies the latent-space
+item–respondent interaction model; the mapping now separates ledger arithmetic,
+schema validation, and unverified psychometric validity. This removes unsupported
+research justification without changing runtime policy. A calibrated observed
+task evaluation and released owner diagnostics remain required.
+
+## 2026-09-09 Response-time research and measurement gap
+
+The [psychometric review](doctoring/irt_router_measurement_review.md#response-time-research-extension-2026-09-09)
+now traces van der Linden's hierarchical speed/accuracy framework to a visually
+inspected earlier report and the final publication's DOI. It records a proposed
+joint-model experiment, not evidence that fast responses imply high ability.
+CO decision overhead and provider completion duration require separate clocks
+and denominators. Observed-data availability, released owner support, baseline
+accuracy, and routing-decision p95 remain unverified; no production default
+change or measured improvement is justified by this literature extension.
+
+## 2026-09-09 Review gateway failure and existing timeout repair
+
+PR #1103 at `4776a970ed8bdef3406684aef84952740b476d88` has a terminal
+Noema 502 after 926 seconds. Its gateway bootstrap used CO `414f2297`,
+whose transport default is 90 seconds. Artifact attribution and the remaining
+causal uncertainty are recorded in
+[the incident investigation](doctoring/noema_gateway_failure_20260909.md).
+The existing repair owner is PR #1053 at
+`76c047585f54fcbe940fe168412f51627d3f79dd`, still Draft, with failures in all
+three CodeQL compatibility analyses on inspection. Older test claims in its
+description do not validate this head. Next work is repair and verification in
+#1053, followed by release and consumer adoption; no runtime recovery or buyer
+accuracy/decision-latency improvement is established by these observations.
+
+The linked central scan run `34122498232` reached status publication, where
+Python job `101756437515` received HTTP 403 with both configured credential
+paths. Current `opencode-agent` installation `141441800` covers all repos but
+has only `statuses: read` and `actions: read`; the app registration owned by
+`anomalyco` also requests only those read permissions. Central publisher
+identity/permission repair is required before validating the consumer gates.
+No missing-secret claim or successful-scan claim follows from this evidence.
+
 ## 2026-09-08 Psychometrics evidence boundary: research trace added
 
 PR #1103 head `19448d95` adds APA 7 references and implementation constraints
@@ -2853,3 +3414,548 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-09 Autoresearch loop: autonomous KPI scope, PR #1108 verification, hourly-prompt hardening
+
+PRD/Goal adjustment: KPI scope was selected autonomously under
+`docs/analytics_spec.md` without asking (see the runbook scope entry).
+Loop metric `open_pr_count` is 87 on recount (baseline 85; growth from
+concurrent sessions). PR 0 only via merge or verified-successor
+full-delta inheritance; single-writer deltas are integrated, never
+discarded; no force-push; close only on user instruction, no valid
+delta, malicious change, or verified complete inheritance.
+
+- **PR #1108 (fix(persistence): roll back failed state replacements):**
+  valid minimal root-cause fix. `_save_sync` now runs under the writer
+  lock plus the SQLite connection context so a failed keyed replacement
+  rolls back instead of leaking its DELETE into a later unrelated commit.
+  Isolated-worktree evidence at head `4316be85`:
+  `tests/test_persistence.py` 20 passed in 32.42s, exit 0 (insert-phase
+  and deferred-commit-phase failures, closed-transaction checks,
+  reopen persistence). Unit evidence only. The PR is `dirty` against
+  loop HEAD `0ea2a58d` because both sides appended to this baseline
+  file; code auto-merges. Action: owner restacks with a normal merge
+  and manual docs resolution; this loop does not push to that branch.
+- **Current HEAD `0ea2a58d` (`benchmark_priors.py` calibration bound):**
+  docstrings/comments only in effect; `tests/test_model_group.py` plus
+  `tests/test_benchmark_priors.py` 37 passed in 25.82s, exit 0. No
+  runtime, routing-default, or numerical-formula change; no customer KPI
+  claim.
+- **Actions concurrency (reviewed, no change):** `security.yml` groups by
+  `local-quality`-repository-event-PR/schedule/ref with same-group
+  cancel only, so distinct PRs stay independent and pushes/schedules
+  serialize on ref/schedule; the hourly loop uses its own
+  `opencode-hourly-loop` group with `cancel-in-progress: false` and never
+  cancels merge/release/deploy/migration. Renaming groups without an ADR
+  would churn CI for no functional gain; left as is.
+- **Hourly prompt:** `.github/opencode/  hourly-loop-prompt.md` now records
+  the shared-checkout, live-handle, synthetic-vs-observed, and PR-0
+  rules so the next scheduled pass inherits them without re-derivation.
+  Follow-up: keep #1079 (main-protection stale job names) with the
+  owner; keep #1075 closure with the owner; re-observe #1108 after its
+  restack and hosted checks.
+
+## 2026-09-09 Autoresearch loop: PR #1109 atomicity review, no merge, prompt stacking rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is a new draft on the psychometric stack
+(`codex/psychometric-kpi-successor` base); #1108 is still `dirty`
+against the loop branch; #1094 is still protection-blocked. No PR met
+the merge bar this turn (terminal-success checks plus resolved threads
+plus independent exact-head approvals), so no merge, readiness flip, or
+cross-session push was attempted.
+
+- **PR #1109 (fix(psychometrics): preserve evidence when observations
+  are rejected):** read-only review plus isolated verification. The
+  reorder validates before mutating retained vectors, order, and
+  revision under the existing lock; valid-input behavior is preserved
+  and no new Python-side numerical arithmetic is added. Isolated
+  evidence at head `4cc0bf2c`:
+  `tests/test_psychometric_observation_atomicity.py` 6 passed in
+  52.15s, exit 0. Hosted checks: CodeQL success; tests and fuzzing still
+  in progress at observation time. Unit evidence only; full regression,
+  independent review, protected merge, and release remain pending.
+  Action: leave the draft with its owner stack; re-observe after hosted
+  checks complete.
+- **Hourly prompt (this hour):** added the single-writer stacking rule
+  (integrate deltas, normal-merge restack only, never flip another
+  session's Draft) and the PRD/TRD case-preservation rule alongside the
+  existing fail-closed ordering guidance.
+
+## 2026-09-09 Autoresearch loop: PR #1109 Ready flip and integer-index hardening, still unmerged
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 is now Ready (`draft: false`, `mergeable: true`,
+`mergeable_state: unstable`); #1108 is confirmed `dirty` again; #1094
+remains protection-blocked. No PR met the merge bar (terminal-success
+checks plus resolved threads plus independent exact-head approvals), so
+no merge, readiness change, or cross-session push was attempted.
+
+- **PR #1109 new head `b8d2651d`:** the owner hardened validation from
+  `int(value)` to `operator.index(value)`, rejecting fractional rows,
+  whole-valued floats, and numeric strings that truncation previously
+  masked as valid dichotomous data, while keeping the integer protocol
+  including `numpy.int64`. Isolated evidence: 19 passed in 13.68s, exit
+  0. Hosted checks: both CodeQL jobs success; tests and fuzzing still in
+  progress; no reviews yet. Unit evidence only; full regression,
+  independent review, protected merge into the owner stack, and release
+  remain pending. Action: re-observe after hosted checks and first
+  review; do not merge across the stack boundary from this loop.
+- **Hourly prompt (this hour):** queue-exhausted continuation now
+  explicitly names gap development plus ContextualWisdomLab repository
+  and connector linkage under responsibility boundaries, so scheduled
+  passes do not idle after the PR list drains.
+
+## 2026-09-09 Autoresearch loop: PR #1109 fuzzing green, tests pending, failure-never-idles rule
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). #1109 head unchanged (`b8d2651d`): fuzzing success is
+new since last turn, tests still in progress, no reviews, still
+`unstable` — the prior 19-pass isolated verification stands and no
+merge was attempted. #1108 mergeability is `unknown` (recomputing);
+#1094 remains protection-blocked.
+
+- **Hourly prompt (this hour):** a failing check never idles the loop —
+  fix and rerun owned failures immediately while continuing safe
+  independent work, and codify manual workarounds with log-grounded RCA
+  for PYTHONPATH, Actions, and execution errors.
+
+## 2026-09-09 Autoresearch loop: stacked-quality merge adopted, #1108 restack verified, #1105 pending-verdict diagnosed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **Loop merge `d721e04b` (adopted, reviewed):** the stacked-quality
+  repair now on this branch is compliant — exact
+  `{workflow}-{repository}-{PR}` concurrency with same-group PR-only
+  cancellation, expanded stacked-PR coverage, Draft/closed-only skips,
+  and test consolidation without dropped assertions (see runbook for
+  the clause-level verdict). Action: none; keep.
+- **PR #1108 restacked head `c11df645`:** isolated evidence 21 passed
+  in 28.10s, exit 0 (prior 20-pass run superseded). Mergeability still
+  recomputing. Action: re-observe; owner restacks with normal merges.
+- **PR #1109 head `b8d2651d`:** all hosted checks green, still no
+  reviews — awaiting independent approval on the owner stack. Action:
+  re-observe.
+- **PR #1105 (Ready, `main` base):** 3 CodeQL-compat failures are
+  pending-verdict fail-closed (`DISPATCH_OUTCOME: success`,
+  `VERDICT_STATE: pending`, self-rerun promised), not code defects.
+  Action: re-observe next turn for self-heal; owner owns any real fix.
+- **Hourly prompt (this hour):** never make a full foundation or mutual
+  official release a precondition — cut owner/consumer cycles with a
+  minimal contract, port, or ACL and complete independently verifiable
+  functionality first.
+
+## 2026-09-09 Autoresearch loop: #1108 loop-merge absorbed, #1105 still unhealed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **PR #1108 head `129a6650`:** owner merged the loop branch with a
+  normal merge (no force). The fix files are byte-identical to the
+  verified head, so the 21-pass evidence stands. Mergeability
+  recomputing. Action: re-observe for clean state, then hosted checks.
+- **PR #1109 head `b8d2651d`:** still clean, still no reviews. Action:
+  await independent approval; re-observe.
+- **PR #1105 head `b655fe1b`:** same 3 pending-verdict failures, no
+  self-healing rerun observed yet. Action: re-observe; owner owns any
+  real fix.
+- **Hourly prompt (this hour):** wrong closes are recovered through
+  reopen or successor and never left closed (close only on the four
+  evidenced conditions).
+
+## 2026-09-09 Autoresearch loop: all PRs static, fetch transient absorbed
+
+KPI reaffirmation (no scope question asked): `open_pr_count` 88
+(baseline 85). No PR met the merge bar, so no merge, readiness change,
+or cross-session push was attempted.
+
+- **PR #1109 / #1108 / #1105:** all heads unchanged; prior isolated
+  verifications stand (19-pass and 21-pass). #1109 clean without
+  reviews; #1108 mergeability recomputing without reviews; #1105 still
+  blocked on the same 3 pending-verdict failures. Action: re-observe
+  all three next turn.
+- **Sync incident:** one fetch refused the remote-tracking ref update;
+  retry plus ancestry check plus fast-forward-only resolved it with no
+  rewrite. Lesson recorded in the runbook: never infer a rewrite from a
+  refused ref update.
+- **Hourly prompt (this hour):** record merge and delete rationale
+  before committing; remove self-modifying or source-fix workflows
+  whose purpose is done.
+
+### PR #1108 terminal repair evidence, 2026-09-09
+
+At head `129a665016ed1acd79ae12915c905b1020856fcc`, base
+`2996cd3c360444b792d499f3b09a783abdd830c2`, hosted run
+[34318012080](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34318012080)
+completed successfully. Checkout log records merge `9516d1d` of those revisions;
+tests job `102358241912` reports **3400 passed, 2 skipped, 734.73 seconds**, plus
+134 package/docstring checks passed in 10.61 seconds. All four actual check runs
+were successful. This supersedes the earlier metadata-assertion failure for
+current-head CI only; it does not erase that failure or establish a protected
+release. The Ready PR still has no reviews. Next gate: independent review and
+protected stack integration, preserving the canonical #1066 workflow delta.
+
+Research source `7734e89c` adds the bounded Bolsinova–Tijmstra response-time
+follow-up and prohibits outcome leakage in the proposed joint-model comparison.
+The DOI discovery check caught its missing inventory entry (one failing test);
+after linking the source, all six paper contracts passed in 6.23 seconds.
+No observed-task accuracy or decision-latency improvement has been measured.
+
+### Decision-measurement pre-release review, 2026-09-09
+
+Candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` for
+[issue #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597096146)
+is not release-ready. Read-only call-site review found that server `_run`
+is called inside embedding retry loops and file-replica deletion. Admission
+inside that helper counts attempts as requests and starts some clocks after
+selection. Repair: one validated request-owned admission, explicit endpoint and
+measurement unit, separate attempts, and a first-failure/second-success regression
+that retains exactly one admission. File operations and evaluation batches must
+not silently become individual generation samples.
+
+The automatic proxy also acknowledged selection before file binding and effort
+configuration could reject the request. Move acknowledgement after those checks,
+immediately before transport, and prove rejection produces neither dispatch nor
+a committed decision. The existing persistence store does not bound the three
+new receipt kinds; all-record export is unbounded in memory. Cohort-aware export
+and explicit retention remain required. A successful isolated package test does
+not resolve these semantic findings. The assigned implementation agent is repairing
+them; no routing default or release was changed.
+
+Integration checkpoint `07957ee643bf74c5beb13c03827f59331307cc5d` normally
+merges #1108 head `129a6650` into the measurement branch. The implementation
+agent reports terminal receipt/persistence verification: **34 passed in 5.88
+seconds**; this is focused local evidence, not full CI or package acceptance.
+The checkpoint still needs per-invocation race identity, indexed phase lookup,
+trusted HTTP identity integration, and remaining endpoint coverage.
+
+A root-run in-memory SQLite plan comparison used the checkpoint's table and
+index definitions: the JSON-filtered phase query searches only by `kind`;
+the proposed `(kind, key, seq)` index with `key IN (...)` searches by both
+`kind` and `key`. Both plans use a temporary ordering B-tree. This validates
+the proposed lookup shape only, not a measured customer latency improvement.
+Keep historical records, validate migration identity, and test rollback before
+adopting the index/backfill. The implementation agent owns that change.
+
+At committed candidate `05b512effe0045340224e5e0408ae984f5784d1e`, an
+independent read-only review found that a successful answer-cache return bypasses
+selection hooks and can finalize as `unfinished`. The required HTTP regression
+uses two identical authenticated requests: two admissions, one provider dispatch,
+and a distinct cache-hit terminal outcome with absent provider-selection duration.
+Keep the cache hit in the accepted denominator. This is tracked in
+[the existing owner issue](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597507862),
+not a separate implementation branch.
+
+The in-progress auxiliary/task repair has a reported cold/warm triage HTTP result
+of one passed test in 8.72 seconds, but it ran on an uncommitted delta over that
+candidate. It is development feedback, not exact-head acceptance. Root inspection
+also found that the new auxiliary records were not yet included in the bounded
+receipt export. Export the same admission cohort's component evidence and test
+it before claiming component reporting. A provider-ready timestamp preceding a
+diagnostic write is not evidence of the actual network-send instant. Generated
+planning, evidence embedding, and answer-cache outcomes remain explicit coverage
+items; no customer KPI gain or release is established by this checkpoint.
+
+### Native packaging and release owner, 2026-09-09
+
+Root independently inspected the native wheel built from candidate `9707a5e1`:
+SHA-256 `e0bf63d790256c6d4eba8598c131d63188a994c899df5124bd9eadf2cc39c568`.
+Its five entries contain only the extension and distribution metadata/SBOM, not
+core Python sources. The hypothesized source-file collision was not observed;
+retain the existing namespace and verify both manifests rather than rename
+without evidence. Clean-checkout CI still needs native build/install and
+outside-checkout core/native acceptance. Local ABI success is not Linux or
+hosted-CI proof.
+
+The existing canonical release owner is
+[organization issue #1552](https://github.com/ContextualWisdomLab/.github/issues/1552),
+verified open. At organization main `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`,
+the inspected `exact-artifact-sbom-attestation.yml` reusable component attests
+artifacts; it does not publish packages. CO owns its build adapter and package
+acceptance; generic release eligibility, immutable tagging, and idempotent
+delivery remain with that owner. The verified organization publishing secret
+names are `PIPY_TOKEN` and `CARGO_REGISTRY_TOKEN`, both visible to all repositories.
+Registration is not credential-validity or registry-ownership proof. Complete
+the minimal owner contract and CO adapter independently, then integrate exact
+revisions; do not require the whole foundation or publish an unmerged candidate.
+
+### Streaming admission reproduction, 2026-09-09
+
+An independent installed-package HTTP probe revises the initial source-only
+hypothesis: invalid empty `user` and array-valued `routing` each returned 400,
+with zero provider calls and zero accepted records. Earlier shared validation
+already rejects these inputs; later duplicate validators do not prove unsafe
+spend. Retain these cases as guards, not failing regressions.
+
+The valid auto-streaming control returned 200, invoked the observed chat client
+once, and retained one admission. That provider call had no active measurement
+scope, proving its triage work preceded the acceptance clock. Installed
+`server.py` SHA-256
+`a28fd4aaafb3852315d0b69541ab12235c6cdcd6c75b5ceff7d8f1c5ff08e08a`
+matches candidate `bbe7eae1a24a95e17b5933ca75cc6b2598f896e4`.
+The spy only recorded state, with assertions after the response. This is a
+mock-provider unit reproduction over real HTTP, not customer latency evidence.
+Repair the valid-stream timing boundary without bypassing existing validation;
+see [the reproduction receipt](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110#issuecomment-5597865731).
+The full-suite checkout remained unchanged during this independent probe.
+
+Full regression at `bbe7eae1a24a95e17b5933ca75cc6b2598f896e4` terminated
+with **9 failed, 3420 passed, 2 skipped in 794.44 seconds** on local
+macOS/Python 3.14. Eight failures exposed compatibility with lightweight
+handlers when measurement was disabled; one workflow contract required the
+existing standalone benchmark import spelling. Repair
+`0b10b553ab916f341ddfbb5c1fc6989c23e0f293` keeps the unmeasured acquisition,
+release, and disconnect paths independent of measurement state and restores
+the explicit import. The failed-file plus receipt regression passed **55 tests
+in 10.92 seconds**. A transient indentation error during repair caused collection
+failure and was corrected before that run; it does not replace the original RCA.
+Full regression on the repaired final head and hosted Linux acceptance remain
+required, along with the valid-stream timing and typed-error accounting repairs.
+
+Integrated candidate `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` preserves
+#1105 trusted SSE identities and includes valid-stream triage in admission time.
+An actual HTTP rejection after authorized triage reproduced `unfinished`; the
+shared error adapter now classifies pending admitted failures without replacing
+acknowledged, capacity, cancellation or write-failure outcomes. Focused local
+verification: **83 passed in 35.72s**. Independently installed exact-head wheels:
+**33 passed in 14.21s**, with disjoint package manifests and imports verified
+outside the checkout. Full regression is still pending; no hosted, deployed or
+customer-KPI success follows from these local receipts.
+
+The [response-process follow-up](doctoring/irt_router_measurement_review.md#response-process-identification-follow-up)
+adds a lawfully redistributable 2017 perspective and a predecision-covariate
+comparison proposal. Its source figure was inspected in the actual browser.
+Observed-data calibration and an immutable owner estimation contract remain
+unverified; latency correlation cannot substitute for those acceptance gates.
+
+Full regression for `3b6dd47ebb0f88802bacdd302051d2f03e7d5003` is now
+terminal: **3442 passed, 2 skipped in 771.43s** on macOS/Python 3.14.
+This supersedes the pending observation above, not the separate hosted/release
+gates. An independent installed-wheel HTTP probe exposed pre-capacity triage
+in auto chat streaming; Responses streaming and nonstreaming chat passed the
+same saturated-slot controls. Preserve the green regression as historical
+evidence and repair the uncovered case, as specified in
+[the runbook](doctoring/autonomous_kpi_runbook.md#integrated-receipt-regression-and-remaining-capacity-defect-2026-09-09).
+
+Next accuracy gap, independently reproduced against installed candidate
+`c7345670e08f029ad3aa5dd1133037bb4b451d9b`: a successful real HTTP route
+request retains one admission receipt and one workflow result, but neither
+record exposes an explicit durable link to the other's identity. The receipt
+has `request_id`; the workflow has `workflow_run_id` and `owner_id` only.
+Field-level equality assertions fail; this mock-provider probe does not claim
+observed customer accuracy. A separately stacked successor must bind trusted
+request identity to outcomes without treating cache reuse as a new execution
+or discarding requests that fail before producing a workflow.
+
+The bounded tracked-data audit at `53a9266a639361651064d7748fa74b396dd493ef`
+found no qualifying observed-accuracy cohort. The NIM manifest contains authored
+tasks, historical benchmark reports contain aggregates, and Noema incidents
+select failed deliveries rather than a complete request window. These cannot
+supply the existing customer KPI. Require permitted-use provenance, a complete
+bounded ingress window, independent outcome adjudication and exact model/policy
+revisions before the first observed baseline. The linkage successor prepares
+that measurement; it does not itself establish its correctness or improvement.
+
+Capacity repair `c7345670e08f029ad3aa5dd1133037bb4b451d9b` now has terminal
+local full-suite evidence: **3452 passed, 2 skipped in 753.15s** (macOS,
+Python 3.14; execution 39067). Its isolated installed-wheel receipt and SSE
+identity slice passed **43 tests in 17.88s**. Independent saturated-capacity
+HTTP probes confirm zero classifier/provider calls with measurement enabled
+and disabled. These results do not establish hosted checks, protected merge,
+publication or customer accuracy.
+
+The separate linkage successor `4cf7feafd554fbbd65dfc3b790f1081623b0d05a`
+retains focused passing evidence, but its first full-suite attempt (28355)
+terminated during collection: missing `hypothesis`, exit 2 after 5.41s.
+This is an incomplete test environment, not a passing full regression. Repair
+the successor's isolated test dependencies without changing the base candidate's
+installed-wheel environment, then rerun against a frozen documented checkpoint.
+
+The capacity candidate is now [PR #1112](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1112),
+head `c7345670e08f029ad3aa5dd1133037bb4b451d9b`, stacked on #1108 at
+`129a665016ed1acd79ae12915c905b1020856fcc`. Security run
+[34327884508](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34327884508)
+was admitted with three queued jobs. The review list is empty. CodeRabbit's
+SUCCESS status is explicitly a
+[skipped review](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1112#issuecomment-5598554823)
+because its automatic reviews exclude non-default target branches; it is not
+approval. Canonical review coordination received this finding. No merge or
+deployment follows from the page's “Able to merge” indicator.
+
+Bounded visual inspection: opened the actual PR in the browser and directly
+viewed its 1265 × 712 English screenshot. The title wraps onto two lines;
+branch labels, Scope heading and opening provenance paragraph remain readable
+without overlap in the inspected viewport. Lower sections require scrolling
+and were not visually audited. This is a PR-document inspection, not product
+UI, responsive, locale or Figma acceptance.
+
+The linkage successor at `af8d732e6cfc9c0169ac850f875f42f1db7eecd4`
+completed its frozen local full suite: **3462 passed, 2 skipped in 822.68s**,
+exit 0 (execution 81304). This supersedes the collection-only failure above:
+a separate locked project environment supplied the missing test dependency,
+without changing the base candidate's wheel environment. The run used successor
+Python source and the unchanged base native extension, so dedicated successor
+wheel acceptance remains separate and in progress. See the successor's
+`docs/doctoring/workflow_request_link.md` for exact reproduction and failure
+history. No observed accuracy baseline, protected merge or release is established.
+
+Research follow-up [now records](doctoring/measured-routing-evidence.md#multilevel-follow-up-source-2026-09-09)
+the read scope and proposed applicability conditions for Jin et al. (2022),
+including independent review and direct inspection of PDF page 7. The remaining
+work is an owner-validated observation/estimand contract and dependence-aware
+held-out evaluation, not production adoption based on a literature citation.
+
+Linkage delivery checkpoint: [PR #1113](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1113)
+now stacks frozen `af8d732e6cfc9c0169ac850f875f42f1db7eecd4` on #1112.
+Dedicated noneditable wheel acceptance completed **53 tests in 26.39s**;
+root independently verified disjoint archive members, both installed import
+origins and the original real-HTTP request/outcome join probe. The PR preserves
+artifact hashes and the missing-Setuptools and macOS path-alias probe failures.
+Hosted run [34329594602](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34329594602)
+has three queued jobs, not acceptance. Review, protected delivery and batch
+submission-to-item lineage remain open.
+
+Hosted #1112 checkpoint: Security run 34327884508 is now terminal **SUCCESS**
+across all three jobs. Job 102389289972 checked out merge
+`aca87f45839f7d03956cc4e37f9646ff2dadbbab` (head `c7345670`, base `129a6650`)
+on Linux/Python 3.12.14: **3452 passed, 2 skipped in 760.25s**, then 134
+benchmark/docstring checks and 40 installed-wheel checks passed. This supplies
+hosted-platform evidence previously pending; it does not establish independent
+approval, protected-main merge, registry publication or customer KPI improvement.
+
+Next batch gap: isolated test `387aa2111142b13b327f7065226c0f22c305b872`
+reproduced successful HTTP submission/retrieval of two items but no durable
+submission-request association after SQLite reopen (one failed in 3.75s).
+Candidate `369ea1e34dd0f4b3da9672ceae068656af6a69a8` passed 65 focused
+checks in 16.51s after repairing association persistence, redundant registry
+writes and response-only registry-write diagnostics. This is not full or
+installed-package acceptance and no batch PR has been submitted.
+
+Independent review still found a recovery gap: a remotely accepted job can
+return its handle after registry-write failure, yet later retrieval is unavailable.
+Recovery must use an owner-bound, expiring backend descriptor and exact item
+identities; a naked remote handle must never bypass ownership. Preserve absent
+usage and distinguish remote acceptance, association commit, registry persistence
+and actual recoverability. A status-only response does not complete this gap.
+The new work remains isolated from the tested #1112/#1113 candidates.
+
+### Research-stack integration checkpoint — 2026-09-12
+
+The earlier stacked-PR receipts above are historical evidence, not proof that
+their changes reached protected main. Main `012beaacd0631f8cd3391c77744eeb626269b5de`
+lacked the retained research ancestry; no deletion from main was established.
+Ordinary merge `52fd0da99224f0889e8b012667a93940f6a324ee` preserves that
+ancestry and current main behavior. The test synchronization repair at
+`36af4a56` waits for actual receipt finalization, without inventing response
+delivery or moving its timestamp.
+
+Frozen integration `81ad64cf77a49f7bc2a57f4851a5c3259387ce5d` completed
+**3,688 passed, 2 skipped in 261.42s**, terminal session 90461. This is source
+testing with a separately installed native namespace, not installed-core,
+hosted, release or observed-customer acceptance. The accuracy and latency
+targets remain unmeasured; the next gap is protected delivery of complete
+request/outcome evidence and independent held-out evaluation.
+See [the integration runbook](doctoring/kpi_stack_integration.md) for lineage,
+the original failure, its reproduction and remaining acceptance work.
+
+Visual inspection: the runbook at `0fd408aa` was rendered at
+`http://127.0.0.1:18766/` in a real browser, English, 1265 × 712. Two screenshots
+were directly opened in the task: the top and the verification/acceptance
+section after scrolling. Text, revision identifiers and headings were readable
+without horizontal clipping or overlap in those views. The viewport edge cut
+off continuing vertical content normally; the final paragraph was not inspected.
+This is a local document preview, not Figma, product UI, mobile or locale
+acceptance; screenshots remain in the task tool output, not repository assets.
+
+Research intake: [LaRT measurement review](doctoring/lart_measurement_review.md)
+separates token-length evidence from wall-clock decision latency and
+full-data fitted references from known true parameters. The proposed
+fast-mlsirm-owned calibration experiment remains unimplemented and unmeasured;
+it does not change routing defaults or close the observed-outcome gap.
+
+Cache aggregation follow-up: frozen `4bc96045037d04fa7477a1532c75f99f0d7e9898`
+repairs repeated/mixed cache items losing initial-decision timing or masking
+failure within one HTTP admission. Full source: **3,699 passed, 2 skipped**;
+separate installed core/native: **82 passed**. These are correctness receipts,
+not observed accuracy or latency improvement. See the
+[single integration runbook](doctoring/kpi_stack_integration.md#request-level-cache-aggregation-repair--2026-09-12)
+for RED evidence, hashes and reproduction. Central Noema dispatch acceptance
+still lacks receiver/run proof; its exact owner evidence is recorded there.
+Do not substitute a successful event submission or old-head Security result
+for current-head independent review, protected delivery or release.
+
+### Existing gateway repair not adopted by the review sidecar — 2026-09-12
+
+The [transport comparison receipt](doctoring/review_phase_transport_comparison.md)
+connects central run `34688188671` / job `103539568718` to source pin
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`. That source fails the eligible-free
+final-synthesis transport regression. Existing protected merge
+`9334dc91aaf853b758077e983517a822b6b21edb` passes the same selected regression,
+13 bootstrap tests, and the exact central `68daf0f` import/startup contract.
+The dependency lock is byte-identical. This is an adoption gap for the central
+workflow owner, not justification for duplicate CO fallback code or consumer
+retries. The original incident's terminal role remains uncorrelated; do not
+claim this defect is its sole cause.
+
+Next evidence: central protected pin adoption, current-head mandatory reviews
+and checks, then a real successful review with immutable runtime identity.
+Until then this gap stays open. Local loopback/test-double success does not
+establish provider recovery, release, observed accuracy, or decision-latency
+improvement. Test commit `8065ada1` remains preserved on its diagnostic branch;
+this research-PR update imports documentation only and does not claim that
+test is already part of its own CI suite.
+
+The historical overall-deadline recommendation above is superseded by the
+user's model-specific timeout policy: no common application/agent/gateway
+deadline by default. Provider termination, explicit user cancellation and
+configured per-model administrative timeout must remain distinguishable.
+
+### Retrospective calibration intake: split identity remains open
+
+The [pinned LaRT matrix audit](doctoring/lart_measurement_review.md#pinned-matrix-identity-audit)
+records actual public-data identity checks, not an estimator result. The
+published row split places 21 of 28 evaluation rows alongside a training row
+with the same suffix-derived base-model identifier. Its 100 item columns have
+only 40 distinct labels. These observations rule out treating that split as
+independent base-model generalization or joining items by raw labels alone.
+
+The next owner experiment must freeze benchmark-qualified item identities,
+reviewed base-model groups and separate family lineage, then fit only on
+training observations. Compare paired held-out Brier score/log loss at equal
+observation budgets; record excluded populations and unavailable generation
+failures explicitly. Released fast-mlsirm contracts remain the estimator
+boundary. Public matrices do not supply CO decision timestamps or known true
+latent parameters, so neither decision-p95 nor true-parameter RMSE can be
+claimed from this retrospective experiment. Data rights, grouping verification,
+owner implementation and observed gains remain open; no route default changes.
+
+Preprocessing follow-ups now live in [Draft successor PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139)
+at `0024522146803627b8741470ebefaf79ffa4a310`, preserving the complete prior
+delta before this normal document revert. The [handoff](doctoring/lart_measurement_review.md#preprocessing-evidence-successor)
+keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
+rights, accuracy and latency gates visible. This is not gap closure or release.
+
+## 2026-09-13 constant-only KPI PR repair findings
+
+Exact-source review found that [PR #1125](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1125)
+at `dbfcc0c17177af0339f1b326f3584db866d8a943` only declares
+`ROUTE_DECISION_LATENCY_FIELD`; its test checks the constant's existence/value,
+not a measured trace interval. [PR #1126](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1126)
+at `2ecc4a03ffe30707d9ce69ae3448e9f83a50e312` does the same for
+`REQUEST_OUTCOME_ASSOCIATIONS_FIELD`, without exercising an authorized export.
+Both tests describe runtime behavior they do not actually assert. Passing them
+cannot establish decision latency, outcome linkage, or customer KPI acceptance.
+
+Keep both Draft PRs open as repair findings. Reconcile their proposed public
+field names with the canonical request measurement/export owner before any
+successor claims complete inheritance. Existing receipt timing is nanoseconds
+and request-scoped; do not copy it onto per-step traces or reinterpret total
+generation latency as decision time. Acceptance needs real HTTP requests,
+durable acknowledgement and missing-value checks, plus authorized one-to-many
+request/outcome joins retaining unfinished requests and excluding other owners.
+PR #1138 is an export candidate, not proof that either legacy field contract
+has already been adopted. No predecessor closure or production change follows
+from this audit.

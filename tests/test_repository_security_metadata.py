@@ -90,12 +90,16 @@ def test_security_workflow_covers_core_repository_security_process():
 
 
 def test_security_workflow_supports_stacked_pull_requests():
+    """Keep stacked validation unfiltered without escalating event permissions."""
     workflow_text = read_text(".github/workflows/security.yml")
     pull_request_trigger = workflow_text.split("  pull_request:\n", 1)[1].split(
         "  schedule:\n", 1
     )[0]
 
-    assert "branches:" not in pull_request_trigger
+    for filter_name in ("branches", "branches-ignore", "paths", "paths-ignore"):
+        assert f"{filter_name}:" not in pull_request_trigger
+    assert "permissions:\n  contents: read\n" in workflow_text
+    assert "pull_request_target:" not in workflow_text
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
@@ -214,7 +218,10 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     assert re.search(r"@[0-9a-f]{40}(?:\s+#|$)", setup_uv_line)
     assert "# v" in setup_uv_line
     assert 'version: "0.12.5"' in workflow_text
-    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
+    locked_sync = "uv sync --locked --extra api --extra db --extra queue --group dev --group native-build"
+    native_build = "uv run --no-sync maturin develop --locked --release --features pyo3/extension-module"
+    full_tests = "uv run --no-sync python -m pytest -q"
+    assert workflow_text.index(locked_sync) < workflow_text.index(native_build) < workflow_text.index(full_tests)
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():

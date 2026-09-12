@@ -16,6 +16,8 @@ from unittest.mock import patch
 import threading
 import time
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -119,6 +121,49 @@ def test_store_upserts_keyed_records_and_appends_streams() -> None:
         assert store.load("audit") == [{"a": 1}, {"a": 2}]  # streams append in order
         assert store.load("audit", 1) == [{"a": 2}]  # limit keeps the newest
         store.close()
+
+
+@pytest.mark.parametrize("failure_phase", ["insert", "commit"])
+def test_failed_keyed_save_preserves_previous_committed_record(failure_phase: str) -> None:
+    """A failed replacement must not leak its deletion into the next commit."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            store._conn.execute("PRAGMA foreign_keys = ON")
+            store.save("workflow_run", "run_existing", {"version": 1})
+            if failure_phase == "insert":
+                store._conn.execute(
+                    "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
+                    "WHEN NEW.payload = '{\"version\": 2}' "
+                    "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+                )
+            else:
+                # Both writes succeed; the deferred constraint fails only at commit.
+                store._conn.execute(
+                    "CREATE TABLE linked_record (record_seq INTEGER REFERENCES "
+                    "orchestration_records(seq) DEFERRABLE INITIALLY DEFERRED)"
+                )
+                store._conn.execute(
+                    "INSERT INTO linked_record SELECT seq FROM orchestration_records"
+                )
+            store._conn.commit()
+            try:
+                store.save("workflow_run", "run_existing", {"version": 2})
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise AssertionError("the injected write failure did not occur")
+            assert not store._conn.in_transaction
+            store.save("workflow_run", "run_other", {"version": 3})
+            assert store.load("workflow_run") == [{"version": 1}, {"version": 3}]
+            assert not store._conn.in_transaction
+        finally:
+            store.close()
+        reopened = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            assert reopened.load("workflow_run") == [{"version": 1}, {"version": 3}]
+        finally:
+            reopened.close()
 
 
 def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
@@ -294,7 +339,7 @@ def test_durable_audit_retention_is_bounded() -> None:
         store = _StateStore(os.path.join(directory, "s.db"))
         limit = store._STREAM_LIMITS["audit"]
         for index in range(limit + 3):
-            store.save("audit", None, {"index": index})
+            store.save("audit", None, {"index": index}, durable=True)
 
         assert len(store.load("audit")) == limit
         assert store.load("audit", 1) == [{"index": limit + 2}]
@@ -306,7 +351,7 @@ def test_durable_authorization_retention_is_bounded() -> None:
         store = _StateStore(os.path.join(directory, "s.db"))
         limit = store._STREAM_LIMITS["authorization"]
         for index in range(limit + 3):
-            store.save("authorization", None, {"index": index})
+            store.save("authorization", None, {"index": index}, durable=True)
 
         assert len(store.load("authorization")) == limit
         assert store.load("authorization", 1) == [{"index": limit + 2}]
@@ -319,11 +364,30 @@ def test_durable_analytics_retention_is_bounded() -> None:
         assert store._STREAM_LIMITS["analytics"] == 256
         limit = 256
         for index in range(limit + 3):
-            store.save("analytics", None, {"index": index})
+            store.save("analytics", None, {"index": index}, durable=True)
 
         assert len(store.load("analytics")) == limit
         assert store.load("analytics", 1) == [{"index": limit + 2}]
         store.close()
+
+
+def test_durable_stream_return_is_visible_to_an_independent_connection() -> None:
+    """A durable return must acknowledge commit, not enqueue or flush-on-read."""
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "s.db")
+        store = _StateStore(database_path)
+        try:
+            # Prevent the asynchronous worker from making a queued write look durable.
+            with store._stream_condition, sqlite3.connect(database_path) as reader:
+                for stream_kind in store._STREAM_LIMITS:
+                    store.save(stream_kind, None, {"committed": True}, durable=True)
+                    rows = reader.execute(
+                        "SELECT payload FROM orchestration_records WHERE kind = ?",
+                        (stream_kind,),
+                    ).fetchall()
+                    assert rows == [('{"committed": true}',)]
+        finally:
+            store.close()
 
 
 def test_authorization_stream_persists_separately_from_audit() -> None:

@@ -1,8 +1,32 @@
 # CLAUDE.md
 
+Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
+One admission may contain cached and uncached items: finalize cache-only status
+at request close, retain failures and isolate request context. The runbook owns
+reproduction, native prerequisites and separate installed-package evidence.
+
+Batch request lineage evidence and unresolved registry failure semantics live
+in `docs/doctoring/batch_request_lineage.md`; HTTP 201 alone does not establish
+durable lineage. Preserve job-scoped item IDs and original submission identity.
+
+See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
+tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
+
+For title-only research citations, verify and register the persistent identifier
+in the source document and paper inventory. Passing DOI discovery does not prove
+full bibliography coverage; see the KPI runbook's citation reconciliation.
+
+For autonomous experiments, also read and maintain
+[the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
+It records commands, environment limits, failed interpretations, and evidence
+boundaries. Do not restart a live numerical test because polling is silent or
+claim customer improvement from synthetic recovery. Use the independently
+verifiable owner/consumer sequence recorded there instead of waiting for all
+foundation releases before developing a port.
 
 Equivalent model-group endpoints may race only through the normalized, explicit
 endpoint-equivalence contract. Preserve modality validation, bounded concurrency,
@@ -112,6 +136,18 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 `conductor/` is the CDD (context-driven development) directory, not a Python package: `product.md` (intent and non-goals), `tech-stack.md` (stdlib HTTP/core rationale plus selected runtime dependencies), `workflow.md` (the TDD/DDD/CDD method and the Ponytail design gate), `tracks.md` (active tracks). Update it when scope, dependencies, workflow, or domain terms change.
 
 ## Key conventions
+
+- **Failure attribution**: one Noema caller attempt is not one internal provider
+  attempt. Verify deployed revision and request identity; do not mix preflight
+  failures with the review request or automatically replay ambiguous timeout/502.
+  See [the incident runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+- **Stacked quality checks**: zero check runs can result from the former
+  `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
+  trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
+  and verify hosted execution after each new head. Earlier-head results are
+  historical, not current approval. Reproduction and limits:
+  [owner runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
 
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.

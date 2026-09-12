@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import asdict, replace
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from .decision_receipts import record_initial_selection
 
 from .batch_routing import (
     BatchBackend,
@@ -37,6 +39,7 @@ from .batch_routing import (
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     ProviderEmbeddingBatchBackend,
+    PgLlmBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
@@ -983,6 +986,7 @@ class CostRoutingCoordinator:
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
         owner_id: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
@@ -1006,7 +1010,36 @@ class CostRoutingCoordinator:
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
         job.prompt_token_estimates = prompt_token_estimates
-        self._batch_jobs[job.job_id] = job
+        if request_id is not None and self.orchestrator._store is not None:
+            try:
+                # One append-only submission envelope commits all item links
+                # together. A later retrieval never rewrites this origin.
+                self.orchestrator._store.save("batch_request_link", job.job_id, {
+                    "request_id": request_id,
+                    "batch_job_id": job.job_id,
+                    "custom_ids": [request.custom_id for request in prepared_requests],
+                    "owner_id": owner_id,
+                    "recovery_descriptor": ({
+                        "job": asdict(job),
+                        "expires_at": job.submitted_at + self._job_registry.retention_seconds,
+                        "backend": self.batch_backend.recovery_descriptor(prepared_requests),
+                    } if isinstance(self.batch_backend, PgLlmBatchBackend) else None),
+                }, durable=True)
+            except Exception:
+                # The upstream submission already happened. Preserve its handle
+                # and report incomplete lineage instead of inviting a resubmit.
+                job.request_link_status = "write_failed"
+            else:
+                job.request_link_status = "durable"
+                if isinstance(self.batch_backend, PgLlmBatchBackend) and self.batch_backend.recovery_enabled:
+                    job.recovery_status = "durable_descriptor"
+        job.registry_persistence_status = "stored"
+        try:
+            self._batch_jobs[job.job_id] = job
+        except Exception:
+            # Submission already applied remotely; an HSET/expiry failure may
+            # itself be partially applied. Return the handle without replay.
+            job.registry_persistence_status = "write_failed"
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
@@ -1057,7 +1090,7 @@ class CostRoutingCoordinator:
             not self._batch_item_usage_valid(item)
             and item.custom_id not in prompt_token_estimates
             for item in items
-        )
+        ) and job.recovered_request_metadata is None
         request_by_custom_id = (
             self._legacy_batch_requests(job) if needs_legacy_lookup else {}
         )
@@ -1304,7 +1337,53 @@ class CostRoutingCoordinator:
         return provider, item.model
 
     def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
-        job = self._batch_jobs.get(job_id)
+        try:
+            job = self._batch_jobs.get(job_id)
+        except Exception:
+            job = None
+        if job is not None and job.owner_id != owner_id:
+            raise KeyError(f"batch job {job_id!r} not found")
+        if job is not None and isinstance(self.batch_backend, PgLlmBatchBackend):
+            if self.batch_backend.has_job_metadata(job):
+                return job
+            # Missing or differently bound metadata cannot use the ordinary
+            # retrieval path; only a validated durable descriptor may recover.
+            job = None
+        if (owner_id is not None and self.orchestrator._store is not None
+                and (job is None or (isinstance(self.batch_backend, PgLlmBatchBackend)
+                                     and self.batch_backend.recovery_enabled))):
+            record = self.orchestrator._store.load_latest_key("batch_request_link", job_id)
+            if (isinstance(record, dict) and record.get("owner_id") == owner_id
+                    and record.get("batch_job_id") == job_id
+                    and isinstance(self.batch_backend, PgLlmBatchBackend)):
+                descriptor = record.get("recovery_descriptor")
+                try:
+                    if not isinstance(descriptor, dict) or type(descriptor.get("expires_at")) is not int:
+                        raise ValueError("invalid descriptor")
+                    if descriptor["expires_at"] <= time.time():
+                        raise ValueError("expired descriptor")
+                    recovered = BatchJob(**descriptor["job"])
+                    if recovered.job_id != job_id or recovered.owner_id != owner_id or recovered.backend != self.batch_backend.name:
+                        raise ValueError("mismatched descriptor")
+                    custom_ids = record.get("custom_ids")
+                    if (type(recovered.request_count) is not int or recovered.request_count < 1
+                            or not isinstance(custom_ids, list)
+                            or any(not isinstance(item, str) or not item for item in custom_ids)
+                            or len(custom_ids) != recovered.request_count
+                            or len(set(custom_ids)) != recovered.request_count):
+                        raise ValueError("invalid recovery item identities")
+                    estimates = recovered.prompt_token_estimates
+                    if (not isinstance(estimates, dict) or not set(estimates).issubset(custom_ids)
+                            or any(type(value) is not int or value < 0 for value in estimates.values())):
+                        raise ValueError("invalid recovery estimates")
+                    self.batch_backend.restore_descriptor(recovered, descriptor["backend"])
+                    if set(recovered.recovered_request_metadata) != set(custom_ids):
+                        raise ValueError("mismatched recovery items")
+                    recovered.request_link_status = "durable"
+                    recovered.recovery_status = "durable_descriptor"
+                    job = recovered
+                except (KeyError, TypeError, ValueError):
+                    job = None
         if job is None or job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
@@ -1350,6 +1429,8 @@ class CostRoutingCoordinator:
         if callable(reserve) and callable(start):
             job = reserve(requests, metadata=metadata)
         else:
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             job = backend.submit(requests, metadata=metadata)
         self._embedding_models[job.job_id] = resolved_model
         self._embedding_owners[job.job_id] = owner_id
@@ -1359,6 +1440,8 @@ class CostRoutingCoordinator:
         self._embedding_part_limits[job.job_id] = part_limits
         self._embedding_jobs[job.job_id] = job
         if callable(reserve) and callable(start):
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             start(job)
         return job
 

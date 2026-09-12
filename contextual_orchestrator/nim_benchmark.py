@@ -2940,6 +2940,9 @@ def assemble_benchmark_report(
         cells,
         evaluation["locked_task_count"],
     )
+    if run_mode == "dry_run":
+        evidence_summary["evidence_status"] = "synthetic_diagnostic_only"
+        evidence_summary["decision_use"] = "benchmark_smoke_only"
     report = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "provenance": build_provenance(

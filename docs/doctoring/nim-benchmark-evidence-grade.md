@@ -214,6 +214,31 @@ succeed:
 No earlier head, local-only result, queued check, or stale approval is accepted as
 release evidence.
 
+## Synthetic classification verification, 2026-09-12
+
+Frozen head `07b95c9ab8e1c7b2f0031c39ea45349314079c34` passed the full source
+suite: **3,688 passed, 2 skipped, 170.85s**, process 12368, exit 0.
+Log: `/tmp/co-kpi-full-07b95c9a.log`. Reproduction from that checkout:
+
+```sh
+/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-export-native-acceptance-20260912/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["tests", "-q"]))'
+```
+
+This reused existing dependencies read-only and is source integration evidence.
+Separately, root process 40384 completed **126 passed, 18.44s** against the exact
+head's installed wheel, with `python -I` from `/tmp` and the benchmark import
+asserted under installed site-packages. Isolated package directory:
+`/tmp/co-diagnostic-wheel-07b95c9a.EWQ86S`; core wheel SHA-256:
+`24a3528f273a42e17700ea26173af4f3e2820bd6de65ac56ab304a00a627a036`.
+Runtime dependencies used hash-locked requirements; test tooling used pytest 9.1.1.
+
+Root process 56391 also generated a dry-run artifact and checked consistent
+classification in JSON evaluation, run provenance and Markdown. The root reviewer
+directly inspected the generated summary's top screenshot in an actual browser,
+English at 1265 × 712. This is a scoped visual check, not full-document or mobile
+inspection. These results validate synthetic evidence labeling, not customer
+accuracy, observed decision latency, production promotion, or a protected release.
+
 ## References
 
 Autio, C., Schwartz, R., Dunietz, J., Jain, S., Stanley, M., Tabassi, E., Hall,

@@ -9,6 +9,18 @@ completion, explicit user/operator cancellation, and the hosting platform's own
 execution contract are the only time-based termination authorities available to
 this agent. Never post intermediate progress reports.
 
+PR 0 only via merge or verified-successor full-delta inheritance. Never
+force-push, never close without evidence (user-explicit, no valid delta,
+malicious change, or verified complete inheritance only). A wrong close is
+recovered through reopen or successor and never left closed. Single-writer
+deltas are integrated, never discarded. Before and after long runs record
+`git rev-parse HEAD` and `git diff --stat origin/main...HEAD --
+contextual_orchestrator/ tests/`; docs-only drift does not invalidate code
+evidence. Prefer isolated worktrees, preserve live execution handles, and
+never rebase or push another session's branch. Synthetic recovery is unit
+evidence only; customer accuracy and decision latency require observed
+outcomes with declared denominators and uncertainty.
+
 Before changing code, read `docs/product_planning.md`, the applicable PRD in
 `docs/model-group-product-technical-spec.md`, and
 `docs/product-technical-gap-baseline.md`. Treat current files and exact GitHub
@@ -44,10 +56,25 @@ contract rather than an inferred ranking:
    dependency model do not identify an order, do not invent an ordering; record
    the unresolved decision evidence and fail closed rather than using an informal
    leverage score. Implement an identified gap with tests + docstrings and open a
-   PR that updates the baseline file.
+   PR that updates the baseline file. When the PR queue is exhausted, continue
+   with gap development and merges plus ContextualWisdomLab repository and
+   connector linkage under responsibility boundaries, without waiting on
+   review or Checks for unrelated work. A failing check never idles the
+   loop: fix and rerun what you own immediately while continuing safe
+   independent work; codify manual workarounds into code or config and
+   root-cause PYTHONPATH, Actions, and execution errors from logs. Never make
+   a full foundation or a mutual official release a precondition: cut the
+   owner/consumer cycle with a minimal contract, port, or ACL and complete
+   independently verifiable functionality first.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
+  Record merge and delete rationale before committing; remove
+  self-modifying or source-fix workflows whose purpose is done.
+  Integrate single-writer deltas, never discard them; restack or retarget with
+  normal merges only, never force-push, and never flip another session's Draft
+  readiness. Fix stacked-PR review gaps in `.github`, coordinating through
+  agent dialogue or spawn. Preserve PRD and TRD naming case exactly.
 - Delete existing code, tests, or documentation only with a clear redundancy or
   root-cause rationale and after verifying that no supported consumer needs it.
 - Never expose internal implementation boundaries in customer-facing copy. Every
