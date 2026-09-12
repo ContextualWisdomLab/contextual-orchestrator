@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -59,6 +62,46 @@ def _get(port: int, path: str, token: str) -> tuple[int, dict]:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+@pytest.mark.parametrize("request_method", ["GET", "POST"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize("response_body", [b'{"error":"unauthorized"}', b'invalid JSON'])
+def test_error_response_cleanup_preserves_diagnostics(
+    monkeypatch, request_method, cleanup_fails, response_body,
+) -> None:
+    """Consumed helper errors close without replacing returned or failed decoding."""
+    response_error = urllib.error.HTTPError(
+        "http://127.0.0.1/", 401, "Unauthorized", {}, io.BytesIO(response_body),
+    )
+    original_close = response_error.close
+
+    def close_response():
+        original_close()
+        if cleanup_fails:
+            raise OSError("cleanup failed")
+
+    def raise_response(*args, **kwargs):
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", close_response)
+    monkeypatch.setattr(urllib.request, "urlopen", raise_response)
+    try:
+        if response_body == b'invalid JSON':
+            with pytest.raises(json.JSONDecodeError):
+                if request_method == "GET":
+                    _get(1, "/", _TEST_AUTH_TOKEN)
+                else:
+                    _post(1, {})
+        else:
+            result = (
+                _get(1, "/", _TEST_AUTH_TOKEN)
+                if request_method == "GET" else _post(1, {})
+            )
+            assert result == (401, {"error": "unauthorized"})
+        assert response_error.closed
+    finally:
+        original_close()
 
 
 def _server():
