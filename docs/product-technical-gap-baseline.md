@@ -14,6 +14,10 @@ This restores a measurement-integrity prerequisite, not observed accuracy or
 latency improvement. Calls finish before score validation; no saved spend or
 early cancellation is claimed. Current-head full-suite, installed-package,
 independent review, visual inspection and protected-release evidence remain
+pending at the initial focused checkpoint. At code/document revision 321409b0,
+the full source suite subsequently passed 3645 tests (2 skipped), installed
+public-API acceptance passed 44 cases, and desktop documentation was visually
+inspected. Protected CI, formal approval, release and real KPI evidence remain
 pending. Historical September 9 artifacts do not prove this revision passed.
 See [the recovery runbook](doctoring/optimizer_score_recovery.md).
 

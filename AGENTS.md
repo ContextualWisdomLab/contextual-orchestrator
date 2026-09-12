@@ -183,6 +183,11 @@ push or open a PR.
 
 ## Tool-call handoffs
 
+Optimizer quality callbacks must yield finite per-task values in [0, 1].
+Validate before aggregation so invalid pairs cannot hide behind a valid mean;
+keep Boolean predicates valid and never discard completed-call usage.
+Recovery evidence and reproduction: `docs/doctoring/optimizer_score_recovery.md`.
+
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof

@@ -127,6 +127,11 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Tool-call handoffs
 
+Optimizer score validation is shared by both public optimizers: reject nonfinite
+or out-of-range per-task values before aggregation, preserve valid predicates
+and completed-call usage. See `docs/doctoring/optimizer_score_recovery.md` for
+RED/GREEN, isolated-package evidence and remaining coverage boundaries.
+
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof

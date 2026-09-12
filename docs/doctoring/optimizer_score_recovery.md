@@ -51,7 +51,12 @@ hash-locked dependency installation. Wheel SHA-256:
 `c0992936db4e8a82b76ae5685964bd4793612614374e04b62cf1107d1e538e47`.
 The first build attempt used an old build environment without the `build`
 module and failed before building; the isolated `uv build` replaced that path.
-Installation alone is not installed behavioral acceptance; those tests remain.
+Installed behavioral acceptance subsequently passed 44 public-API cases using
+`installed/bin/python -I installed_score_check.py` from `/tmp`. The printed
+module path was the isolated environment's `site-packages`, not the source
+checkout. The stdlib-only acceptance script exercised optimize/evolve and
+serial/batch route calls, rejecting seven invalid value sets and preserving
+four valid sets per combination. It remains mock-provider unit evidence.
 
 Visual inspection: directly viewed the local browser rendering at
 `http://127.0.0.1:18765/`, revision 321409b0, English, 1265 × 712 viewport.
@@ -59,7 +64,8 @@ Overlapping top/bottom captures showed readable headings, wrapped command and
 revision text, and no horizontal clipping or overlap. This is a documentation
 preview only; narrow viewports, other locales and product UI were not inspected.
 
-Run full checks and isolated installed-package tests, inspect the rendered
-documentation, obtain independent current-head review and protected CI before
-merge/release. Real accuracy and decision-latency KPIs still require an observed
+Obtain protected current-head CI and formal independent approval before
+merge/release; local review does not satisfy GitHub approval rules. Extend
+invalid-score coverage to auto/conduct and retained usage before claiming all
+evaluation-path coverage. Real accuracy and decision-latency KPIs still require an observed
 cohort, independent adjudication, failure denominators and uncertainty estimates.
