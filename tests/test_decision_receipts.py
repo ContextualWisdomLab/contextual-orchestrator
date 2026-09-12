@@ -4,6 +4,7 @@ import http.client
 import json
 import threading
 import sqlite3
+from contextlib import closing
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
@@ -366,7 +367,7 @@ def test_http_route_persists_initial_decision(tmp_path, monkeypatch, endpoint, s
     dispatched_snapshots = []
 
     def inspect_committed_decision(original_call, *args, **kwargs):
-        with sqlite3.connect(tmp_path / "state.db") as independent:
+        with closing(sqlite3.connect(tmp_path / "state.db")) as independent, independent:
             rows = independent.execute(
                 "SELECT payload FROM orchestration_records WHERE kind = 'initial_decision'"
             ).fetchall()

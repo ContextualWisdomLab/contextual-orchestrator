@@ -6005,6 +6005,8 @@ def build_server(
                     self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
                 if path == "/api/v1/request_outcome_exports":
+                    if not decision_receipts:
+                        raise RequestError(503, "export_unavailable", "Enable decision measurements before exporting observations.")
                     if orchestrator._store is None:
                         raise RequestError(503, "export_unavailable", "Export storage is unavailable.")
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)

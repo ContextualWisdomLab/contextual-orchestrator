@@ -1,6 +1,7 @@
 """Service-admin exports preserve admitted cohorts without exposing content."""
 
 import threading
+from contextlib import closing
 import pytest
 
 from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
@@ -11,10 +12,10 @@ from test_cost_review_server import _request
 
 
 @pytest.fixture
-def export_server(tmp_path):
+def export_server(tmp_path, request):
     """Run the actual HTTP adapter against isolated persistent state."""
     orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db")
-    server = build_server(orchestrator, port=0, security=SecurityConfig(
+    server = build_server(orchestrator, port=0, decision_receipts=getattr(request, "param", True), security=SecurityConfig(
         bearer_verifier=lambda token, scope: token == "admin-token" and scope == "admin"))
     worker_thread = threading.Thread(target=server.serve_forever, daemon=True)
     worker_thread.start()
@@ -42,6 +43,31 @@ def test_export_denies_non_admin_before_query(export_server, monkeypatch, token)
     status, _ = _request("GET", export_url, token)
     assert status == 401
     assert not queries
+
+
+@pytest.mark.parametrize("export_server", [False], indirect=True)
+def test_disabled_measurement_export_is_unavailable(export_server, monkeypatch):
+    """A disabled producer must not report an apparently valid empty cohort."""
+    from http.client import HTTPConnection
+    from urllib.parse import urlsplit
+
+    orchestrator, export_url = export_server
+
+    def forbidden_query(**kwargs):
+        raise AssertionError("disabled measurement queried an incomplete cohort")
+
+    monkeypatch.setattr(orchestrator._store, "export_request_outcomes", forbidden_query)
+    endpoint = urlsplit(export_url)
+    connection = HTTPConnection(endpoint.hostname, endpoint.port)
+    try:
+        connection.request("GET", endpoint.path, headers={"Authorization": "Bearer admin-token"})
+        response = connection.getresponse()
+        status = response.status
+        response.read()
+        response.close()
+    finally:
+        connection.close()
+    assert status == 503
 
 
 @pytest.mark.parametrize("query", ["page_size=0", "page_size=201", "page_size=true",
@@ -340,7 +366,7 @@ def test_malformed_retained_link_survives_index_migration(tmp_path):
     from contextual_orchestrator.orchestrator import _StateStore
 
     state_path = tmp_path / "malformed.db"
-    with sqlite3.connect(state_path) as connection:
+    with closing(sqlite3.connect(state_path)) as connection, connection:
         connection.execute(_StateStore._CREATE_RECORDS_SQL)
         connection.execute(_StateStore._INSERT_SQL,
                            ("accepted_request", "request_one", '{"request_id":"request_one"}'))
@@ -366,7 +392,7 @@ def test_legacy_origin_index_upgrade_keeps_uniqueness_and_rows(tmp_path):
     from contextual_orchestrator.orchestrator import _StateStore
 
     state_path = tmp_path / "old_index.db"
-    with sqlite3.connect(state_path) as connection:
+    with closing(sqlite3.connect(state_path)) as connection, connection:
         connection.execute(_StateStore._CREATE_RECORDS_SQL)
         connection.execute("CREATE UNIQUE INDEX orchestration_records_workflow_origin "
                            "ON orchestration_records(json_extract(payload, '$.workflow_run_id')) "

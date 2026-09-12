@@ -4012,6 +4012,18 @@ class _StateStore:
                                          "workflow_outcomes": [], "batch_associations": [],
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
+                initial_records = self._conn.execute(
+                    "SELECT payload FROM orchestration_records WHERE kind = 'initial_decision' "
+                    "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
+                ).fetchall()
+                initial_phase = self._export_record(initial_records[0][0]) if initial_records else {}
+                initial_selection = initial_phase.get("selection_elapsed_ns")
+                valid_initial = (
+                    bool(initial_records) and initial_phase.get("request_id") == request_id
+                    and initial_phase.get("status") == "selected"
+                    and type(initial_selection) is int and 0 <= initial_selection <= 2**64 - 1
+                    and initial_phase.get("durable_ack_elapsed_ns") is None
+                )
                 phases = self._conn.execute(
                     "SELECT payload FROM orchestration_records WHERE kind = 'decision_receipt' "
                     "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
@@ -4020,15 +4032,49 @@ class _StateStore:
                 invalid_phase = bool(phases) and (
                     phase.get("request_id") != request_id or not isinstance(phase.get("status"), str))
                 status = phase.get("status") if phases and not invalid_phase else "unfinished"
+                if not phases and valid_initial:
+                    status = "acknowledgement_unobserved"
                 # Only enum-like receipt state is exported; no diagnostic text.
-                if status not in {"acknowledged", "failed", "cache_hit", "unfinished",
+                if status not in {"acknowledged", "acknowledgement_unobserved", "failed", "cache_hit", "unfinished",
                                   "not_applicable", "accepted", "capacity_rejected", "selection_failed",
                                   "write_failed", "cancelled", "store_unavailable", "other_execution_endpoint"}:
                     status = "unclassified"
                 row = {"admission_sequence": admission_sequence, "request_id": request_id,
                        "decision_status": status, "workflow_outcomes": [],
                        "batch_associations": [], "links_truncated": False,
-                       "invalid_association_count": int(invalid_phase)}
+                       "invalid_association_count": int(invalid_phase) + int(bool(initial_records) and not valid_initial)}
+                # Project only canonical measurement fields, never arbitrary stored text.
+                measurement = self._export_record(admission_payload)
+                if valid_initial:
+                    measurement.update(initial_phase)
+                if phases and not invalid_phase:
+                    measurement.update(phase)
+                for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
+                    field_value = measurement.get(field_name)
+                    row[field_name] = field_value if type(field_value) is int and 0 <= field_value <= 2**64 - 1 else None
+                    if field_value is not None and row[field_name] is None:
+                        row["invalid_association_count"] += 1
+                if not phases or invalid_phase:
+                    row["durable_ack_elapsed_ns"] = None
+                acknowledgement = row["durable_ack_elapsed_ns"]
+                selection = row["selection_elapsed_ns"]
+                if acknowledgement is not None and (
+                    status != "acknowledged" or selection is None or acknowledgement < selection
+                ):
+                    row["durable_ack_elapsed_ns"] = None
+                    row["invalid_association_count"] += 1
+                policy_hash = measurement.get("policy_snapshot_hash")
+                row["policy_snapshot_hash"] = policy_hash if (
+                    isinstance(policy_hash, str) and len(policy_hash) == 64
+                    and all(character in "0123456789abcdef" for character in policy_hash)
+                ) else None
+                for field_name, allowed_values in (
+                    ("measurement_unit", {"http_request", "explicit_scope"}),
+                    ("metric_scope", {"initial_task_route_decision"}),
+                    ("admission_boundary", {"explicit_scope", "validated_endpoint", "first_execution_slot"}),
+                ):
+                    field_value = measurement.get(field_name)
+                    row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None
                 for record_kind, output_field in (("workflow_request_link", "workflow_outcomes"),
                                                   ("batch_request_link", "batch_associations")):
                     if record_kind == "workflow_request_link":
