@@ -464,6 +464,14 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         fallback_task_filters=("text-generation",),
         capabilities=("chat",),
     ),
+    ProviderModelSource(
+        provider_name="experiential_labs",
+        credential_name="EXPERIENTAL_LABS_API_KEY",
+        list_url="https://api.experientiallabs.ai/v1/models",
+        chat_base_url="https://api.experientiallabs.ai/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
+    ),
 )
 
 @dataclass(frozen=True)
