@@ -520,7 +520,8 @@ class _UpstreamDown(ModelClient):
     """Chat client whose provider always answers 429, classified as the real layer does."""
 
     def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
-        raise classify_provider_failure(_http_error(429), agent_id=agent.id, model=agent.model)
+        with _http_error(429) as response_error:
+            raise classify_provider_failure(response_error, agent_id=agent.id, model=agent.model)
 
 
 def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
@@ -534,7 +535,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
@@ -555,6 +557,7 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 429
     error = body["error"]
