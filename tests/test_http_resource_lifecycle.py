@@ -54,11 +54,19 @@ def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_
 
 
 @pytest.mark.parametrize("second_fails", [False, True])
-def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails):
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails, cleanup_fails):
     """Retry delay starts only after consuming and closing the failed response."""
     first_error = urllib.error.HTTPError("https://provider.example/v1", 429, "retry", {}, io.BytesIO(b"{}"))
     final_error = urllib.error.HTTPError("https://provider.example/v1", 401, "stop", {}, io.BytesIO(b"{}"))
     client = ModelClient(max_retries=1)
+    original_close = first_error.close
+    if cleanup_fails:
+        def failing_close():
+            """Preserve the retry decision even when cleanup itself fails."""
+            original_close()
+            raise OSError("private intermediate cleanup diagnostic")
+        monkeypatch.setattr(first_error, "close", failing_close)
     attempted_calls = []
     observed_delays = []
 
@@ -91,7 +99,7 @@ def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails
         assert attempted_calls == [1, 2]
         assert observed_delays == [0.125]
     finally:
-        first_error.close()
+        original_close()
         final_error.close()
 
 
