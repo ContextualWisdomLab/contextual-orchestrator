@@ -325,6 +325,7 @@ def test_binary_passthrough_classifies_provider_transport_failure() -> None:
             assert raised.client_status == 503
             assert raised.provider_status == 503
             assert raised.transport == "passthrough"
+            assert upstream.closed, "binary transport must close its classified HTTP response"
         else:  # pragma: no cover
             raise AssertionError("binary provider failure must be classified")
 
@@ -440,13 +441,17 @@ def test_passthrough_retry_layer_surfaces_model_not_found_without_retry() -> Non
     """A 404 on passthrough fails immediately as model_not_found."""
     client = _StatusFailureClient(404)
     agent = ModelAgent("proxy_agent", "missing-model", base_url="https://provider.example/v1")
-    with patch.object(client, "_validate_provider", lambda unused: None):
+    upstream = _http_error(404)
+    with patch.object(client, "_validate_provider", lambda unused: None), patch.object(
+        client, "_send_raw", side_effect=upstream
+    ) as send_raw:
         try:
             client._send_raw_with_retry(agent, "responses", {})
         except ProviderUpstreamError as exc:
             assert exc.error_code == "model_not_found"
             assert exc.transport == "passthrough"
-            assert client.attempts == 1  # caller errors are never retried
+            assert send_raw.call_count == 1  # caller errors are never retried
+            assert upstream.closed, "raw transport must close its classified HTTP response"
         else:  # pragma: no cover
             raise AssertionError("classified failure must propagate")
 
