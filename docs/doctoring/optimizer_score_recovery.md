@@ -121,6 +121,28 @@ The preceding frozen `b6fec962` full suite passed 3785 tests with 2 skips in
 168.62s (`/tmp/co-quality-full-b6fec962.log`). This is historical evidence for
 that revision, not current-repair full-suite acceptance.
 
+## Frozen repair acceptance: 85580612
+
+At `855806125a640d238850e575c1118bf4379f7e2d`, the full source suite passed
+**3785 tests, 2 skipped in 200.11s**, exit 0 (session 78573;
+`/tmp/co-quality-full-85580612.log`). Source and environment remained unchanged.
+
+An independent Git archive built a wheel and installed it non-editably into
+`/tmp/co-quality-package-85580612.OnW9XK/installed`, using hash-locked runtime
+dependencies and pytest 9.1.1. From `/tmp`, Python 3.14.6 with `-I` imported
+the installed package, asserted its site-packages location, and ran
+`test_optimizer_score_domain.py`, `test_optimizer.py`,
+`test_batch_optimizer.py`, and `test_evolve_optimizer.py`: **216 passed in
+15.05s**, exit 0 (session 38230). Wheel SHA-256:
+`d62e05d3d32dde50ba9f6687b03319a4661dafa5650b25301d4b132061527593`.
+These are mock-provider behavioral checks, not observed customer KPI evidence.
+Python 3.10 execution and the revised document's visual inspection remain
+unverified; the older visual receipt does not cover this revision.
+
+This follow-up preserves the existing PR and its valid delta. Push the repair
+non-forcibly for fresh review of the factory-discard finding; do not resolve
+the review or infer approval from local test success.
+
 Obtain protected current-head CI and formal independent approval before
 merge/release; local review does not satisfy GitHub approval rules.
 Real accuracy and decision-latency KPIs still require an observed
