@@ -4009,6 +4009,7 @@ class _StateStore:
                 if not self._export_identifier(request_id) or request_id != admitted_identity:
                     observations.append({"admission_sequence": admission_sequence,
                                          "request_id": None, "link_status": "identity_unavailable",
+                                         "decision_latency_ms": None,
                                          "workflow_outcomes": [], "batch_associations": [],
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
@@ -4049,8 +4050,13 @@ class _StateStore:
                     measurement.update(initial_phase)
                 if phases and not invalid_phase:
                     measurement.update(phase)
+                measurement["selection_elapsed_ns"] = phase.get(
+                    "selection_elapsed_ns",
+                    initial_phase.get("selection_elapsed_ns") if valid_initial else None,
+                ) if not invalid_phase else None
                 for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
-                    field_value = measurement.get(field_name)
+                    field_value = (phase.get(field_name) if field_name == "durable_ack_elapsed_ns"
+                                   else measurement.get(field_name))
                     row[field_name] = field_value if type(field_value) is int and 0 <= field_value <= 2**64 - 1 else None
                     if field_value is not None and row[field_name] is None:
                         row["invalid_association_count"] += 1
@@ -4063,6 +4069,12 @@ class _StateStore:
                 ):
                     row["durable_ack_elapsed_ns"] = None
                     row["invalid_association_count"] += 1
+                # Convert only the validated request acknowledgement, never generation time.
+                validated_acknowledgement = row["durable_ack_elapsed_ns"]
+                row["decision_latency_ms"] = (
+                    validated_acknowledgement / 1_000_000
+                    if validated_acknowledgement is not None else None
+                )
                 policy_hash = measurement.get("policy_snapshot_hash")
                 row["policy_snapshot_hash"] = policy_hash if (
                     isinstance(policy_hash, str) and len(policy_hash) == 64

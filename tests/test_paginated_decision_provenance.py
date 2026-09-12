@@ -4,6 +4,26 @@ from contextual_orchestrator.orchestrator import _StateStore
 import pytest
 
 
+@pytest.mark.parametrize("receipt_fields", [{}, {"durable_ack_elapsed_ns": 20}])
+def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_fields):
+    """Admission values cannot supply missing selection or acknowledgement evidence."""
+    store = _StateStore(str(tmp_path / "missing_acknowledgement.db"))
+    try:
+        store.save("accepted_request", "request_one", {
+            "request_id": "request_one", "selection_elapsed_ns": 10,
+            "durable_ack_elapsed_ns": 20,
+        }, durable=True)
+        store.save("decision_receipt", "request_one", {
+            "request_id": "request_one", "status": "acknowledged",
+            **receipt_fields,
+        }, durable=True)
+        observation = store.export_request_outcomes()["observations"][0]
+        assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("field_name,bad_value", [
     ("selection_elapsed_ns", -1), ("durable_ack_elapsed_ns", True),
     ("first_provider_elapsed_ns", 2**64),
@@ -59,6 +79,7 @@ def test_invalid_acknowledgement_is_not_a_duration(tmp_path, receipt_status, sel
         }, durable=True)
         observation = store.export_request_outcomes()["observations"][0]
         assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
         assert observation["invalid_association_count"] >= 1
     finally:
         store.close()
@@ -131,12 +152,15 @@ def test_fixed_cutoff_pages_preserve_decision_phases(tmp_path):
                 assert row[field_name] == provenance[field_name]
         assert rows[0]["selection_elapsed_ns"] == 123
         assert rows[0]["durable_ack_elapsed_ns"] == 456
+        assert rows[0]["decision_latency_ms"] == 456 / 1_000_000
         assert rows[0]["first_provider_elapsed_ns"] == 789
         assert rows[255]["decision_status"] == "acknowledgement_unobserved"
         assert rows[255]["selection_elapsed_ns"] == 123
         assert rows[255]["durable_ack_elapsed_ns"] is None
+        assert rows[255]["decision_latency_ms"] is None
         assert rows[256]["decision_status"] == "unfinished"
         assert rows[256]["selection_elapsed_ns"] is None
         assert rows[256]["durable_ack_elapsed_ns"] is None
+        assert rows[256]["decision_latency_ms"] is None
     finally:
         store.close()
