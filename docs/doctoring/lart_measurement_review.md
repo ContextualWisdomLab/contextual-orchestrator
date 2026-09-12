@@ -290,3 +290,32 @@ overlap. Other viewports/locales and the Gap document were not visually
 inspected in this receipt. At that exact source, the six citation/role-contract
 tests passed with warnings treated as errors in 1.17s; they do not validate
 upstream estimation or prove a customer KPI gain.
+
+### Owner repair contract and retained lineage
+
+The separate `codex/lart-preprocessing-contract-20260912` branch preserves
+all four preprocessing-document commits from research head `b4887c28`.
+Both affected documentation files compared byte-identically after cherry-pick
+at `83f12d54`. This is local succession only: no successor PR or runtime
+repair is verified, so the predecessor documents must not yet be reverted.
+
+Root independently read the pinned estimator's lines 413–517 and the
+item-efficiency loader's first 85 lines. The estimator takes the logarithm
+of positive `T`; the individual update accepts `log_T` without adding one.
+The second application also adds one to the combined CSV. Do not attribute
+a unit pseudocount to the estimator. The primary
+[data contract](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data/README.md#L16)
+describes stored token counts with applications adding one; the
+[matrix builder](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data_generation/build_matrices.py#L32)
+exports `cot_tokens` without a unit shift. These support a raw-count artifact
+contract, not proof of historical intent or a paper-mandated pseudocount.
+
+The canonical defective artifact/export belongs to the upstream LaRT project,
+not CO's router. Prefer restoring raw-count export while retaining exactly one
+application pseudocount; alternatively preserve the historical artifact with
+explicit shifted semantics and repair both consuming loaders. Either change
+needs upstream patch provenance and source-backed regression expectations,
+including zero, missing, transformed-input and row-alignment boundaries.
+Do not create a CO subtraction workaround or copy the estimator. Actual
+estimator execution and finite-output checks remain required after the chosen
+owner patch; current evidence is source inspection and data comparison only.
