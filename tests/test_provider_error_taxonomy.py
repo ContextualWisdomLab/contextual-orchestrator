@@ -460,7 +460,8 @@ def test_invoke_preserves_final_classified_failure_across_candidates() -> None:
     """
 
     def _rate_limited(agent: ModelAgent) -> ProviderUpstreamError:
-        return classify_provider_failure(_http_error(429), agent_id=agent.id, model=agent.model)
+        with _http_error(429) as response_error:
+            return classify_provider_failure(response_error, agent_id=agent.id, model=agent.model)
 
     class RateLimited(ModelClient):
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
@@ -493,9 +494,10 @@ def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> 
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
             self.calls.append(agent.id)
             if agent.id == "primary_worker":
-                raise classify_provider_failure(
-                    _http_error(401), agent_id=agent.id, model=agent.model
-                )
+                with _http_error(401) as response_error:
+                    raise classify_provider_failure(
+                        response_error, agent_id=agent.id, model=agent.model
+                    )
             return "backup answer"
 
     client = AuthThenBackup()
