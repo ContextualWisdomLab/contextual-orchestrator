@@ -49,6 +49,33 @@ replace that measurement. No production default changes are authorized by
 this intake. Remaining gates: complete method audit, owner contract, licensed
 data provenance, held-out evaluation and uncertainty verification.
 
+## Nonlinear dependence: external psychometrics intake
+
+Bolsinova, M., & Molenaar, D. (2018). Modeling nonlinear conditional dependence
+between response time and accuracy. *Frontiers in Psychology, 9*, Article 1525.
+https://doi.org/10.3389/fpsyg.2018.01525
+
+Read scope on 2026-09-12: publisher HTML abstract, introduction, hierarchical
+model, existing conditional-dependence models and opening quadratic-model
+section. Equations omitted by HTML extraction, remaining methods, empirical
+results and supplements remain unaudited. This is not replication.
+
+The authors distinguish raw-time median splits from residual log-time effects:
+the former can mix higher-level ability/speed association with within-item
+dependence. They propose quadratic, multiple-category and nonparametric
+approaches, including posterior predictive evaluation of linearity. Opposing
+response processes may conceal dependence in a linear summary.
+
+CO-specific proposal, not the authors' result: before fast-mlsirm supplies a
+joint calibration contract, compare residual-dependence diagnostics with an
+accuracy-only baseline using held-out model-family/item clusters. Preserve
+generation time, queue/network time, reasoning-token count and decision-only
+time as different observables. A completed response's time or correctness
+cannot select that same request's initial route. Fit preprocessing only on
+training data; evaluate frozen policies on subsequent observations. Reject an
+uncalibrated monotonic length bonus. Neither human-test results nor this
+proposal establishes LLM transfer or the existing accuracy/decision-p95 KPI.
+
 ## Executable marginal-uncertainty check
 
 Root read §5.2, including equation (7), on 2026-09-12. That equation reports

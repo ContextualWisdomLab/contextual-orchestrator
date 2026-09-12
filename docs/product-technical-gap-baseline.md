@@ -1,5 +1,18 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Nonlinear response-process evidence gap
+
+Research baseline `60ee94c2e941d2883aca623867138798e2ba9bc9`, PR #1107:
+[external psychometrics intake](doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake)
+adds a diagnostic alternative to monotonic token-length assumptions. Proposed
+owner work belongs in fast-mlsirm; CO consumes a released calibration contract.
+Keep post-response observations out of the same request's initial routing
+features, and separate decision latency from generation and queueing time.
+No estimator, production default, observed KPI, or protected-main delivery is
+established by this literature addition. Remaining work includes full method
+audit, lawful observed data, held-out diagnostic comparison and frozen-policy
+accuracy/decision-latency measurement. Rendering of this addition is unverified.
+
 ## 2026-09-09 Optimizer score-domain repair finding
 
 Independent exact-source probing at
