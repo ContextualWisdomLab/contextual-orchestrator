@@ -63,16 +63,18 @@ request-profile boundary could apply its strict validation.
 RED commit `f0ad677ceb032ad90537df47571425604a22907a` exercises the real
 `ModelAgent` and `ModelClient` Responses path. It produced three intended
 failures: both numeric values reached request mutation without raising, and
-the hostile equality hook executed. Repair commit
-`0e514f316b63fdd2c43ae345bd9d70b10c0bb25a` replaces equality with an
-identity/type check at construction. The repaired production blob is
+the hostile equality hook executed. Valid repair commit
+`5d4e8e30b66acf21e30aaecf94e10799f3cef288` replaces equality with an
+identity/type check at construction and restores the complete source. The
+repaired production blob is
 `441092b8889ab4328e95a93eee9093ad8a85d0c4`; malformed evidence is rejected
 before normalization, rendering, fallback selection, or payload mutation.
 
-The first Git-data transfer created intermediate head `bd8ce72f69ca31d1b3a0e555632d0003466f81e1`
-with a truncated source blob; exact-tree comparison rejected it before any
-readiness or merge claim. Ordinary child
-`5d4e8e30b66acf21e30aaecf94e10799f3cef288` restored the complete file from
+The first Git-data transfer through implementation object
+`0e514f316b63fdd2c43ae345bd9d70b10c0bb25a` and intermediate documentation
+head `bd8ce72f69ca31d1b3a0e555632d0003466f81e1` contained a truncated source
+blob; exact-tree comparison rejected that lineage before any readiness or
+merge claim. The valid ordinary child restored the complete file from
 predecessor `583ac7047df8129cabc3278eeb8d4ac96e43c348` and applied only the validated
 line replacement. Its Git blob identity matches the locally verified source.
 
