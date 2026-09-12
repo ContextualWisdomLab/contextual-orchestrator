@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+Artifact pin changes must retain paths, retention, failure handling and trigger
+locks. Run actionlint and the NIM workflow contracts; local success is not
+artifact publication proof. See `docs/doctoring/artifact_runtime_migration.md`.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
