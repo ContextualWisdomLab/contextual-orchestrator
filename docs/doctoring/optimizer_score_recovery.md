@@ -298,3 +298,12 @@ before wiring an actual production caller. Existing profile metadata alone
 does not satisfy these conditions. This records an unresolved contract gap;
 it is neither an implemented approval path nor a decision to discard the
 valid cardinality/usage changes in this PR.
+
+At `2e963e77`, the four optimizer suites in the reproduction command passed
+222 tests with `-W error` in 6.02s (session `78674`, exit 0). This rechecks
+existing behavior after documentation-only changes; it is not an implemented
+production approval test. Root directly opened the complete new adapter-audit
+section in a real browser at `http://127.0.0.1:18775/optimizer`, English,
+1265 × 712. Long identifiers and paragraphs wrapped without observed clipping
+or overlap. This screenshot remains in task output; other sections, mobile,
+locales and link destinations were not covered by this capture.
