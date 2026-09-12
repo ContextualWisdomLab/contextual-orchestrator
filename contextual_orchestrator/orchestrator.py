@@ -16374,19 +16374,43 @@ def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | No
     return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
 
-def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool) -> float:
+def _optimizer_usage_snapshot(orchestrator: Any, evaluation_index: int) -> dict[str, Any]:
+    """Capture cumulative engine totals without prompts, configuration, or model identifiers."""
+    totals = orchestrator.spend_analytics()["totals"]
+    return {
+        "evaluation_index": evaluation_index,
+        "scope": "cumulative_engine_snapshot",
+        "snapshot_status": "available",
+        "totals": {key: totals[key] for key in (
+            "run_count", "prompt_tokens", "output_tokens", "prompt_tokens_source", "cost_usd", "currency"
+        )},
+    }
+
+
+def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool,
+                  usage_receipts: list[dict[str, Any]]) -> float:
     """Mean quality of one config over the task set; route configs may evaluate via Batch."""
-    if use_batch and mode == "route":
-        records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
-    else:
-        scores = [
-            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
-            for task in tasks
-        ]
-    if any(not math.isfinite(score) or not 0.0 <= score <= 1.0 for score in scores):
-        raise ValueError("quality scores must be finite and in [0, 1]")
-    return sum(scores) / len(scores) if scores else 0.0
+    try:
+        if use_batch and mode == "route":
+            records = orchestrator.batch_route([task["prompt"] for task in tasks])
+            scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+        else:
+            scores = [
+                float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
+                for task in tasks
+            ]
+        if any(not math.isfinite(score) or not 0.0 <= score <= 1.0 for score in scores):
+            raise ValueError("quality scores must be finite and in [0, 1]")
+        usage_receipts.append(_optimizer_usage_snapshot(orchestrator, len(usage_receipts)))
+        return sum(scores) / len(scores) if scores else 0.0
+    except Exception as evaluation_error:
+        try:
+            failed_usage = _optimizer_usage_snapshot(orchestrator, len(usage_receipts))
+        except Exception:
+            failed_usage = {"evaluation_index": len(usage_receipts), "scope": "cumulative_engine_snapshot",
+                            "snapshot_status": "unavailable", "totals": None}
+        evaluation_error.optimizer_usage = tuple([*usage_receipts, failed_usage])
+        raise
 
 
 def optimize_orchestration(
@@ -16410,11 +16434,12 @@ def optimize_orchestration(
     Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
     """
     results: list[dict[str, Any]] = []
+    usage_receipts: list[dict[str, Any]] = []
     for candidate in candidates:
         orchestrator = candidate["orchestrator"]
         mode = candidate.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        cost = usage_receipts[-1]["totals"]["cost_usd"]
         results.append({
             "name": candidate["name"],
             "mode": mode,
@@ -16481,6 +16506,7 @@ def evolve_orchestration(
         return json.dumps({p: config[p] for p in params}, sort_keys=True, ensure_ascii=False)
 
     evaluated: dict[str, dict[str, Any]] = {}
+    usage_receipts: list[dict[str, Any]] = []
 
     def evaluate(config: dict[str, Any]) -> dict[str, Any]:
         config_key = key(config)
@@ -16488,8 +16514,8 @@ def evolve_orchestration(
             return evaluated[config_key]
         orchestrator = build_orchestrator(config)
         mode = config.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        cost = usage_receipts[-1]["totals"]["cost_usd"]
         result = {
             "name": config_key,
             "config": dict(config),

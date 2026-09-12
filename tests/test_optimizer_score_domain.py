@@ -115,3 +115,32 @@ def test_discarded_factory_exposes_completed_usage(optimizer_kind, execution_mod
     else:
         assert usage_rows[1]["totals"]["cost_usd"] is None
     assert type(caught_error.value) is (LookupError if failure_kind == "callback" else ValueError)
+
+
+def test_retained_engine_usage_is_explicitly_cumulative():
+    """Prior work remains distinguishable from invocation-only billing claims."""
+    candidate_engine = _orch(_CountingClient())
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        candidate_engine.batch_route(["prior private prompt"])
+        with pytest.raises(ValueError) as caught_error:
+            optimize_orchestration([{"name": "private", "mode": "route", "orchestrator": candidate_engine}],
+                [{"prompt": "new private prompt"}], lambda task, answer: math.nan, use_batch=True)
+    usage_row = caught_error.value.optimizer_usage[0]
+    assert usage_row["scope"] == "cumulative_engine_snapshot"
+    assert usage_row["totals"]["run_count"] == 2
+    assert usage_row["totals"]["output_tokens"] == 12
+
+
+def test_usage_snapshot_failure_preserves_original_exception():
+    """Broken analytics must neither mask the scorer failure nor invent zero spend."""
+    original_error = LookupError("scorer failed")
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        with patch("contextual_orchestrator.orchestrator.TaskOrchestrator.spend_analytics",
+                   side_effect=RuntimeError("private analytics details")):
+            with pytest.raises(LookupError) as caught_error:
+                evolve_orchestration(lambda config: _orch(_CountingClient()), {"mode": ["route"]},
+                    [{"prompt": "private prompt"}], lambda task, answer: (_ for _ in ()).throw(original_error),
+                    generations=1, population=1)
+    assert caught_error.value is original_error
+    assert caught_error.value.optimizer_usage == ({"evaluation_index": 0,
+        "scope": "cumulative_engine_snapshot", "snapshot_status": "unavailable", "totals": None},)

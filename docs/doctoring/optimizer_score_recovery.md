@@ -64,12 +64,41 @@ Overlapping top/bottom captures showed readable headings, wrapped command and
 revision text, and no horizontal clipping or overlap. This is a documentation
 preview only; narrow viewports, other locales and product UI were not inspected.
 
-The follow-up test-only commit `10bfd868` closes the listed mode/accounting
-coverage gaps: 176 focused tests passed in 7.83s across route/auto/conduct,
+The follow-up test-only commit `10bfd868` extends mode/accounting
+coverage: 176 focused tests passed in 7.83s across route/auto/conduct,
 both optimizers, and both values of the batch flag. Rejected NaN evaluations
 retain both completed workflow records and run counts; the actual batch path
 also retains the expected reported output-token total. No runtime code changed.
 This does not retroactively extend the 44-case installed test's route-only scope.
+
+## PR #1137 factory-discard review repair
+
+The retained-engine assertions above did not cover a factory that constructs
+an engine without retaining it. Review of `5240315f` identified that an invalid
+score unwound before callers could recover its completed-call accounting.
+RED commit `4369e702` reproduced 36 failures across both optimizers, all three
+modes, both batch flags, and invalid-domain, callback and float-conversion
+errors (`/tmp/co-quality-usage-red-20260912.log`, 3.92s).
+
+The shared evaluation path now attaches `optimizer_usage` to the original
+exception, preserving its type and identity. This ordered tuple includes
+earlier completed evaluations and the failed evaluation. Each receipt contains
+an evaluation index and an allowlisted aggregate usage snapshot, never candidate
+names, configuration, model identifiers, prompts or answers. Its scope is
+explicitly `cumulative_engine_snapshot`: preexisting work is included and reused
+engines may overlap. Do not sum these receipts as invocation-only cost. Cost and
+token counts retain their existing unavailable values. If analytics itself
+fails, that receipt has unavailable status and null totals; its failure does
+not replace the original exception or fabricate zero spend.
+
+This is caller-accessible failure evidence, not durable billing storage. Factory
+construction failures before entering the shared evaluator and process-level
+termination are outside this repair. Successful return shapes are unchanged.
+The final focused run passed 214 tests in 10.68s, including non-retained factories,
+prior successful evaluations, preexisting engine usage, original exception
+identity and unavailable analytics (`/tmp/co-quality-usage-green-final-20260912.log`).
+Current-repair full-suite, installed-wheel and rendered-document checks remain
+pending; the earlier receipts above apply only to their stated revisions.
 
 Obtain protected current-head CI and formal independent approval before
 merge/release; local review does not satisfy GitHub approval rules.
