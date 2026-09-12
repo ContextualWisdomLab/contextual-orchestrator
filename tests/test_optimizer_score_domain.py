@@ -2,6 +2,7 @@
 
 import math
 import json
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -161,7 +162,7 @@ def test_minimal_analytics_contract_remains_supported():
 
 
 def test_readonly_exception_usage_preserves_original_failure():
-    """A custom read-only attribute uses safe exception notes instead of masking."""
+    """Read-only properties cannot mask the original error or discard decimal cost."""
     class ReadonlyUsageError(LookupError):
         @property
         def optimizer_usage(self):
@@ -171,9 +172,11 @@ def test_readonly_exception_usage_preserves_original_failure():
     def failed_score(task_row, answer_text):
         raise original_error
     with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
-        with pytest.raises(ReadonlyUsageError) as caught_error:
-            evolve_orchestration(lambda config: _orch(_CountingClient()), {"mode": ["route"]},
-                [{"prompt": "private prompt"}], failed_score, generations=1, population=1)
+        with patch("contextual_orchestrator.orchestrator.TaskOrchestrator.spend_analytics",
+                   return_value={"totals": {"cost_usd": Decimal("0.1")}}):
+            with pytest.raises(ReadonlyUsageError) as caught_error:
+                evolve_orchestration(lambda config: _orch(_CountingClient()), {"mode": ["route"]},
+                    [{"prompt": "private prompt"}], failed_score, generations=1, population=1)
     assert caught_error.value is original_error
-    usage_rows = json.loads(original_error.__notes__[-1].removeprefix("optimizer_usage="))
-    assert usage_rows[0]["totals"]["run_count"] == 1
+    usage_rows = vars(original_error)["optimizer_usage"]
+    assert usage_rows[0]["totals"]["cost_usd"] == Decimal("0.1")
