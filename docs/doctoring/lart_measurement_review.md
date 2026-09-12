@@ -212,3 +212,11 @@ declared group boundaries, not the scientific correctness of those declarations,
 family ancestry, label validity, calibration, or data rights. A manually verified
 identity map remains a prerequisite; accepting a repaired partition will not
 constitute successful model estimation or KPI improvement.
+
+Verification receipt: at `1ffd5d44`, root directly opened a browser screenshot
+of this complete owner-gate section at `http://127.0.0.1:18774/lart`, English,
+1265 × 712. The text and complete digest wrapped legibly without observed
+clipping or overlap. The capture remains in the task output; other viewports,
+locales and product UI remain uninspected. The existing Rust documentation
+test also passed (1 test, 1.61s; terminal command `c2e46a`); that algebra check
+is separate from the installed partition-rejection evidence above.
