@@ -420,11 +420,19 @@ if [ "$1" = "api" ]; then
           exit 1
           ;;
         tag_exists)
+          printf 'tag\tannotated-tag-object\n'
+          exit 0
+          ;;
+        tag_lightweight)
           printf 'commit\t%s\n' "${tag_sha}"
           exit 0
           ;;
         *) echo "unhandled stub gh api tag mode: ${tag_mode}" >&2; exit 97 ;;
       esac
+      ;;
+    *"/git/tags/"*)
+      printf 'commit\t%s\n' "${tag_sha}"
+      exit 0
       ;;
     *"/compare/"*)
       case "${compare_mode}" in
@@ -580,6 +588,19 @@ def test_simulated_tag_at_the_dispatch_commit_resumes_without_a_compare_call(tmp
     assert result.returncode == 0, result.stderr
     assert outputs == {"tag_resume": "true", "release_resume": "false", "target_sha": _SIM_GITHUB_SHA}
     assert env_vars == {"TARGET_SHA": _SIM_GITHUB_SHA}
+
+
+def test_simulated_lightweight_tag_is_rejected(tmp_path: Path) -> None:
+    """A lightweight tag cannot become the canonical immutable release tag."""
+    workflow = _workflow_text()
+    script = _tag_state_script(workflow)
+    result, outputs, env_vars = _run_tag_state_script(
+        tmp_path, script, tag_mode="tag_lightweight", tag_sha=_SIM_GITHUB_SHA
+    )
+    assert result.returncode != 0
+    assert "lightweight" in result.stderr
+    assert outputs == {}
+    assert env_vars == {}
 
 
 def test_simulated_tag_resumes_from_an_older_ancestor_commit_after_main_advanced(tmp_path: Path) -> None:
