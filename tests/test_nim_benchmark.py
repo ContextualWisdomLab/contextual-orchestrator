@@ -367,8 +367,10 @@ def test_budgeted_evaluation_transport_failures_are_fail_closed() -> None:
         ((200, b"[]"), nb.BenchmarkContractError),
     ):
         client = client_for(result)
-        with pytest.raises(expected_error):
+        with pytest.raises(expected_error) as captured_error:
             client.proxy_send_once(agent, "responses", {})
+        if isinstance(captured_error.value, urllib.error.HTTPError):
+            captured_error.value.close()
 
 
 def test_structured_judge_uses_transport_and_both_request_limits() -> None:

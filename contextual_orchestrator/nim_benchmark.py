@@ -1956,6 +1956,15 @@ def run_policy_cell(
         # (fail closed), never degrade into one quietly failed cell.
         raise
     except Exception as exc:  # noqa: BLE001 - classified into the contract outcomes
+        try:
+            run_outcome = _classify_run_error(exc)
+            outcome_reason = _run_error_reason(exc)
+        finally:
+            if isinstance(exc, urllib.error.HTTPError):
+                try:
+                    exc.close()
+                except OSError:
+                    pass  # Cleanup must not replace the classified provider failure.
         incurred = failure_evidence() if failure_evidence is not None else {}
         prompt_tokens = incurred.get("prompt_tokens", 0)
         completion_tokens = incurred.get("completion_tokens", 0)
@@ -1969,8 +1978,8 @@ def run_policy_cell(
             "scorer_name": scorer["name"],
             "scorer_version": scorer["version"],
             "task_score": None,
-            "run_outcome": _classify_run_error(exc),
-            "outcome_reason": _run_error_reason(exc),
+            "run_outcome": run_outcome,
+            "outcome_reason": outcome_reason,
             "end_to_end_latency_ms": round((timer() - started) * 1000, 3),
             "provider_latency_ms": None,
             "call_count": incurred.get("call_count", 0),
