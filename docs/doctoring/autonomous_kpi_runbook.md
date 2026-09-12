@@ -1,5 +1,26 @@
 # Autonomous KPI experiment runbook
 
+## Title-only citation reconciliation, 2026-09-12
+
+At parent `14a6a943e99bd1dcf8b65a2780b0c80dbc70edcb`, the Fox and Glas
+reference below had no explicit identifier and was absent from the inventory.
+Both identifier-discovery tests passed in 2.43s despite that omission.
+Adding its verified DOI to this runbook alone produced the expected RED:
+one failed, five deselected in 0.72s, naming `10.1007/bf02294839`.
+Adding the APA reference and bounded read status to the existing inventory
+passed all six citation contracts in 1.04s. Reproduce with the project
+environment's `python -m pytest tests/test_paper_contracts.py -q`.
+This does not make title-only discovery complete. Normalize manually verified
+title-only references to persistent identifiers so the existing guard can
+track them thereafter; no new parser or dependency is needed for this repair.
+
+Publisher metadata and abstract were verified; full-method access and PDF
+redistribution permission remain unresolved. The 2025 online migration date
+does not replace the original 2001 publication year. Numerical estimation
+remains the fast-mlsirm responsibility; no runtime default or KPI gain follows.
+New heads invalidate prior hosted acceptance for #1107 and its #1139 successor;
+normal restacking, fresh checks and independent review are still required.
+
 ## Baker estimation boundary, 2026-09-09
 
 Baker, F. B. (2001). *The basics of item response theory* (2nd ed.). ERIC
@@ -167,8 +188,12 @@ zsh because an unquoted `?` is treated as a filename pattern before HTTP runs.
 Use `format=json`, a bounded `limit`, and project only bibliographic fields;
 do not export the full personal library or private notes.
 
-A bounded IRT query located item `E4INK5S3`, Fox and Glas (2001),
-*Bayesian estimation of a multilevel IRT model using Gibbs sampling*.
+A bounded IRT query located item `E4INK5S3`:
+
+Fox, J.-P., & Glas, C. A. W. (2001). Bayesian estimation of a multilevel IRT
+model using Gibbs sampling. *Psychometrika, 66*(2), 271–288.
+https://doi.org/10.1007/BF02294839
+
 Its bibliographic fields matched the University of Twente repository's record.
 The repository linked an accepted manuscript at
 `https://research.utwente.nl/files/247180414/Fox2001Bayesian.pdf`, but the

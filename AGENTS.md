@@ -21,6 +21,10 @@ For LaRT count preprocessing, read the [upstream handoff](docs/doctoring/lart_me
 Preserve versioned encoded counts; do not copy an estimator or subtract a
 heuristic offset in CO. Dataframe loading is not estimator or KPI evidence.
 
+Identifier checks do not discover title-only citations. Verify their persistent
+identifier and register it in both the citing document and paper inventory;
+retain read-depth and reuse limits. See the KPI runbook's citation reconciliation.
+
 Read [the KPI runbook](docs/doctoring/autonomous_kpi_runbook.md) before numerical
 experiments and update its verified evidence before handoff. Choose KPI scope
 autonomously under `docs/analytics_spec.md`. Preserve live execution handles;

@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Title-only psychometric citation gap
+
+Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
+so passing identifier checks missed its absence from the paper inventory.
+The verified DOI and APA entry now connect that lead to the existing guard.
+The [reproduction record](doctoring/autonomous_kpi_runbook.md#title-only-citation-reconciliation-2026-09-12)
+records RED and six passing citation contracts. This closes one known discovery
+omission, not complete paper coverage. Full-method review, owner implementation,
+observed accuracy/latency improvement and protected delivery remain unverified.
+
 ## 2026-09-12 Nonlinear response-process evidence gap
 
 Follow-up classification repair: RED `c8b358ad` reproduced a dry-run report
