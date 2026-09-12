@@ -28,6 +28,16 @@ counts were recomputed directly against the complete log. The earlier export
 worktree's 1287-failure/15-error baseline has a different collected population;
 do not report an improvement percentage without an exact per-node comparison.
 
+Residual singleton audit at `f598d982`: trace HTTP honesty's
+`test_trace_requires_a_verified_trace_purpose` independently fails in 1.85s,
+exit 1 (session 81224; `/tmp/co-trace-resource-singleton-f598d982.log`). It emits
+an HTTPError 401 finalizer warning and an unclosed listener warning. Its helper
+reads HTTP errors without closing; teardown stops and joins the server without
+closing its socket. That file has no delta against #1140's remote `eeed2d98`.
+This establishes a remaining test-owned boundary, not whole-baseline equivalence
+or authorization to rewrite other open PRs. Hunk ownership coordination precedes
+any repair in that module.
+
 The union consists of SQLite fixture lifecycle, HTTP resource lifecycle, agent
 pool DB, tool execution fallback, provider error taxonomy, OpenAI passthrough,
 true streaming and Actions model fallback tests. It uses the shared project
