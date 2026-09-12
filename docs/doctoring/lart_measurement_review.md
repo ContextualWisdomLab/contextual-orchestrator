@@ -76,9 +76,7 @@ training data; evaluate frozen policies on subsequent observations. Reject an
 uncalibrated monotonic length bonus. Neither human-test results nor this
 proposal establishes LLM transfer or the existing accuracy/decision-p95 KPI.
 
-## Executable marginal-uncertainty check
-
-### Nonparametric diagnostic follow-up, 2026-09-13
+## Nonparametric diagnostic follow-up, 2026-09-13
 
 At research head `b0844bd8`, additional primary-text inspection covered the
 two-step procedure and posterior-predictive diagnostic (published pages 5–6)
@@ -98,6 +96,8 @@ a second estimator in CO. Full equations, supplements and transfer remain open.
 
 The PDF screenshot tool timed out; the actual browser PDF rendered blank.
 Consequently equation-level visual inspection is unverified, not passed.
+
+## Executable marginal-uncertainty check
 
 Root read §5.2, including equation (7), on 2026-09-12. That equation reports
 the ability diagonal of joint posterior precision as inverse variance. For
