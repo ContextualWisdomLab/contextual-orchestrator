@@ -42,9 +42,23 @@ mutation is diagnostic evidence, not a committed production change.
 Reproduce the expanded check with `uv run --no-sync python -m pytest
 tests/test_telemetry.py tests/test_telemetry_handler_lifecycle.py
 tests/test_orchestrator_debug_logging.py tests/test_request_framing.py -q -W error`.
-Full regression, final rendered inspection, hosted acceptance and protected
-delivery remain pending. Neither focused success nor a subsequently clean full
-run identifies the missing exception in the original log.
+The default full regression at code/test source
+`87aa7177bf27e973a1195f1de7906b856018411f` passed 3,766 tests with 2 skipped
+in 150.27s, with process exit 0. Its captured log contained no matching
+`Message:`, `Arguments:`, logging-error, traceback or warning fragment. This
+was not a warnings-as-errors full run and does not identify the missing
+exception in the original log. Documentation-only revisions do not change
+that tested source.
+
+At documentation head `10e3db20759057181ee3db1af84cd9457ecad2fb`, actual
+GitHub screenshots at 1265 × 712, English locale, showed the complete added
+AGENTS.md and CLAUDE.md guidance with readable wrapping and no overlap or
+clipping. The investigation section was inspected at `72485aca`; a missing
+historical-section boundary was corrected and visually rechecked at `10e3db2`.
+The full code-diff visual audit remains incomplete. Hosted run
+[34709827004](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34709827004)
+targets `10e3db2`; it is branch validation, not protected merge-result approval.
+Hosted acceptance and protected delivery remain pending.
 
 The repair boundary is the nine tests that start real servers, not the five
 handler-only instances or the production daemon policy. Close clients even on
