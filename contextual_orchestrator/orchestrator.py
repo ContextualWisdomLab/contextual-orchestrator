@@ -16384,6 +16384,8 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
             float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
             for task in tasks
         ]
+    if any(not math.isfinite(score) or not 0.0 <= score <= 1.0 for score in scores):
+        raise ValueError("quality scores must be finite and in [0, 1]")
     return sum(scores) / len(scores) if scores else 0.0
 
 
@@ -16403,7 +16405,7 @@ def optimize_orchestration(
     - ``quality_fn(task, answer_text) -> float`` in [0, 1] — the caller's real quality
       signal (e.g. checkable answers or a judge). This function does not fabricate quality.
     - ``cost_budget_usd``: optional cap. Recommendation = highest-quality config within
-      budget, else the cheapest; with no budget, the best quality-per-USD.
+      budget, else the cheapest; with no budget, highest quality then cheapest.
 
     Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
     """
