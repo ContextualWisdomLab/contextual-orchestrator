@@ -1,5 +1,10 @@
 # AGENTS.md
 
+HTTP test owners must close error responses and listening sockets, not merely
+stop serving. Keep warnings-as-errors enabled; see
+`docs/doctoring/http_test_resource_lifecycle.md` for reproductions and the separate
+unresolved production-streaming response leak.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 

@@ -69,7 +69,8 @@ def _post(port: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | str
                 return response.status, body, content_type
             return response.status, json.loads(body), content_type
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8")), "application/json"
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8")), "application/json"
 
 
 def _free_agents(group_name: str = "") -> list[ModelAgent]:
@@ -112,6 +113,7 @@ def test_http_virtual_free_tools_stay_on_route() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -153,6 +155,7 @@ def test_http_virtual_tools_bypass_response_cache() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -179,6 +182,7 @@ def test_http_virtual_free_tools_stream_stays_on_control_plane() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -366,6 +370,7 @@ def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -397,6 +402,7 @@ def test_http_virtual_chat_completions_stream_has_no_responses_reasoning_events(
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -428,6 +434,7 @@ def test_http_virtual_chat_stream_reselects_worker_before_first_delta() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -533,6 +540,7 @@ def test_http_virtual_free_image_reselects_worker() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     decoded = raw.decode("utf-8")
@@ -581,6 +589,7 @@ def test_http_virtual_free_speech_reselects_worker() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, raw
@@ -729,6 +738,7 @@ def test_http_virtual_structured_tools_run_only_on_worker() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -804,6 +814,7 @@ def test_http_virtual_structured_tools_honor_explicit_sync_policy() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -829,6 +840,7 @@ def test_http_virtual_response_format_preserves_terminal_tool_stop() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 409, body
@@ -865,6 +877,7 @@ def test_http_virtual_free_response_format_reselects_after_retryable_502(
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -914,6 +927,7 @@ def test_http_named_model_response_format_stays_sticky_on_502() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 502, body
@@ -950,6 +964,7 @@ def test_http_virtual_free_response_format_exhausts_retryable_502() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 502, body
@@ -1144,6 +1159,7 @@ def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body
@@ -1179,6 +1195,7 @@ def test_http_tools_reject_deferred_batch_routing() -> None:
         ]
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     for status, body, _content_type in responses:
@@ -1218,6 +1235,7 @@ def test_http_tools_accept_effectively_synchronous_routing(
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200, body

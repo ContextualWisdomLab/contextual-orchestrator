@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+For HTTP test cleanup, reuse response context managers and explicit server
+closure. Test-resource fixes do not prove production transport closure; follow
+`docs/doctoring/http_test_resource_lifecycle.md` and preserve its remaining failure.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
