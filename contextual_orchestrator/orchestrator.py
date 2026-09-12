@@ -16410,10 +16410,7 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
             failed_usage = {"evaluation_index": len(usage_receipts), "scope": "cumulative_engine_snapshot",
                             "snapshot_status": "unavailable", "totals": None}
         completed_usage = tuple([*usage_receipts, failed_usage])
-        try:
-            evaluation_error.optimizer_usage = completed_usage
-        except Exception:
-            BaseException.add_note(evaluation_error, "optimizer_usage=" + json.dumps(completed_usage))
+        vars(evaluation_error)["optimizer_usage"] = completed_usage
         raise
 
 

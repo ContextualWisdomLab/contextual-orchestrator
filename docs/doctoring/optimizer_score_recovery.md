@@ -104,10 +104,22 @@ Independent follow-up review found two compatibility edges, reproduced at
 `6597712f` (2 failed, 3.36s): custom engines may return only the previously
 required `totals.cost_usd`, and custom exceptions may expose a read-only
 `optimizer_usage` property. Missing optional totals now remain null. For a
-read-only exception attribute, the same safe receipt is retained as a JSON
-`optimizer_usage=` exception note, with the original exception preserved.
+read-only exception attribute, the first repair used a JSON exception note.
 The compatibility-focused full optimizer selection passed 216 tests in the
 run recorded at `/tmp/co-quality-usage-compat-green.log`.
+
+That note fallback was superseded: JSON serialization could itself reject a
+custom engine's Decimal cost, and `BaseException.add_note` is unavailable on
+supported Python 3.10. RED `d1a81643` reproduced the masking error (1 failed,
+2.05s; `/tmp/co-quality-decimal-red.log`). Receipts are now stored directly in
+the original exception's instance dictionary. Normal exceptions expose
+`error.optimizer_usage`; when a subclass shadows that name with a property,
+use `vars(error)["optimizer_usage"]`. No serialization or Python 3.11 API is
+needed, and numeric values are not coerced.
+
+The preceding frozen `b6fec962` full suite passed 3785 tests with 2 skips in
+168.62s (`/tmp/co-quality-full-b6fec962.log`). This is historical evidence for
+that revision, not current-repair full-suite acceptance.
 
 Obtain protected current-head CI and formal independent approval before
 merge/release; local review does not satisfy GitHub approval rules.
