@@ -45,6 +45,17 @@ It is not installed-core acceptance. Local log:
 
 ## Next acceptance
 
+The failure was independently reproduced by delaying the second final receipt
+write. The concurrent export correctly reported acknowledgement unobserved;
+the completed database subsequently contained both acknowledged receipts and
+both workflows marked cache bypass. HTTP response consumption and listener
+shutdown do not join daemon request handlers. Commit `36af4a56` therefore
+changes only the test: signal after the original `DecisionMeasurement.close`
+returns, then await that event before exporting. All original acknowledgement
+assertions remain. The five-suite run then passed **196 tests in 11.50s**.
+No runtime acknowledgement is invented or moved ahead of delivery, and this
+test-only synchronization does not impose a provider/model timeout.
+
 Resolve the missing acknowledgement from actual stored evidence, re-run the
 focused suite and full checks, then verify an isolated core/native install.
 Retain both #1103 and #1107 until protected review/checks and lineage-preserving
