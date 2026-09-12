@@ -4,8 +4,9 @@ from contextual_orchestrator.orchestrator import _StateStore
 import pytest
 
 
-def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path):
-    """An acknowledged label does not prove a missing final duration."""
+@pytest.mark.parametrize("receipt_fields", [{}, {"durable_ack_elapsed_ns": 20}])
+def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_fields):
+    """Admission values cannot supply missing selection or acknowledgement evidence."""
     store = _StateStore(str(tmp_path / "missing_acknowledgement.db"))
     try:
         store.save("accepted_request", "request_one", {
@@ -14,6 +15,7 @@ def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path):
         }, durable=True)
         store.save("decision_receipt", "request_one", {
             "request_id": "request_one", "status": "acknowledged",
+            **receipt_fields,
         }, durable=True)
         observation = store.export_request_outcomes()["observations"][0]
         assert observation["durable_ack_elapsed_ns"] is None
