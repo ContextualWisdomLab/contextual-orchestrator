@@ -73,15 +73,20 @@ def test_reclassification_preserves_failure_and_updates_boundary_transport() -> 
 
 def test_safe_message_prefers_nested_provider_error_fields() -> None:
     """``error.message`` / ``error.code`` / top-level fields are the only pass-through."""
-    nested = safe_provider_message(_body_http_error(400, {"error": {"message": "max_tokens too large"}}))
+    with _body_http_error(400, {"error": {"message": "max_tokens too large"}}) as response_error:
+        nested = safe_provider_message(response_error)
     assert nested == "max_tokens too large"
-    coded = safe_provider_message(_body_http_error(400, {"error": {"code": "context_length_exceeded"}}))
+    with _body_http_error(400, {"error": {"code": "context_length_exceeded"}}) as response_error:
+        coded = safe_provider_message(response_error)
     assert coded == "context_length_exceeded"
-    plain_string = safe_provider_message(_body_http_error(400, {"error": "invalid api key"}))
+    with _body_http_error(400, {"error": "invalid api key"}) as response_error:
+        plain_string = safe_provider_message(response_error)
     assert plain_string is None
-    top_level = safe_provider_message(_body_http_error(429, {"message": "rate limit reached"}))
+    with _body_http_error(429, {"message": "rate limit reached"}) as response_error:
+        top_level = safe_provider_message(response_error)
     assert top_level == "rate limit reached"
-    detail = safe_provider_message(_body_http_error(422, {"detail": "validation failed"}))
+    with _body_http_error(422, {"detail": "validation failed"}) as response_error:
+        detail = safe_provider_message(response_error)
     assert detail == "validation failed"
 
 
