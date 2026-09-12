@@ -1,0 +1,46 @@
+"""Public optimizer contracts reject invalid per-task quality, not just invalid means."""
+
+import math
+from unittest.mock import patch
+
+import pytest
+
+from test_batch_optimizer import _CountingClient, _orch
+from contextual_orchestrator.orchestrator import evolve_orchestration, optimize_orchestration
+
+
+def _evaluate_scores(score_values, optimizer_kind, use_batch):
+    """Evaluate mock answers through the public serial and batch optimizer APIs."""
+    task_rows = [{"prompt": "reference task", "score_value": value} for value in score_values]
+    def quality_score(task_row, answer_text):
+        """Return the declared test score without making a provider call."""
+        return task_row["score_value"]
+
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        if optimizer_kind == "evolve":
+            return evolve_orchestration(
+                lambda config: _orch(_CountingClient()), {"mode": ["route"]},
+                task_rows, quality_score, generations=1, population=1, use_batch=use_batch,
+            )
+        return optimize_orchestration(
+            [{"name": "reference_config", "orchestrator": _orch(_CountingClient()), "mode": "route"}],
+            task_rows, quality_score, use_batch=use_batch,
+        )
+
+
+@pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
+@pytest.mark.parametrize("use_batch", [False, True])
+@pytest.mark.parametrize("score_values", [[math.nan], [math.inf], [-math.inf], [-0.1], [1.1], [-0.1, 1.1], [0.5, 1.1]])
+def test_invalid_task_quality_rejected(score_values, optimizer_kind, use_batch):
+    """Invalid values cannot enter recommendations even when their mean is valid."""
+    with pytest.raises(ValueError, match=r"quality scores must be finite and in \[0, 1\]"):
+        _evaluate_scores(score_values, optimizer_kind, use_batch)
+
+
+@pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
+@pytest.mark.parametrize("use_batch", [False, True])
+@pytest.mark.parametrize("score_values", [[0.0], [1.0], [0.25, 0.75], [False, True]])
+def test_valid_task_quality_preserved(score_values, optimizer_kind, use_batch):
+    """Endpoints, fractional scores, and predicate callbacks retain their meaning."""
+    result_rows = _evaluate_scores(score_values, optimizer_kind, use_batch)["results"]
+    assert result_rows[0]["quality"] == sum(score_values) / len(score_values)
