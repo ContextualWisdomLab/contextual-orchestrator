@@ -507,6 +507,7 @@ inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
 This demonstrates the identification pitfall, not estimator accuracy or a
 latency improvement. It is a manual documentation check, not yet a hosted
 CI gate or a test of the released fast-mlsirm implementation.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
