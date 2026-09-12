@@ -369,3 +369,17 @@ links wrapped without observed clipping or overlap. The heading, preceding
 owner-contract section, AGENTS, CLAUDE and Gap baseline were not covered by
 that screenshot; full successor visual acceptance remains pending. This
 receipt does not cover the subsequent chronology clarification above.
+
+The coordinating reviewer independently inspected PR #1139 at that same
+`0a2745d71b8f6a4771efdb1f7b0366d6e6acbe32` head in Chromium, 1265 × 712,
+English/default GitHub rendering: Draft header, stacked base, eight commits,
+three changed files, +78 lines, body links/SHA and the doctoring handoff diff.
+The AGENTS/CLAUDE file-tree entries were visible; this does not establish that
+their complete rendered contents were inspected. No clipping, overlap or
+horizontal overflow was reported in those views. Gap rendering remains pending.
+At `31f3bf8e55e3043819a32f60afa40e62d08626b0`, the Rust documentation check
+above passed one test in 2.92s (session 27094). This verifies only the finite
+matrix algebra example, not upstream estimation or a real-data KPI. The Gap
+file has no delta against the retained research base. No predecessor evidence
+has been removed. These verification records are historical exact-head
+receipts; later receipt-only commits do not retroactively expand their scope.
