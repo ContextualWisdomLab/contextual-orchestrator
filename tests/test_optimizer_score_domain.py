@@ -33,7 +33,7 @@ def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count)
             evolve_orchestration(lambda config: candidate_engine, {"mode": ["route"]},
                 task_rows, quality_score, generations=1, population=1, use_batch=True)
         else:
-            optimize_orchestration([{"name": "reference", "orchestrator": candidate_engine}],
+            optimize_orchestration([{"name": "reference", "mode": "route", "orchestrator": candidate_engine}],
                 task_rows, quality_score, use_batch=True)
     assert callback_calls == []
     assert caught_error.value.optimizer_usage[0]["totals"]["cost_usd"] == 0.1
