@@ -19,7 +19,7 @@ def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count)
     callback_calls = []
     candidate_engine = SimpleNamespace(
         batch_route=lambda prompts: [{"answer": "unit answer"}] * record_count,
-        spend_analytics=lambda: {"totals": {"cost_usd": Decimal("0.1")}},
+        spend_analytics=lambda: {"totals": {"cost_usd": 0.1}},
     )
     task_rows = [{"prompt": "first task"}, {"prompt": "second task"}]
 
@@ -36,7 +36,7 @@ def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count)
             optimize_orchestration([{"name": "reference", "orchestrator": candidate_engine}],
                 task_rows, quality_score, use_batch=True)
     assert callback_calls == []
-    assert caught_error.value.optimizer_usage[0]["totals"]["cost_usd"] == Decimal("0.1")
+    assert caught_error.value.optimizer_usage[0]["totals"]["cost_usd"] == 0.1
 
 
 def _evaluate_scores(score_values, optimizer_kind, use_batch, execution_mode="route"):
