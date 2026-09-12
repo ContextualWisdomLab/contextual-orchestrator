@@ -632,7 +632,10 @@ OPENAPI_SPEC = {
                 "description": "Requires service-wide admin authority; not owner-scoped. "
                                "The audit_replay purpose is route-owned. Reuse the returned "
                                "high-water on continuation. Unmatched and truncated evidence "
-                               "must not be interpreted as a complete correctness cohort.",
+                               "must not be interpreted as a complete correctness cohort. "
+                               "Each observation's decision_latency_ms is the validated final "
+                               "durable acknowledgement interval in milliseconds, or null when "
+                               "unavailable. It is request-scoped, not generation or per-step latency.",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {"name": "page_size", "in": "query", "required": False,

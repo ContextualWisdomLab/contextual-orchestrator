@@ -1,5 +1,37 @@
 # Retained outcome export validation
 
+## Request decision milliseconds, 2026-09-13
+
+The additive export field `decision_latency_ms` converts the validated final
+receipt's `durable_ack_elapsed_ns` by 1,000,000. The native monotonic clock and
+raw nanoseconds remain authoritative; this is JSON presentation, not a new
+estimator, timer or routing policy. Invalid, missing, failed and unfinished
+acknowledgements remain null. It describes one initial request decision, never
+each workflow step or upstream generation. It does not establish correctness,
+a complete ingress denominator, or a p95 improvement.
+
+PR #1125's proposed field name is retained as a request-level export contract,
+not its unimplemented trace-row claim. This candidate is based on PR #1138 at
+`1881ef06ed90ee72eb7209434db366c851cd68dc`; neither predecessor is closed or
+claimed fully superseded. Existing export authorization and pagination remain.
+
+Baseline projection tests: 24 passed in 9.35s. Test commit `876c02d0` reproduced
+the missing field (10 failed, 14 passed in 1.12s). Independent review then found
+that a receipt missing its acknowledgement could inherit a stale admission
+value. RED `be35784b` reproduced that defect; `7748e5b1` restricts the source to
+the final receipt, fixing the raw nanosecond projection as well. At `39d2dad4`,
+strict projection and HTTP export suites passed 61 tests in 2.90s, including an
+actual HTTP request, restart, admin export, unit conversion and capacity-failure
+null. Provider output is controlled unit evidence, not observed customer data.
+
+Reproduce with the locked environment and native build commands below, using
+`uv sync --locked --python 3.12 --extra api --extra db --extra queue --group dev --group native-build`.
+Run `uv run --no-sync python -m pytest -q -W error tests/test_paginated_decision_provenance.py tests/test_request_outcome_export.py`.
+The first expanded run lacked the native module (29 passed, 1 failed, 30 setup
+errors in 9.65s); building the current extension resolved that prerequisite.
+Do not reuse another checkout's binary. Public release, full regression,
+installed-wheel and final rendered acceptance remain unverified for this delta.
+
 ## Candidate and ownership
 
 PR #1138 remains the export owner. Local merge base
