@@ -1,5 +1,26 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 SSE test-fixture socket ownership RCA
+
+Draft optimizer PR #1137 exact `341bf003561d6118a38c142c1dc9a131696b1ebf`
+and protected `main@012beaacd0631f8cd3391c77744eeb626269b5de` independently
+reproduced `tests/test_true_streaming.py::test_stream_send_parses_real_provider_sse`
+under `pytest -W error`: `_FakeSSEProvider.__exit__` called
+`ThreadingHTTPServer.shutdown()` without closing the listening socket, producing
+`ResourceWarning` and `PytestUnraisableExceptionWarning`. The sibling
+`_CapturingSSEProvider` had the same lifecycle defect. A standard-library probe
+confirmed that `shutdown()` leaves the descriptor open while `server_close()`
+changes it to `-1`.
+
+RED `a38258c4b25b3b4994b61d42708aea9ef0292b1d` requires both provider
+contexts to leave descriptor `-1`. GREEN
+`093d03f9329927a8e9d130a3ff623800bb1f34de` adds only
+`server_close()` to the two context-manager exits. This is test-harness resource
+ownership, not optimizer behavior or provider routing. It resolves one proven
+root warning; it does not classify the other failures in #1137's truncated
+full-suite output or convert that Draft's skipped product jobs into passing
+evidence. Hosted exact-head checks and independent review remain required.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
