@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 import sys
 import tempfile
@@ -69,7 +70,7 @@ def test_endpoint_equivalence_contract_is_normalized_and_survives_restart() -> N
         )
         second = TaskOrchestrator(_seed(), agents_db=database_path)
         assert second._agent("general_agent").endpoint_equivalence == _endpoint_contract()
-        with sqlite3.connect(database_path) as connection:
+        with closing(sqlite3.connect(database_path)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM endpoint_equivalence_contract"
             ).fetchone() == (1,)
@@ -91,7 +92,7 @@ def test_clearing_last_endpoint_member_reaps_its_orphan_contract() -> None:
         orchestrator.patch_agent(
             "default", "general_agent", {"endpoint_equivalence": None}
         )
-        with sqlite3.connect(database_path) as connection:
+        with closing(sqlite3.connect(database_path)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM endpoint_equivalence_member"
             ).fetchone() == (0,)
@@ -119,7 +120,7 @@ def test_add_patch_remove_survive_restart() -> None:
         assert by_id["general_agent"].priority == 9  # patch restored over the seed
         assert by_id["coding_agent"].model == "gpt-5.5"
         assert {a.group_name for a in by_id.values()} == {"example_logical_model"}
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns  # normalized schema, no JSON shadow
             assert conn.execute("SELECT group_name FROM model_group").fetchall() == [
@@ -145,7 +146,7 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
             "default", "persisted_agent", {"stream_usage_supported": True}
         )
         assert updated["stream_usage_supported"] is True
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT stream_usage_supported FROM agent_pool WHERE agent_id = ?",
                 (agent.id,),
@@ -196,7 +197,7 @@ def test_add_agent_rejects_unpersistable_limit_without_mutation() -> None:
             )
 
         assert [agent.id for agent in orchestrator.candidates] == ["general_agent"]
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM agent_pool WHERE agent_id = ?",
                 ("overflow_agent",),
@@ -216,7 +217,7 @@ def test_patch_agent_rejects_unpersistable_limit_without_mutation() -> None:
             )
 
         assert orchestrator._agent("general_agent").context_window is None
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT context_window FROM agent_pool WHERE agent_id = ?",
                 ("general_agent",),
@@ -227,14 +228,14 @@ def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
         legacy = ModelAgent("legacy_agent", "legacy-model", group_name="legacy-group").to_config()
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute("CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
             conn.execute("INSERT INTO agent_pool VALUES (?, ?)", ("legacy_agent", json.dumps(legacy)))
 
         restored = TaskOrchestrator([], agents_db=db)
 
         assert restored.candidates[0].group_name == "legacy_group"
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             # The normalized pool has no payload column; membership lives in its
             # own relation and the legacy payload table is dropped after promotion.
             tables = {
@@ -284,7 +285,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
         first = TaskOrchestrator([agent], agents_db=db)
         first._pool_store.save(agent)
 
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns
             assert "reasoning_effort_supported" in columns
@@ -339,7 +340,7 @@ def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
             provider_exclusions=("provider-x",),
             reasoning_effort_supported=True,
         )
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
             )
@@ -351,7 +352,7 @@ def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
 
         restored = TaskOrchestrator([], agents_db=db).agents
         assert restored == [legacy]
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("agent_pool_legacy_payloads",),
@@ -362,7 +363,7 @@ def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
     """Reject malformed legacy data and leave the original table recoverable."""
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
             )
@@ -374,7 +375,7 @@ def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
 
         with pytest.raises(json.JSONDecodeError):
             TaskOrchestrator([ModelAgent("seed_agent", "unused")], agents_db=db)
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT payload FROM agent_pool WHERE agent_id = ?", ("broken_agent",)
             ).fetchone() == ("not-json",)
