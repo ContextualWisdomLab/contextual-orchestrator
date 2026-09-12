@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-For NIM error ownership, assert closure before test fallback cleanup. A clean
+For NIM error ownership, assert closure before test fallback cleanup. Cover both
+OSError and RuntimeError cleanup failures; do not swallow BaseException. A clean
 benchmark-module run does not establish combined-suite acceptance: inherited
 ModelClient cleanup remains owned by #1140. See the NIM doctoring record.
 

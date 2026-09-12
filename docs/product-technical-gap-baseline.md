@@ -10,6 +10,11 @@ strict suite passes 137 tests. Combined strict checks remain 239 passed and
 integrated. No observed customer KPI gain is claimed. Exact evidence and
 limitations are in the NIM benchmark doctoring record.
 
+Follow-up source `7ff2c8e7` generalizes cleanup protection to Exception after
+RuntimeError reproduced outcome masking at RED `f67db9c2`. BaseException is
+not caught. This repairs primary-outcome integrity, not an observed KPI gain;
+the inherited #1140 dependency and prior combined failure remain unresolved.
+
 ## 2026-09-09 Rejected observation integrity (proposed)
 
 PR #1109 is stacked on numerical-routing owner PR #1067. At candidate
