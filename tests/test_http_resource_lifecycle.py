@@ -18,7 +18,8 @@ from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 @pytest.mark.parametrize("status_code", [401, 429, 413, 409])
 @pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_fails):
+@pytest.mark.parametrize("raw_transport", [False, True])
+def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_fails, raw_transport):
     """Final classification preserves meaning before releasing its response."""
     response_body = io.BytesIO(
         b'{"error":{"code":"tool_execution_stopped"}}'
@@ -40,14 +41,16 @@ def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_
         """Simulate the transport handing ownership to the retry boundary."""
         raise response_error
 
-    monkeypatch.setattr(client, "_send", raise_response)
+    monkeypatch.setattr(client, "_send_raw" if raw_transport else "_send", raise_response)
     expected = (ToolFallbackStoppedError if status_code == 409 else
                 ProviderRequestTooLargeError if status_code == 413 else ProviderUpstreamError)
     try:
         with pytest.raises(expected):
-            client._send_with_retry(
-                ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1"), {}
-            )
+            agent = ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1")
+            if raw_transport:
+                client._send_raw_with_retry(agent, "responses", {})
+            else:
+                client._send_with_retry(agent, {})
         assert response_body.closed
     finally:
         original_close()
@@ -55,7 +58,8 @@ def test_retry_boundary_closes_final_response(monkeypatch, status_code, cleanup_
 
 @pytest.mark.parametrize("second_fails", [False, True])
 @pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails, cleanup_fails):
+@pytest.mark.parametrize("raw_transport", [False, True])
+def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails, cleanup_fails, raw_transport):
     """Retry delay starts only after consuming and closing the failed response."""
     first_error = urllib.error.HTTPError("https://provider.example/v1", 429, "retry", {}, io.BytesIO(b"{}"))
     final_error = urllib.error.HTTPError("https://provider.example/v1", 401, "stop", {}, io.BytesIO(b"{}"))
@@ -84,18 +88,21 @@ def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails
         observed_delays.append(delay)
         assert first_error.closed
 
-    monkeypatch.setattr(client, "_send", send_attempt)
+    monkeypatch.setattr(client, "_send_raw" if raw_transport else "_send", send_attempt)
     monkeypatch.setattr(client, "_backoff_delay", lambda attempt: 0.125)
     monkeypatch.setattr(client, "_sleep", check_backoff)
     try:
         agent = ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1")
+        send_request = (
+            lambda: client._send_raw_with_retry(agent, "responses", {})
+        ) if raw_transport else lambda: client._send_with_retry(agent, {})
         if second_fails:
             with pytest.raises(ProviderUpstreamError) as captured:
-                client._send_with_retry(agent, {})
+                send_request()
             assert captured.value.provider_status == 401
             assert final_error.closed
         else:
-            assert client._send_with_retry(agent, {}) == "delivered answer"
+            assert send_request() == "delivered answer"
         assert attempted_calls == [1, 2]
         assert observed_delays == [0.125]
     finally:
