@@ -1,5 +1,10 @@
 # AGENTS.md
 
+NIM policy evaluation owns HTTP errors it converts into outcome cells; classify
+before close and preserve the outcome on cleanup OSError. Propagated errors
+retain caller ownership. The NIM doctoring record distinguishes this repair
+from the separate ModelClient response-lifecycle owner (#1140).
+
 For stacked benchmark work, verify the target branch with `git ls-remote`;
 PR comparison metadata can retain an older base. Preserve both evidence
 sections in Gap conflicts and distinguish delayed HTTPError cleanup warnings

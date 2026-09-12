@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+For NIM error ownership, assert closure before test fallback cleanup. A clean
+benchmark-module run does not establish combined-suite acceptance: inherited
+ModelClient cleanup remains owned by #1140. See the NIM doctoring record.
+
 Benchmark restacking requires the actual target branch SHA, not only PR base
 metadata. Reproduce strict resource warnings independently before blaming
 later tests. The 2026-09-13 receipt in

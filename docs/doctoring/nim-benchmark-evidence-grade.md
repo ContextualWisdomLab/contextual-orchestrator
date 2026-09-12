@@ -1,5 +1,35 @@
 # Evidence-grade NVIDIA NIM benchmark: engineering decision record
 
+## Consumed NIM response ownership, 2026-09-13 — Proposed
+
+Successor source `dda57de36dcbd9254f2e4215279494fbaccfc03f` is based on
+#1090 `2bf856cdaa3756ba6e729479b0cbdc6109d065d9`. The open-PR audit found
+11 PRs touching the module. The only overlapping consumer change, #1000's
+token-usage-source field, is left unchanged; no competing closure owner was
+found for `run_policy_cell`. Shared ModelClient closure remains #1140's scope.
+
+RED `e2c06a32` failed both retained-response tests (2 failed, 135 deselected,
+1.54s, exit 1). Source `dda57de3` classifies the error before closing it at
+the common outcome consumer. Cleanup OSError cannot replace the provider
+classification; raw score remains null. Contract/budget/auth failures still
+propagate unchanged. The direct proxy test closes its caller-owned error.
+No classifier, score formula, timeout, retry or production policy changes.
+
+Using the primary checkout's shared Python 3.14 interpreter, run
+`-m pytest tests/test_nim_benchmark.py -q -W error`: **137 passed in 9.24s**,
+exit 0 (`/tmp/co-nim-owner-module-dda57de3.log`). The five-module strict run
+used in the restack still fails: **239 passed, 1 failed in 14.56s**, exit 1
+(`/tmp/co-nim-owner-green.log`; the filename is not an acceptance status).
+Independent static review found no actionable issue; it did not rerun suites.
+
+The remaining HTTPError500 originates in the release-acceptance client's
+fallback/error test and is consumed by inherited ModelClient classification.
+That test independently fails under warnings-as-errors; #1140 already owns
+its closure path. Do not duplicate that repair or suppress its warning here.
+Cleanup injection covers OSError after underlying closure, not every possible
+cleanup exception or failure before closure. Full/hosted checks, protected
+delivery, and observed accuracy/decision-latency improvement remain unproven.
+
 ## Current-parent restack, 2026-09-13 — Proposed
 
 Normal merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090
