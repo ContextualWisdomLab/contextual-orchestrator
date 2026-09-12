@@ -221,6 +221,168 @@ locales and product UI remain uninspected. The existing Rust documentation
 test also passed (1 test, 1.61s; terminal command `c2e46a`); that algebra check
 is separate from the installed partition-rejection evidence above.
 
+### Combined-item identity source follow-up
+
+At the same upstream commit, root inspected zero-based cells 3, 6, 8, 12 and
+86–88 of [the application notebook](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/notebooks/application_analysis.ipynb).
+The inputs are the individual AIME24, AIME25 and AMC23 benchmark CSVs;
+cell 12 lowercases row identifiers. Cell 86 concatenates those three matrices
+in that order along columns, removes all-zero correctness rows from both
+matrices, and cell 87 independently drops missing rows before cell 88 saves
+the combined CSVs. This identifies a source-backed candidate mapping:
+columns 1–30 AIME24, 31–60 AIME25, and 61–100 AMC23 (one-based).
+
+This is source inspection, not execution provenance or verified byte/content
+equivalence. Before using that mapping, compare every retained row and column
+against the pinned individual matrices, check lowercasing collisions, and
+assert accuracy/length row alignment after the independent missing-row filters.
+Keep benchmark identity and original item label together; neither the repeated
+label alone nor an assumed concatenation order is sufficient. No estimator
+was executed and the real-data KPI remains unmeasured.
+
+Root independently checked all eight pinned CSVs in isolated Python using
+stdlib CSV and exact decimal subtraction (terminal session `20966`, exit 0).
+All 12,800 combined correctness cells equal the corresponding individual
+matrix cells. Every combined length cell instead equals its individual
+source plus one: 12,800 of 12,800. Headers match the stated concatenation;
+there are no lowercase row-ID collisions in any input, and both combined
+matrices have the same ordered 128 row IDs. This verifies the retained-cell
+mapping, not the completeness of excluded observations or benchmark provenance.
+Combined length SHA-256:
+`ae180f278e8c838a7fa81c1554ce7f4391fd375637feaa8fa8474b07c4999f01`.
+
+Cell 87 increments the array returned by `cot_df_3.to_numpy()` before cell 88
+saves the frame. Shared array storage is a plausible explanation for the
+observed shift, not established historical execution provenance. Any proposed
+calibration must explicitly distinguish individual raw counts from this
+already-shifted combined matrix; do not silently add one again. Existing
+application results require a separate preprocessing-path audit before their
+numerical interpretation is accepted. No published-result error magnitude or
+customer KPI improvement has been established.
+
+### Predictive application preprocessing follow-up
+
+Root read the complete pinned
+[predictive application](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/applications/predictive_power.py)
+on 2026-09-12. `load_combined_benchmarks()` adds `1.0` to the combined
+length matrix. `main()` passes that result to training and held-out evaluation;
+`cross_validated_mae()` takes its logarithm for held-out trait inference.
+Together with the exact retained-cell comparison above, this path uses
+`log(individual_count + 2)` for that inference, not
+`log(individual_count + 1)`. This conclusion follows from current pinned
+source and matrix values; the script was not imported or executed, and no
+claim is made that a particular published table was produced by this revision.
+
+Before adopting this evaluation, specify the intended count offset once at
+the data boundary and compare both preprocessing choices on a frozen,
+group-held-out cohort using the owner estimator. Do not silently subtract
+one from all files: individual and combined files have different observed
+representations. Historical result attribution, fitted-parameter sensitivity
+and downstream accuracy effects remain unverified. The previous section at
+`c2d98e87` was directly inspected in a browser at 1265 × 712, English,
+`http://127.0.0.1:18774/lart`; the complete section was readable without
+observed clipping or overlap. That visual receipt excludes this new addition.
+
+Follow-up receipt: root directly inspected the complete predictive-preprocessing
+section at `75c9d293`, same URL, English and 1265 × 712 viewport. Paragraphs,
+code spans and the source link were readable without observed clipping or
+overlap. Other viewports/locales and the Gap document were not visually
+inspected in this receipt. At that exact source, the six citation/role-contract
+tests passed with warnings treated as errors in 1.17s; they do not validate
+upstream estimation or prove a customer KPI gain.
+
+### Owner repair contract and retained lineage
+
+The separate `codex/lart-preprocessing-contract-20260912` branch preserves
+all four preprocessing-document commits from research head `b4887c28`.
+Both affected documentation files compared byte-identically after cherry-pick
+at `83f12d54`. This was a local succession receipt, not runtime repair proof.
+Draft [CO PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139)
+now stacks on #1107; complete visual/delta succession remains pending, so the
+predecessor documents must not yet be reverted.
+
+Root independently read the pinned estimator's lines 413–517 and the
+item-efficiency loader's first 85 lines. The estimator takes the logarithm
+of positive `T`; the individual update accepts `log_T` without adding one.
+The second application also adds one to the combined CSV. Do not attribute
+a unit pseudocount to the estimator. The primary
+[data contract](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data/README.md#L16)
+describes stored token counts with applications adding one; the
+[matrix builder](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data_generation/build_matrices.py#L32)
+exports `cot_tokens` without a unit shift. These support a raw-count artifact
+contract, not proof of historical intent or a paper-mandated pseudocount.
+
+The artifact/export contract belongs to the upstream LaRT project, not CO's
+router. The alternatives considered were restoring raw-count export with one
+application pseudocount, or preserving the historical artifact with explicit
+shifted semantics and repairing both consuming loaders. The latter was selected
+in the handoff below; the historical intent remains unknown. Either change
+needs upstream patch provenance and source-backed regression expectations,
+including zero, missing, transformed-input and row-alignment boundaries.
+Do not create a CO subtraction workaround or copy the estimator. Actual
+estimator execution and finite-output checks remain required after the chosen
+owner patch; current evidence is source inspection and data comparison only.
+
+### Upstream patch handoff
+
+[Upstream Draft PR #2](https://github.com/Toby-X/Latency-Response-Theory-Model/pull/2)
+owns the two-loader correction at
+`e5c82a91918a26fab469efd9f04d5152088b5c84`, via the personal fork
+`seonghobae/Latency-Response-Theory-Model`. The canonical upstream permission
+was read-only. No artifact values or estimator code were changed. The chosen
+compatibility contract preserves the pinned combined count-plus-one encoding;
+it is not proof of historical author intent. CO does not import this branch.
+
+Local upstream checkout: `/tmp/lart-upstream-contract-20260912`. At that head,
+`python -m unittest discover -s validation -p 'test_*.py' -v` passed four
+tests in 0.127s with installed numpy 2.3.5/pandas 2.2.3; actionlint passed.
+The exact extracted predictive loader reads real CSVs, preserves all 12,800
+encoded values, produces finite logs and rejects shape/row-order mismatch.
+Separate scalar-frame conversion checks cover both consumers; artifact checks
+cover 25,600 cells. These are not full module or estimator execution.
+
+Failed attempts and limits: the CO interpreter lacked pandas; the bundled
+analysis interpreter lacked scipy. No dependencies were installed. The first
+fork command used an unsupported `--remote` option; retry without that option
+created the verified personal fork. The original raw-count equality failure
+was downgraded to a provenance probe; the selected encoded-consumption contract
+then produced six RED scalar cases at `911fcb1` and GREEN at `3c52a82`.
+CI called undeclared pytest and a nonexistent tests directory; the owner patch
+uses stdlib unittest discovery and the actual regression files instead.
+
+The upstream PR remains Draft. Hosted run
+[34692344683](https://github.com/Toby-X/Latency-Response-Theory-Model/actions/runs/34692344683)
+at the same head awaits upstream maintainer approval. The coordinating reviewer
+directly inspected its “Action required” / awaiting-approval screen; the earlier
+“no jobs” interpretation was withdrawn. This is an approval boundary, not
+evidence of another workflow source defect. Do not change permissions or CI to
+bypass it. The independent pytest/lint-path repairs remain justified above.
+Hosted acceptance, full estimator output,
+statistical effects and release are unverified. Research PR #1107's document
+delta remains preserved until the separate CO successor is published and
+fully compared; the existence of the upstream PR alone does not authorize its
+revert. Earlier source-only status above is superseded only by these explicitly
+bounded loading checks. At `0a2745d71b8f6a4771efdb1f7b0366d6e6acbe32`, root
+directly inspected the complete handoff body in GitHub's browser preview at
+1265 × 712, English, with the file tree collapsed. Text, command spans and
+links wrapped without observed clipping or overlap. The heading, preceding
+owner-contract section, AGENTS, CLAUDE and Gap baseline were not covered by
+that screenshot; full successor visual acceptance remains pending. This
+receipt does not cover the subsequent chronology clarification above.
+
+The coordinating reviewer independently inspected PR #1139 at that same
+`0a2745d71b8f6a4771efdb1f7b0366d6e6acbe32` head in Chromium, 1265 × 712,
+English/default GitHub rendering: Draft header, stacked base, eight commits,
+three changed files, +78 lines, body links/SHA and the doctoring handoff diff.
+The AGENTS/CLAUDE file-tree entries were visible; this does not establish that
+their complete rendered contents were inspected. No clipping, overlap or
+horizontal overflow was reported in those views. Gap rendering remains pending.
+At `31f3bf8e55e3043819a32f60afa40e62d08626b0`, the Rust documentation check
+above passed one test in 2.92s (session 27094). This verifies only the finite
+matrix algebra example, not upstream estimation or a real-data KPI. The Gap
+file has no delta against the retained research base. No predecessor evidence
+has been removed. These verification records are historical exact-head
+receipts; later receipt-only commits do not retroactively expand their scope.
 ### Preprocessing evidence successor
 
 The four preprocessing follow-ups formerly ending at `b4887c28` are preserved

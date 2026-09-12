@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+LaRT count-encoding work is owned by the [upstream patch and handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Reuse its commands and distinguish scalar contract checks, real dataframe
+loading and unverified estimator integration; do not reapply a pseudocount.
+
 For title-only research citations, verify and register the persistent identifier
 in the source document and paper inventory. Passing DOI discovery does not prove
 full bibliography coverage; see the KPI runbook's citation reconciliation.
