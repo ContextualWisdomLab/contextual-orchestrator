@@ -37,6 +37,7 @@ class DecisionMeasurement:
         self.selection_attempt_count = 0
         self._race_attempt_ids = set()
         self.first_provider_phase = None
+        self._answer_cache_observed = False
         self._lock = threading.Lock()
         self._token = _CURRENT_DECISION.set(self)
         try:
@@ -146,7 +147,10 @@ class DecisionMeasurement:
         """Persist the post-commit measurement separately; never claim its own ack."""
         try:
             with self._lock:
-                if self.receipt.status in ("accepted", "selected"):
+                if (self.receipt.status == "accepted"
+                    and self._answer_cache_observed and reason == "unfinished"):
+                    self.receipt.record_cache_hit()
+                elif self.receipt.status in ("accepted", "selected"):
                     self.receipt.record_failure(reason)
                 if self.store is not None:
                     try:
@@ -165,11 +169,11 @@ def record_initial_selection(agent_ids, route_mode="unclassified", *, attempt_id
 
 
 def record_answer_cache_hit():
-    """Retain answer-cache admissions without attributing cached provider timings."""
+    """Defer cache-only classification until all request items have finished."""
     measurement = _CURRENT_DECISION.get()
     if measurement is not None:
         with measurement._lock:
-            measurement.receipt.record_cache_hit()
+            measurement._answer_cache_observed = True
 
 
 @contextmanager
