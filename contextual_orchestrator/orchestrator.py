@@ -891,6 +891,9 @@ TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+REQUEST_OUTCOME_ASSOCIATIONS_FIELD = "request_outcome_associations"
+"""Reserved association field retained from PR #1126; export uses observations."""
+
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     """Read and cache one bounded JSON error body for downstream classifiers."""
