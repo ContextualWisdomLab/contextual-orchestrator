@@ -3896,9 +3896,16 @@ class _StateStore:
                 "ON orchestration_records(kind, json_extract(payload, '$.request_id'), seq) "
                 "WHERE kind IN ('workflow_run', 'batch_request_link') AND json_valid(payload)"
             )
+            previous_origin_index = self._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                ("orchestration_records_workflow_origin",),
+            ).fetchone()
+            if previous_origin_index is not None and "json_valid" not in previous_origin_index[0]:
+                self._conn.execute("DROP INDEX orchestration_records_workflow_origin")
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS orchestration_records_workflow_origin "
-                "ON orchestration_records(json_extract(payload, '$.workflow_run_id')) "
+                "ON orchestration_records(CASE WHEN json_valid(payload) "
+                "THEN json_extract(payload, '$.workflow_run_id') END) "
                 "WHERE kind = 'workflow_request_link'"
             )
             self._conn.execute(
@@ -4164,7 +4171,8 @@ class _StateStore:
                 # the already committed origin or its cache provenance.
                 prior_link = self._conn.execute(
                     "SELECT key FROM orchestration_records WHERE kind = 'workflow_request_link' "
-                    "AND json_extract(payload, '$.workflow_run_id') = ? LIMIT 1", (key,),
+                    "AND CASE WHEN json_valid(payload) "
+                    "THEN json_extract(payload, '$.workflow_run_id') END = ? LIMIT 1", (key,),
                 ).fetchone()
                 if prior_link is not None and prior_link[0] != request_id:
                     raise ValueError("workflow origin cannot change")
