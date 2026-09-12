@@ -222,6 +222,12 @@ results are historical. See the [reproduction runbook](docs/doctoring/autonomous
 
 ## Export validation
 
+Telemetry tests must finish their own request handlers before leaving log
+capture scopes. Close persistent clients even after assertion failures before
+joining; do not change production daemon policy or replace joins with sleeps.
+The diagnostic limits and ownership audit are recorded in
+`docs/doctoring/provider_request_correlation.md#test-handler-completion-investigation-2026-09-13`.
+
 Export validation must distinguish transaction completion from connection
 closure and test-body passes from process exit. Reproduction, inherited warning
 owners, native build commands, and unverified acceptance boundaries are recorded
