@@ -948,6 +948,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
+        "--decision-receipts", action="store_true",
+        help="Record initial routing measurements when serving; requires --state-db and the native receipt module.",
+    )
+    parser.add_argument(
         "--release-authority-json",
         default=None,
         help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
@@ -1193,6 +1197,7 @@ def main(argv: list[str] | None = None) -> None:
                 config_store=_bootstrap_telemetry_config(),
             ),
             release_authority=release_authority,
+            decision_receipts=args.decision_receipts,
         )
         return
 
