@@ -2826,3 +2826,21 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-09-12 Optimizer cardinality acceptance and calibration boundary
+
+Frozen `090b4ec841cfc78b45248b561f1cef6396b57429` rejects incomplete/extra
+custom batch outputs before callbacks, preserving incurred usage. Corrected
+route-mode RED has six actual batch failures; full source **3,791 passed,
+2 skipped**, separate installed core **222 passed**. Earlier fixture failures
+are corrected, not counted as product reproductions. Exact commands, hashes
+and failed attempts are in [the recovery runbook](doctoring/optimizer_score_recovery.md).
+The PR remains Draft: this repair does not supply calibrated production
+ranking or observed accuracy/latency gains. Reuse fast-mlsirm's existing
+validation-profile owner successor #1737 rather than create a parallel consumer
+manifest; it is not in the inspected v0.9.1 release.
+
+The historical overall-deadline recommendation above is not current policy:
+model timeouts default to null, and a terminal 502 alone does not justify a
+new application-wide timeout or caller-side provider fallback. Trace the
+actual eligible candidates and request phases before changing owner behavior.
