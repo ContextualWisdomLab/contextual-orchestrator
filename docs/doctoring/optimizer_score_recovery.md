@@ -64,8 +64,14 @@ Overlapping top/bottom captures showed readable headings, wrapped command and
 revision text, and no horizontal clipping or overlap. This is a documentation
 preview only; narrow viewports, other locales and product UI were not inspected.
 
+The follow-up test-only commit `10bfd868` closes the listed mode/accounting
+coverage gaps: 176 focused tests passed in 7.83s across route/auto/conduct,
+both optimizers, and both values of the batch flag. Rejected NaN evaluations
+retain both completed workflow records and run counts; the actual batch path
+also retains the expected reported output-token total. No runtime code changed.
+This does not retroactively extend the 44-case installed test's route-only scope.
+
 Obtain protected current-head CI and formal independent approval before
-merge/release; local review does not satisfy GitHub approval rules. Extend
-invalid-score coverage to auto/conduct and retained usage before claiming all
-evaluation-path coverage. Real accuracy and decision-latency KPIs still require an observed
+merge/release; local review does not satisfy GitHub approval rules.
+Real accuracy and decision-latency KPIs still require an observed
 cohort, independent adjudication, failure denominators and uncertainty estimates.
