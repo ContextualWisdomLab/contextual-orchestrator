@@ -2,6 +2,18 @@
 
 ## 2026-09-12 Nonlinear response-process evidence gap
 
+Follow-up classification repair: RED `c8b358ad` reproduced a dry-run report
+being labelled for production-candidate review (1 failed, 1.87s). Runtime
+`383b4a1e` marks assembled dry-run reports `synthetic_diagnostic_only` and
+`benchmark_smoke_only`, preserving live sufficiency logic and the null routing
+recommendation. Both benchmark test suites passed: 126 tests in 8.65s,
+session 70083, exit 0. Independent read-only tracing found the misleading
+classification in published JSON/Markdown but no inspected deployment consumer
+that uses it to activate policy. This repairs evidence classification, not a
+demonstrated promotion bypass or measured accuracy/latency gain. Full suite,
+installed artifacts, rendered output and hosted review remain unverified for
+this repair; earlier research-branch runtime acceptance does not cover it.
+
 Evaluation readiness probe at `4359401f` ran the documented NIM command with
 `--dry-run --pricing-scenario examples/nim_pricing_scenario.json` and isolated
 output `/tmp/co-kpi-readiness-20260912.r1sYeS` (session 75417, exit 0).
