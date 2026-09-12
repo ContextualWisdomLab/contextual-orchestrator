@@ -2,6 +2,18 @@
 
 ## 2026-09-12 Nonlinear response-process evidence gap
 
+Evaluation readiness probe at `4359401f` ran the documented NIM command with
+`--dry-run --pricing-scenario examples/nim_pricing_scenario.json` and isolated
+output `/tmp/co-kpi-readiness-20260912.r1sYeS` (session 75417, exit 0).
+It completed 589 simulated requests, with 30 paired tasks and no production
+recommendation. All policy scores were zero and reported latency was the
+fixed 1 ms test value: neither is an observed KPI baseline. The generated
+report labels `decision_use=production_candidate_review` despite dry-run mode;
+admission semantics require audit before this label can support any decision.
+The readiness command proves harness execution only. No provider egress,
+observed cohort, independent adjudication, initial-decision p95, or production
+promotion was verified by this probe.
+
 Research baseline `60ee94c2e941d2883aca623867138798e2ba9bc9`, PR #1107:
 [external psychometrics intake](doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake)
 adds a diagnostic alternative to monotonic token-length assumptions. Proposed
