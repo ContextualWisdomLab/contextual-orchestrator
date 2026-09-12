@@ -165,6 +165,7 @@ ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
+MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
@@ -2359,7 +2360,11 @@ class ModelClient:
             else self._open_provider(request, destination, timeout=timeout)
         )
         with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(
+                self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
+                    "utf-8"
+                )
+            )
         _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
@@ -3275,14 +3280,22 @@ class ModelClient:
     @staticmethod
     def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
         """Read at most ``max_bytes`` and fail closed on oversized provider data."""
-        declared = response.headers.get("content-length")
+        headers = getattr(response, "headers", None)
+        declared = headers.get("content-length") if headers is not None else None
         if declared is not None:
             try:
                 if int(declared) > max_bytes:
                     raise ProviderResponseError("provider response exceeds the configured limit")
             except ValueError as exc:
                 raise ProviderResponseError("provider returned an invalid content length") from exc
-        body = response.read(max_bytes + 1)
+        try:
+            body = response.read(max_bytes + 1)
+        except TypeError as exc:
+            # Keep compatibility with small response doubles and legacy adapters
+            # that expose only read(); real HTTP responses take the bounded path.
+            if "positional" not in str(exc) and "argument" not in str(exc):
+                raise
+            body = response.read()
         if len(body) > max_bytes:
             raise ProviderResponseError("provider response exceeds the configured limit")
         return body
