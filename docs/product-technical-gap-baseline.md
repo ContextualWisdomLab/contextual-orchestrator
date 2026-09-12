@@ -3839,3 +3839,29 @@ for RED evidence, hashes and reproduction. Central Noema dispatch acceptance
 still lacks receiver/run proof; its exact owner evidence is recorded there.
 Do not substitute a successful event submission or old-head Security result
 for current-head independent review, protected delivery or release.
+
+### Existing gateway repair not adopted by the review sidecar — 2026-09-12
+
+The [transport comparison receipt](doctoring/review_phase_transport_comparison.md)
+connects central run `34688188671` / job `103539568718` to source pin
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`. That source fails the eligible-free
+final-synthesis transport regression. Existing protected merge
+`9334dc91aaf853b758077e983517a822b6b21edb` passes the same selected regression,
+13 bootstrap tests, and the exact central `68daf0f` import/startup contract.
+The dependency lock is byte-identical. This is an adoption gap for the central
+workflow owner, not justification for duplicate CO fallback code or consumer
+retries. The original incident's terminal role remains uncorrelated; do not
+claim this defect is its sole cause.
+
+Next evidence: central protected pin adoption, current-head mandatory reviews
+and checks, then a real successful review with immutable runtime identity.
+Until then this gap stays open. Local loopback/test-double success does not
+establish provider recovery, release, observed accuracy, or decision-latency
+improvement. Test commit `8065ada1` remains preserved on its diagnostic branch;
+this research-PR update imports documentation only and does not claim that
+test is already part of its own CI suite.
+
+The historical overall-deadline recommendation above is superseded by the
+user's model-specific timeout policy: no common application/agent/gateway
+deadline by default. Provider termination, explicit user cancellation and
+configured per-model administrative timeout must remain distinguishable.
