@@ -55,6 +55,15 @@ archives include tracked PDFs and require a separate redistribution decision.
 
 ## Response-process validity
 
+Xu, Z., Liu, J., Wang, Y., & Gu, Y. (2026). *Latency-response theory model:
+Evaluating large language models via response accuracy and chain-of-thought
+length* (Version 4) [Preprint]. arXiv. https://arxiv.org/abs/2512.07019v4
+
+Citation only; no PDF vendored. The version page declares the arXiv perpetual
+non-exclusive license, not repository redistribution permission. See the
+[measurement review and read scope](../doctoring/lart_measurement_review.md).
+Experimental intake only: no production estimator or measured KPI improvement.
+
 Bolsinova, M., Tijmstra, J., Molenaar, D., & De Boeck, P. (2017).
 Conditional dependence between response time and accuracy: An overview of its
 possible sources and directions for distinguishing between them. *Frontiers in
