@@ -27,7 +27,7 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -97,7 +97,7 @@ jobs:
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -153,7 +153,7 @@ jobs:
         (github.event.action != 'closed' &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/init@v4.37.8
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/init@v4.37.9
         with:
           languages: python
           build-mode: none
@@ -194,6 +194,6 @@ jobs:
           path: cyclonedx-sbom.json
 
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # github/codeql-action/analyze@v4.37.8
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/analyze@v4.37.9
         with:
           category: "/language:python"

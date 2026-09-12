@@ -34,7 +34,7 @@ from .cost_router import (
     CostRoutingCoordinator,
     InvalidBatchModelError,
 )
-from .batch_routing import BatchDownloadError, BatchRequest
+from .batch_routing import BatchDownloadError, BatchRequest, RoutingHints
 from .debug_logging import (
     redact_credential_shaped_keys,
     response_metadata_for_log,
@@ -5423,10 +5423,21 @@ def _orchestrated_response(
     *,
     reasoning_id: str | None = None,
     message_id: str | None = None,
+    reasoning_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAI Responses shape for an orchestrated plain-text result."""
     reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
     message_id = message_id or f"msg_{uuid.uuid4().hex}"
+    reasoning_item: dict[str, Any] = {
+        "id": reasoning_id,
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [{"type": "summary_text", "text": text} for text in summaries],
+    }
+    if reasoning_texts:
+        reasoning_item["content"] = [
+            {"type": "reasoning_text", "text": text} for text in reasoning_texts
+        ]
     response = {
         "id": response_id,
         "object": "response",
@@ -5436,12 +5447,7 @@ def _orchestrated_response(
         "incomplete_details": None,
         "model": model,
         "output": [
-            {
-                "id": reasoning_id,
-                "type": "reasoning",
-                "status": "completed",
-                "summary": [{"type": "summary_text", "text": text} for text in summaries],
-            },
+            reasoning_item,
             {
                 "id": message_id,
                 "type": "message",
@@ -6915,8 +6921,13 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
+                    normalized_tool_choice = None
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_tool_choice
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
@@ -6965,11 +6976,38 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     include_usage = sampling["include_usage"]
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    if tools_list:
+                        deferred_tool_request = routing and (
+                            coordinator.policy.decide(
+                                RoutingHints.from_mapping(routing)
+                            ).channel
+                            == "batch"
+                        )
+                        if deferred_tool_request:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "tool calls require synchronous routing",
+                            )
+                        routing = {**(routing or {}), "channel": "sync"}
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if body.get("response_format") or tools_list:
+                    # Virtual selectors stay on Fugu route / TRINITY-Conductor
+                    # conduct. Tools are a worker payload, not a reason to leave
+                    # the control plane. Concrete model ids may still passthrough
+                    # for debug pins.
+                    virtual_selector = model_name in {
+                        orchestrator.GATEWAY_DEFAULT_MODEL,
+                        orchestrator.AUTO_MODEL,
+                        orchestrator.FREE_MODEL,
+                    }
+                    named_tool_passthrough = bool(tools_list) and not virtual_selector
+                    if body.get("response_format") or named_tool_passthrough:
                         trace_audited = False
-                        tool_loop = bool(tools_list)
+                        tool_loop = named_tool_passthrough
                         # Single-agent tool passthrough (tool_loop) always makes one
                         # non-streaming upstream call (orchestrator.proxy_completion
                         # forces upstream["stream"] = False) and returns the provider's
@@ -7036,13 +7074,10 @@ def build_server(
                             )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(
-                                body.get("routing"), allow_endpoint=True
-                            )
-                            if structured_routing and (
-                                structured_routing.get("channel") == "batch"
-                                or structured_routing.get("latency_tolerant") is True
-                            ):
+                            structured_routing = routing
+                            if structured_routing and coordinator.policy.decide(
+                                RoutingHints.from_mapping(structured_routing)
+                            ).channel == "batch":
                                 raise RequestError(
                                     400,
                                     "invalid_routing",
@@ -7062,6 +7097,9 @@ def build_server(
                                 top_p=top_p,
                                 presence_penalty=presence_penalty,
                                 frequency_penalty=frequency_penalty,
+                                tools=tools_list or None,
+                                tool_choice=body.get("tool_choice"),
+                                parallel_tool_calls=body.get("parallel_tool_calls"),
                             ):
                                 proxied = self._run(
                                     lambda: coordinator.complete(
@@ -7126,9 +7164,6 @@ def build_server(
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(
-                        body.get("routing"), allow_endpoint=True
-                    )
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
@@ -7154,7 +7189,8 @@ def build_server(
                         self._acquire_measured_slot()
                         self._classification_slot_held = True
                     route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
+                        stream and not tools_list
+                        and orchestrator.would_route(messages, mode, model_name)
                     )
                     if route_stream:
                         if explicit_trace:
@@ -7168,13 +7204,20 @@ def build_server(
                         self._authorize_trace_access()
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    with model_client.request_settings(
-                        max_output_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        presence_penalty=presence_penalty,
-                        frequency_penalty=frequency_penalty,
-                    ):
+                    request_settings = {
+                        "max_output_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "presence_penalty": presence_penalty,
+                        "frequency_penalty": frequency_penalty,
+                    }
+                    if tools_list:
+                        request_settings["tools"] = tools_list
+                        if normalized_tool_choice is not None:
+                            request_settings["tool_choice"] = normalized_tool_choice
+                        if body.get("parallel_tool_calls") is not None:
+                            request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
+                    with model_client.request_settings(**request_settings):
                         if route_stream:
                             self._stream_route_completion(
                                 orchestrator,
@@ -7203,7 +7246,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
+                            cache_bypass=cache_bypass or bool(tools_list),
                             cache_partition=cache_partition,
                             owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
@@ -7318,25 +7361,32 @@ def build_server(
                         )
                     )
                     started_at = time.perf_counter()
-                    embedding_deadline = time.monotonic() + float(
-                        orchestrator.client.timeout
+                    configured_timeout = orchestrator.client.timeout
+                    embedding_deadline = (
+                        None
+                        if configured_timeout is None
+                        else time.monotonic() + float(configured_timeout)
                     )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
-                        remaining_timeout = embedding_deadline - time.monotonic()
-                        if remaining_timeout <= 0:
+                        remaining_timeout = (
+                            None
+                            if embedding_deadline is None
+                            else embedding_deadline - time.monotonic()
+                        )
+                        if remaining_timeout is not None and remaining_timeout <= 0:
                             break
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                            document = self._run(lambda agent=embedding_agent, wait_timeout=remaining_timeout: coordinator.complete_embeddings_batch(
                                 inputs,
                                 model=agent.model,
                                 attribution=attribution,
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
-                                wait_timeout=remaining_timeout,
+                                wait_timeout=wait_timeout,
                                 owner_id=security.principal_id(self.headers),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
@@ -7627,7 +7677,11 @@ def build_server(
                     if "tools" in body:
                         _validate_chat_tools(body)
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_responses_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_responses_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_responses_tool_choice
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "modalities" in body:
@@ -7909,6 +7963,9 @@ def build_server(
                         top_p=body.get("top_p"),
                         presence_penalty=body.get("presence_penalty"),
                         frequency_penalty=body.get("frequency_penalty"),
+                        tools=tools_list or None,
+                        tool_choice=body.get("tool_choice"),
+                        parallel_tool_calls=body.get("parallel_tool_calls"),
                     ):
                         proxied = self._run(
                             lambda: coordinator.complete(
@@ -8011,11 +8068,12 @@ def build_server(
                     f"batch result download failed for job {exc.job_id}",
                     {"job_id": exc.job_id, "reason": exc.reason},
                 )
-            except ProviderResponseError:
+            except ProviderResponseError as exc:
                 self._send_error(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                    getattr(exc, "detail", None),
                 )
             except FileContractError:
                 self._send_error(
@@ -8477,13 +8535,14 @@ def build_server(
             coordinator: Any = None,
             attribution: dict[str, Any] | None = None,
         ) -> bool:
-            """Stream orchestration as native Responses reasoning-summary events."""
+            """Stream Fugu/TRINITY/Conductor work as Responses reasoning events."""
             response_id = f"resp_{uuid.uuid4().hex}"
             reasoning_id = f"rs_{uuid.uuid4().hex}"
             message_id = f"msg_{uuid.uuid4().hex}"
             created_at = int(time.time())
             sequence = 0
             summaries: list[str] = []
+            reasoning_texts: list[str] = []
             open_parts: dict[str, list[tuple[int, str]]] = {}
 
             def emit(event_type: str, **values: Any) -> None:
@@ -8495,7 +8554,7 @@ def build_server(
                 ):
                     raise ConnectionAbortedError("Responses stream disconnected")
 
-            def progress(role: str, status: str) -> None:
+            def progress(role: str, status: str, output: str = "") -> None:
                 text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
                 if status == "started":
                     index = len(summaries)
@@ -8515,8 +8574,9 @@ def build_server(
                         summary_index=index,
                         delta=text,
                     )
-                elif open_parts.get(role):
-                    index, text = open_parts[role].pop(0)
+                    return
+                if open_parts.get(role):
+                    index, summary_text = open_parts[role].pop(0)
                     if not open_parts[role]:
                         del open_parts[role]
                     emit(
@@ -8524,14 +8584,48 @@ def build_server(
                         item_id=reasoning_id,
                         output_index=0,
                         summary_index=index,
-                        text=text,
+                        text=summary_text,
                     )
                     emit(
                         "response.reasoning_summary_part.done",
                         item_id=reasoning_id,
                         output_index=0,
                         summary_index=index,
-                        part={"type": "summary_text", "text": text},
+                        part={"type": "summary_text", "text": summary_text},
+                    )
+                # Paper-role process output (TRINITY thinker/worker/verifier,
+                # Conductor step work) is Responses reasoning_text, not the
+                # final message. The synthesizer answer stays output_text.
+                if status == "completed" and output and role != "synthesizer":
+                    content_index = len(reasoning_texts)
+                    reasoning_texts.append(output)
+                    emit(
+                        "response.content_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        delta=output,
+                    )
+                    emit(
+                        "response.reasoning_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        text=output,
+                    )
+                    emit(
+                        "response.content_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": output},
                     )
 
             if decision_receipts:
@@ -8638,6 +8732,10 @@ def build_server(
                     **reasoning_item,
                     "status": "completed",
                     "summary": [{"type": "summary_text", "text": text} for text in summaries],
+                    "content": [
+                        {"type": "reasoning_text", "text": text}
+                        for text in reasoning_texts
+                    ],
                 }
                 emit("response.output_item.done", output_index=0, item=reasoning_done)
                 message_item = {
@@ -8692,6 +8790,7 @@ def build_server(
                     summaries,
                     reasoning_id=reasoning_id,
                     message_id=message_id,
+                    reasoning_texts=reasoning_texts,
                 )
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json as _json
 import re as _re
+import http.client
 import socket
 import ssl
 import urllib.error
@@ -182,6 +183,7 @@ class ProviderUpstreamError(RuntimeError):
         provider_status: int | None = None,
         retryable: bool = False,
         transport: str = "chat",
+        extra_detail: dict[str, Any] | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.model = model
@@ -190,18 +192,21 @@ class ProviderUpstreamError(RuntimeError):
         self.provider_status = provider_status
         self.retryable = retryable
         self.transport = transport
+        self.extra_detail = dict(extra_detail or {})
         super().__init__(message)
 
     @property
     def detail(self) -> dict[str, Any]:
         """Return the structured evidence attached to API error payloads."""
-        return {
+        payload = {
             "agent_id": self.agent_id,
             "model": self.model,
             "provider_status": self.provider_status,
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        payload.update(self.extra_detail)
+        return payload
 
 
 def classify_provider_failure(
@@ -230,6 +235,7 @@ def classify_provider_failure(
             provider_status=exc.provider_status,
             retryable=exc.retryable,
             transport=transport,
+            extra_detail=exc.extra_detail,
         )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code
@@ -283,7 +289,20 @@ def classify_provider_failure(
             retryable=dns_error.errno == socket.EAI_AGAIN,
             transport=transport,
         )
-    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
+    # http.client.HTTPException (IncompleteRead, BadStatusLine) is not an
+    # OSError but is the same event -- a stalled or dropped connection
+    # mid-read, as provider_error_body already notes -- so it shares the
+    # retryable connection classification instead of the opaque default.
+    if isinstance(
+        exc,
+        (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            socket.timeout,
+            http.client.HTTPException,
+        ),
+    ):
         return ProviderUpstreamError(
             agent_id=agent_id,
             model=model,

@@ -10,7 +10,7 @@ dependencies = [
   "opentelemetry-sdk>=1.30.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
   "jsonschema>=4.26.0",
-  "fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz ; python_full_version >= '3.12'",
+  "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f ; python_full_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
