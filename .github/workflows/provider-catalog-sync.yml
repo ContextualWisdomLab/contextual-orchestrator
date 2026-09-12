@@ -85,6 +85,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTAL_LABS_API_KEY }}
         run: |
           set -euo pipefail
           if [[ "${CATALOG_STORAGE_SCOPE}" == "durable" ]]; then
@@ -143,14 +144,14 @@ jobs:
           from pathlib import Path
 
           report = Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
-          from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+          from contextual_orchestrator.provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 
-          names = PROVIDER_CREDENTIAL_NAMES
+          names = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
           leaked = [
               name
               for name in names
-              if os.environ[name].rstrip('\r\n')
-              and os.environ[name].rstrip('\r\n') in report
+              if os.environ.get(name, "").rstrip('\r\n')
+              and os.environ.get(name, "").rstrip('\r\n') in report
           ]
           if leaked:
               raise SystemExit(f'provider bootstrap report leaked secret values for: {leaked}')

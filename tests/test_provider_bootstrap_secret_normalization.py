@@ -13,6 +13,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.provider_bootstrap import (
     PROVIDER_CREDENTIAL_NAMES,
+    PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
     collect_provider_credentials,
     register_provider_credentials_atomically,
 )
@@ -63,7 +64,7 @@ def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
         encoding="utf-8"
     )
 
-    assert "os.environ[name].rstrip('\\r\\n')" in workflow
+    assert "os.environ.get(name, \"\").rstrip('\\r\\n')" in workflow
     assert "os.environ[name] and os.environ[name] in report" not in workflow
 
 
@@ -73,9 +74,9 @@ def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
         encoding="utf-8"
     )
 
-    for credential_name in PROVIDER_CREDENTIAL_NAMES:
+    for credential_name in PROVIDER_ACCEPTED_CREDENTIAL_NAMES:
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
-    assert "from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES" in workflow
+    assert "from contextual_orchestrator.provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES" in workflow
 
 
 def test_catalog_sync_delegates_the_credential_verdict_to_tested_production_code() -> None:
@@ -106,3 +107,23 @@ def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() ->
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_catalog_sync_leak_guard_rejects_optional_secret(tmp_path, monkeypatch) -> None:
+    """Execute the workflow guard with an optional mounted secret in its report."""
+    import textwrap
+
+    workflow_text = Path('.github/workflows/provider-catalog-sync.yml').read_text()
+    guard_script = textwrap.dedent(
+        workflow_text.rsplit("python - <<'PY'\n", 1)[1].rsplit('\n          PY', 1)[0]
+    )
+    monkeypatch.chdir(tmp_path)
+    for credential_name in PROVIDER_ACCEPTED_CREDENTIAL_NAMES:
+        monkeypatch.delenv(credential_name, raising=False)
+    report_path = tmp_path / 'provider-bootstrap-report.json'
+    report_path.write_text('{}')
+    exec(compile(guard_script, 'catalog-secret-guard', 'exec'), {})
+    monkeypatch.setenv('EXPERIENTAL_LABS_API_KEY', 'fixture-secret\r\n')
+    report_path.write_text('fixture-secret')
+    with pytest.raises(SystemExit, match='EXPERIENTAL_LABS_API_KEY'):
+        exec(compile(guard_script, 'catalog-secret-guard', 'exec'), {})

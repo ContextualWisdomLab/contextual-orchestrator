@@ -123,3 +123,29 @@ https://doi.org/10.48550/arXiv.2512.04695
 Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
 *Learning to orchestrate agents in natural language with the Conductor*
 (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
+
+## Experiential Labs
+
+`experiential_labs` is an optional provider. Bootstrap accepts the organization
+Secret name `EXPERIENTAL_LABS_API_KEY` exactly as registered; the spelling is
+intentional. The catalog-sync workflow transports it into the existing encrypted
+KV. Runtime discovery reads that KV name and sends Bearer authentication to
+`https://api.experientiallabs.ai/v1/models`; chat uses the same `/v1` base.
+Existing deployments do not need this additional credential.
+
+The integration does not infer free pricing or ZDR from a key or model slug.
+Unknown pricing stays unknown. Experiential's public catalog retention verdict
+is evidence about routed lanes, not enforcement: its organization require-ZDR
+setting controls actual routing. This adapter does not invent a request header
+or promote catalog retention to a guaranteed ZDR route. Private-review admission
+therefore remains closed without verified privacy evidence. Provider support
+alone does not establish that a consumer's hosted review now passes.
+
+References (retrieved September 12, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
+[API reference](https://platform.experientiallabs.ai/docs/reference), and
+[Models](https://platform.experientiallabs.ai/docs/models).
+
+The review gateway accepts this credential as a free-pool source, but admits
+only models already satisfying its explicit zero-cost serving contract. Paid
+and unknown-price models remain excluded, as do credentials absent from the
+current bootstrap. This source authorization is not live pricing evidence.
