@@ -3865,3 +3865,22 @@ The historical overall-deadline recommendation above is superseded by the
 user's model-specific timeout policy: no common application/agent/gateway
 deadline by default. Provider termination, explicit user cancellation and
 configured per-model administrative timeout must remain distinguishable.
+
+### Retrospective calibration intake: split identity remains open
+
+The [pinned LaRT matrix audit](doctoring/lart_measurement_review.md#pinned-matrix-identity-audit)
+records actual public-data identity checks, not an estimator result. The
+published row split places 21 of 28 evaluation rows alongside a training row
+with the same suffix-derived base-model identifier. Its 100 item columns have
+only 40 distinct labels. These observations rule out treating that split as
+independent base-model generalization or joining items by raw labels alone.
+
+The next owner experiment must freeze benchmark-qualified item identities,
+reviewed base-model groups and separate family lineage, then fit only on
+training observations. Compare paired held-out Brier score/log loss at equal
+observation budgets; record excluded populations and unavailable generation
+failures explicitly. Released fast-mlsirm contracts remain the estimator
+boundary. Public matrices do not supply CO decision timestamps or known true
+latent parameters, so neither decision-p95 nor true-parameter RMSE can be
+claimed from this retrospective experiment. Data rights, grouping verification,
+owner implementation and observed gains remain open; no route default changes.
