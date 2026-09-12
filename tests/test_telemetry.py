@@ -423,11 +423,12 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
     import threading
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     request_ids = []
-    try:
-        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+    with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+        try:
             for _request_index in range(2):
                 connection = http.client.HTTPConnection(*server.server_address, timeout=5)
                 try:
@@ -444,10 +445,10 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
                     assert expected_message in [record.getMessage() for record in caplog.records]
                 finally:
                     connection.close()
-    finally:
-        server.shutdown()
-        server_thread.join(timeout=5)
-        server.server_close()
+        finally:
+            server.shutdown()
+            server_thread.join(timeout=5)
+            server.server_close()
     assert len(set(request_ids)) == 2
 
 
@@ -508,13 +509,14 @@ def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
     monkeypatch.setattr(model_client, "_send", reject_send)
     monkeypatch.setattr(router, "complete", fail_completion)
     server = build_server(router, port=0, security=SecurityConfig(auth_token="test-correlation-token"))
+    server.daemon_threads = False
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     connection = http.client.HTTPConnection(*server.server_address, timeout=5)
     request_ids = []
     first_socket = None
-    try:
-        with caplog.at_level("DEBUG"):
+    with caplog.at_level("DEBUG"):
+        try:
             for request_index in range(2):
                 first_record = len(caplog.records)
                 connection.request("POST", "/v1/chat/completions", json.dumps({
@@ -538,14 +540,15 @@ def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
                                 if record.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
                 assert len(attempt_logs) == 2, (request_index, attempt_logs)
                 assert all(f"request_id={request_id}" in message for message in attempt_logs)
-        assert len(set(request_ids)) == 2
-        assert "shared-private-session" not in "\n".join(attempt_logs)
-    finally:
-        connection.close()
-        server.shutdown()
-        server_thread.join(timeout=5)
-        server.server_close()
-        router.close()
+            assert len(set(request_ids)) == 2
+            assert "shared-private-session" not in "\n".join(attempt_logs)
+        finally:
+            connection.close()
+            server.shutdown()
+            server_thread.join(timeout=5)
+            server.server_close()
+            router.close()
+
 
 
 def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
@@ -575,6 +578,7 @@ def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
     monkeypatch.setattr(model_client, "_send", reject_send)
     monkeypatch.setattr(router, "complete", fail_completion)
     server = build_server(router, port=0, security=SecurityConfig(auth_token="parallel-test-token"))
+    server.daemon_threads = False
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
@@ -591,25 +595,27 @@ def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
         finally:
             connection.close()
 
-    try:
-        with caplog.at_level("DEBUG"), ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(send_request) for _ in range(2)]
-            request_ids = [future.result(timeout=20) for future in futures]
-        assert len(overlapping_threads) == 2
-        assert len(set(request_ids)) == 2
-        provider_logs = [row.getMessage() for row in caplog.records
-                         if row.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
-        assert len(provider_logs) == 4
-        for request_id in request_ids:
-            matching = [message for message in provider_logs if f"request_id={request_id}" in message]
-            assert len(matching) == 2
-            assert sum(message.startswith("provider_attempt ") for message in matching) == 1
-        assert "same-private-session" not in "\n".join(provider_logs)
-    finally:
-        server.shutdown()
-        server_thread.join(timeout=5)
-        server.server_close()
-        router.close()
+    with caplog.at_level("DEBUG"):
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(send_request) for _ in range(2)]
+                request_ids = [future.result(timeout=20) for future in futures]
+            assert len(overlapping_threads) == 2
+            assert len(set(request_ids)) == 2
+            provider_logs = [row.getMessage() for row in caplog.records
+                             if row.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+            assert len(provider_logs) == 4
+            for request_id in request_ids:
+                matching = [message for message in provider_logs if f"request_id={request_id}" in message]
+                assert len(matching) == 2
+                assert sum(message.startswith("provider_attempt ") for message in matching) == 1
+            assert "same-private-session" not in "\n".join(provider_logs)
+        finally:
+            server.shutdown()
+            server_thread.join(timeout=5)
+            server.server_close()
+            router.close()
+
 
 
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
@@ -772,25 +778,19 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
     import urllib.request
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
                 assert response.status == 200
             _wait_for_caplog(caplog, lambda text: "http_request" in text)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        # ThreadingHTTPServer's per-connection handler threads are daemon
-        # threads server_close() does not wait for; a brief settle avoids a
-        # straggler's own _log_request_summary call landing inside a *later*
-        # test's caplog window instead of being filtered out here at the
-        # default WARNING level once this test's own caplog.at_level scope
-        # has already exited.
-        time.sleep(0.2)
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert "http_request" in caplog.text
     assert "method=GET" in caplog.text
@@ -818,21 +818,21 @@ def test_per_request_info_summary_never_includes_query_string(caplog):
 
     fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/healthz?api_key={fake_token}", timeout=5
             ) as response:
                 assert response.status == 200
             _wait_for_caplog(caplog, lambda text: "http_request" in text)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert "http_request" in caplog.text
     assert "path=/healthz" in caplog.text
@@ -856,11 +856,13 @@ def test_keep_alive_close_does_not_log_phantom_request(caplog):
     import time as time_module
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+    connection = None
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        try:
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             connection.request("GET", "/healthz")
             response = connection.getresponse()
@@ -868,12 +870,12 @@ def test_keep_alive_close_does_not_log_phantom_request(caplog):
             response.read()
             _wait_for_caplog(caplog, lambda text: "http_request" in text)
             connection.close()  # keep-alive connection closed with no second request
-            time_module.sleep(0.3)  # let the server's connection thread observe the close
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        time_module.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+        finally:
+            if connection is not None:
+                connection.close()
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert caplog.text.count("http_request") == 1
     assert "path=/healthz" in caplog.text
@@ -895,22 +897,25 @@ def test_framework_generated_error_status_is_captured_in_log(caplog):
     import time
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+    connection = None
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        try:
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             connection.request("PUT", "/healthz")  # no do_PUT -- stdlib's own 501 path
             response = connection.getresponse()
             assert response.status == 501
             response.read()
             _wait_for_caplog(caplog, lambda text: "http_request" in text)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+        finally:
+            if connection is not None:
+                connection.close()
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert "http_request" in caplog.text
     assert "status=501" in caplog.text
@@ -937,11 +942,12 @@ def test_malformed_request_line_is_captured_in_log(caplog):
     import time
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        try:
             with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
                 # A single-token request line: too few words for
                 # parse_request's `2 <= len(words) <= 3` shape check, so it
@@ -964,11 +970,10 @@ def test_malformed_request_line_is_captured_in_log(caplog):
                     response += chunk
             assert b"400" in response
             _wait_for_caplog(caplog, lambda text: "http_request" in text)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert "http_request" in caplog.text
     assert "status=400" in caplog.text
@@ -980,18 +985,18 @@ def test_per_request_info_summary_absent_below_info(caplog):
     import urllib.request
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    try:
-        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+    with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+        try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
                 assert response.status == 200
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
     assert "http_request" not in caplog.text
 
