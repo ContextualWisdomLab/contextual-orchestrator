@@ -98,6 +98,22 @@ No independent approval,
 protected merge, release, remote-provider integration, or observed KPI gain is
 established. The untracked local native extension was not committed.
 
+## 2026-09-12 Retained export validation repair (Proposed)
+
+PR #1138's repair `7ebf577535139c6655a1b8d360682511defc22ba`, based on
+`d1a080d7bd9de4e37aa72a7f98f9414abc0362fc`,
+preserves fixed-cutoff initial/final decision provenance across 257 admissions
+and rejects disabled measurements instead of presenting an apparently empty
+cohort. Malformed phases remain counted and missing durations remain null.
+Focused actual-native validation passes 62 tests with warnings-as-errors; after
+test-only root lifecycle repairs the six-module expansion passes 124 tests with
+process exit 0. All 23 isolated failure-union nodes now pass; a fresh noneditable
+core/native wheel installation outside the checkout passes the same 124 tests.
+No customer accuracy or
+decision-latency gain, hosted acceptance, release, or deployment is established.
+See [the validation runbook](doctoring/request_outcome_export_validation.md)
+for RED/GREEN evidence, parent comparison, reproduction, and remaining gates.
+
 ## 2026-09-09 Request-outcome export gap
 
 [Issue #1114](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1114)

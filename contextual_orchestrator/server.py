@@ -6004,6 +6004,26 @@ def build_server(
                         raise ValueError("refresh must be true or false")
                     self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
+                if path == "/api/v1/request_outcome_exports":
+                    if not decision_receipts:
+                        raise RequestError(503, "export_unavailable", "Enable decision measurements before exporting observations.")
+                    if orchestrator._store is None:
+                        raise RequestError(503, "export_unavailable", "Export storage is unavailable.")
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) - {"page_size", "after_sequence", "high_water_sequence"}:
+                        raise ValueError("unsupported export parameter")
+                    if any(len(values) != 1 for values in query.values()):
+                        raise ValueError("duplicate export parameter")
+                    if any(values[0] == "" for values in query.values()):
+                        raise ValueError("export parameter must not be empty")
+                    page_size = self._parse_optional_int(query, "page_size")
+                    after_sequence = self._parse_optional_int(query, "after_sequence")
+                    self._send(orchestrator._store.export_request_outcomes(
+                        page_size=100 if page_size is None else page_size,
+                        after_sequence=0 if after_sequence is None else after_sequence,
+                        high_water_sequence=self._parse_optional_int(query, "high_water_sequence"),
+                    ))
+                    return
                 if path == "/api/v1/analytics_snapshots/latest":
                     snapshot = orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS)
                     if decision_receipts:
@@ -8106,6 +8126,7 @@ def build_server(
             """Select the least-privileged purpose for an admin GET route."""
             if (
                 path == "/admin/state"
+                or path == "/api/v1/request_outcome_exports"
                 or path == "/api/v1/workflow_runs"
                 or path.startswith("/api/v1/workflow_runs/")
                 or path.startswith("/api/v1/access_reports/")

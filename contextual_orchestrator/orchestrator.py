@@ -891,6 +891,9 @@ TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+REQUEST_OUTCOME_ASSOCIATIONS_FIELD = "request_outcome_associations"
+"""Reserved association field retained from PR #1126; export uses observations."""
+
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     """Read and cache one bounded JSON error body for downstream classifiers."""
@@ -3889,6 +3892,23 @@ class _StateStore:
                 "ON orchestration_records(kind, key, seq)"
             )
             self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS orchestration_records_request_link_seq "
+                "ON orchestration_records(kind, json_extract(payload, '$.request_id'), seq) "
+                "WHERE kind IN ('workflow_run', 'batch_request_link') AND json_valid(payload)"
+            )
+            previous_origin_index = self._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                ("orchestration_records_workflow_origin",),
+            ).fetchone()
+            if previous_origin_index is not None and "json_valid" not in previous_origin_index[0]:
+                self._conn.execute("DROP INDEX orchestration_records_workflow_origin")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS orchestration_records_workflow_origin "
+                "ON orchestration_records(CASE WHEN json_valid(payload) "
+                "THEN json_extract(payload, '$.workflow_run_id') END) "
+                "WHERE kind = 'workflow_request_link'"
+            )
+            self._conn.execute(
                 "UPDATE orchestration_records SET key = json_extract(payload, '$.request_id') "
                 "WHERE kind IN (?, ?, ?, ?) AND key IS NULL "
                 "AND CASE WHEN json_valid(payload) THEN "
@@ -3950,6 +3970,174 @@ class _StateStore:
                 self._stream_condition.notify()
             return
         self._save_sync(kind, key, payload)
+
+    def export_request_outcomes(self, *, page_size: int = 100, after_sequence: int = 0,
+                                high_water_sequence: int | None = None) -> dict[str, Any]:
+        """Project bounded retained evidence for a service-admin admission cohort.
+
+        The cutoff freezes append-only metadata, never keyed source versions.
+        Missing legacy links remain unresolved; authorization belongs to the adapter.
+        """
+        if type(page_size) is not int or not 1 <= page_size <= 200:
+            raise ValueError("page_size must be between 1 and 200")
+        if type(after_sequence) is not int or after_sequence < 0:
+            raise ValueError("after_sequence must be nonnegative")
+        if high_water_sequence is not None and (
+                type(high_water_sequence) is not int or high_water_sequence < after_sequence):
+            raise ValueError("high_water_sequence must not precede after_sequence")
+        if after_sequence and high_water_sequence is None:
+            raise ValueError("continuation requires high_water_sequence")
+        with self._lock:
+            current_sequence = self._conn.execute(
+                "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'orchestration_records'), 0)"
+            ).fetchone()[0]
+            cutoff = current_sequence if high_water_sequence is None else high_water_sequence
+            if cutoff > current_sequence:
+                raise ValueError("high_water_sequence exceeds retained journal")
+            admissions = self._conn.execute(
+                "SELECT seq, key, payload FROM orchestration_records WHERE kind = 'accepted_request' "
+                "AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+                (after_sequence, cutoff, page_size + 1),
+            ).fetchall()
+            more_available = len(admissions) > page_size
+            observations = []
+            for admission_sequence, request_id, admission_payload in admissions[:page_size]:
+                try:
+                    admitted_identity = json.loads(admission_payload).get("request_id")
+                except (ValueError, AttributeError):
+                    admitted_identity = None
+                if not self._export_identifier(request_id) or request_id != admitted_identity:
+                    observations.append({"admission_sequence": admission_sequence,
+                                         "request_id": None, "link_status": "identity_unavailable",
+                                         "workflow_outcomes": [], "batch_associations": [],
+                                         "links_truncated": False, "invalid_association_count": 0})
+                    continue
+                initial_records = self._conn.execute(
+                    "SELECT payload FROM orchestration_records WHERE kind = 'initial_decision' "
+                    "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
+                ).fetchall()
+                initial_phase = self._export_record(initial_records[0][0]) if initial_records else {}
+                initial_selection = initial_phase.get("selection_elapsed_ns")
+                valid_initial = (
+                    bool(initial_records) and initial_phase.get("request_id") == request_id
+                    and initial_phase.get("status") == "selected"
+                    and type(initial_selection) is int and 0 <= initial_selection <= 2**64 - 1
+                    and initial_phase.get("durable_ack_elapsed_ns") is None
+                )
+                phases = self._conn.execute(
+                    "SELECT payload FROM orchestration_records WHERE kind = 'decision_receipt' "
+                    "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
+                ).fetchall()
+                phase = self._export_record(phases[0][0]) if phases else {}
+                invalid_phase = bool(phases) and (
+                    phase.get("request_id") != request_id or not isinstance(phase.get("status"), str))
+                status = phase.get("status") if phases and not invalid_phase else "unfinished"
+                if not phases and valid_initial:
+                    status = "acknowledgement_unobserved"
+                # Only enum-like receipt state is exported; no diagnostic text.
+                if status not in {"acknowledged", "acknowledgement_unobserved", "failed", "cache_hit", "unfinished",
+                                  "not_applicable", "accepted", "capacity_rejected", "selection_failed",
+                                  "write_failed", "cancelled", "store_unavailable", "other_execution_endpoint"}:
+                    status = "unclassified"
+                row = {"admission_sequence": admission_sequence, "request_id": request_id,
+                       "decision_status": status, "workflow_outcomes": [],
+                       "batch_associations": [], "links_truncated": False,
+                       "invalid_association_count": int(invalid_phase) + int(bool(initial_records) and not valid_initial)}
+                # Project only canonical measurement fields, never arbitrary stored text.
+                measurement = self._export_record(admission_payload)
+                if valid_initial:
+                    measurement.update(initial_phase)
+                if phases and not invalid_phase:
+                    measurement.update(phase)
+                for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
+                    field_value = measurement.get(field_name)
+                    row[field_name] = field_value if type(field_value) is int and 0 <= field_value <= 2**64 - 1 else None
+                    if field_value is not None and row[field_name] is None:
+                        row["invalid_association_count"] += 1
+                if not phases or invalid_phase:
+                    row["durable_ack_elapsed_ns"] = None
+                acknowledgement = row["durable_ack_elapsed_ns"]
+                selection = row["selection_elapsed_ns"]
+                if acknowledgement is not None and (
+                    status != "acknowledged" or selection is None or acknowledgement < selection
+                ):
+                    row["durable_ack_elapsed_ns"] = None
+                    row["invalid_association_count"] += 1
+                policy_hash = measurement.get("policy_snapshot_hash")
+                row["policy_snapshot_hash"] = policy_hash if (
+                    isinstance(policy_hash, str) and len(policy_hash) == 64
+                    and all(character in "0123456789abcdef" for character in policy_hash)
+                ) else None
+                for field_name, allowed_values in (
+                    ("measurement_unit", {"http_request", "explicit_scope"}),
+                    ("metric_scope", {"initial_task_route_decision"}),
+                    ("admission_boundary", {"explicit_scope", "validated_endpoint", "first_execution_slot"}),
+                ):
+                    field_value = measurement.get(field_name)
+                    row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None
+                for record_kind, output_field in (("workflow_request_link", "workflow_outcomes"),
+                                                  ("batch_request_link", "batch_associations")):
+                    if record_kind == "workflow_request_link":
+                        linked = self._conn.execute(
+                            "SELECT payload FROM orchestration_records WHERE kind = ? AND key = ? "
+                            "AND seq <= ? ORDER BY seq LIMIT 17", (record_kind, request_id, cutoff),
+                        ).fetchall()
+                    else:
+                        linked = self._conn.execute(
+                        "SELECT payload FROM orchestration_records "
+                        "WHERE kind IN ('workflow_run', 'batch_request_link') AND json_valid(payload) "
+                        "AND kind = ? AND json_extract(payload, '$.request_id') = ? "
+                        "AND seq <= ? ORDER BY seq LIMIT 17", (record_kind, request_id, cutoff),
+                    ).fetchall()
+                    row["links_truncated"] |= len(linked) > 16
+                    for (payload,) in linked[:16]:
+                        record = self._export_record(payload)
+                        if record.get("request_id") != request_id:
+                            row["invalid_association_count"] += 1
+                            continue
+                        if record_kind == "workflow_request_link":
+                            if (not self._export_identifier(record.get("workflow_run_id"))
+                                    or not isinstance(record.get("cache_status"), str)
+                                    or record["cache_status"] not in {"hit", "miss", "bypass", "disabled", "unavailable"}
+                                    or type(record.get("source_record_sequence")) is not int):
+                                row["invalid_association_count"] += 1
+                                continue
+                            row[output_field].append({"workflow_run_id": record.get("workflow_run_id"),
+                                                      "cache_status": record.get("cache_status", "unavailable"),
+                                                      "source_record_sequence": record.get("source_record_sequence")})
+                        else:
+                            custom_ids = record.get("custom_ids", [])
+                            if (not self._export_identifier(record.get("batch_job_id"))
+                                    or not isinstance(custom_ids, list)
+                                    or any(not self._export_identifier(item) for item in custom_ids[:100])):
+                                row["invalid_association_count"] += 1
+                                continue
+                            row["links_truncated"] |= len(custom_ids) > 100
+                            row[output_field].append({"batch_job_id": record.get("batch_job_id"),
+                                                      "custom_ids": custom_ids[:100]})
+                row["link_status"] = ("linked" if row["workflow_outcomes"] or row["batch_associations"]
+                                      else "unmatched")
+                observations.append(row)
+        return {"schema_version": 1, "scope": "service_admin_retained_admissions",
+                "measurement_complete": False, "reconciliation_required": True,
+                "snapshot_semantics": "append_only_links_at_or_before_cutoff",
+                "high_water_sequence": cutoff, "page_size": page_size,
+                "next_after_sequence": admissions[page_size - 1][0] if more_available else None,
+                "observations": observations}
+
+    @staticmethod
+    def _export_record(payload: str) -> dict[str, Any]:
+        """Treat malformed retained metadata as unresolved, never response content."""
+        try:
+            record = json.loads(payload)
+        except (TypeError, ValueError):
+            return {}
+        return record if isinstance(record, dict) else {}
+
+    @staticmethod
+    def _export_identifier(value: Any) -> bool:
+        """Permit bounded scalar identifiers without nested data or control text."""
+        return isinstance(value, str) and 0 < len(value) <= 256 and value.isprintable()
 
     def load_decision_window(self, limit: int = 256) -> dict[str, Any]:
         """Read a bounded shared admission cohort without deleting historical rows."""
@@ -4017,7 +4205,30 @@ class _StateStore:
         with self._lock, self._conn:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
-            self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            source_cursor = self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            if kind == "workflow_run" and isinstance(payload.get("request_id"), str) and payload["request_id"]:
+                request_id = payload["request_id"]
+                if payload.get("workflow_run_id") != key:
+                    raise ValueError("workflow association identity mismatch")
+                cache_status = payload.get("cache_status", "unavailable")
+                if cache_status not in {"hit", "miss", "bypass", "disabled", "unavailable"}:
+                    cache_status = "unavailable"
+                # One origin association per workflow. Replacement never changes
+                # the already committed origin or its cache provenance.
+                prior_link = self._conn.execute(
+                    "SELECT key FROM orchestration_records WHERE kind = 'workflow_request_link' "
+                    "AND CASE WHEN json_valid(payload) "
+                    "THEN json_extract(payload, '$.workflow_run_id') END = ? LIMIT 1", (key,),
+                ).fetchone()
+                if prior_link is not None and prior_link[0] != request_id:
+                    raise ValueError("workflow origin cannot change")
+                if prior_link is None:
+                    projection = {"request_id": request_id, "workflow_run_id": key,
+                                  "cache_status": cache_status,
+                                  "source_record_sequence": source_cursor.lastrowid}
+                    self._conn.execute(self._INSERT_SQL, (
+                        "workflow_request_link", request_id, json.dumps(projection),
+                    ))
             if kind in self._STREAM_LIMITS:
                 limit = self._STREAM_LIMITS[kind]
                 self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))

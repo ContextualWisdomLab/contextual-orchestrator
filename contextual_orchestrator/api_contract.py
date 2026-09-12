@@ -625,6 +625,31 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Analytics snapshot"}},
             }
         },
+        "/api/v1/request_outcome_exports": {
+            "get": {
+                "operationId": "export_request_outcomes",
+                "summary": "Export service-admin prompt-free retained request associations",
+                "description": "Requires service-wide admin authority; not owner-scoped. "
+                               "The audit_replay purpose is route-owned. Reuse the returned "
+                               "high-water on continuation. Unmatched and truncated evidence "
+                               "must not be interpreted as a complete correctness cohort.",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "page_size", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}},
+                    {"name": "after_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0, "default": 0}},
+                    {"name": "high_water_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0}},
+                ],
+                "responses": {
+                    "200": {"description": "Bounded admission page with prompt-free workflow and batch associations"},
+                    "400": {"description": "Invalid or future pagination cursor"},
+                    "401": {"description": "Service-admin authority required"},
+                    "503": {"description": "Durable audit or export storage unavailable"},
+                },
+            }
+        },
         "/api/v1/sales_readiness/latest": {
             "get": {
                 "operationId": "get_latest_sales_readiness",
