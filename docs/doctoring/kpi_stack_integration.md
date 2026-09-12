@@ -125,3 +125,11 @@ At `eeefaca`, Security run `34688379677` completed tests, fuzzing, supply-chain
 and CodeQL successfully. That evidence predates the cache repair and does not
 approve or validate its new head. Fresh hosted checks, independent review,
 protected merge, release and observed KPI acceptance remain separate gates.
+
+Bounded visual receipt: revision `36ade588`, English, 1265 × 712. The actual
+browser preview's cache-repair, installed-verification and final owner-gap
+sections were directly opened as three overlapping screenshots. Long hashes
+and paths wrapped without horizontal clipping; headings and paragraphs did
+not overlap. A stale preview-only revision badge was corrected and its top
+view recaptured at `http://127.0.0.1:18771/`. Images remain in task tool output.
+This does not cover mobile, other locales, Figma or product interaction states.
