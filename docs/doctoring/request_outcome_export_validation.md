@@ -29,8 +29,35 @@ Reproduce with the locked environment and native build commands below, using
 Run `uv run --no-sync python -m pytest -q -W error tests/test_paginated_decision_provenance.py tests/test_request_outcome_export.py`.
 The first expanded run lacked the native module (29 passed, 1 failed, 30 setup
 errors in 9.65s); building the current extension resolved that prerequisite.
-Do not reuse another checkout's binary. Public release, full regression,
-installed-wheel and final rendered acceptance remain unverified for this delta.
+Do not reuse another checkout's binary.
+
+Second review RED `7bc5b655` reproduced a missing selection inherited from the
+admission (1 failed, 1 passed, 24 deselected in 0.80s). Fix `45cc666f` requires
+selection from the final receipt or a validated initial phase; explicit invalid
+selection is not replaced. Independent re-review found both provenance findings
+resolved, with no further specific defect in the bounded projection delta.
+
+At source `45cc666f9fd52aedf6484b345f30857d7f9d72bf` (Draft PR #1158), strict
+projection/HTTP/API contracts passed 69 tests in 3.41s. The default full suite
+passed 3,764 tests with 2 skipped in 178.26s, exit 0. The log also contains one
+unclassified `Message`/`Arguments` request-log fragment; its origin remains
+unresolved, so this is not a claim of completely clean diagnostics or a strict
+full-suite run.
+
+Separately built core/native wheels passed the manifest separation check.
+SHA-256: core `f6043b274809ee67019375f5f3dd8ca8aef0e456f7ae8be1dffd801fdb75b957`;
+native `b21cf8d0ce7601b3e7b788eba2bfd5f2a3a0cd74f723d151770b5f96953f625c`.
+In `/tmp/co-latency-wheel-proof.OFezGW/isolated_env`, both noneditable import
+origins were asserted under site-packages. Unmodified copies of the three
+contract modules and two helpers ran outside the checkout with `python -I -m
+pytest --noconftest ... -q -W error`: 69 passed in 24.71s, exit 0. This proves
+the local macOS ARM64/Python 3.12 artifact slice, not hosted Linux or release.
+
+The original added section at exact source `45cc666f` was directly inspected in
+the actual GitHub browser, English, 1265 x 712, with readable wrapped commands,
+hashes and headings and no observed overlap. These follow-up receipt paragraphs
+and the complete code diff still need final visual inspection. No full product
+UI, public release, protected approval, or customer KPI gain is established.
 
 ## Candidate and ownership
 
