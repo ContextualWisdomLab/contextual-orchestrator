@@ -130,8 +130,9 @@ def test_safe_message_reads_only_a_bounded_provider_body() -> None:
     error = urllib.error.HTTPError(
         "https://provider.example/chat/completions", 500, "error", None, body
     )
-    assert safe_provider_message(error) is None
-    assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
+    with error:
+        assert safe_provider_message(error) is None
+        assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
 
 
 def test_transient_classification_survives_a_stalled_error_body_read() -> None:
@@ -155,16 +156,18 @@ def test_transient_classification_survives_a_stalled_error_body_read() -> None:
         "https://provider.example/v1/models", 500, "error", None, StallingBody(b"")
     )
 
-    assert is_transient_error(error) is True
-    assert safe_provider_message(error) is None
+    with error:
+        assert is_transient_error(error) is True
+        assert safe_provider_message(error) is None
 
 
 def test_safe_message_reuses_body_after_retryability_inspection() -> None:
     """Tool-stop and caller-safe classification share one bounded body read."""
     error = _body_http_error(401, {"error": {"message": "invalid credential"}})
 
-    assert is_transient_error(error) is False
-    assert safe_provider_message(error) == "invalid credential"
+    with error:
+        assert is_transient_error(error) is False
+        assert safe_provider_message(error) == "invalid credential"
 
 
 def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
