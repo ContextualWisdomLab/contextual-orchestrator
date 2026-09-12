@@ -25,6 +25,14 @@ validity claim or actual accuracy/latency KPI is changed by this repair. See the
 [single owner runbook](doctoring/http_test_resource_lifecycle.md) for commands,
 exact-head evidence, rejected approaches and visual-inspection limits.
 
+Next separate test-resource gap: the trace HTTP honesty authorization singleton
+fails independently at `f598d982` with an unclosed 401 response and listener
+(1.85s, exit 1). The test file is unchanged from #1140 remote `eeed2d98`;
+latest file history includes `0906ee80`, `1287da2e`, `5f2753ac`. A live inventory
+of 95 open PRs returned no matching file. This is bounded ownership evidence,
+not a blanket claim that all remaining strict failures are pre-existing. Keep
+the source repair outside #1140; its runbook records the exact reproduction.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
