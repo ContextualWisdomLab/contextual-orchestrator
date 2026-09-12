@@ -890,6 +890,13 @@ TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+ROUTE_DECISION_LATENCY_FIELD = "decision_latency_ms"
+"""Trace-row field for the decision-only interval (#1110).
+
+Distinct from ``latency_ms``: selection/queueing/write cost only, never
+upstream generation. Until durable acknowledgement exists, report unavailable.
+"""
+
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     """Read and cache one bounded JSON error body for downstream classifiers."""
