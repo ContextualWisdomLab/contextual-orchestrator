@@ -2805,3 +2805,23 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+### HTTP resource lifecycle follow-up — local candidate, 2026-09-12
+
+Owner: CO transport, stacked on #1135 exact
+`c7ed39397bd8771b44250a61ab0ee8818889152a`; test cleanup is inherited as
+`87dcc53fb868bfa615c27c42fdc73aa69c4f1875`. Customer outcome sought: release failed
+stream resources while preserving the actionable error, terminal tool stop and
+response-size limit. No routing score or model timeout changes are included.
+
+The HTTP 500 cleanup defect was reproduced before repair. The local candidate
+closes its error response after classification; closer failures cannot replace
+the safe primary error. Three affected test files passed 56 cases with warnings
+as errors. Expanded parent/successor suites remain nonclean. All 25 observed
+failure nodes were run independently on both trees: 50 processes had matching
+per-node exits and core warning/error signatures (addresses/ephemeral ports
+excluded). This bounds the observed order-dependent baseline limitation; it
+does not relabel the suite as GREEN. Full-suite, hosted review,
+protected merge, deployment, real accuracy and latency gains remain unverified.
+See [the lifecycle runbook](doctoring/http_test_resource_lifecycle.md) for RED
+receipts, the rejected unsafe closer behavior, parent lineage and remaining gates.

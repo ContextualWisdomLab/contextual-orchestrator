@@ -1,5 +1,45 @@
 # HTTP test resource lifecycle
 
+## Stacked transport follow-up (not published)
+
+The sections below retain the initial test-only checkpoint. The current local
+successor instead starts at #1135 exact
+`c7ed39397bd8771b44250a61ab0ee8818889152a` and cherry-picks that checkpoint as
+`87dcc53fb868bfa615c27c42fdc73aa69c4f1875`. The complete `_stream_send` AST,
+response-limit expression and streaming test delta preserve #1128's contribution;
+this does not establish full succession of every other #1041 PR.
+
+The HTTP 500 reproduction failed on this stack before the production change
+(1.86s, `/tmp/co-stream-resource-successor-red.log`). `_stream_send` now closes
+HTTP error responses in `finally`, after body classification and on terminal
+tool-stop paths. Response-limit passthrough remains intact. A cleanup exception
+must not replace the safe primary error or leak provider diagnostics.
+
+Independent review found that a failing custom response closer could do exactly
+that. The first regression attempt failed on an invalid mock URL, not this defect;
+after fixing its HTTP URL, it failed with the raw cleanup diagnostic in 0.98s.
+Best-effort closure fixed that failure. Tests cover both ordinary HTTP 500 and
+terminal tool-stop errors. The latest three-file run passed **56 tests in 1.76s**
+with warnings as errors (`/tmp/co-stream-resource-final-focused.log`).
+
+The expanded five-file transport run is not clean: parent 21 failed/90 passed/
+1 error, successor 22 failed/89 passed/1 error. Five telemetry node outcomes
+differed. Running those five alone produced the same one resource-warning
+failure and four passes in both trees. This suggests collection-order-dependent
+warning attribution but does not prove equivalence. Every node in the observed
+failure union was compared in independent processes (session 53963, exit 0).
+All 25 nodes ran once on each tree: 50 processes, identical per-node exit codes,
+22 nodes failing on both trees and three passing on both. Core warning/error
+signatures matched after ignoring process-specific memory addresses and loopback
+ephemeral ports; those two normalizations do not discard error types or status
+codes. Raw results are in `/tmp/co-stream-resource-isolated-union.jsonl`.
+This is a bounded, order-dependent baseline limitation, not a clean expanded
+suite or proof of no regression outside the observed union. Subsequent focused
+tests including the terminal tool-stop cleanup path passed **56 in 1.76s**.
+Independent final review found no actionable defect in the revised cleanup.
+Full-suite acceptance and rendered-document inspection remain pending. No push,
+PR, merge, deployment or numerical KPI improvement is claimed.
+
 ## Scope and cause
 
 This isolated repair starts at protected main
