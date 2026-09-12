@@ -220,3 +220,22 @@ clipping or overlap. The capture remains in the task output; other viewports,
 locales and product UI remain uninspected. The existing Rust documentation
 test also passed (1 test, 1.61s; terminal command `c2e46a`); that algebra check
 is separate from the installed partition-rejection evidence above.
+
+### Combined-item identity source follow-up
+
+At the same upstream commit, root inspected zero-based cells 3, 6, 8, 12 and
+86–88 of [the application notebook](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/notebooks/application_analysis.ipynb).
+The inputs are the individual AIME24, AIME25 and AMC23 benchmark CSVs;
+cell 12 lowercases row identifiers. Cell 86 concatenates those three matrices
+in that order along columns, removes all-zero correctness rows from both
+matrices, and cell 87 independently drops missing rows before cell 88 saves
+the combined CSVs. This identifies a source-backed candidate mapping:
+columns 1–30 AIME24, 31–60 AIME25, and 61–100 AMC23 (one-based).
+
+This is source inspection, not execution provenance or verified byte/content
+equivalence. Before using that mapping, compare every retained row and column
+against the pinned individual matrices, check lowercasing collisions, and
+assert accuracy/length row alignment after the independent missing-row filters.
+Keep benchmark identity and original item label together; neither the repeated
+label alone nor an assumed concatenation order is sufficient. No estimator
+was executed and the real-data KPI remains unmeasured.
