@@ -1,6 +1,6 @@
 # Reasoning-effort capability is typed evidence, not truthiness
 
-Status: Proposed; implementation on PR #1119, not a protected-main release.
+Status: Proposed; main-based successor implementation on PR #1136, not a protected-main release.
 Date: 2026-09-12.
 Owner: ContextualWisdomLab/contextual-orchestrator, provider request-profile boundary.
 
@@ -51,6 +51,30 @@ python -m coverage report -m
 Result: **83 passed**. The changed function covered **19/19 executable statements and 12/12 branch arcs**. Whole-module coverage was **75%**, not 100%. AST/docstring inspection found documentation on every definition in the changed source and new test file. No full repository test, package-import integration, hosted GREEN, release, or consumer deployment is claimed. The existing omission and authority test blobs were independently matched to `f3f99a5940764eac6d64df27cfc91e86701de6fe` and `c815feae94153e9b32637893a999b3df2b6a821d`.
 
 At the pre-write child head, GitHub returned zero check runs and no PR-triggered workflow runs. Absence is not success. Parent #1000 integration, complete current-head CI, independent review, immutable release and consumer adoption remain required. This patch neither retires the parent nor authorizes merging its unresolved numerical/synthetic diagnostics. The large canonical product-gap baseline was read but not replaced by this bounded doctoring record; its full-tree integration is still pending.
+
+### Main-based successor boundary repair
+
+Review of PR #1136 at exact head `583ac7047df8129cabc3278eeb8d4ac96e43c348`
+found that `ModelAgent.__post_init__` used equality-based membership for the
+capability field. Python therefore admitted integer `1` and float `1.0` as
+equal to `True`; a hostile object's equality hook also executed before the
+request-profile boundary could apply its strict validation.
+
+RED commit `f0ad677ceb032ad90537df47571425604a22907a` exercises the real
+`ModelAgent` and `ModelClient` Responses path. It produced three intended
+failures: both numeric values reached request mutation without raising, and
+the hostile equality hook executed. Repair commit
+`0e514f316b63fdd2c43ae345bd9d70b10c0bb25a` replaces equality with an
+identity/type check at construction. The repaired production blob is
+`fd9369d8309ac37624a79637fb8470af433cd30c`; malformed evidence is rejected
+before normalization, rendering, fallback selection, or payload mutation.
+
+Fresh local verification with CPython 3.12 used disabled third-party pytest
+plugin autoload so an unrelated installed `pytest-asyncio` deprecation warning
+could not replace repository evidence. All effort-prefixed tests plus the
+client-boundary module completed with **153 passed** under `-W error`; Ruff,
+`compileall`, and `git diff --check` also passed. This focused evidence does
+not replace hosted exact-head Checks or independent review.
 
 ## References
 
