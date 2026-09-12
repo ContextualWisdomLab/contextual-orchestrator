@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 NIM consumed-response repair — Proposed
+
+Source `dda57de36dcbd9254f2e4215279494fbaccfc03f` closes HTTP errors consumed
+into benchmark outcomes while preserving classification and caller ownership
+of propagated errors. Two explicit RED cases become passing; the module's
+strict suite passes 137 tests. Combined strict checks remain 239 passed and
+1 failed because the separate ModelClient closure owner (#1140) is not yet
+integrated. No observed customer KPI gain is claimed. Exact evidence and
+limitations are in the NIM benchmark doctoring record.
+
 ## 2026-09-09 Rejected observation integrity (proposed)
 
 PR #1109 is stacked on numerical-routing owner PR #1067. At candidate
