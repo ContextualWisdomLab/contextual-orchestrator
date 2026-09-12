@@ -1,5 +1,42 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+
+PR #1053's valid default-null timeout and administrator-policy delta was 169
+commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`
+and conflicted in five files. A non-force merge preserves both histories. The
+RED merge-result regression had seven failures: ambiguous transport exceptions
+were typed as `provider_outcome_unknown` on one path without updating circuit
+evidence, while newer tests expected the older retryable
+`provider_connection_error`; the concrete-model HTTP path leaked the raw
+exception into a retrying 500 response. The reconciled contract records the
+candidate and group failure once, returns non-retryable
+`provider_outcome_unknown`, omits provider-controlled diagnostics, and emits
+`x-should-retry: false` for both concrete and virtual passthrough. The focused
+timeout, passthrough, telemetry, policy, pool, and admin suite passes 287 tests.
+Protected-main reconciliation also exposed a duplicate DNS preflight in the NIM
+benchmark evaluation adapter: the pinned benchmark transport was never reached,
+so 180 evaluation cells collapsed into local failures after capability probing.
+The adapter now keeps URL and KV credential validation while delegating address
+resolution exclusively to its pinned transport; the malformed-evaluation
+contract again fails before artifact publication. Four focused regression and
+stale-contract tests pass; five additional adapter tests cover the delegated,
+valid injected, unsafe-URL, and missing-credential boundaries. Pytest's
+asynchronous fixture-loop scope is now
+explicit rather than inherited from a deprecated plugin default.
+
+The reconciled tree's local full suite reports `3680 passed, 3 skipped, 1
+deselected`; the deselected owner-contract test requires the released
+`fast-mlsirm` native extension, while this runner has neither that artifact nor
+a Rust toolchain. Public-object docstring coverage is 100%, Ruff and compileall
+are clean. Aggregate line coverage is 96%, so no full-repository 100% coverage
+claim is made and the PR remains Proposed pending hosted exact-head evidence.
+
+This is Proposed exact-tree evidence. Protected merge, immutable release,
+consumer pin update, and a live `orchestrator/free` recovery remain required.
+The triggering `.github` #2106 model gates therefore remain nonpassing even
+though its exact-head CodeQL run has subsequently settled successfully.
+
 ## 2026-09-07 per-model serving timeout and HTTP policy writes
 
 PR #1053 now applies an administrator-owned `model_timeout_seconds` value on
@@ -79,6 +116,107 @@ See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
 revisions, retained failures, corrected test-evidence limitations, owner
 boundaries and the full remaining acceptance gates. Local configuration work
 must not be represented as released enforcement or psychometric accuracy gain.
+
+## 2026-09-09 Request-to-provider diagnostic correlation
+
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
+
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
+
+## 2026-09-08 error-response correlation repair
+
+ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
+500 with request ID `175d6d59c5294b0e8a21548193b90482`. Its surviving artifact
+9969701340 contains gateway stderr but only generic request-failure messages;
+it cannot correlate that ID to an internal cause. The job installed CO source
+`2e414d15ba58f28597751b625a8a2f00fc9fadcf`. This is not proof of free-pool
+exhaustion, a disappeared run, or a currently released fix.
+
+The same correlation gap was reproduced on main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`: the common HTTP error response had
+a generated ID absent from its log. The proposed repair generates one ID for
+both response and warning, prevents detail fields from overriding it, and logs
+neither session values nor error details. RED: one missing-correlation failure;
+GREEN: 45 telemetry tests passed in 6.58 seconds. This improves future failure
+correlation only; it does not recover the historical exception, cover every
+streaming-error path, or prove immutable publication or deployed behavior.
+
+## 2026-09-05 PR #1004 mixed provider failure follow-up
+
+At head `2a6b41562114530315bb44d1aa3dede820a68da1`, both `502 → 404` and
+`404 → 502` on same-endpoint structured-synthesis candidates returned a
+non-retryable missing-model error. The shared exhaustion boundary now preserves
+the recorded retryable upstream error first. Caller-selected endpoint, model, free/ZDR,
+file-replica, and ambiguous-tool-replay restrictions remain unchanged.
+Both ordered regression cases failed before the fix and pass afterward.
+See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
+ Protected merge and post-change live gateway evidence are still required;
+head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
+(`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
+correction below and does not verify it.
+
+Independent local review reproduced a separate accounting gap: after two grouped
+candidates fail, the group ledger records only the final candidate. A prior
+failure also hides a later terminal 400 or billed malformed response from the
+circuit counter. The proposed correction records both observations at the
+actual failed synthesis attempt, before fallback or a budget stop, and removes
+the outer duplicate group observation. A later 413 is not a provider failure.
+The accounting regressions changed from `7 failed, 11 passed` to `18 passed`;
+the wider provider/group/effort/HTTP suite passed all 124 tests. Full-suite and
+hosted exact-head evidence for this additional correction must be recorded
+separately in the existing PR.
+The subsequent response-before-return regression additionally prevents an
+unassigned response read or reuse of another candidate's usage. Both cases
+failed on `18a29d14`; 178 focused tests pass after the correction. Unknown
+usage stays unavailable. The explicitly interrupted full run on `18a29d14`
+is excluded from passing evidence; see the same doctoring record.
+
+The next current-head review found that `69b79a6bc2a6039396d6fd03edcac5bef80c686e`
+still converted a stale model into an implicit endpoint pin. Existing tests
+had preserved that behavior without proving it was required. New cases failed
+`12/49` before the shared candidate-list correction; the focused unit/HTTP/usage
+suite now passes `52/52`. Virtual AUTO/FREE requests can exhaust each already
+eligible model across endpoints; explicit selections and budget enforcement
+remain bounded. This is proposed local remediation, not protected or live
+acceptance. See the same doctoring record for the corrected contract audit.
+An additional eight-case RED on `2582176d` covered malformed-only/mixed-413
+exhaustion and pre-return repair failures for virtual and concrete models.
+The shared correction preserves the response-failure category and failed-run
+usage evidence; all 60 focused cases pass. The interrupted full run on
+`2582176d` is not acceptance evidence for this correction.
+
+## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
+
+- **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.
+- **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
+- **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
+- **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
+ - **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
@@ -197,6 +335,30 @@ Focused and proportional verification run on the exact local head:
 
 Total exact local evidence for this unit: `163 passed` across the touched
 discovery, persistence, client-boundary, CLI, and contract surfaces.
+## 2026-09-04 Bytez discovery: filtered empty catalogs and upstream 5xx are distinct fail-closed states
+
+At `origin/main` `60c562de`, an authenticated, bounded live probe loaded only
+`BYTEZ_API_KEY` from the operator's local `.env` and emitted no token, response
+body, or upstream error text. The earlier `task=chat` HTTP 200 response with an
+empty `output` is a successful transport with no usable catalog, whereas an
+unfiltered HTTP 500 is an upstream server failure. A fresh probe found the
+upstream condition had widened: `chat`, `text-generation`, the other documented
+chat-completion-compatible task filters, and the unfiltered request all returned
+HTTP 500 with a small JSON object and empty `output`. Raw-token and `Key`-prefixed
+authorization produced the same status, so the prefix does not explain the
+failure.
+
+The canonical discovery boundary now queries only `task=chat` and then
+`task=text-generation`. Bytez documents both as compatible with its OpenAI-style
+chat-completions API; audio, image, and video task catalogs are intentionally not
+admitted to the ordinary text-chat pool. Discovery never uses the failing
+unfiltered endpoint as a fallback. A non-empty filtered catalog is parsed through
+the existing Bytez model contract. If both filtered catalogs are empty or fail,
+refresh records only task, outcome, model count, and an allowlisted error code;
+it retains the durable last-known-good catalog and fails closed when none exists.
+The current upstream 5xx therefore remains a first-bootstrap blocker, not a
+reason to fabricate usable models.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential

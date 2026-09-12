@@ -7,18 +7,18 @@ registry path. This keeps the review sidecar useful without pretending that a
 short-lived runner has a durable production credential store.
 
 Credential registration and ``orchestrator/free`` candidate admission are
-separate contracts. A deployment may register every configured provider,
-including OpenAI, while the free review pool admits only the provider-account
-sources explicitly authorized for that pool and explicitly supplied for the
-current sidecar bootstrap.
+separate contracts. A deployment may register every accepted provider,
+including OpenAI and a CI-seeded ``OPENCODE_ZEN_API_KEY``, while the free
+review pool admits only the provider-account sources explicitly authorized
+for that pool and explicitly supplied for the current sidecar bootstrap.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import replace
-from typing import Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
 from .model_discovery import (
@@ -28,27 +28,103 @@ from .model_discovery import (
     general_free_serving_candidates,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
-from .provider_bootstrap import (
-    PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
-    PROVIDER_CREDENTIAL_NAMES,
-)
+from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 
-REVIEW_CREDENTIAL_NAMES = PROVIDER_CREDENTIAL_NAMES
+REVIEW_CREDENTIAL_NAMES = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
     "BYTEZ_API_KEY",
     "NVIDIA_NIM_API_KEY",
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
 )
 """Provider-account sources authorized to contribute to ``orchestrator/free``.
 
 This is a pool-admission policy, not the bootstrap credential inventory.
-``OPENAI_API_KEY`` may be registered and globally discovered, but a model whose
-credential source is OpenAI is never admitted to this free review pool.
+Default bootstrap registers every accepted provider credential that is present,
+including optional ``OPENCODE_ZEN_API_KEY``, so a CI-seeded OpenCode key is not
+dropped before admission. ``OPENAI_API_KEY`` may be registered and globally
+discovered, but a model whose credential source is OpenAI is never admitted to
+this free review pool. ``OPENCODE_ZEN_API_KEY`` is the shared source for
+OpenCode Zen and OpenCode Go; only rows that already satisfy the shared
+general-free serving contract enter the pool.
 """
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+
+REVIEW_READINESS_CONTRACT_VERSION = "1"
+"""Versioned owner readiness/admission contract for the free review pool.
+
+Consumers pin this version to know exactly which readiness/admission
+predicates the owner applied. It is bumped whenever a predicate, its
+evidence source, or the returned provenance shape changes, so a leaf
+caller can delete its own duplicated routing preflight instead of guessing
+which owner contract is live.
+"""
+
+
+@dataclass(frozen=True)
+class ReviewModelAdmission:
+    """Typed, request-scoped provenance for one admitted review-pool model.
+
+    Every field is owner-produced evidence about *why* the candidate is
+    admitted, so a consumer never has to re-derive eligibility, re-probe
+    readiness, or apply its own provider/model/fallback heuristics.
+    """
+
+    contract_version: str
+    model_id: str
+    provider_name: str
+    credential_key: str
+    tags: tuple[str, ...]
+    max_output_tokens: int | None
+    context_window: int | None
+
+
+def review_model_admission(
+    model: DiscoveredModel,
+    *,
+    tags: Sequence[str] = (),
+) -> ReviewModelAdmission:
+    """Return typed provenance for one already-admitted review-pool model.
+
+    Admission itself happened in :func:`build_review_orchestrator`; this only
+    serializes the owner's evidence so a consumer can consume it directly
+    instead of re-deriving eligibility, readiness, or ordering.
+    """
+    return ReviewModelAdmission(
+        contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+        model_id=model.model_id,
+        provider_name=model.provider_name,
+        credential_key=model.credential_name,
+        tags=tuple(tags),
+        max_output_tokens=model.max_output_tokens,
+        context_window=model.context_window,
+    )
+
+
+def review_pool_admissions(
+    agents: Sequence[Any],
+) -> list[ReviewModelAdmission]:
+    """Project a built review pool into versioned, consumer-readable provenance.
+
+    The owner exposes this so a caller can send only the gateway token and
+    ``model: orchestrator/free`` -- no provider/model/fallback parameters,
+    no credential eligibility, no candidate catalog, no probing.
+    """
+    return [
+        ReviewModelAdmission(
+            contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+            model_id=str(getattr(agent, "model", "")),
+            provider_name=str(getattr(agent, "provider_name", "") or ""),
+            credential_key=str(getattr(agent, "credential_key", "") or ""),
+            tags=tuple(getattr(agent, "tags", ()) or ()),
+            max_output_tokens=getattr(agent, "max_output_tokens", None),
+            context_window=getattr(agent, "context_window", None),
+        )
+        for agent in agents
+    ]
 
 
 def _validated_credential_names(
@@ -168,7 +244,7 @@ def build_review_orchestrator(
         )
     return TaskOrchestrator(
         agents,
-        client=ModelClient(max_output_tokens=32768),
+        client=ModelClient(),
     )
 
 
@@ -184,7 +260,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=PROVIDER_ACCEPTED_CREDENTIAL_NAMES,
         help=(
             "Provider credential name to bootstrap; repeat to supply an ordered "
-            "credential array. Defaults to the repository provider inventory."
+            "credential array. Defaults to every accepted provider credential."
         ),
     )
     parser.add_argument(

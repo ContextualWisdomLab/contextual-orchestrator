@@ -63,7 +63,7 @@ def test_concurrent_error_responses_share_only_their_own_log_id(caplog) -> None:
 
 
 def test_error_log_bounds_existing_response_request_ids(caplog) -> None:
-    """Existing response details survive, but arbitrary IDs never enter logs."""
+    """Diagnostics survive while one trusted correlation ID binds body and log."""
     server = build_server(build(), port=0)
     handler = object.__new__(server.RequestHandlerClass)
     try:
@@ -72,11 +72,15 @@ def test_error_log_bounds_existing_response_request_ids(caplog) -> None:
             detail = {"request_id": request_id, "diagnostic": "private_diagnostic"}
             with patch.object(handler, "_send") as send:
                 handler._send_error(400, "invalid_request", "invalid request", detail)
-            assert send.call_args.args[0]["error_detail"] == detail
+            sent_detail = send.call_args.args[0]["error_detail"]
+            assert sent_detail["diagnostic"] == "private_diagnostic"
+            trusted_id = sent_detail["request_id"]
+            assert len(trusted_id) == 32
+            assert all(character in "0123456789abcdef" for character in trusted_id)
+            assert send.call_args.args[0]["error"]["detail"]["request_id"] == trusted_id
             assert send.call_args.args[1] == 400
-            expected_id = request_id if request_id == "a" * 32 else "<omitted>"
             assert caplog.records[-1].getMessage() == (
-                f"request_failed status=400 code=invalid_request request_id={expected_id}"
+                f"request_failed status=400 code=invalid_request request_id={trusted_id}"
             )
             assert "private_diagnostic" not in caplog.text
             assert "forged_log" not in caplog.text

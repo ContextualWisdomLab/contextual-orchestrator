@@ -20,10 +20,75 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Ambiguous transport outcomes on both concrete-model and virtual passthrough
+  paths now fail closed as `provider_outcome_unknown`, never replay onto another
+  provider, update circuit/group reliability evidence, omit provider-controlled
+  diagnostics, and tell retrying SDKs not to repeat the request.
+- Live NIM benchmark evaluation now reaches its already pinned provider transport
+  instead of failing every policy cell during a duplicate generic DNS preflight;
+  injected transports retain URL and credential validation for deterministic
+  contract tests.
+- Pytest now declares function-scoped asynchronous fixture loops explicitly,
+  removing the ambient `pytest-asyncio` deprecation ambiguity.
 - Model, Agent, gateway, and structured-output repair requests now default to
   no application timeout. An administrator-owned per-model wait is applied only
   to that model; there is no shared 90s/900s/3-hour ceiling. Explicit probe,
   discovery, benchmark, and operator limits remain bounded.
+- Virtual `orchestrator/free` structured completions (`response_format`, no
+  tools/stream) fail over a retryable synthesizer 502/429 onto the next
+  eligible free worker and attach request-scoped eligible/attempted
+  receipts. Concrete model pins stay sticky. Default model timeout remains
+  null (issue #1045; Inkspan Noema job 101628090366 on base `414f2297`).
+- Review-sidecar `orchestrator/free` admission now treats a CI-seeded
+  `OPENCODE_ZEN_API_KEY` as an authorized free-pool source. Honest-free
+  OpenCode Zen and OpenCode Go rows can enter `G ∩ P ∩ R`; `OPENAI_API_KEY`
+  remains registered for global discovery and is still excluded from the
+  review free pool (Noema 429 on `google/gemma-4-31b-it:free` in PR #1094
+  while Zen/Go evidence was dropped before routing).
+- `OPENCODE_ZEN_API_KEY` is documented as the shared KV credential for both
+  OpenCode Zen and OpenCode Go catalogs; registering it once discovers both
+  accounts.
+- Virtual selectors (`orchestrator/free`, `orchestrator/auto`,
+  `contextual-orchestrator`) keep tools and streaming on Fugu route /
+  TRINITY-Conductor conduct. A tools array no longer ejects those calls into
+  single-agent passthrough, so a failed worker is re-selected on the control
+  plane (incident: ContextualWisdomLab/.github run 34079284863, Strix step 23).
+  A worker `tool_calls` payload is returned as Chat Completions `tool_calls`
+  instead of being treated as missing assistant text. Concrete model ids
+  remain a debug pin. Psychometric θ̂/RMSE stays an equal-budget score of
+  those paper paths, not a separate router.
+- Streamed `/v1/responses` now emits OpenAI `response.reasoning_text.*`
+  events for TRINITY thinker/worker/verifier and Conductor step outputs,
+  while `response.reasoning_summary_*` stays the paper-role stage summary.
+  The synthesizer answer remains `output_text`. Chat Completions, audio,
+  image, video, embeddings, and rerank use the same worker re-selection
+  but cannot emit those reasoning events, so only the modality result is
+  returned.
+- Virtual structured requests can recover on another eligible endpoint after
+  all models at the first endpoint are unavailable. Explicit caller selections
+  and spending limits remain enforced, including malformed later responses.
+- Structured requests that exhaust eligible candidates after both temporary
+  provider failures and missing-model responses retain the temporary failure
+  classification, so clients can recognize that a later retry may succeed.
+- Structured fallback now counts each failed model once in routing health
+  evidence, including failures before successful recovery or a spending stop.
+  Request-size limits remain separate from provider failures.
+- Recovery from a rejected provider response no longer crashes or attributes
+  an earlier model's token usage to the rejected attempt. Missing usage remains
+  unavailable instead of being reported as zero.
+- Malformed response exhaustion no longer reports a fictitious request-size
+  limit. Failed repairs preserve earlier usage even when no repair response
+  was received.
+- Structured-output review follow-up now charges already-incurred synthesis
+  and repair usage before propagating a budget stop, keeps failed workflow
+  evidence queryable without counting it as a normal recent/completed KPI,
+  and binds a repair to the candidate whose synthesis failed. A repair-only
+  413 retires that candidate and starts a fresh synthesis on the next
+  already-eligible candidate instead of forwarding the repair prompt across
+  providers. If no eligible candidate remains, the original request-too-large
+  classification is preserved instead of being rewritten as structured-output
+  exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
+  (Devin Review, PR #1004).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
@@ -36,10 +101,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retention and the selected backend's polling cadence, so clients can poll
   within the actual job lifecycle instead of guessing or failing closed on
   missing lifecycle metadata.
-- Virtual structured workflows now exclude a same-endpoint candidate only
-  after both its synthesis and bounded repair violate the caller's schema,
-  then continue with the next eligible model on that endpoint. Explicit model
-  pins remain single-model and exhausted virtual pools return a typed error.
+- Virtual structured workflows now exclude a candidate only after both its
+  synthesis and bounded repair violate the caller's schema, then continue with
+  the next distinct eligible model, including another provider endpoint.
+  Explicit models and caller-selected endpoints remain sticky; failed attempts
+  retain validation and usage evidence, and exhausted pools return a typed,
+  secret-free error without recursive retry multiplication.
 - Configured-gateway runtime discovery now retains chat rows only after a
   bounded structured-output probe, and virtual structured workflows share one
   request-scoped missing-model exclusion set across evidence and synthesis.

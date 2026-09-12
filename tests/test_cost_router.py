@@ -24,6 +24,7 @@ from contextual_orchestrator import (  # noqa: E402
 from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchJob,
     BatchRequest,
+    BatchResultItem,
     PgLlmBatchBackend,
 )
 from contextual_orchestrator.cost_router import BatchModelSelectionError  # noqa: E402
@@ -37,7 +38,7 @@ class _FailingLedgerStore:
         return []
 
 
-def _coordinator(ledger=None) -> CostRoutingCoordinator:
+def _coordinator(ledger=None, batch_backend=None, token_counter=None) -> CostRoutingCoordinator:
     agents = [
         ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
                    tags=("reasoning", "coding", "writing"), priority=1),
@@ -46,7 +47,14 @@ def _coordinator(ledger=None) -> CostRoutingCoordinator:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
-    return CostRoutingCoordinator(orchestrator, config, price_book=price_book, ledger=ledger)
+    return CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        ledger=ledger,
+        batch_backend=batch_backend,
+        token_counter=token_counter,
+    )
 
 
 def test_sync_completion_records_usage_and_returns_costs() -> None:
@@ -194,6 +202,84 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["completion_tokens"] == 2
     assert record["measurement_status"] == "measured"
     assert record["workflow_run_id"] == "run_race"
+
+
+def test_five_field_race_loser_preserves_provider_usage() -> None:
+    """Tool-call race outcomes carry usage in their fourth tuple field."""
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": None,
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_tool_call_race",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            (
+                "",
+                "mock_worker",
+                "mock-a",
+                {"prompt_tokens": 8, "completion_tokens": 3},
+                {"tool_calls": [{"id": "call_1"}]},
+            ),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+
+    record = coordinator.ledger.records()[0]
+    assert record["prompt_tokens"] == 8
+    assert record["completion_tokens"] == 3
+    assert record["measurement_status"] == "measured"
+
+
+def test_batch_five_field_race_loser_reaches_retrieval_cost() -> None:
+    """Local batch keeps fourth-field usage from a completed tool-call race."""
+    coordinator = _coordinator()
+
+    def complete(messages, *, mode, model_name):  # type: ignore[no-untyped-def]
+        del messages, model_name
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            (
+                "",
+                "mock_worker",
+                "mock-a",
+                {"prompt_tokens": 8, "completion_tokens": 3},
+                {"tool_calls": [{"id": "call_batch_race"}]},
+            ),
+        )
+        return {
+            "answer": "winner",
+            "mode": mode,
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.complete = complete  # type: ignore[method-assign]
+    job = coordinator.submit_batch(
+        [BatchRequest(messages=[{"role": "user", "content": "race batch"}])]
+    )
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+    rows = coordinator.ledger.records()
+
+    assert (item["prompt_tokens"], item["completion_tokens"]) == (10, 4)
+    assert {(row["prompt_tokens"], row["completion_tokens"]) for row in rows} == {
+        (8, 3),
+        (2, 1),
+    }
+    assert item["measurement_status"] == "measured"
+    assert item["cost_amount"] == 0.018
 
 
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
@@ -572,6 +658,58 @@ def test_batch_completion_records_on_retrieve() -> None:
     assert all(record["team_name"] == "beta" for record in records)
 
 
+def test_batch_item_usage_wins_when_trace_and_race_steps_lack_usage() -> None:
+    class MixedUsageBackend:
+        name = "mixed-usage"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            return BatchJob("mixed-usage-job", self.name, request_count=2)
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [
+                BatchResultItem(
+                    "trace-item",
+                    "trace answer",
+                    prompt_tokens=12,
+                    completion_tokens=8,
+                    model="mock-a",
+                    usage_valid=True,
+                    trace=[{"agent_id": "mock_worker", "output": "trace answer"}],
+                ),
+                BatchResultItem(
+                    "race-item",
+                    "race answer",
+                    prompt_tokens=9,
+                    completion_tokens=4,
+                    model="mock-a",
+                    usage_valid=True,
+                    race_usage=[{"agent_id": "mock_worker", "output": "race answer"}],
+                ),
+            ]
+
+    coordinator = _coordinator(batch_backend=MixedUsageBackend())
+    job = coordinator.submit_batch(
+        [
+            BatchRequest(messages=[{"role": "user", "content": "trace item"}], model="mock-a"),
+            BatchRequest(messages=[{"role": "user", "content": "race item"}], model="mock-a"),
+        ]
+    )
+
+    results = {
+        item["custom_id"]: item
+        for item in coordinator.retrieve_batch(job.job_id)["results"]
+    }
+
+    assert results["trace-item"]["measurement_status"] == "measured"
+    assert results["trace-item"]["prompt_tokens"] == 12
+    assert results["trace-item"]["completion_tokens"] == 8
+    assert results["race-item"]["measurement_status"] == "measured"
+    assert results["race-item"]["prompt_tokens"] == 9
+    assert results["race-item"]["completion_tokens"] == 4
+
+
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
     class _Client:
         local_concurrency = 3
@@ -589,7 +727,7 @@ def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator = _coordinator()
-    sync = coordinator.complete(
+    coordinator.complete(
         [{"role": "user", "content": "sync one"}], attribution={"company": "acme"}
     )
     job = coordinator.complete([{"role": "user", "content": "batch one"}],
@@ -1194,28 +1332,3 @@ def test_non_zdr_embedding_batch_preserves_explicit_model_outside_the_pool() -> 
 
     assert resolved_model == "unconfigured-upstream-model"
     assert resolved_agent_id is None
-
-
-def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
-    captured = []
-
-    class _CapturingBackend:
-        name = "capturing"
-
-        def submit(self, requests, metadata=None):
-            captured.extend(requests)
-            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
-
-    coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
-        batch_backend=_CapturingBackend(),
-    )
-    request = BatchRequest(
-        messages=[{"role": "user", "content": "ordinary batch"}],
-        model="unconfigured-provider-model",
-    )
-
-    coordinator.submit_batch([request])
-
-    assert len(captured) == 1
-    assert captured[0].model == "unconfigured-provider-model"

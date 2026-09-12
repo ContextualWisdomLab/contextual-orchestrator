@@ -7,6 +7,7 @@ retry can help — instead of collapsing into a generic ``internal_error``.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import socket
@@ -19,6 +20,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
@@ -532,3 +535,26 @@ def test_safe_message_discards_sensitive_provider_diagnostics() -> None:
         classified = classify_provider_failure(error, agent_id="a", model="m")
         assert diagnostic not in str(classified)
         assert str(classified) == "provider rejected the request with HTTP 400"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [http.client.IncompleteRead(b""), http.client.BadStatusLine("")],
+    ids=["incomplete-read", "bad-status-line"],
+)
+def test_truncated_read_classifies_as_provider_connection_error(failure: Exception) -> None:
+    """A connection dropped mid-read is a connection failure, not the opaque default.
+
+    ``http.client.IncompleteRead`` and ``BadStatusLine`` are not ``OSError``
+    subclasses, so they fell through to ``api_error`` (retryable=False) while
+    the same event surfacing as ``ConnectionResetError`` was classified as a
+    retryable ``provider_connection_error`` -- ``provider_error_body``'s own
+    note already treats them as transport failures.
+    """
+    classified = classify_provider_failure(
+        failure, agent_id="worker_agent", model="gpt-x", transport="passthrough"
+    )
+    assert classified.error_code == "provider_connection_error"
+    assert classified.client_status == 502
+    assert classified.provider_status is None
+    assert classified.retryable is True

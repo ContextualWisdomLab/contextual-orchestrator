@@ -41,6 +41,10 @@ push or open a PR.
 
 ### Code exploration
 
+- Provider logs need server-generated per-request identity, not a session hash.
+  Preserve context cleanup and validate the central collector before adoption.
+  Reproduction and exact evidence: `docs/doctoring/provider_request_correlation.md`.
+
 - This repo has **no `.codegraph/` index**, so use normal search
   (grep/ripgrep/find, file reads) to locate and understand code. If a
   `.codegraph/` directory is ever added at the repo root, prefer CodeGraph
@@ -77,24 +81,66 @@ push or open a PR.
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
+- In structured fallback, keep the final error classification separate from
+  per-attempt circuit and model-group observations. Record each actual failed
+  candidate once before advancing or propagating a budget stop; a request-wide
+  flag must not hide a later hard failure or charge an earlier error to a later
+  413 candidate. Test real counters, not only mocked callback counts, including
+  recovery, exhaustion, mixed failure order, and billed malformed output.
+  Distinguish a malformed returned object from a client exception before
+  return: reset response state per attempt, never copy prior usage, and keep
+  unreported usage unavailable rather than fabricating a zero count.
+  Apply this to repair calls that fail before returning as well. Exhausted
+  malformed responses must not be classified as an all-provider size limit;
+  test all-malformed and mixed malformed/413 orders before accepting that error.
+- A stale-model response does not create a caller-selected endpoint constraint.
+  Virtual structured recovery must visit the already-eligible distinct models,
+  including later endpoint siblings, while preserving explicit model/endpoint,
+  free/ZDR, file-replica, and effort restrictions. Test all-local-candidates
+  failing, an initial candidate excluded during evidence collection, and billed
+  malformed output on a later endpoint. Do not reject a review solely because
+  an existing guard or successful-sibling test encodes the current behavior;
+  verify the requirement and the exhausted-candidate case first.
+- Review-gateway recovery tests must exercise `FREE_MODEL` with admitted free
+  candidates, not only `AUTO_MODEL`. A mocked synthesis test does not prove
+  the preceding conduct stages, HTTP boundary, or deployed Noema review.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
 - Provider API keys and server bearer tokens are resolved from the **KV /
-  credential registry** (`get_credential`), not from `os.environ`. Ensure the
-  org `OPENAI_API_KEY` (and `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`) is seeded into the KV at
-  bootstrap time so auto-discovery and routing can use them.
+  credential registry** (`get_credential`), not from `os.environ`. Seed
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`, and any configured
+  `OPENAI_API_KEY` into the KV at bootstrap so auto-discovery and routing can
+  use them. One OpenCode Zen credential discovers the separate Zen and Go
+  catalogs; only explicit zero-cost capability evidence admits either source
+  to `orchestrator/free`.
+- Tool-bearing chat requests stay synchronous. Reject explicit deferred/batch
+  routing after applying `RoutingPolicy` precedence because the batch contract
+  does not carry tool controls or returned tool calls. Generated planners,
+  verifiers, and synthesizers suppress caller tools when the client supports
+  that optional scope; structured virtual requests keep them on worker calls
+  and strip them from final synthesis. Every grouped or `free_only`
+  structured-synthesis attempt updates group stability exactly once, including
+  failure followed by successful failover. A streamed failure before the first
+  byte remains a trace step and usage row; missing provider usage is
+  `unavailable`. HTTP 413 may fall back but never counts against member
+  stability because it describes the request, not provider health.
+- A live 2026-09-09 Bytez catalog check with a configured credential returned
+  zero `task=chat` rows, while unfiltered and `text-generation` requests
+  returned HTTP 500. Treat this as provider/runtime evidence, not proof of an
+  endpoint or credential defect; keep Bytez absent from the active catalog
+  until a non-empty authenticated listing succeeds.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
   three-stage CI review pipeline defined in `ContextualWisdomLab/.github`
   (`opencode.jsonc`, `noema-review.yml`, `strix.yml`) — are being migrated to
   use `contextual-orchestrator` as their shared backend, with
   `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
-  `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` registered in this repo's KV so
-  it auto-discovers models across all five and auto-optimizes routing by
+  `OPENROUTER_API_KEY`, and `OPENCODE_ZEN_API_KEY` registered in this repo's
+  KV so it auto-discovers their model catalogs and auto-optimizes routing by
   cost (see `contextual_orchestrator/model_discovery.py`, the
   `discover-models` CLI subcommand, and `ModelAgent.auth_scheme` for
   non-Bearer providers like Bytez). The provider-config change to the org
@@ -141,3 +187,10 @@ push or open a PR.
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
+
+## Tool-call handoffs
+
+Return worker tool calls before text-answer judging or later workflow roles;
+a handoff does not establish completed tool execution or answer quality.
+Preserve stream indices and request isolation. Reproduction and release-proof
+boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
