@@ -332,3 +332,29 @@ def test_export_requires_durable_authorization_audit(export_server, monkeypatch)
     assert status == 503
     assert not queries
     assert "private-audit-error" not in str(result)
+
+
+def test_malformed_retained_link_survives_index_migration(tmp_path):
+    """Invalid metadata remains countable without preventing startup or valid writes."""
+    import sqlite3
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    state_path = tmp_path / "malformed.db"
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(_StateStore._CREATE_RECORDS_SQL)
+        connection.execute(_StateStore._INSERT_SQL,
+                           ("accepted_request", "request_one", '{"request_id":"request_one"}'))
+        connection.execute(_StateStore._INSERT_SQL,
+                           ("workflow_request_link", "request_one", '{broken'))
+    store = _StateStore(str(state_path))
+    try:
+        store.save("workflow_run", "workflow_one", {
+            "request_id": "request_one", "workflow_run_id": "workflow_one", "cache_status": "miss",
+        })
+        row, = store.export_request_outcomes()["observations"]
+        assert row["invalid_association_count"] == 1
+        assert row["workflow_outcomes"][0]["workflow_run_id"] == "workflow_one"
+        assert store._conn.execute("SELECT count(*) FROM orchestration_records WHERE payload = ?",
+                                   ('{broken',)).fetchone()[0] == 1
+    finally:
+        store.close()
