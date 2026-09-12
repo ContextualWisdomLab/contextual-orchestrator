@@ -1,5 +1,32 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 request-decision export candidate
+
+[PR #1158](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1158)
+implements request-scoped milliseconds on export owner #1138 at base
+`1881ef06ed90ee72eb7209434db366c851cd68dc`. Source
+`45cc666f9fd52aedf6484b345f30857d7f9d72bf` also repairs admission metadata
+incorrectly supplying missing final acknowledgement or selection evidence.
+This preserves the intent of #1125 without claiming its per-step trace contract
+fully inherited; neither predecessor is closed. No new timer or routing policy
+is introduced. Focused strict contracts passed 69 tests; default full regression
+passed 3,764 with 2 skipped. Isolated noneditable macOS ARM64/Python 3.12 wheels
+passed the same 69 strict contracts. These are controlled test results, not an
+observed correctness cohort or decision-latency improvement.
+
+Candidate head `0a2626867c0baa6a95ad40f3f00e40008359cca2` has a real
+[manual Security run](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34708859235)
+whose three jobs were observed running, not completed. Draft PR automatic jobs
+were skipped by their explicit Draft condition; that is not secret absence.
+Protected review, merge-result verification, publication, ingress-denominator
+reconciliation and observed KPI comparison remain open. Actual GitHub
+screenshots covered the two changed production files and both changed test
+files at 1265 x 712 English without observed clipping or overlap; this is not
+the complete product UI/locale matrix. The default full-test log's isolated
+request-log fragment remains unresolved: strict standalone telemetry tests
+passed 50 in 3.26s without reproducing it. Detailed receipts remain in the
+[candidate runbook](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/0a2626867c0baa6a95ad40f3f00e40008359cca2/docs/doctoring/request_outcome_export_validation.md).
+
 ## 2026-09-13 residual diagnostic acceptance gap
 
 Research follow-up `e9d51ac7` identifies an owner-contract requirement: declare
