@@ -129,3 +129,109 @@ other viewport sizes, link destinations and locales were not visually audited.
 Screenshots remain in the task output, not published image assets. The shared
 local preview has an exporter-oriented browser title/navigation; it is not
 the product UI or evidence of published documentation.
+
+## Additional intake — model/prompt split and theorem boundary
+
+At official repository commit `8cb9639eb162ff3732df82d4e190e7f902bde19d`,
+[data documentation](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data/README.md)
+describes rows as model/prompt combinations, not independent base models.
+[Predictive evaluation](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/applications/predictive_power.py)
+selects 100 of 128 rows randomly before fitting. Consequently, that split
+does not itself establish unseen-base-model or unseen-family generalization.
+This is an inference from the code, not a measured leakage magnitude or a
+claim that the authors targeted family holdout. CO's proposed experiment must
+group verified base-model/prompt siblings and keep family holdout distinct.
+The matrices omit raw generations; their availability alone does not establish
+complete failed-request denominators, data reuse permission, or CO latency.
+
+Root read Appendix D.1; independent review also checked PDF pages 32–34.
+Assumption 2 requires both component bounds to be negative whenever the joint
+trait differs from truth. At `theta = theta_true` and `tau != tau_true`, the
+accuracy log-ratio is identically zero, contradicting its strictly negative
+bound. The symmetric speed-axis case also fails. Separate suprema over the
+two-dimensional ball complement preserve this problem. This is a printed
+quantifier inconsistency, not evidence that the intended normality conclusion
+or empirical results are false. A possible repair is componentwise
+nonpositivity with joint uniform separation; Lemma 4 must also be revisited.
+No corrected theorem has been proved here. Primary locations:
+[Appendix D.1](https://arxiv.org/html/2512.07019v4#A4.SS1) and
+[PDF pages 32–34](https://arxiv.org/pdf/2512.07019v4#page=32).
+
+Owner acceptance implication: do not treat the printed assumption as a
+verified precondition for production uncertainty claims. Keep the existing
+finite-matrix unit check separate from an asymptotic proof and from held-out
+calibration. This intake changes no estimator or routing default; dataset
+licensing/provenance audit and final rendering of this addition are pending.
+
+### Pinned matrix identity audit
+
+On 2026-09-12 root parsed the complete public combined correctness CSV at the
+upstream commit above, without running upstream code or fitting an estimator.
+Raw SHA-256: `231ea6d561e63229747de56b3c8aa8456a1ae16442945758f1ac4944df89b244`.
+There are 128 rows and 100 columns, but only 40 unique column labels; 30 labels
+repeat. No ragged rows, duplicate full row IDs, or nonbinary cells were found.
+Column position must therefore be preserved until benchmark-qualified item
+identity is established; a label-keyed join could merge distinct questions.
+
+Reproducing only the published `RandomState(42).choice(128, 100, replace=False)`
+split with NumPy 2.5.2, and stripping only explicit `_one_shot`/`_zero_shot`
+suffixes for this diagnostic, gives 65 base identifiers. Of 28 held-out rows,
+21 have a base identifier in training (21 shared identifiers). This verifies
+overlap under that naming rule, not family ancestry or its predictive impact.
+It is a read-only dataset audit, not an autoresearch treatment or KPI gain.
+No response content was sent to a model; no dataset was committed.
+
+The existing finite-uncertainty Rust documentation test passed at `a73737e4`
+(session `30596`, 1 test, 1.30s). It does not test this CSV audit or prove a
+corrected asymptotic theorem.
+
+Visual follow-up: source `85fabb16` was rendered at
+`http://127.0.0.1:18774/lart`, English, 1265 × 712. Root directly opened two
+overlapping browser captures covering the complete additional intake and
+pinned-matrix audit through its final paragraph. Text, identifiers and links
+were readable without observed clipping or overlap. This supersedes the
+earlier pending-render statement for these additions only. Captures remain
+in the task output; other viewports/locales, link destinations and product UI
+were not audited. Dataset rights and all statistical/deployment limits remain.
+
+### Existing installed owner gate
+
+The installed `fast-mlsirm` 0.9.1 distribution already exposes
+`validate_group_partition`. Its installed `model_validation.py` SHA-256 is
+`7441501eb8c9ee2fb79a8c5e8fddff4a9be9385331e5f0909c4e023eb63bd7e9`.
+Root verified the site-packages origin with Python isolated mode from `/tmp`.
+Passing the pinned matrix's suffix-derived group IDs and published seeded
+training/evaluation fold IDs to this existing function raised the expected
+cross-fold-group `ValueError` (terminal command `221880`, exit 0 because the
+diagnostic explicitly required rejection). Input bytes were SHA-256 checked
+before parsing. No owner source imports, external estimator execution, runtime
+changes or new validation abstraction were needed.
+
+Reuse this released identity gate for the proposed experiment. It validates
+declared group boundaries, not the scientific correctness of those declarations,
+family ancestry, label validity, calibration, or data rights. A manually verified
+identity map remains a prerequisite; accepting a repaired partition will not
+constitute successful model estimation or KPI improvement.
+
+Verification receipt: at `1ffd5d44`, root directly opened a browser screenshot
+of this complete owner-gate section at `http://127.0.0.1:18774/lart`, English,
+1265 × 712. The text and complete digest wrapped legibly without observed
+clipping or overlap. The capture remains in the task output; other viewports,
+locales and product UI remain uninspected. The existing Rust documentation
+test also passed (1 test, 1.61s; terminal command `c2e46a`); that algebra check
+is separate from the installed partition-rejection evidence above.
+
+### Preprocessing evidence successor
+
+The four preprocessing follow-ups formerly ending at `b4887c28` are preserved
+in [Draft PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139),
+exact head `0024522146803627b8741470ebefaf79ffa4a310`. Before this normal revert,
+the research head was verified as its ancestor and the successor diff contained
+only additions to this note and AGENTS/CLAUDE; runtime, tests, Rust and Gap
+contents were identical. This removes duplicate ownership, not the research
+finding or its unresolved acceptance gates. Read the successor for all retained
+cell comparisons, encoding provenance, chosen owner repair and bounded tests.
+[Upstream PR #2](https://github.com/Toby-X/Latency-Response-Theory-Model/pull/2)
+remains Draft at `e5c82a91918a26fab469efd9f04d5152088b5c84`; its hosted run
+requires maintainer approval. Full estimator execution, data rights, held-out
+accuracy and CO decision latency remain unverified. No deployment is claimed.

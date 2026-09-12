@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+For title-only research citations, verify and register the persistent identifier
+in the source document and paper inventory. Passing DOI discovery does not prove
+full bibliography coverage; see the KPI runbook's citation reconciliation.
+
 For autonomous experiments, also read and maintain
 [the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
 It records commands, environment limits, failed interpretations, and evidence

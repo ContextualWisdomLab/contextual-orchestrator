@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Title-only psychometric citation gap
+
+Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
+so passing identifier checks missed its absence from the paper inventory.
+The verified DOI and APA entry now connect that lead to the existing guard.
+The [reproduction record](doctoring/autonomous_kpi_runbook.md#title-only-citation-reconciliation-2026-09-12)
+records RED and six passing citation contracts. This closes one known discovery
+omission, not complete paper coverage. Full-method review, owner implementation,
+observed accuracy/latency improvement and protected delivery remain unverified.
+
 ## 2026-09-12 Nonlinear response-process evidence gap
 
 Follow-up classification repair: RED `c8b358ad` reproduced a dry-run report
@@ -3839,3 +3849,54 @@ for RED evidence, hashes and reproduction. Central Noema dispatch acceptance
 still lacks receiver/run proof; its exact owner evidence is recorded there.
 Do not substitute a successful event submission or old-head Security result
 for current-head independent review, protected delivery or release.
+
+### Existing gateway repair not adopted by the review sidecar — 2026-09-12
+
+The [transport comparison receipt](doctoring/review_phase_transport_comparison.md)
+connects central run `34688188671` / job `103539568718` to source pin
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`. That source fails the eligible-free
+final-synthesis transport regression. Existing protected merge
+`9334dc91aaf853b758077e983517a822b6b21edb` passes the same selected regression,
+13 bootstrap tests, and the exact central `68daf0f` import/startup contract.
+The dependency lock is byte-identical. This is an adoption gap for the central
+workflow owner, not justification for duplicate CO fallback code or consumer
+retries. The original incident's terminal role remains uncorrelated; do not
+claim this defect is its sole cause.
+
+Next evidence: central protected pin adoption, current-head mandatory reviews
+and checks, then a real successful review with immutable runtime identity.
+Until then this gap stays open. Local loopback/test-double success does not
+establish provider recovery, release, observed accuracy, or decision-latency
+improvement. Test commit `8065ada1` remains preserved on its diagnostic branch;
+this research-PR update imports documentation only and does not claim that
+test is already part of its own CI suite.
+
+The historical overall-deadline recommendation above is superseded by the
+user's model-specific timeout policy: no common application/agent/gateway
+deadline by default. Provider termination, explicit user cancellation and
+configured per-model administrative timeout must remain distinguishable.
+
+### Retrospective calibration intake: split identity remains open
+
+The [pinned LaRT matrix audit](doctoring/lart_measurement_review.md#pinned-matrix-identity-audit)
+records actual public-data identity checks, not an estimator result. The
+published row split places 21 of 28 evaluation rows alongside a training row
+with the same suffix-derived base-model identifier. Its 100 item columns have
+only 40 distinct labels. These observations rule out treating that split as
+independent base-model generalization or joining items by raw labels alone.
+
+The next owner experiment must freeze benchmark-qualified item identities,
+reviewed base-model groups and separate family lineage, then fit only on
+training observations. Compare paired held-out Brier score/log loss at equal
+observation budgets; record excluded populations and unavailable generation
+failures explicitly. Released fast-mlsirm contracts remain the estimator
+boundary. Public matrices do not supply CO decision timestamps or known true
+latent parameters, so neither decision-p95 nor true-parameter RMSE can be
+claimed from this retrospective experiment. Data rights, grouping verification,
+owner implementation and observed gains remain open; no route default changes.
+
+Preprocessing follow-ups now live in [Draft successor PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139)
+at `0024522146803627b8741470ebefaf79ffa4a310`, preserving the complete prior
+delta before this normal document revert. The [handoff](doctoring/lart_measurement_review.md#preprocessing-evidence-successor)
+keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
+rights, accuracy and latency gates visible. This is not gap closure or release.
