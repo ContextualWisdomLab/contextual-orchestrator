@@ -221,72 +221,17 @@ locales and product UI remain uninspected. The existing Rust documentation
 test also passed (1 test, 1.61s; terminal command `c2e46a`); that algebra check
 is separate from the installed partition-rejection evidence above.
 
-### Combined-item identity source follow-up
+### Preprocessing evidence successor
 
-At the same upstream commit, root inspected zero-based cells 3, 6, 8, 12 and
-86–88 of [the application notebook](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/notebooks/application_analysis.ipynb).
-The inputs are the individual AIME24, AIME25 and AMC23 benchmark CSVs;
-cell 12 lowercases row identifiers. Cell 86 concatenates those three matrices
-in that order along columns, removes all-zero correctness rows from both
-matrices, and cell 87 independently drops missing rows before cell 88 saves
-the combined CSVs. This identifies a source-backed candidate mapping:
-columns 1–30 AIME24, 31–60 AIME25, and 61–100 AMC23 (one-based).
-
-This is source inspection, not execution provenance or verified byte/content
-equivalence. Before using that mapping, compare every retained row and column
-against the pinned individual matrices, check lowercasing collisions, and
-assert accuracy/length row alignment after the independent missing-row filters.
-Keep benchmark identity and original item label together; neither the repeated
-label alone nor an assumed concatenation order is sufficient. No estimator
-was executed and the real-data KPI remains unmeasured.
-
-Root independently checked all eight pinned CSVs in isolated Python using
-stdlib CSV and exact decimal subtraction (terminal session `20966`, exit 0).
-All 12,800 combined correctness cells equal the corresponding individual
-matrix cells. Every combined length cell instead equals its individual
-source plus one: 12,800 of 12,800. Headers match the stated concatenation;
-there are no lowercase row-ID collisions in any input, and both combined
-matrices have the same ordered 128 row IDs. This verifies the retained-cell
-mapping, not the completeness of excluded observations or benchmark provenance.
-Combined length SHA-256:
-`ae180f278e8c838a7fa81c1554ce7f4391fd375637feaa8fa8474b07c4999f01`.
-
-Cell 87 increments the array returned by `cot_df_3.to_numpy()` before cell 88
-saves the frame. Shared array storage is a plausible explanation for the
-observed shift, not established historical execution provenance. Any proposed
-calibration must explicitly distinguish individual raw counts from this
-already-shifted combined matrix; do not silently add one again. Existing
-application results require a separate preprocessing-path audit before their
-numerical interpretation is accepted. No published-result error magnitude or
-customer KPI improvement has been established.
-
-### Predictive application preprocessing follow-up
-
-Root read the complete pinned
-[predictive application](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/applications/predictive_power.py)
-on 2026-09-12. `load_combined_benchmarks()` adds `1.0` to the combined
-length matrix. `main()` passes that result to training and held-out evaluation;
-`cross_validated_mae()` takes its logarithm for held-out trait inference.
-Together with the exact retained-cell comparison above, this path uses
-`log(individual_count + 2)` for that inference, not
-`log(individual_count + 1)`. This conclusion follows from current pinned
-source and matrix values; the script was not imported or executed, and no
-claim is made that a particular published table was produced by this revision.
-
-Before adopting this evaluation, specify the intended count offset once at
-the data boundary and compare both preprocessing choices on a frozen,
-group-held-out cohort using the owner estimator. Do not silently subtract
-one from all files: individual and combined files have different observed
-representations. Historical result attribution, fitted-parameter sensitivity
-and downstream accuracy effects remain unverified. The previous section at
-`c2d98e87` was directly inspected in a browser at 1265 × 712, English,
-`http://127.0.0.1:18774/lart`; the complete section was readable without
-observed clipping or overlap. That visual receipt excludes this new addition.
-
-Follow-up receipt: root directly inspected the complete predictive-preprocessing
-section at `75c9d293`, same URL, English and 1265 × 712 viewport. Paragraphs,
-code spans and the source link were readable without observed clipping or
-overlap. Other viewports/locales and the Gap document were not visually
-inspected in this receipt. At that exact source, the six citation/role-contract
-tests passed with warnings treated as errors in 1.17s; they do not validate
-upstream estimation or prove a customer KPI gain.
+The four preprocessing follow-ups formerly ending at `b4887c28` are preserved
+in [Draft PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139),
+exact head `0024522146803627b8741470ebefaf79ffa4a310`. Before this normal revert,
+the research head was verified as its ancestor and the successor diff contained
+only additions to this note and AGENTS/CLAUDE; runtime, tests, Rust and Gap
+contents were identical. This removes duplicate ownership, not the research
+finding or its unresolved acceptance gates. Read the successor for all retained
+cell comparisons, encoding provenance, chosen owner repair and bounded tests.
+[Upstream PR #2](https://github.com/Toby-X/Latency-Response-Theory-Model/pull/2)
+remains Draft at `e5c82a91918a26fab469efd9f04d5152088b5c84`; its hosted run
+requires maintainer approval. Full estimator execution, data rights, held-out
+accuracy and CO decision latency remain unverified. No deployment is claimed.
