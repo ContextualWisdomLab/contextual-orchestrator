@@ -28,6 +28,19 @@ introspected from an isolated `mcp==2.2.0` environment.
 Not established: a live Camoufox round-trip, and an operator-visible signal when
 the fallback is taken (the fallback still swallows `ImportError`/`OSError`).
 
+## 2026-09-13 Trace HTTP fixture successor — Proposed
+
+Candidate `e88562187b7ab3bf681b306ab98d2ca821ae82ed`, based on #1140
+`38c0603a`, repairs client error-body and listener ownership in the trace HTTP
+tests without changing production authorization or routing. Targeted strict
+checks pass (31 trace cases; 126 related cases), and the full default suite
+passes 3670 tests with 2 skipped. Full strict remains RED: 1173 failed,
+2494 passed, 2 skipped, 13 errors. All process exits were observed.
+This closes a test-validation gap, not an observed customer accuracy or latency
+gap. Required review, full strict remediation and protected delivery remain.
+Ownership, RED evidence, independent review and exact-head logs are in the
+[HTTP resource runbook](doctoring/http_test_resource_lifecycle.md#trace-http-fixture-successor-2026-09-13).
+
 ## 2026-09-13 Test-owned listener and HTTPError resource warnings
 
 `python -m pytest tests -q -W default` at `012beaac` emitted 2013 warnings,
@@ -102,7 +115,6 @@ tests/test_self_check.py tests/test_security_hardening.py
 tests/test_provider_reliability.py -q` passes. This is local, single-branch
 evidence, not a protected-main merge or hosted CI run; sidecar adoption and a
 live gateway round-trip from `.github` remain open.
-
 
 ## 2026-09-13 Response lifecycle repair candidate
 
