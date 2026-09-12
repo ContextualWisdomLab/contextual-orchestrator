@@ -2813,11 +2813,18 @@ class ModelClient:
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
-            if isinstance(exc, ProviderResponseError):
-                raise
-            raise classify_provider_failure(
-                exc, agent_id=agent.id, model=agent.model, transport="passthrough"
-            ) from None
+            try:
+                if isinstance(exc, ProviderResponseError):
+                    raise
+                raise classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="passthrough"
+                ) from None
+            finally:
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:
+                        pass  # Preserve the primary provider failure.
 
     def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Retrieve provider JSON from the exact agent that owns an async job."""
@@ -2926,6 +2933,11 @@ class ModelClient:
                 _log_provider_attempt_failed(agent, attempt, exc, transient)
                 if attempt >= retry_limit or not transient:
                     break
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:
+                        pass  # Cleanup must not prevent the next provider attempt.
                 delay = self._backoff_delay(attempt)
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
@@ -2938,27 +2950,36 @@ class ModelClient:
                 transient=transient,
                 allow_transient_retries=allow_transient_retries,
             )
-        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
-            raise _provider_tool_execution_stopped(agent) from None
-        if isinstance(last_error, urllib.error.HTTPError) and (
-            last_error.code == 413 or _is_oversized_tool_description_error(last_error)
-        ):
-            raise ProviderRequestTooLargeError(
-                "provider request body is too large",
-                agent_id=agent.id,
-                model=agent.model,
-                provider_status=last_error.code,
-                transport="passthrough",
+        response_handed_off = False
+        try:
+            if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+                raise _provider_tool_execution_stopped(agent) from None
+            if isinstance(last_error, urllib.error.HTTPError) and (
+                last_error.code == 413 or _is_oversized_tool_description_error(last_error)
+            ):
+                raise ProviderRequestTooLargeError(
+                    "provider request body is too large",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    provider_status=last_error.code,
+                    transport="passthrough",
+                ) from None
+            if last_error is None:  # pragma: no cover - the loop always attempts once
+                raise RuntimeError(f"provider {agent.id} passthrough request failed")
+            if isinstance(last_error, ProviderResponseError):
+                raise last_error
+            if not allow_transient_retries:
+                response_handed_off = True
+                raise last_error
+            raise classify_provider_failure(
+                last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
             ) from None
-        if last_error is None:  # pragma: no cover - the loop always attempts once
-            raise RuntimeError(f"provider {agent.id} passthrough request failed")
-        if isinstance(last_error, ProviderResponseError):
-            raise last_error
-        if not allow_transient_retries:
-            raise last_error
-        raise classify_provider_failure(
-            last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
-        ) from None
+        finally:
+            if isinstance(last_error, urllib.error.HTTPError) and not response_handed_off:
+                try:
+                    last_error.close()
+                except Exception:
+                    pass  # Preserve the primary provider failure.
 
     def _send_raw(
         self,
