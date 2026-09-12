@@ -1,6 +1,7 @@
 """Public optimizer contracts reject invalid per-task quality, not just invalid means."""
 
 import math
+import json
 from unittest.mock import patch
 
 import pytest
@@ -70,3 +71,47 @@ def test_score_rejection_preserves_completed_usage(optimizer_kind, execution_mod
     assert len(candidate_engine._workflow_runs) == len(task_rows)
     if use_batch and execution_mode == "route":
         assert candidate_engine.spend_analytics()["by_model"][0]["output_tokens"] == 12
+
+
+@pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
+@pytest.mark.parametrize("execution_mode", ["route", "auto", "conduct"])
+@pytest.mark.parametrize("use_batch", [False, True])
+@pytest.mark.parametrize("failure_kind", ["domain", "callback", "conversion"])
+def test_discarded_factory_exposes_completed_usage(optimizer_kind, execution_mode, use_batch, failure_kind):
+    """An exception retains safe snapshots for earlier and failed evaluations."""
+    score_calls = 0
+    def score_value(task_row, answer_text):
+        nonlocal score_calls
+        score_calls += 1
+        if score_calls <= 2:
+            return 0.5
+        if failure_kind == "callback":
+            raise LookupError("scorer failed")
+        return "not a number" if failure_kind == "conversion" else math.nan
+
+    task_rows = [{"prompt": "private evaluation prompt"}] * 2
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        with pytest.raises((ValueError, LookupError)) as caught_error:
+            if optimizer_kind == "evolve":
+                evolve_orchestration(lambda config: _orch(_CountingClient()),
+                    {"mode": [execution_mode], "trial_id": [1, 2]}, task_rows,
+                    score_value, generations=1, population=2, use_batch=use_batch)
+            else:
+                optimize_orchestration([
+                    {"name": "private candidate", "mode": execution_mode, "orchestrator": _orch(_CountingClient())}
+                    for _ in range(2)], task_rows, score_value, use_batch=use_batch)
+    usage_rows = caught_error.value.optimizer_usage
+    assert len(usage_rows) == 2
+    assert [row["evaluation_index"] for row in usage_rows] == [0, 1]
+    assert all(row["scope"] == "cumulative_engine_snapshot" for row in usage_rows)
+    assert usage_rows[0]["totals"]["run_count"] == 2
+    expected_runs = 2 if failure_kind == "domain" or use_batch and execution_mode == "route" else 1
+    assert usage_rows[1]["totals"]["run_count"] == expected_runs
+    assert set(usage_rows[1]["totals"]) == {"run_count", "prompt_tokens", "output_tokens", "prompt_tokens_source", "cost_usd", "currency"}
+    assert "private" not in json.dumps(usage_rows)
+    assert "general_agent" not in json.dumps(usage_rows)
+    if use_batch and execution_mode == "route":
+        assert usage_rows[1]["totals"]["output_tokens"] == 12
+    else:
+        assert usage_rows[1]["totals"]["cost_usd"] is None
+    assert type(caught_error.value) is (LookupError if failure_kind == "callback" else ValueError)
