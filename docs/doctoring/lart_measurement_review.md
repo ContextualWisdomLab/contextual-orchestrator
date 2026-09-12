@@ -193,3 +193,22 @@ were readable without observed clipping or overlap. This supersedes the
 earlier pending-render statement for these additions only. Captures remain
 in the task output; other viewports/locales, link destinations and product UI
 were not audited. Dataset rights and all statistical/deployment limits remain.
+
+### Existing installed owner gate
+
+The installed `fast-mlsirm` 0.9.1 distribution already exposes
+`validate_group_partition`. Its installed `model_validation.py` SHA-256 is
+`7441501eb8c9ee2fb79a8c5e8fddff4a9be9385331e5f0909c4e023eb63bd7e9`.
+Root verified the site-packages origin with Python isolated mode from `/tmp`.
+Passing the pinned matrix's suffix-derived group IDs and published seeded
+training/evaluation fold IDs to this existing function raised the expected
+cross-fold-group `ValueError` (terminal command `221880`, exit 0 because the
+diagnostic explicitly required rejection). Input bytes were SHA-256 checked
+before parsing. No owner source imports, external estimator execution, runtime
+changes or new validation abstraction were needed.
+
+Reuse this released identity gate for the proposed experiment. It validates
+declared group boundaries, not the scientific correctness of those declarations,
+family ancestry, label validity, calibration, or data rights. A manually verified
+identity map remains a prerequisite; accepting a repaired partition will not
+constitute successful model estimation or KPI improvement.
