@@ -176,9 +176,10 @@ def test_classifier_requires_explicit_boolean_idempotency() -> None:
 
 def test_generic_provider_timeout_is_not_misclassified_as_tool_replay() -> None:
     cause = TimeoutError("provider read timeout")
-    wrapper = RuntimeError("provider request failed")
-    wrapper.__cause__ = cause
-    decision = classify_tool_failure(wrapper)
+    with cause:
+        wrapper = RuntimeError("provider request failed")
+        wrapper.__cause__ = cause
+        decision = classify_tool_failure(wrapper)
     assert decision.kind is ToolFailureKind.UNKNOWN
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
@@ -670,7 +671,8 @@ def _post_fallback_json(
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8"))
+        with error:
+            return error.code, json.loads(error.read().decode("utf-8"))
 
 
 def _provider_tool_stop_http_error() -> urllib.error.HTTPError:
@@ -745,6 +747,7 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 409
@@ -789,6 +792,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 409
@@ -835,6 +839,7 @@ def test_provider_http_tool_stop_preserves_streaming_sse_contract() -> None:
             body = response.read().decode("utf-8")
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200
@@ -895,6 +900,7 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
             body = response.read().decode("utf-8")
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
     assert status == 200
