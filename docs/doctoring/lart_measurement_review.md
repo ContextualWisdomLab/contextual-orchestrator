@@ -383,3 +383,17 @@ matrix algebra example, not upstream estimation or a real-data KPI. The Gap
 file has no delta against the retained research base. No predecessor evidence
 has been removed. These verification records are historical exact-head
 receipts; later receipt-only commits do not retroactively expand their scope.
+### Preprocessing evidence successor
+
+The four preprocessing follow-ups formerly ending at `b4887c28` are preserved
+in [Draft PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139),
+exact head `0024522146803627b8741470ebefaf79ffa4a310`. Before this normal revert,
+the research head was verified as its ancestor and the successor diff contained
+only additions to this note and AGENTS/CLAUDE; runtime, tests, Rust and Gap
+contents were identical. This removes duplicate ownership, not the research
+finding or its unresolved acceptance gates. Read the successor for all retained
+cell comparisons, encoding provenance, chosen owner repair and bounded tests.
+[Upstream PR #2](https://github.com/Toby-X/Latency-Response-Theory-Model/pull/2)
+remains Draft at `e5c82a91918a26fab469efd9f04d5152088b5c84`; its hosted run
+requires maintainer approval. Full estimator execution, data rights, held-out
+accuracy and CO decision latency remain unverified. No deployment is claimed.

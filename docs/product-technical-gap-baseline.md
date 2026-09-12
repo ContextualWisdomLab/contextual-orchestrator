@@ -3885,6 +3885,12 @@ latent parameters, so neither decision-p95 nor true-parameter RMSE can be
 claimed from this retrospective experiment. Data rights, grouping verification,
 owner implementation and observed gains remain open; no route default changes.
 
+Preprocessing follow-ups now live in [Draft successor PR #1139](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1139)
+at `0024522146803627b8741470ebefaf79ffa4a310`, preserving the complete prior
+delta before this normal document revert. The [handoff](doctoring/lart_measurement_review.md#preprocessing-evidence-successor)
+keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
+rights, accuracy and latency gates visible. This is not gap closure or release.
+
 The [combined-item and preprocessing follow-up](doctoring/lart_measurement_review.md#predictive-application-preprocessing-follow-up)
 now verifies the benchmark-qualified retained-cell mapping against all eight
 pinned source matrices. Correctness matches in all 12,800 cells; combined
