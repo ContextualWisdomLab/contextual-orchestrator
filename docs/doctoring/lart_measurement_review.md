@@ -239,3 +239,23 @@ assert accuracy/length row alignment after the independent missing-row filters.
 Keep benchmark identity and original item label together; neither the repeated
 label alone nor an assumed concatenation order is sufficient. No estimator
 was executed and the real-data KPI remains unmeasured.
+
+Root independently checked all eight pinned CSVs in isolated Python using
+stdlib CSV and exact decimal subtraction (terminal session `20966`, exit 0).
+All 12,800 combined correctness cells equal the corresponding individual
+matrix cells. Every combined length cell instead equals its individual
+source plus one: 12,800 of 12,800. Headers match the stated concatenation;
+there are no lowercase row-ID collisions in any input, and both combined
+matrices have the same ordered 128 row IDs. This verifies the retained-cell
+mapping, not the completeness of excluded observations or benchmark provenance.
+Combined length SHA-256:
+`ae180f278e8c838a7fa81c1554ce7f4391fd375637feaa8fa8474b07c4999f01`.
+
+Cell 87 increments the array returned by `cot_df_3.to_numpy()` before cell 88
+saves the frame. Shared array storage is a plausible explanation for the
+observed shift, not established historical execution provenance. Any proposed
+calibration must explicitly distinguish individual raw counts from this
+already-shifted combined matrix; do not silently add one again. Existing
+application results require a separate preprocessing-path audit before their
+numerical interpretation is accepted. No published-result error magnitude or
+customer KPI improvement has been established.
