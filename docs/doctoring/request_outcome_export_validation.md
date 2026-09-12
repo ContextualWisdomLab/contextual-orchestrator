@@ -2,6 +2,25 @@
 
 ## Request decision milliseconds, 2026-09-13
 
+Hosted acceptance remains outstanding at documentation head
+`cb97ec6615dcbef5d3f97901261a5c3125151bd5`. Run `34708601751` reports all
+three Security and Quality jobs skipped. Each job's checked-in condition
+excludes draft pull requests; the skip is not evidence of missing secrets or
+successful testing. A subsequent run-details lookup returned an explicit API
+rate-limit 403. Keep this distinct from authentication and organization-secret
+authorization failures. The existing manual workflow trigger can validate a
+candidate branch without changing its Draft status, but no such execution is
+claimed here. Its run head and terminal job results must be checked separately
+from protected PR approval and merge requirements.
+
+The full added section at `cb97ec66`, including the artifact and regression
+paragraphs below, was directly inspected in two actual GitHub browser
+screenshots at 1265 x 712, English. Text, commands and hashes wrapped readably
+without observed overlap or clipping. This supersedes only the follow-up
+paragraph inspection pending note below; complete code-diff and product UI
+inspection remain outstanding. Screenshots are in task
+`01a06c7e-d687-7352-90fb-adbea73e46b4`, browser tab 55.
+
 The additive export field `decision_latency_ms` converts the validated final
 receipt's `durable_ack_elapsed_ns` by 1,000,000. The native monotonic clock and
 raw nanoseconds remain authoritative; this is JSON presentation, not a new
