@@ -1963,7 +1963,7 @@ def run_policy_cell(
             if isinstance(exc, urllib.error.HTTPError):
                 try:
                     exc.close()
-                except OSError:
+                    except Exception:  # noqa: BLE001 - preserve the primary outcome
                     pass  # Cleanup must not replace the classified provider failure.
         incurred = failure_evidence() if failure_evidence is not None else {}
         prompt_tokens = incurred.get("prompt_tokens", 0)
