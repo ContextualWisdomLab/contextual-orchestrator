@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Optimizer score-domain recovery
+
+Current main `012beaacd0631f8cd3391c77744eeb626269b5de` still accepts NaN,
+infinity and out-of-range per-task quality into configuration ranking. Recovery
+test commit `40290df6` reproduced 28 failures and 16 valid-case passes (5.89s).
+The shared guard at `982b553345623e006698950bd560d94b4038ed33` passed all 76
+focused optimizer tests (11.65s), covering both public optimizers and serial/batch
+route evaluation. Invalid pairs whose average is valid are rejected individually;
+valid endpoints, fractional values and Boolean predicates retain their meaning.
+
+This restores a measurement-integrity prerequisite, not observed accuracy or
+latency improvement. Calls finish before score validation; no saved spend or
+early cancellation is claimed. Current-head full-suite, installed-package,
+independent review, visual inspection and protected-release evidence remain
+pending. Historical September 9 artifacts do not prove this revision passed.
+See [the recovery runbook](doctoring/optimizer_score_recovery.md).
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
