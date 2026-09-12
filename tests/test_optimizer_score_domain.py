@@ -2,6 +2,7 @@
 
 import math
 import json
+from types import SimpleNamespace
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -9,6 +10,33 @@ import pytest
 
 from test_batch_optimizer import _CountingClient, _orch
 from contextual_orchestrator.orchestrator import evolve_orchestration, optimize_orchestration
+
+
+@pytest.mark.parametrize("optimizer_kind", ["optimize", "evolve"])
+@pytest.mark.parametrize("record_count", [0, 1, 3])
+def test_batch_cardinality_rejected_before_scoring(optimizer_kind, record_count):
+    """Incomplete or extra custom-engine results cannot rank a partial task set."""
+    callback_calls = []
+    candidate_engine = SimpleNamespace(
+        batch_route=lambda prompts: [{"answer": "unit answer"}] * record_count,
+        spend_analytics=lambda: {"totals": {"cost_usd": Decimal("0.1")}},
+    )
+    task_rows = [{"prompt": "first task"}, {"prompt": "second task"}]
+
+    def quality_score(task_row, answer_text):
+        """Track whether malformed batches reach the evaluation callback."""
+        callback_calls.append(task_row)
+        return 1.0
+
+    with pytest.raises(ValueError, match="batch result count must match task count") as caught_error:
+        if optimizer_kind == "evolve":
+            evolve_orchestration(lambda config: candidate_engine, {"mode": ["route"]},
+                task_rows, quality_score, generations=1, population=1, use_batch=True)
+        else:
+            optimize_orchestration([{"name": "reference", "orchestrator": candidate_engine}],
+                task_rows, quality_score, use_batch=True)
+    assert callback_calls == []
+    assert caught_error.value.optimizer_usage[0]["totals"]["cost_usd"] == Decimal("0.1")
 
 
 def _evaluate_scores(score_values, optimizer_kind, use_batch, execution_mode="route"):
