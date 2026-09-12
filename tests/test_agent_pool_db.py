@@ -451,7 +451,8 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_http_create_and_delete_worker_agents() -> None:
@@ -513,6 +514,7 @@ def test_http_create_and_delete_worker_agents() -> None:
         assert status == 404
     finally:
         server.shutdown()
+        server.server_close()
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
 
 
@@ -574,6 +576,7 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         assert orchestrator.list_model_groups() == []
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
@@ -592,6 +595,7 @@ def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
             assert body["error"]["code"] == "agent_not_found"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":

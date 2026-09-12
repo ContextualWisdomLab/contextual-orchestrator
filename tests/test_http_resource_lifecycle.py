@@ -8,6 +8,7 @@ import pytest
 
 from test_actions_model_fallback import _post
 from test_openai_passthrough import _post as passthrough_post
+from test_agent_pool_db import _call as pool_call
 from test_true_streaming import _CapturingSSEProvider, _FakeSSEProvider
 from contextual_orchestrator import ModelAgent, ToolFallbackStoppedError
 from contextual_orchestrator.orchestrator import ModelClient
@@ -29,7 +30,7 @@ def test_provider_context_closes_listening_socket(provider_type):
 
 
 @pytest.mark.parametrize("body_bytes", [b'{"error":"unavailable"}', b'not-json'])
-@pytest.mark.parametrize("helper_name", ["actions", "passthrough"])
+@pytest.mark.parametrize("helper_name", ["actions", "passthrough", "agent_pool"])
 def test_post_closes_error_body_even_when_decoding_fails(monkeypatch, body_bytes, helper_name):
     """The shared HTTP helper owns error bodies, including invalid JSON."""
     body_stream = io.BytesIO(body_bytes)
@@ -44,7 +45,9 @@ def test_post_closes_error_body_even_when_decoding_fails(monkeypatch, body_bytes
     def call_helper():
         """Exercise each existing helper with its public argument contract."""
         if helper_name == "actions":
-            return _post(1, {})[:2]
+            return _post(1, {})
+        if helper_name == "agent_pool":
+            return pool_call("http://127.0.0.1/", "POST", "test_token", {})
         return passthrough_post("http://127.0.0.1/", {}, "test_token")
 
     try:
@@ -52,7 +55,10 @@ def test_post_closes_error_body_even_when_decoding_fails(monkeypatch, body_bytes
             with pytest.raises(json.JSONDecodeError):
                 call_helper()
         else:
-            assert call_helper() == (502, {"error": "unavailable"})
+            expected = (502, {"error": "unavailable"})
+            if helper_name == "actions":
+                expected += ("application/json",)
+            assert call_helper() == expected
         assert body_stream.closed
     finally:
         response_error.close()
