@@ -259,3 +259,26 @@ already-shifted combined matrix; do not silently add one again. Existing
 application results require a separate preprocessing-path audit before their
 numerical interpretation is accepted. No published-result error magnitude or
 customer KPI improvement has been established.
+
+### Predictive application preprocessing follow-up
+
+Root read the complete pinned
+[predictive application](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/applications/predictive_power.py)
+on 2026-09-12. `load_combined_benchmarks()` adds `1.0` to the combined
+length matrix. `main()` passes that result to training and held-out evaluation;
+`cross_validated_mae()` takes its logarithm for held-out trait inference.
+Together with the exact retained-cell comparison above, this path uses
+`log(individual_count + 2)` for that inference, not
+`log(individual_count + 1)`. This conclusion follows from current pinned
+source and matrix values; the script was not imported or executed, and no
+claim is made that a particular published table was produced by this revision.
+
+Before adopting this evaluation, specify the intended count offset once at
+the data boundary and compare both preprocessing choices on a frozen,
+group-held-out cohort using the owner estimator. Do not silently subtract
+one from all files: individual and combined files have different observed
+representations. Historical result attribution, fitted-parameter sensitivity
+and downstream accuracy effects remain unverified. The previous section at
+`c2d98e87` was directly inspected in a browser at 1265 × 712, English,
+`http://127.0.0.1:18774/lart`; the complete section was readable without
+observed clipping or overlap. That visual receipt excludes this new addition.
