@@ -1,5 +1,116 @@
 # HTTP test resource lifecycle
 
+## Expanded repair checkpoint (unpublished)
+
+### Current checkpoint: 2026-09-13
+
+At `69a5c26b52601832b5faa6ee23a8f7251816038c`, the eight-module strict
+union passes **274 tests in 6.58 seconds, process exit 0** (session 11593;
+`/tmp/co-resource-expanded-69a5c26b.log`). This supersedes the earlier RED
+eight-module observation below, not its historical record. The complete strict
+suite ended with **1193 failed, 2467 passed, 2 skipped, 11 errors in 284.63s**,
+session 24872, process exit 1. Log:
+`/tmp/co-resource-full-strict-69a5c26b.log`. Remaining failures are not accepted
+as baseline exceptions without independent root/overlap classification. The
+default suite completed with **3661 passed, 2 skipped in 152.37s**, session
+68953, process exit 0; log `/tmp/co-resource-full-default-69a5c26b.log`.
+This demonstrates default-suite success for this exact worktree, not equivalence
+to the export worktree's larger test population or strict-warning acceptance.
+
+Full-file warning aggregation finds 738 HTTPError, 673 socket and 18 SQLite
+ResourceWarning occurrences. These count printed warning occurrences, not unique
+objects, causal defects or failed tests. The largest failed-node module counts
+are trace HTTP honesty (23), response-format HTTP honesty (22), multimodal model
+group HTTP (20) and cost-review server (18). Module attribution alone does not
+prove ownership: delayed finalization can surface in a later unrelated test.
+An initial tool-output aggregation was truncated and is not evidence; these
+counts were recomputed directly against the complete log. The earlier export
+worktree's 1287-failure/15-error baseline has a different collected population;
+do not report an improvement percentage without an exact per-node comparison.
+
+The union consists of SQLite fixture lifecycle, HTTP resource lifecycle, agent
+pool DB, tool execution fallback, provider error taxonomy, OpenAI passthrough,
+true streaming and Actions model fallback tests. It uses the shared project
+interpreter at
+`/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python`
+from this worktree, with `-m pytest -q -W error --tb=short`. This is source-tree
+test evidence, not an independently installed package or native release proof.
+
+- `8182dd73`: retained-response assertions reproduce both raw 404 and binary
+  503 ownership failures (2 failed, exit 1), without relying on GC timing.
+- `c0a2170d`: consumed raw/binary responses close after classification; retry
+  responses close before backoff. Original HTTPError handoff remains open when
+  `allow_transient_retries=False`; its receiving caller owns consumption/close.
+- `68a73663` and `88440c78`: cover raw final/intermediate cleanup failures,
+  preserved primary classification, caller-owned handoff identity/lifetime and
+  binary cleanup failure. Taxonomy plus lifecycle: 62 passed, exit 0.
+- `82d478c7`: closes 11 test-owned listening sockets after shutdown. The
+  passthrough module improved to 31 passed/1 failed; the remaining two 413
+  responses were production-owned, not test-fixture cleanup obligations.
+- A read-only threaded call profile of that failing test observed
+  `proxy_completion`, `_orchestrated_provider_completion`, and `send_synthesis`
+  once each, and no `proxy_capability` call. Evidence:
+  `/tmp/co-413-owner-call-trace.log` (exit 1). Fixing a similarly named sibling
+  would not have addressed this actual execution path.
+- `69a5c26b`: closes each consumed synthesis HTTPError in `finally` after its
+  diagnostics, candidate observation and classification. Cleanup exceptions
+  cannot replace its primary outcome. Passthrough: 32 passed, exit 0.
+
+Independent read-only review found no production semantic blocker in
+`c0a2170d`/`69a5c26b`; the reviewer independently ran 37 lifecycle tests in
+1.79 seconds with exit 0 (session 25520). It identified missing direct synthesis
+cleanup-failure and close-before-next-candidate assertions. `dc88b2f3` adds both
+to the existing two-candidate HTTP 413 scenario: the next send asserts earlier
+responses are already closed; both retained responses must be closed before
+test cleanup; a closer that raises after closure must preserve the final 413.
+The test does not close errors in the fake sender. Its fallback cleanup runs
+only after the assertions to avoid leaking resources on RED. The passthrough
+module passes 33 tests in 2.69s, session 72459, exit 0. Full-suite results above
+remain tied to `69a5c26b`, not this later test-only head. Changed-file
+syntax parsing (7 Python files) and `git diff eeed2d98 HEAD --check` both pass
+at `69a5c26b`. The checked-in local quality workflow and `pyproject.toml` do
+not specify a Ruff/Black/Mypy gate; syntax/whitespace checks are not substitutes
+for type checking or security analysis. No new lint policy was invented here.
+
+The revised checkpoint's top and evidence/review sections were rendered with the
+installed Marked renderer and directly inspected in the in-app browser at
+`http://127.0.0.1:65278/` (English, 1265×712, tab 39). The screenshots showed
+readable headings, wrapped hashes/paths, adequate spacing and contrast, and no
+overlap or horizontal clipping in those viewports. Screenshots were viewed
+directly in the tool output, not saved as durable image files. Remaining historic
+sections, responsive widths and a final post-edit capture remain uninspected;
+this is a partial document visual receipt, not full UI/locale acceptance. No claim of
+full-suite acceptance, protected merge, release, deployment, actual routing
+accuracy gain or customer decision-latency gain follows from these unit tests.
+
+### Earlier checkpoint retained for provenance
+
+At `5d498b5ed30b8ce46e2e2041533b6c5070904cac`, the four-module resource
+union passes 150 tests with warnings as errors and process exit 0 (2.78 seconds,
+session 7722). The eight-module expansion remains RED: 31 failed, 226 passed
+in 10.94 seconds, session 23491, exit 1. Full log:
+`/tmp/co-resource-expanded-5d498b5e.log`. This is not whole-suite acceptance
+or a measured customer accuracy/decision-latency gain.
+
+The SQLite fixture change (`d05a83d6`) preserves transaction exit before close;
+explicit handle assertions changed from 9 failures/1 pass to 10 passes.
+Test HTTP helper/listener cleanup (`00ffc012`, `94982670`, `febef47f`) remains
+separate from production ownership. `3a014a40` accidentally wrapped a plain
+TimeoutError in a response context; standalone execution exposed TypeError.
+`3068a5cb` restores that test's semantics and scopes closure to its intended
+HTTPError caller. Preserve this failed attempt as a mixed regression, not a
+clean improvement in aggregate failure count.
+
+The fake-client cleanup experiment `997113de` was explicitly discarded by
+revert `fba09c8d`: its green result masked production retry-boundary ownership.
+The actual owner fixes are `2b69dbc2` (final classification, four RED status
+cases) and `5d498b5e` (close before retry backoff, success/final-failure RED
+cases). Final classification reads diagnostics before closing; a close error
+cannot replace the classified primary error. Generic classifiers are unchanged.
+Tests preserve attempt counts, backoff delay and final provider status.
+Independent review and expanded failure repairs remain pending. Nothing in
+this checkpoint establishes protected merge, release or deployment.
+
 ## Stacked transport follow-up (not published)
 
 The sections below retain the initial test-only checkpoint. The current local

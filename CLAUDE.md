@@ -136,3 +136,17 @@ Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof
 boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
+
+## HTTP response and test resource ownership
+
+Python 3.14 may report an unclosed resource during a later test or final pytest
+cleanup; test-body passes alone are not process success. Keep explicit response
+handles in regression tests and assert closure before fallback/backoff. Close a
+consumed HTTPError only after diagnostics/classification; preserve caller ownership
+when returning the original error. Cleanup failures must not replace the primary
+provider failure. Test servers need server_close after shutdown; SQLite fixtures
+need transaction exit before close. Never mask production leaks with fake-client
+cleanup, warning filters or forced GC. Use the existing project interpreter from
+isolated worktrees, record exact head and process exit, and distinguish default
+suite success from strict-warning acceptance. Reproduction, discarded experiments,
+commands and bounded results: [HTTP resource runbook](docs/doctoring/http_test_resource_lifecycle.md).

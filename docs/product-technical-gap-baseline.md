@@ -1,5 +1,30 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Response lifecycle repair candidate
+
+PR #1140's unpublished local candidate `dc88b2f3` closes consumed chat, raw,
+binary and synthesis HTTP error responses after classification, and before
+retry/backoff where applicable. Caller-owned raw-error handoff remains intact.
+Test-owned listeners and SQLite connections are closed at their owning boundary.
+The customer-relevant gap is reliable recovery without accumulating abandoned
+responses; no live-load resource or decision-latency gain has yet been measured.
+
+At production head `69a5c26b52601832b5faa6ee23a8f7251816038c`, the default
+suite passed 3661 tests with 2 skipped (152.37s, exit 0), but strict warnings
+produced 1193 failures and 11 errors (2467 passed, 2 skipped; exit 1). These are
+not comparable to a different worktree's test population. Test-only follow-up
+`dc88b2f3` passed 275 focused strict tests, including synthesis cleanup ordering
+and preservation of the final HTTP 413 when cleanup raises. Production review
+found no semantic blocker; this does not satisfy remaining hosted gates.
+
+Remaining work: independently reproduce and attribute residual resource roots;
+verify complete current-head checks/reviews; finish document visual evidence;
+integrate under branch protection and verify release/runtime behavior. Keep this
+candidate Proposed and unreleased. No model selection default, psychometric
+validity claim or actual accuracy/latency KPI is changed by this repair. See the
+[single owner runbook](doctoring/http_test_resource_lifecycle.md) for commands,
+exact-head evidence, rejected approaches and visual-inspection limits.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
