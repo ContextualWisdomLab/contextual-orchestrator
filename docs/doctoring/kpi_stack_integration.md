@@ -26,7 +26,7 @@ request-owned per-attempt measurement. The independent recovery branch at
 `726ae2949b026fbcf8567655aaa29cf1c18534ab` remains intact as reconciliation
 evidence, not a second production implementation.
 
-## Verification and concrete remaining defect
+## Verification and resolved test synchronization defect
 
 Both merged modules parse; whitespace checks pass. Independent read-only
 conflict review found no actionable issue within receipt/admission scope.
@@ -34,9 +34,9 @@ Focused execution of decision receipt, workflow link, batch lineage, true
 streaming and tool-execution fallback suites returned **1 failed, 195 passed
 in 13.05s** at merge revision 52fd0da9. The failure is
 `test_http_evidence_embedding_cold_and_warm_keep_task_interval`: the second
-request has no durable acknowledgement timestamp. Its cause is still under
-investigation; do not weaken the assertion or infer that an embedding-cache
-hit means a response-cache hit.
+request has no durable acknowledgement timestamp at the instant sampled.
+The synchronization cause and repair are recorded below; an embedding-cache
+hit does not mean a response-cache hit.
 
 The source integration used the existing immutable project test environment
 with the separately installed native receipt namespace appended read-only.
@@ -56,8 +56,13 @@ assertions remain. The five-suite run then passed **196 tests in 11.50s**.
 No runtime acknowledgement is invented or moved ahead of delivery, and this
 test-only synchronization does not impose a provider/model timeout.
 
-Resolve the missing acknowledgement from actual stored evidence, re-run the
-focused suite and full checks, then verify an isolated core/native install.
+At exact head `81ad64cf77a49f7bc2a57f4851a5c3259387ce5d`, the full source
+suite terminated successfully: **3,688 passed, 2 skipped in 261.42s**.
+The terminal receipt is session `90461`, log `/tmp/co-kpi-stack-full.log`.
+It used the same read-only native namespace arrangement described above;
+neither installed-core acceptance nor hosted checks are implied.
+
+Next verify an isolated core/native install.
 Retain both #1103 and #1107 until protected review/checks and lineage-preserving
 merge are verified. The archived bounded outcome exporter still requires
 integration; constants or manually seeded observations are not its successor.

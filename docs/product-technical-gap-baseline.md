@@ -3756,3 +3756,37 @@ identities; a naked remote handle must never bypass ownership. Preserve absent
 usage and distinguish remote acceptance, association commit, registry persistence
 and actual recoverability. A status-only response does not complete this gap.
 The new work remains isolated from the tested #1112/#1113 candidates.
+
+### Research-stack integration checkpoint — 2026-09-12
+
+The earlier stacked-PR receipts above are historical evidence, not proof that
+their changes reached protected main. Main `012beaacd0631f8cd3391c77744eeb626269b5de`
+lacked the retained research ancestry; no deletion from main was established.
+Ordinary merge `52fd0da99224f0889e8b012667a93940f6a324ee` preserves that
+ancestry and current main behavior. The test synchronization repair at
+`36af4a56` waits for actual receipt finalization, without inventing response
+delivery or moving its timestamp.
+
+Frozen integration `81ad64cf77a49f7bc2a57f4851a5c3259387ce5d` completed
+**3,688 passed, 2 skipped in 261.42s**, terminal session 90461. This is source
+testing with a separately installed native namespace, not installed-core,
+hosted, release or observed-customer acceptance. The accuracy and latency
+targets remain unmeasured; the next gap is protected delivery of complete
+request/outcome evidence and independent held-out evaluation.
+See [the integration runbook](doctoring/kpi_stack_integration.md) for lineage,
+the original failure, its reproduction and remaining acceptance work.
+
+Visual inspection: the runbook at `0fd408aa` was rendered at
+`http://127.0.0.1:18766/` in a real browser, English, 1265 × 712. Two screenshots
+were directly opened in the task: the top and the verification/acceptance
+section after scrolling. Text, revision identifiers and headings were readable
+without horizontal clipping or overlap in those views. The viewport edge cut
+off continuing vertical content normally; the final paragraph was not inspected.
+This is a local document preview, not Figma, product UI, mobile or locale
+acceptance; screenshots remain in the task tool output, not repository assets.
+
+Research intake: [LaRT measurement review](doctoring/lart_measurement_review.md)
+separates token-length evidence from wall-clock decision latency and
+full-data fitted references from known true parameters. The proposed
+fast-mlsirm-owned calibration experiment remains unimplemented and unmeasured;
+it does not change routing defaults or close the observed-outcome gap.
