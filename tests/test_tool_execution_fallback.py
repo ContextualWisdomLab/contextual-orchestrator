@@ -692,7 +692,6 @@ class _ProviderStoppedChatClient(ModelClient):
     def __init__(self) -> None:
         super().__init__(max_retries=3, retry_backoff=0.0)
         self.calls: list[str] = []
-        self.response_errors: list[urllib.error.HTTPError] = []
 
     def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
         del agent
@@ -701,9 +700,7 @@ class _ProviderStoppedChatClient(ModelClient):
     def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
         del payload, destination
         self.calls.append(agent.id)
-        response_error = _provider_tool_stop_http_error()
-        self.response_errors.append(response_error)
-        raise response_error
+        raise _provider_tool_stop_http_error()
 
 
 class _ProviderStoppedStreamingClient(ModelClient):
@@ -797,8 +794,6 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-        for response_error in client.response_errors:
-            response_error.close()
 
     assert status == 409
     assert body["error"]["code"] == "tool_execution_stopped"
