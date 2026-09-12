@@ -347,7 +347,14 @@ then produced six RED scalar cases at `911fcb1` and GREEN at `3c52a82`.
 CI called undeclared pytest and a nonexistent tests directory; the owner patch
 uses stdlib unittest discovery and the actual regression files instead.
 
-The upstream PR remains Draft. Hosted acceptance, full estimator output,
+The upstream PR remains Draft. Hosted run
+[34692344683](https://github.com/Toby-X/Latency-Response-Theory-Model/actions/runs/34692344683)
+at the same head awaits upstream maintainer approval. The coordinating reviewer
+directly inspected its “Action required” / awaiting-approval screen; the earlier
+“no jobs” interpretation was withdrawn. This is an approval boundary, not
+evidence of another workflow source defect. Do not change permissions or CI to
+bypass it. The independent pytest/lint-path repairs remain justified above.
+Hosted acceptance, full estimator output,
 statistical effects and release are unverified. Research PR #1107's document
 delta remains preserved until the separate CO successor is published and
 fully compared; the existence of the upstream PR alone does not authorize its
