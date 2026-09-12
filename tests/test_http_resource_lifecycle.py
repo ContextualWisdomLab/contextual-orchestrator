@@ -12,7 +12,37 @@ from test_agent_pool_db import _call as pool_call
 from test_true_streaming import _CapturingSSEProvider, _FakeSSEProvider
 from contextual_orchestrator import ModelAgent, ToolFallbackStoppedError
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ProviderRequestTooLargeError
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
+
+
+@pytest.mark.parametrize("status_code", [401, 429, 413, 409])
+def test_retry_boundary_closes_final_response(monkeypatch, status_code):
+    """Final classification preserves meaning before releasing its response."""
+    response_body = io.BytesIO(
+        b'{"error":{"code":"tool_execution_stopped"}}'
+        if status_code == 409 else b'{}'
+    )
+    response_error = urllib.error.HTTPError(
+        "https://provider.example/v1", status_code, "error", {}, response_body
+    )
+    client = ModelClient(max_retries=0)
+
+    def raise_response(*args, **kwargs):
+        """Simulate the transport handing ownership to the retry boundary."""
+        raise response_error
+
+    monkeypatch.setattr(client, "_send", raise_response)
+    expected = (ToolFallbackStoppedError if status_code == 409 else
+                ProviderRequestTooLargeError if status_code == 413 else ProviderUpstreamError)
+    try:
+        with pytest.raises(expected):
+            client._send_with_retry(
+                ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1"), {}
+            )
+        assert response_body.closed
+    finally:
+        response_error.close()
 
 
 @pytest.mark.parametrize("provider_type", [_FakeSSEProvider, _CapturingSSEProvider])

@@ -2307,23 +2307,29 @@ class ModelClient:
                 transient=transient,
                 allow_transient_retries=allow_transient_retries,
             )
-        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
-            raise _provider_tool_execution_stopped(agent) from None
-        if isinstance(last_error, urllib.error.HTTPError) and (
-            last_error.code == 413 or _is_oversized_tool_description_error(last_error)
-        ):
-            raise ProviderRequestTooLargeError(
-                "provider request body is too large",
-                agent_id=agent.id,
-                model=agent.model,
-                provider_status=last_error.code,
-                transport="chat",
-            ) from None
-        if isinstance(last_error, ProviderResponseError):
-            raise last_error
-        # Classify instead of collapsing: a 401/404/429 upstream failure is
-        # caller-actionable and must not surface as one opaque internal error.
-        raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
+        try:
+            if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+                raise _provider_tool_execution_stopped(agent) from None
+            if isinstance(last_error, urllib.error.HTTPError) and (
+                last_error.code == 413 or _is_oversized_tool_description_error(last_error)
+            ):
+                raise ProviderRequestTooLargeError(
+                    "provider request body is too large",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    provider_status=last_error.code,
+                    transport="chat",
+                ) from None
+            if isinstance(last_error, ProviderResponseError):
+                raise last_error
+            # Preserve actionable status before releasing the transport response.
+            raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
+        finally:
+            if isinstance(last_error, urllib.error.HTTPError):
+                try:
+                    last_error.close()
+                except Exception:  # noqa: BLE001 - cleanup must not replace the classified failure
+                    pass
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
