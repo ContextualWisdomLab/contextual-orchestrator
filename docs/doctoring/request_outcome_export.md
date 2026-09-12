@@ -121,6 +121,34 @@ resolved them. These results are source integration, not a final-head installed
 package or production KPI claim. Prior installed evidence retains its exact-head
 scope; protected delivery remains unverified.
 
+### Cache-aggregation parent integration
+
+Ordinary merge `97b6bc7bea9cf212f99fd6e83689e39acaf1b546` incorporates research
+`9863638dd0915737d45a4265fb029bf7453add5c`. The exporter delta relative to its
+old and new research parents is byte-identical (diff SHA-256
+`d4f390f3cf574f3a29d6ab9bf70baaa92efb4f01827e79470b2922541bf18417`).
+No exporter delta was discarded. Frozen full source session `63533` passed
+**3,735 tests, 2 skipped in 146.18s**, log `/tmp/co-export-full-97b6bc7b.log`;
+the command and read-only native arrangement are unchanged from above.
+Focused cache/receipt/server/workflow/export suites passed **117 tests in 6.91s**.
+
+Independent installed acceptance built a Git archive of that exact merge in
+`/tmp/co-export-wheel-97b6bc7b.80Fe62`. Core wheel SHA-256:
+`650959b15c42497cd31307425eee2a9d6432cec52db0e2588d38a2277013b987`.
+Python 3.14.6 used all 46 hash-locked requirements, pytest 9.1.1 and the unchanged
+native wheel described above. Initial isolated collection failed because the
+export tests import sibling `test_batch_routing` helpers (session `98524`, exit 2).
+Adding only the archived `tests` directory to the test process search path,
+not the package source root, restored collection. With `python -I`, `/tmp` as
+working directory, importlib test mode and both core/native import origins
+asserted under `site-packages`, all five focused suites passed **117 tests in
+9.36s** (session `6099`, exit 0). Preserve this test-helper prerequisite for
+reproduction; it does not justify importing the source package into wheel tests.
+
+These receipts verify cache measurement and exporter integration, not observed
+accuracy, latency improvement, hosted current-head review, protected merge or
+registry publication. The cache RCA is in the single KPI integration runbook.
+
 ## PRD: operator job and acceptance
 
 An authorized service administrator needs a repeatable list of admitted requests
