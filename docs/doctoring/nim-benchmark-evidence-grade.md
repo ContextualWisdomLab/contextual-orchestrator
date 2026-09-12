@@ -26,8 +26,15 @@ The remaining HTTPError500 originates in the release-acceptance client's
 fallback/error test and is consumed by inherited ModelClient classification.
 That test independently fails under warnings-as-errors; #1140 already owns
 its closure path. Do not duplicate that repair or suppress its warning here.
-Cleanup injection covers OSError after underlying closure, not every possible
-cleanup exception or failure before closure. Full/hosted checks, protected
+Follow-up review found that the OSError-only handler could still mask the
+primary outcome with RuntimeError. RED `f67db9c2` produced 1 failed, 2 passed,
+135 deselected in 0.64s. Attempt `46ccd25e` had an indentation error and failed
+collection (0.94s); `7ff2c8e7` corrects it. The cleanup boundary now catches
+Exception, not BaseException, preserving cancellation and process-exit signals.
+Strict benchmark module at `7ff2c8e7`: 138 passed in 5.30s, terminal exit 0
+(`/tmp/co-nim-general-cleanup-fixed.log`).
+Injected OSError and RuntimeError occur after underlying closure; inability to
+close the underlying resource is not demonstrated. Full/hosted checks, protected
 delivery, and observed accuracy/decision-latency improvement remain unproven.
 
 ## Current-parent restack, 2026-09-13 — Proposed

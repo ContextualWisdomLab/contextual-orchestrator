@@ -10,6 +10,11 @@ strict suite passes 137 tests. Combined strict checks remain 239 passed and
 integrated. No observed customer KPI gain is claimed. Exact evidence and
 limitations are in the NIM benchmark doctoring record.
 
+Follow-up source `7ff2c8e7` generalizes cleanup protection to Exception after
+RuntimeError reproduced outcome masking at RED `f67db9c2`. BaseException is
+not caught. This repairs primary-outcome integrity, not an observed KPI gain;
+the inherited #1140 dependency and prior combined failure remain unresolved.
+
 ## 2026-09-13 current-parent bootstrap restack — Proposed
 
 Merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090 and the
