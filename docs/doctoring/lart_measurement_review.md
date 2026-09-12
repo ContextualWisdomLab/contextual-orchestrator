@@ -162,3 +162,25 @@ verified precondition for production uncertainty claims. Keep the existing
 finite-matrix unit check separate from an asymptotic proof and from held-out
 calibration. This intake changes no estimator or routing default; dataset
 licensing/provenance audit and final rendering of this addition are pending.
+
+### Pinned matrix identity audit
+
+On 2026-09-12 root parsed the complete public combined correctness CSV at the
+upstream commit above, without running upstream code or fitting an estimator.
+Raw SHA-256: `231ea6d561e63229747de56b3c8aa8456a1ae16442945758f1ac4944df89b244`.
+There are 128 rows and 100 columns, but only 40 unique column labels; 30 labels
+repeat. No ragged rows, duplicate full row IDs, or nonbinary cells were found.
+Column position must therefore be preserved until benchmark-qualified item
+identity is established; a label-keyed join could merge distinct questions.
+
+Reproducing only the published `RandomState(42).choice(128, 100, replace=False)`
+split with NumPy 2.5.2, and stripping only explicit `_one_shot`/`_zero_shot`
+suffixes for this diagnostic, gives 65 base identifiers. Of 28 held-out rows,
+21 have a base identifier in training (21 shared identifiers). This verifies
+overlap under that naming rule, not family ancestry or its predictive impact.
+It is a read-only dataset audit, not an autoresearch treatment or KPI gain.
+No response content was sent to a model; no dataset was committed.
+
+The existing finite-uncertainty Rust documentation test passed at `a73737e4`
+(session `30596`, 1 test, 1.30s). It does not test this CSV audit or prove a
+corrected asymptotic theorem. The new intake remains pending visual review.
