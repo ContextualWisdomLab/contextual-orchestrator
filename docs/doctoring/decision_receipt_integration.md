@@ -2,6 +2,104 @@
 
 Status: incomplete implementation for issue #1110; not release evidence.
 
+## Supported entrypoint repair, 2026-09-12
+
+Parent: `de21ffd42733d6115800b33c4e84b3626a33f758` (#1107).
+The supported call chain is CLI `main` → `serve` → `build_server`.
+Only the builder accepted `decision_receipts`, so ordinary server startup could
+not enable the existing measurements. The successor adds a keyword-only,
+default-false forwarding option to `serve` and one explicit CLI switch,
+`--decision-receipts`, beside `--serve`. The native implementation and durable
+store checks remain in the existing builder; no estimator or timer is copied.
+
+The 2026-09-12 ownership inventory contains **91 open PRs**, correcting the
+earlier 90-PR snapshot. Sixteen touch either entrypoint file. Fresh GraphQL head
+identities and local exact-object merge-base diffs showed no changes to `serve`
+or its CLI invocation. This is a hunk audit, not whole-stack merge acceptance.
+#911 inserts a routing-observation option after `--state-db`; preserve that
+adjacent delta. #971 changes discovery-command help, not this parser option.
+#1107 owns the builder receipt hooks; #1138 changes export routing separately.
+
+| PR | Audited exact head |
+| --- | --- |
+| 1138 | `8de04219e2ce58c6f88504d8cb6c7f41056293cd` |
+| 1130 | `440847c3a4a2d698c6f6d1b92848d2d4743b5337` |
+| 1107 | `de21ffd42733d6115800b33c4e84b3626a33f758` |
+| 1074 | `2157d702c4609cc51829d7423911cadf26cf83d0` |
+| 1053 | `76c047585f54fcbe940fe168412f51627d3f79dd` |
+| 1037 | `4ba6be741bdee62bc4b1b3ae498e8d3415f4653c` |
+| 1022 | `35a518be78a375bb9e2821bcbb5c1b9ed713e155` |
+| 1021 | `61d5170b96a3e579ebe1aa237d0c55b67246e72c` |
+| 1017 | `e84d39c2c25f4ebae67247888d8e892f928e820d` |
+| 983 | `53aa9c5c7fcbb6a0dc573e22c67e3ef9e8f9474d` |
+| 982 | `20783edd7b39ff6439e9ea463f17d2e274b0ade8` |
+| 978 | `200135d07ab3e30bc00a1ab1a8f314a87fa5b547` |
+| 977 | `845f5c5dc146e5dc1515a451a6c51fc12ed70cc2` |
+| 972 | `876f1679cd44d7e9691b95344118bfe324e31287` |
+| 971 | `d9c2f57701f6e7fe194582b510255759ffb30990` |
+| 911 | `e80949188f0afa86052f10f5a9b627da1ee1ef0b` |
+
+Reproduction uses the existing project-local Python 3.14 environment at
+`/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python`
+from the successor worktree. No dependencies were installed. An initial attempt
+at a worktree-local `.venv` failed because that environment does not exist.
+Run `python -m pytest tests/test_decision_receipt_entrypoint.py -q -W error`
+with that interpreter: before source changes, four failures in 1.80 s exposed
+missing forwarding and the unrecognized flag; afterward four passed in 0.29 s.
+These are entrypoint unit checks, not installed-artifact or real-request proof.
+
+The related CLI auth/logging/role-effort and telemetry suites with `-W error`
+returned 104 passed and two failures in 5.69 s including the four new cases.
+The unchanged parent returned 100 passed and the same two failures in 5.20 s:
+`test_traced_recognizes_litellm_prefixed_json_object_diagnostic` and
+`test_traced_does_not_export_classified_provider_prose`, both HTTPError resource
+cleanup warnings. The candidate additionally emitted a cleanup warning during
+shutdown. Do not describe this as a clean full suite or suppress the warnings.
+Resource ownership needs its existing owner-stack repair and revalidation.
+
+Isolated follow-up distinguishes shutdown timing from a new leak: the unchanged
+parent running only those two telemetry nodes reported two passed in 1.04 s but
+exited 1 during `pytest_unconfigure` with the same `HTTPError 400: 'bad'`
+implicit-cleanup warning. The new six entrypoint tests plus existing CLI suites
+passed 58 cases in 2.53 s with `-W error` and exit 0. A candidate expanded rerun
+with allocation tracing reported 106 passed and the same two failures in 25.41 s,
+plus the shutdown warning. Therefore the shutdown symptom is parent-reproducible,
+not evidence of a candidate-only listener leak. The allocation follow-up below
+narrows ownership. No warning filter or unrelated teardown was added.
+
+Allocation follow-up on the unchanged parent identified the test-owned
+`urllib.error.HTTPError` construction at `tests/test_telemetry.py:1223` inside
+`test_traced_recognizes_litellm_prefixed_json_object_diagnostic`; no entrypoint
+test was loaded. The same shutdown signature followed two passing nodes (1.05 s,
+process exit 1). This baseline defect is not repaired in this successor.
+
+Offline packaging used `uv build --wheel --offline` with the existing Python
+interpreter and cached isolated build backend. The non-isolated attempt lacked
+setuptools, and the project interpreter has no pip; neither was installed into
+the shared environment. The resulting core wheel SHA-256 is
+`a51ce8658a723691a9d02accb03645ff9704dbe62ba326e0240028b96be193bf`.
+A fresh isolated environment installed this wheel and cached dependencies
+offline. Outside the checkout, `python -I -m pytest` with `--noconftest`
+and `--import-mode=importlib` passed all six entrypoint tests in 3.19 s.
+Core and server import origins were under that environment's site-packages.
+The CLI test uses an explicit agent fixture path to avoid depending on the
+working directory. This verifies the uncommitted core source candidate, not
+native-wheel integration, final-commit packaging, or a released artifact.
+
+The analytics export remains bounded to 256 retained admissions with
+`measurement_complete=false` and `reconciliation_required=true`. Complete ingress
+reconciliation and independently adjudicated outcomes are still required.
+Enabling this option alone cannot prove an accuracy or latency KPI improvement.
+Independent diff review found no runtime defect but requested missing-native and
+missing-store startup checks. Both now exercise `serve` and verify no listener
+is created; the native module is replaced only within these unit tests. The six
+focused cases passed in 0.31 s with `-W error`. Local browser inspection at
+1265 × 712, English, covered this added section and ownership table plus the
+changed AGENTS, CLAUDE and Gap paragraphs. Directly viewed overlapping captures
+showed readable wrapping without overlap or clipping. This is changed-section
+desktop inspection, not whole-product or multilingual acceptance. Hosted checks
+and release remain pending; no deployment or protected merge is claimed.
+
 RED `85a0b2d2` exposed the missing HTTP measurement option (1 failed,
 3.67 s). The working candidate compiles a separate PyO3 extension using the
 workspace's existing pyo3 0.29.2 lock resolution. It introduces no new

@@ -8942,8 +8942,10 @@ def serve(
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
     release_authority: Mapping[str, Any] | None = None,
+    *,
+    decision_receipts: bool = False,
 ) -> None:
-    """Serve the API with an optional persisted release-authority snapshot."""
+    """Serve the API with optional release authority and opt-in decision receipts."""
     server = build_server(
         orchestrator,
         host=host,
@@ -8952,6 +8954,7 @@ def serve(
         clearfolio_url=clearfolio_url,
         coordinator=coordinator,
         release_authority=release_authority,
+        decision_receipts=decision_receipts,
     )
     print(f"listening on http://{host}:{port}")
     try:
