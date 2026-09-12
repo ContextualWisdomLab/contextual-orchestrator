@@ -66,3 +66,62 @@ Next verify an isolated core/native install.
 Retain both #1103 and #1107 until protected review/checks and lineage-preserving
 merge are verified. The archived bounded outcome exporter still requires
 integration; constants or manually seeded observations are not its successor.
+
+## Request-level cache aggregation repair — 2026-09-12
+
+At published `eeefaca9378e4f70d03aec263fd26be1dccf92a3`, a cache hit
+immediately terminated the native request receipt. Repeated cache hits and
+selection followed by cache reuse raised an exception; cache followed by
+selection silently omitted the first-selection duration. A later failed or
+cancelled item could also retain the earlier cache classification. One HTTP
+batch contains multiple items but owns one admission clock.
+
+RED `c4e8343c` reproduced six failures in 0.55s. Runtime repair `0ddb5f1b`
+records cache observation without changing native state. At request close,
+only an accepted receipt with cache observation and no explicit failure becomes
+`cache_hit`. Selection, durable acknowledgement and write-failure terminals keep
+their existing meaning. The native state machine is unchanged; catching its
+exception alone would leave silent timing loss unresolved.
+
+Frozen `4bc96045037d04fa7477a1532c75f99f0d7e9898` adds real HTTP local-batch
+tests for repeated cache, both mixed orders and cache followed by failure,
+plus explicit context cleanup and successor-request isolation. Related suites
+passed **82 tests in 3.33s**. Full source regression passed **3,699 tests,
+2 skipped in 144.99s**, terminal session `86318`, log
+`/tmp/co-kpi-full-cache-0ddb5f1b.log` (the filename names the runtime commit;
+the tested head is the frozen revision above).
+
+Source reproduction uses the root project `.venv/bin/python`, appends the
+read-only native namespace at
+`/tmp/co-export-native-acceptance-20260912/lib/python3.14/site-packages/contextual_orchestrator`
+to the imported package path, then runs `pytest.main(["tests", "-q"])`.
+Do not interpret that source/native arrangement as an installed core test.
+
+Separate installed acceptance used a `git archive` of the frozen revision at
+`/tmp/co-cache-wheel-4bc96045.C4cqDg`, Python 3.14.6, all 46 hash-locked
+requirements, pytest 9.1.1 and the unchanged native wheel. Core wheel SHA-256:
+`3e278e07adf168140b23cde0a3f99be38201dea8ae0abfdc89fcdff2af88514b`.
+Native wheel SHA-256:
+`8dfee5d228a28733136e25c6006f77006bcba095863a667e0f2a3e71ca8c7c04`.
+With `python -I`, working directory `/tmp`, importlib test mode and asserted
+core/native `site-packages` origins, `test_decision_cache_aggregation.py`,
+`test_decision_receipts.py`, `test_cost_review_server.py` and
+`test_workflow_request_link.py` passed **82 tests in 8.93s** (session `18167`).
+This verifies measurement correctness, not customer accuracy or latency gains.
+
+## Central review handoff remains an owner gap
+
+The coordinating owner task supplied protected-main evidence at
+`.github@fb17ef556f94f673234aa557254ae52779e9a7b0`:
+[`noema_review_handoff.py`, lines 191–210](https://github.com/ContextualWisdomLab/.github/blob/fb17ef556f94f673234aa557254ae52779e9a7b0/scripts/ci/noema_review_handoff.py#L191-L210)
+sends `repository_dispatch` to the target repository. The
+[OpenCode handoff, lines 7707–7736](https://github.com/ContextualWisdomLab/.github/blob/fb17ef556f94f673234aa557254ae52779e9a7b0/.github/workflows/opencode-review-dispatch.yml#L7707-L7736)
+sets that repository as its destination. The inspected CO `eeefaca` tree has
+no `noema-review.yml` receiver. A 204 event-acceptance response is not a Noema
+run or independent review. Keep receiver repair in the `.github` owner;
+do not copy a workflow into this consumer to claim review coverage.
+
+At `eeefaca`, Security run `34688379677` completed tests, fuzzing, supply-chain
+and CodeQL successfully. That evidence predates the cache repair and does not
+approve or validate its new head. Fresh hosted checks, independent review,
+protected merge, release and observed KPI acceptance remain separate gates.

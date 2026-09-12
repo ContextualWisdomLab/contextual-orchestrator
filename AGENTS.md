@@ -1,5 +1,10 @@
 # AGENTS.md
 
+Cache reuse is an item observation, not a request terminal until close. Preserve
+mixed-batch selection timing, explicit failures and ContextVar cleanup. See
+`docs/doctoring/kpi_stack_integration.md` for the RED cases and separate source
+versus installed-core verification commands; do not weaken the native invariant.
+
 Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
 HTTP reproduction, atomic submission-event projection, and remote/local failure
 boundary. Do not retry a remotely submitted job after local lineage failure.

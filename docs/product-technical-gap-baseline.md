@@ -3828,3 +3828,14 @@ separates token-length evidence from wall-clock decision latency and
 full-data fitted references from known true parameters. The proposed
 fast-mlsirm-owned calibration experiment remains unimplemented and unmeasured;
 it does not change routing defaults or close the observed-outcome gap.
+
+Cache aggregation follow-up: frozen `4bc96045037d04fa7477a1532c75f99f0d7e9898`
+repairs repeated/mixed cache items losing initial-decision timing or masking
+failure within one HTTP admission. Full source: **3,699 passed, 2 skipped**;
+separate installed core/native: **82 passed**. These are correctness receipts,
+not observed accuracy or latency improvement. See the
+[single integration runbook](doctoring/kpi_stack_integration.md#request-level-cache-aggregation-repair--2026-09-12)
+for RED evidence, hashes and reproduction. Central Noema dispatch acceptance
+still lacks receiver/run proof; its exact owner evidence is recorded there.
+Do not substitute a successful event submission or old-head Security result
+for current-head independent review, protected delivery or release.
