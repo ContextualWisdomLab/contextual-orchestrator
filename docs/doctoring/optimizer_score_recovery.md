@@ -193,10 +193,11 @@ cohort, independent adjudication, failure denominators and uncertainty estimates
 
 ## Released calibration boundary inspection — 2026-09-12
 
-At local `b04dc9cec7636a764aa368324f5ac3ef0a5359fa`, six independent
-cardinality RED cases remain failing (zero, one or three records for two tasks,
-both optimizers; 184 deselected). No runtime cardinality repair has been added
-here and the unlocated 218-test descendant is still not acceptance evidence.
+At local `b04dc9cec7636a764aa368324f5ac3ef0a5359fa`, six tests failed, but
+three were subsequently identified as fixture-mode errors rather than batch
+cardinality reproductions; the corrected RED is recorded below. No runtime
+cardinality repair existed at that historical checkpoint. The unlocated
+218-test descendant is still not acceptance evidence.
 
 The hash-locked `fast-mlsirm==0.9.1` installed for the separate cache acceptance
 contains `fast_mlsirm.judge_calibration`. Its module SHA-256 is
