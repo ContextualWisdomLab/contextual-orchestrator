@@ -2636,22 +2636,23 @@ class ModelClient:
                 started,
             )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
-            # The gateway's own terminal tool-stop contract must survive the
-            # boundary: convert the provider HTTP shape into the package-owned
-            # stop error so callers keep the 409 semantics they rely on.
-            if _is_tool_execution_stopped(exc):
-                raise _provider_tool_execution_stopped(agent) from None
-            if isinstance(exc, ToolFallbackStoppedError):
-                raise
-            if isinstance(exc, ProviderResponseError):
-                raise
-            # A stream may already have emitted bytes, so it can neither be retried
-            # nor failed over to another provider. Keep the provider status, body,
-            # and exception cause inside the gateway; callers get one stable,
-            # classified, package-owned error instead of raw provider diagnostics.
-            stream_error = classify_provider_failure(
-                exc, agent_id=agent.id, model=agent.model, transport="stream"
-            )
+            try:
+                # Preserve tool-stop and response-limit contracts before classification.
+                if _is_tool_execution_stopped(exc):
+                    raise _provider_tool_execution_stopped(agent) from None
+                if isinstance(exc, (ToolFallbackStoppedError, ProviderResponseError)):
+                    raise
+                # Already-emitted bytes cannot be retried; keep diagnostics internal.
+                stream_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="stream"
+                )
+            finally:
+                # HTTPError is also a response; classifiers must read it before closure.
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:  # noqa: BLE001 - cleanup must not expose provider diagnostics
+                        pass
         if stream_error is not None:
             raise stream_error
 

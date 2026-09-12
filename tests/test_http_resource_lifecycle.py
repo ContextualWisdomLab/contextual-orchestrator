@@ -8,6 +8,9 @@ import pytest
 
 from test_actions_model_fallback import _post
 from test_true_streaming import _CapturingSSEProvider, _FakeSSEProvider
+from contextual_orchestrator import ModelAgent, ToolFallbackStoppedError
+from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
 @pytest.mark.parametrize("provider_type", [_FakeSSEProvider, _CapturingSSEProvider])
@@ -45,3 +48,35 @@ def test_post_closes_error_body_even_when_decoding_fails(monkeypatch, body_bytes
         assert body_stream.closed
     finally:
         response_error.close()
+
+
+@pytest.mark.parametrize("tool_stopped", [False, True])
+def test_stream_cleanup_failure_preserves_safe_provider_error(monkeypatch, tool_stopped):
+    """A failing response closer must not replace the classified stream error."""
+    response_error = urllib.error.HTTPError(
+        "http://127.0.0.1/", 409 if tool_stopped else 500, "error", {},
+        io.BytesIO(b'{"error":{"code":"tool_execution_stopped"}}' if tool_stopped else b"{}")
+    )
+    original_close = response_error.close
+
+    def failing_close():
+        original_close()
+        raise OSError("private cleanup diagnostic")
+
+    def raise_response_error(*args, **kwargs):
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", failing_close)
+    client = ModelClient()
+    monkeypatch.setattr(client, "_open_provider", raise_response_error)
+    try:
+        expected_error = ToolFallbackStoppedError if tool_stopped else ProviderUpstreamError
+        with pytest.raises(expected_error) as captured:
+            list(client._stream_send(
+                ModelAgent("worker_agent", "model_name", base_url="http://127.0.0.1"), {}
+            ))
+        if not tool_stopped:
+            assert captured.value.client_status == 502
+        assert "private cleanup diagnostic" not in str(captured.value)
+    finally:
+        original_close()
