@@ -100,6 +100,27 @@ Changes after `aae29136` are documentation/inventory only, so its installed
 not a newly built final-head package. Protected checks, independent approval,
 publication and the remaining visual audit are separate outstanding gates.
 
+### Synthetic-classification parent integration
+
+Frozen `be762e7dc515aa808c621b400108d9618cadb01c` incorporates the research
+parent's synthetic benchmark classification repair. Full source process 33167
+completed **3,724 passed, 2 skipped, 235.16s**, exit 0. Log:
+`/tmp/co-export-full-be762e7d.log`. Exact command from the source checkout:
+
+```sh
+/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-export-native-acceptance-20260912/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["tests", "-q"]))'
+```
+
+Independent root focused process 22472 passed **177 tests, 22.54s** with the same
+read-only native setup: NIM benchmark, NIM release acceptance, paper contracts,
+request outcome export and workflow request link suites. The earlier direct
+root-interpreter invocation 73852 produced **6 failed, 171 passed, 19.80s**;
+all six failures were the missing native receipt import. Correcting the test
+invocation, without changing source or installing into the shared environment,
+resolved them. These results are source integration, not a final-head installed
+package or production KPI claim. Prior installed evidence retains its exact-head
+scope; protected delivery remains unverified.
+
 ## PRD: operator job and acceptance
 
 An authorized service administrator needs a repeatable list of admitted requests
