@@ -95,6 +95,19 @@ class _CapturingSSEProvider:
         return f"http://127.0.0.1:{self._server.server_address[1]}"
 
 
+def test_stream_provider_contexts_close_listening_sockets() -> None:
+    """Both local SSE provider contexts release their listening sockets."""
+    providers = (_FakeSSEProvider([]), _CapturingSSEProvider([[]]))
+    socket_descriptors: list[int] = []
+
+    for provider in providers:
+        with provider:
+            pass
+        socket_descriptors.append(provider._server.socket.fileno())
+
+    assert socket_descriptors == [-1, -1]
+
+
 def _delta(content: str) -> str:
     return 'data: ' + json.dumps({"choices": [{"delta": {"content": content}}]}) + "\n\n"
 
