@@ -84,6 +84,22 @@ Proposed frontmatter were visible. Images are in tool output, not saved files.
 Other document sections, lower ADR, mobile widths, other locales and other links
 remain uninspected. These scoped checks do not establish a full UI audit.
 
+### Inventory repair and full verification
+
+The research owner repaired the missing LART inventory entry at `9a49cb84`;
+ordinary merge produced frozen `40d344dc4733e6fa2b8d45817faba8d4ba4f6dbd`.
+Full source verification, process 73240, completed **3,724 passed, 2 skipped,
+156.29s**. Log: `/tmp/co-export-full-inventory-repaired.log`. The interpreter was
+the root project's existing `.venv/bin/python`, read-only, with the isolated native
+namespace appended before `pytest.main(["tests", "-q"])`. No tests were excluded
+to repair the earlier failure. This validates the complete source suite at that
+head; the earlier failed run remains recorded above.
+
+Changes after `aae29136` are documentation/inventory only, so its installed
+74-test runtime acceptance remains applicable to the unchanged implementation,
+not a newly built final-head package. Protected checks, independent approval,
+publication and the remaining visual audit are separate outstanding gates.
+
 ## PRD: operator job and acceptance
 
 An authorized service administrator needs a repeatable list of admitted requests
