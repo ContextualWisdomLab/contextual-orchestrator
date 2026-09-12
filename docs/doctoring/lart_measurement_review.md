@@ -282,3 +282,11 @@ and downstream accuracy effects remain unverified. The previous section at
 `c2d98e87` was directly inspected in a browser at 1265 × 712, English,
 `http://127.0.0.1:18774/lart`; the complete section was readable without
 observed clipping or overlap. That visual receipt excludes this new addition.
+
+Follow-up receipt: root directly inspected the complete predictive-preprocessing
+section at `75c9d293`, same URL, English and 1265 × 712 viewport. Paragraphs,
+code spans and the source link were readable without observed clipping or
+overlap. Other viewports/locales and the Gap document were not visually
+inspected in this receipt. At that exact source, the six citation/role-contract
+tests passed with warnings treated as errors in 1.17s; they do not validate
+upstream estimation or prove a customer KPI gain.
