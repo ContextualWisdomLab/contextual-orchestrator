@@ -66,8 +66,15 @@ failures: both numeric values reached request mutation without raising, and
 the hostile equality hook executed. Repair commit
 `0e514f316b63fdd2c43ae345bd9d70b10c0bb25a` replaces equality with an
 identity/type check at construction. The repaired production blob is
-`fd9369d8309ac37624a79637fb8470af433cd30c`; malformed evidence is rejected
+`441092b8889ab4328e95a93eee9093ad8a85d0c4`; malformed evidence is rejected
 before normalization, rendering, fallback selection, or payload mutation.
+
+The first Git-data transfer created intermediate head `bd8ce72f69ca31d1b3a0e555632d0003466f81e1`
+with a truncated source blob; exact-tree comparison rejected it before any
+readiness or merge claim. Ordinary child
+`5d4e8e30b66acf21e30aaecf94e10799f3cef288` restored the complete file from
+predecessor `583ac7047df8129cabc3278eeb8d4ac96e43c348` and applied only the validated
+line replacement. Its Git blob identity matches the locally verified source.
 
 Fresh local verification with CPython 3.12 used disabled third-party pytest
 plugin autoload so an unrelated installed `pytest-asyncio` deprecation warning
