@@ -165,6 +165,7 @@ ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
+MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
@@ -2584,9 +2585,13 @@ class ModelClient:
         stream_usage: dict[str, Any] | None = None
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
+        response_bytes = 0
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
+                    response_bytes += len(raw)
+                    if response_bytes > MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderResponseError("provider response exceeds the configured limit")
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -2631,6 +2636,8 @@ class ModelClient:
             if _is_tool_execution_stopped(exc):
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            if isinstance(exc, ProviderResponseError):
                 raise
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
