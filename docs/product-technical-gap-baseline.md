@@ -1,5 +1,16 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 current-parent bootstrap restack — Proposed
+
+Merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090 and the
+current #1074 target, including both prior Gap sections. Strict selected
+checks remain RED: 235 passed, 3 failed. Two HTTPError cleanup failures also
+reproduce on the parent; the later profile test passes alone. The
+[restack receipt](doctoring/nim-benchmark-evidence-grade.md#current-parent-restack-2026-09-13--proposed)
+records exact revisions, commands, logs, the inherited PDF rights decision and
+remaining limits. This is integration work, not measured accuracy or latency
+improvement. Fresh hosted checks and independent review remain required.
+
 ## 2026-09-07 declared paired-bootstrap coverage (proposed)
 
 Child successor of [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)

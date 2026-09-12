@@ -1,5 +1,42 @@
 # Evidence-grade NVIDIA NIM benchmark: engineering decision record
 
+## Current-parent restack, 2026-09-13 — Proposed
+
+Normal merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090
+`5e952933d4dd97057ba76b70ea17983314a4babe` and #1074
+`2157d702c4609cc51829d7423911cadf26cf83d0`. Fetch and ls-remote confirmed
+both branch heads before integration. No competing local branch checkout or
+active subagent writer was found. The only conflict was this stack's Gap
+baseline: both sections were retained line for line, adding 20 lines with no
+removed lines. Bootstrap source, its tests and workflow remain byte-identical
+to the previous #1090 head.
+
+PR metadata reported historical base `9f5d0ce2`; a clean merge-tree against
+that base did not establish readiness against the actual target `2157d702`.
+The inherited parent intentionally removes the IRT-Router PDF in `84a60523`
+and preserves its citation/link and unresolved embedded-rights explanation.
+This restack retains that existing decision; it does not introduce a new
+content deletion or restore the removed copy. Git history retains the file.
+
+Using the shared Python 3.14 interpreter from the primary checkout, run
+`-m pytest` on `tests/test_nim_benchmark.py`,
+`tests/test_nim_benchmark_release_acceptance.py`,
+`tests/test_nim_benchmark_workflow_contract.py`, `tests/test_paper_contracts.py`
+and `tests/test_reasoning_effort_profile.py` with `-q -W error`.
+At merge `708fbb19`, this completed with **235 passed, 3 failed in 9.66s**,
+exit 1; log `/tmp/co-bootstrap-restack-708fbb19.log`.
+
+Two benchmark cases report HTTPError 500/503 cleanup warnings. Both fail
+independently on parent `2157d702` (2 failed, 1.36s, exit 1;
+`/tmp/co-bootstrap-parent-resource-2157d702.log`). The reported profile
+validation case passes alone on `708fbb19` (1 passed, 0.68s, exit 0;
+`/tmp/co-bootstrap-effort-isolated-708fbb19.log`), supporting delayed cleanup
+attribution rather than proving a profile defect. No warnings are suppressed.
+Resource ownership repair remains open; these probes do not establish every
+failure's cause. No full suite, hosted acceptance, approval, release or
+customer KPI improvement follows. Later documentation heads must not relabel
+these tests as executed at that later revision.
+
 ## Decision
 
 The NVIDIA NIM benchmark is an optional, provider-neutral evaluation adapter.

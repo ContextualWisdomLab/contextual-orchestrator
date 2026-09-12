@@ -1,5 +1,11 @@
 # AGENTS.md
 
+For stacked benchmark work, verify the target branch with `git ls-remote`;
+PR comparison metadata can retain an older base. Preserve both evidence
+sections in Gap conflicts and distinguish delayed HTTPError cleanup warnings
+from the test where collection reports them. See the 2026-09-13 restack
+receipt in `docs/doctoring/nim-benchmark-evidence-grade.md`.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 
