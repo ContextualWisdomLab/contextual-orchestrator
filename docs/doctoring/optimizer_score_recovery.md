@@ -273,3 +273,28 @@ remain unresolved. Preserve the owner successor and release boundary.
 PR #1137 remains Draft pending the separate psychometric evidence contract and
 current-head hosted review. The cardinality repair neither authorizes production
 ranking nor proves customer accuracy/latency improvement.
+
+### Production approval adapter audit — 2026-09-12
+
+At `d43e08c7a61c710fbc8493245b8b11baef92da93`, CodeGraph and direct
+call-site searches found optimizer/evolver calls in tests and the historical
+benchmark document, but no production invocation inside the gateway modules.
+Public exports permit external callers; this audit cannot establish their
+behavior. The generic APIs accept `quality_fn(task, answer)` and validate its
+numeric domain. They have no purpose/profile/evidence input. A value of 1.0
+and a returned recommendation are observed callback results, not calibrated
+model-judge approval, independent accuracy evidence, or production eligibility.
+
+No existing production approval adapter was identified in this checkout.
+Do not insert a package-import check, repurpose the judge-component resolver
+as an approval authority, or invent a purpose/profile abstraction in this PR.
+The existing checkable-answer/descriptive evaluation contract remains intact.
+
+Canonical owner follow-up must explicitly define the production approval
+adapter, its released evidence input, applicability to the assessment/rubric,
+model and population, verification/expiry/revocation behavior, and fail-closed
+recommendation behavior. Test missing, stale, mismatched and invalid evidence
+before wiring an actual production caller. Existing profile metadata alone
+does not satisfy these conditions. This records an unresolved contract gap;
+it is neither an implemented approval path nor a decision to discard the
+valid cardinality/usage changes in this PR.

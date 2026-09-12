@@ -2844,3 +2844,14 @@ The historical overall-deadline recommendation above is not current policy:
 model timeouts default to null, and a terminal 502 alone does not justify a
 new application-wide timeout or caller-side provider fallback. Trace the
 actual eligible candidates and request phases before changing owner behavior.
+
+Production approval boundary audit at `d43e08c7`: generic optimizer callback
+scores and recommendations are not calibration approval. No production
+approval adapter was identified in this checkout's runtime call graph; external
+callers remain outside that audit. Preserve descriptive/checkable-answer APIs
+and do not invent a purpose/profile layer in this repair. The canonical owner
+follow-up must define released applicable evidence, verification and lifecycle
+checks, and fail-closed production recommendation tests before an actual
+production caller adopts it. See the
+[adapter audit](doctoring/optimizer_score_recovery.md#production-approval-adapter-audit--2026-09-12).
+This gap remains open independently of the repaired cardinality/usage defects.
