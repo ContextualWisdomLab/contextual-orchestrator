@@ -362,7 +362,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _serve() -> tuple[object, int, str]:
