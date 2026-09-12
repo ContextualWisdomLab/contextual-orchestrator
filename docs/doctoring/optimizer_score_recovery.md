@@ -190,3 +190,32 @@ Obtain protected current-head CI and formal independent approval before
 merge/release; local review does not satisfy GitHub approval rules.
 Real accuracy and decision-latency KPIs still require an observed
 cohort, independent adjudication, failure denominators and uncertainty estimates.
+
+## Released calibration boundary inspection — 2026-09-12
+
+At local `b04dc9cec7636a764aa368324f5ac3ef0a5359fa`, six independent
+cardinality RED cases remain failing (zero, one or three records for two tasks,
+both optimizers; 184 deselected). No runtime cardinality repair has been added
+here and the unlocated 218-test descendant is still not acceptance evidence.
+
+The hash-locked `fast-mlsirm==0.9.1` installed for the separate cache acceptance
+contains `fast_mlsirm.judge_calibration`. Its module SHA-256 is
+`e51b8a8ef5b7da331b8572db40b5cc049bfa29d3034d66ab584c81d2c10c21f6`.
+Inspection covered lines 1–240 and 395–765, including report construction,
+serialization and the entire `evaluate_paired_calibration` function. The module
+explicitly calls its controls diagnostic evidence only. It retains failed
+outcomes, category occupancy and paired score changes; `gold_exact_agreement`
+uses the explicitly reported gold-scored subset, not every admitted case.
+The report does not emit a production-eligibility decision, a confidence
+interval or an independently verified holdout attestation. A caller-provided
+`held_out` label is metadata, not proof of independent evaluation.
+
+DeepWiki suggested this module supplied production-ranking eligibility. The
+inspected released code does not support that assertion; treat that response
+as a navigation hint, not evidence. Reuse the owner's diagnostic contract,
+but do not infer calibration approval from package availability, successful
+IRT projection or a bounded scalar score. The next owner/consumer contract
+must bind validation evidence to the actual rubric, judge revision, population
+and independent cohort before authorizing production changes. This bounded
+inspection does not establish that no other owner module or newer release
+provides such a contract, and adds no consumer-side replacement implementation.
