@@ -144,3 +144,36 @@ def test_usage_snapshot_failure_preserves_original_exception():
     assert caught_error.value is original_error
     assert caught_error.value.optimizer_usage == ({"evaluation_index": 0,
         "scope": "cumulative_engine_snapshot", "snapshot_status": "unavailable", "totals": None},)
+
+
+def test_minimal_analytics_contract_remains_supported():
+    """Optional usage fields do not expand the successful optimizer contract."""
+    candidate_engine = _orch(_CountingClient())
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        with patch.object(candidate_engine, "spend_analytics", return_value={"totals": {"cost_usd": None}}):
+            report = optimize_orchestration([{"name": "reference", "orchestrator": candidate_engine}],
+                [{"prompt": "reference task"}], lambda task, answer: 0.5)
+            assert report["results"][0]["quality"] == 0.5
+            with pytest.raises(ValueError) as caught_error:
+                optimize_orchestration([{"name": "reference", "orchestrator": candidate_engine}],
+                    [{"prompt": "reference task"}], lambda task, answer: math.nan)
+    assert caught_error.value.optimizer_usage[0]["totals"]["output_tokens"] is None
+
+
+def test_readonly_exception_usage_preserves_original_failure():
+    """A custom read-only attribute uses safe exception notes instead of masking."""
+    class ReadonlyUsageError(LookupError):
+        @property
+        def optimizer_usage(self):
+            return None
+
+    original_error = ReadonlyUsageError("scorer failed")
+    def failed_score(task_row, answer_text):
+        raise original_error
+    with patch("contextual_orchestrator.orchestrator._resolve_fast_mlsirm_components", return_value=None):
+        with pytest.raises(ReadonlyUsageError) as caught_error:
+            evolve_orchestration(lambda config: _orch(_CountingClient()), {"mode": ["route"]},
+                [{"prompt": "private prompt"}], failed_score, generations=1, population=1)
+    assert caught_error.value is original_error
+    usage_rows = json.loads(original_error.__notes__[-1].removeprefix("optimizer_usage="))
+    assert usage_rows[0]["totals"]["run_count"] == 1
