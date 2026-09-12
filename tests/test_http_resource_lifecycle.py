@@ -110,6 +110,70 @@ def test_retry_closes_previous_response_before_backoff(monkeypatch, second_fails
         final_error.close()
 
 
+def test_raw_response_handoff_keeps_caller_owned_body_open(monkeypatch):
+    """An unclassified response remains owned by its receiving caller."""
+    response_error = urllib.error.HTTPError(
+        "https://provider.example/v1", 404, "missing", {}, io.BytesIO(b'{}')
+    )
+    client = ModelClient(max_retries=0)
+
+    def raise_response(*args, **kwargs):
+        """Transfer the raw response without consuming ownership."""
+        raise response_error
+
+    monkeypatch.setattr(client, "_send_raw", raise_response)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as captured:
+            client._send_raw_with_retry(
+                ModelAgent("worker_agent", "model_name"), "responses", {},
+                allow_transient_retries=False,
+            )
+        assert captured.value is response_error
+        assert not response_error.closed
+        from contextual_orchestrator.provider_errors import classify_provider_failure
+        with captured.value as caller_response:
+            classified = classify_provider_failure(caller_response, agent_id="worker_agent", model="model_name")
+            assert classified.provider_status == 404
+        assert response_error.closed
+    finally:
+        response_error.close()
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_binary_classification_closes_response_without_masking_failure(monkeypatch, cleanup_fails):
+    """Binary transport consumes its HTTP failure even if cleanup raises."""
+    response_error = urllib.error.HTTPError(
+        "https://provider.example/v1", 503, "unavailable", {}, io.BytesIO(b'{}')
+    )
+    original_close = response_error.close
+    client = ModelClient(max_retries=0)
+
+    def raise_response(*args, **kwargs):
+        """Transfer response ownership to the binary boundary."""
+        raise response_error
+
+    def failing_close():
+        """Close the resource then inject a secondary cleanup failure."""
+        original_close()
+        raise OSError("private cleanup diagnostic")
+
+    if cleanup_fails:
+        monkeypatch.setattr(response_error, "close", failing_close)
+    monkeypatch.setattr(client, "_open_provider", raise_response)
+    monkeypatch.setattr(client, "_validate_provider", lambda agent: None)
+    try:
+        with pytest.raises(ProviderUpstreamError) as captured:
+            client.proxy_send_bytes(
+                ModelAgent("worker_agent", "model_name", base_url="https://provider.example/v1"),
+                "audio/speech", {"input": "hello"},
+            )
+        assert captured.value.provider_status == 503
+        assert captured.value.transport == "passthrough"
+        assert response_error.closed
+    finally:
+        original_close()
+
+
 @pytest.mark.parametrize("provider_type", [_FakeSSEProvider, _CapturingSSEProvider])
 def test_provider_context_closes_listening_socket(provider_type):
     """Leaving either provider context releases its real listening socket."""
