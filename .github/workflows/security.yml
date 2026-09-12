@@ -45,7 +45,7 @@ jobs:
           version: "0.12.5"
 
       - name: Run full test suite
-        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q -ra
 
       - name: Install hash-locked quality tools
         run: |
