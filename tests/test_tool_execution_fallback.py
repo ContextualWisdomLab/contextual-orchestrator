@@ -176,10 +176,9 @@ def test_classifier_requires_explicit_boolean_idempotency() -> None:
 
 def test_generic_provider_timeout_is_not_misclassified_as_tool_replay() -> None:
     cause = TimeoutError("provider read timeout")
-    with cause:
-        wrapper = RuntimeError("provider request failed")
-        wrapper.__cause__ = cause
-        decision = classify_tool_failure(wrapper)
+    wrapper = RuntimeError("provider request failed")
+    wrapper.__cause__ = cause
+    decision = classify_tool_failure(wrapper)
     assert decision.kind is ToolFailureKind.UNKNOWN
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
@@ -597,9 +596,10 @@ def test_provider_auth_failure_without_tool_evidence_keeps_provider_failover() -
         {},
         None,
     )
-    wrapper = RuntimeError("provider request failed")
-    wrapper.__cause__ = cause
-    decision = classify_tool_failure(wrapper)
+    with cause:
+        wrapper = RuntimeError("provider request failed")
+        wrapper.__cause__ = cause
+        decision = classify_tool_failure(wrapper)
     assert decision.kind is ToolFailureKind.UNKNOWN
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
