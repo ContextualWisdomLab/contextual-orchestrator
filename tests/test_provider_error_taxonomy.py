@@ -55,9 +55,10 @@ def _body_http_error(code: int, payload: dict) -> urllib.error.HTTPError:
 
 
 def test_reclassification_preserves_failure_and_updates_boundary_transport() -> None:
-    original = classify_provider_failure(
-        _http_error(404), agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
-    )
+    with _http_error(404) as response_error:
+        original = classify_provider_failure(
+            response_error, agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
+        )
     classified = classify_provider_failure(
         original,
         agent_id="synthetic-agent",
@@ -210,7 +211,8 @@ def test_classification_maps_every_upstream_status_to_openai_surface() -> None:
     }
     for status, surface in expected.items():
         assert PROVIDER_STATUS_SURFACES[status] == surface, f"status {status}"
-        classified = classify_provider_failure(_http_error(status), agent_id="a", model="m")
+        with _http_error(status) as response_error:
+            classified = classify_provider_failure(response_error, agent_id="a", model="m")
         assert isinstance(classified, ProviderUpstreamError)
         assert classified.client_status == surface[0], f"status {status}"
         assert classified.error_code == surface[1], f"status {status}"
@@ -376,9 +378,10 @@ def test_batch_raw_rejects_oversized_provider_body() -> None:
 
 def test_detail_and_transport_are_preserved_for_callers() -> None:
     """The structured detail names agent/model/status/retryability/transport."""
-    classified = classify_provider_failure(
-        _http_error(429), agent_id="worker_agent", model="gpt-x", transport="passthrough"
-    )
+    with _http_error(429) as response_error:
+        classified = classify_provider_failure(
+            response_error, agent_id="worker_agent", model="gpt-x", transport="passthrough"
+        )
     assert classified.detail == {
         "agent_id": "worker_agent",
         "model": "gpt-x",
