@@ -175,10 +175,21 @@ push or open a PR.
   scheduling (e.g. LLM-cascade / model-routing and queueing/load-balancing
   papers).
 - **Issue #568 slice:** `contextual_orchestrator.reasoning_effort_profile`
-  is the provider-neutral role catalog and equal-budget true-θ ablation.
-  RMSE is computed from θ̂ versus known true parameters, not a rank
-  constant. Do not change production route/conduct defaults until
-  `production_default_change_allowed` is true. Temperature is not effort.
+  retains provider-neutral configuration and legacy synthetic diagnostics.
+  The synthetic estimates are constructed from supplied true theta using
+  hand-authored effort/access coefficients; their RMSE is not observed model
+  quality or evidence of unknown-parameter recovery. The diagnostic-only
+  `production_default_change_allowed` API always refuses authorization.
+  An empirical successor needs actual observations, the released Rust/
+  fast-mlsirm estimation contract, exact learned-policy identity, a validated
+  evaluation design and separate deployment approval. Moving the remaining
+  synthetic routines to unit-test fixtures is still parent #1000 work.
+  Temperature is not effort. For an explicit request profile, only literal
+  boolean `True` is positive native-effort capability evidence; `False` and
+  `None` follow the explicit unsupported-provider fallback, and malformed
+  types are rejected before mutation without coercion. See
+  `docs/doctoring/learned_policy_authority_20260910.md` and
+  `docs/doctoring/effort_capability_evidence_20260912.md` for scope and evidence.
 <!-- END cwl-agent-guidance -->
 
 ## Tool-call handoffs

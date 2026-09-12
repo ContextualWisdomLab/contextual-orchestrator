@@ -653,7 +653,7 @@ class ModelAgent:
                 raise TypeError(
                     f"{field_name} must be a positive integer <= {_AGENT_POOL_INTEGER_MAX} or null"
                 )
-        if self.reasoning_effort_supported not in (None, True, False):
+        if self.reasoning_effort_supported is not None and type(self.reasoning_effort_supported) is not bool:
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
