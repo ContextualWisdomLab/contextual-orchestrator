@@ -98,3 +98,35 @@ tag inventory only); the public PyPI endpoint
 `https://pypi.org/pypi/contextual-orchestrator/json` returned HTTP 404 in a
 separate request. These checks do not rule out alternate distribution names
 or private registries. No immutable released adoption has been verified.
+
+## Exact protected-merge adoption check
+
+The minimal candidate `9334dc91aaf853b758077e983517a822b6b21edb` was checked
+in detached `/tmp/co-review-phase-merge-20260912`. The unchanged selected
+test definitions described above passed both cases. Its own
+`tests/test_review_gateway.py` passed **13 tests in 0.81s**. The ancestry
+check against `012beaacd0631f8cd3391c77744eeb626269b5de` returned exit 0.
+The generated-planner case still means no planner invocation, not recovery.
+
+The central launcher was read at `.github` PR #2052 head
+`68daf0f61d2afc0ebf68aa260713b2e481f5112d`, path
+`scripts/ci/contextual_orchestrator_review_sidecar.sh`. It installs only the
+hash-locked dependencies, then imports the selected CO source. The old and
+candidate `requirements.lock` files have identical SHA-256
+`c80752a4c6bbbc1bc9b0cb2b938831693a88dfdca7d1130bb4c00e2f9fe21345`.
+The changed project dependency URL does not participate in this install path.
+
+The exact import statement and unchanged startup heredoc were executed with
+`PYTHONPATH=/tmp/co-review-phase-merge-20260912:/private/tmp/cwl-pr2052-current`,
+the isolated interpreter
+`/tmp/co-cache-wheel-4bc96045.C4cqDg/installed/bin/python`, and working
+directory `/tmp`. The imported source path was printed and verified. The
+startup body SHA-256 was
+`3dc3b5bffb95f90ba9ef1db1dbe93003def994e4d063637420ed9bbe0645b178`.
+Session `83034` exited 0 with `IMPORT_AND_STARTUP_CONTRACT_PASS`.
+This exercised real loopback HTTP rejection above the body limit, acceptance
+above 64 KiB, exact tool-description byte preservation, and connection/server
+cleanup. Provider responses were test doubles; no credentials or provider
+requests were used. This did not reinstall dependencies or execute the full
+provisioning shell. It proves this bounded startup contract, not hosted CI,
+registry release, live discovery, or recovery of the original incident.
