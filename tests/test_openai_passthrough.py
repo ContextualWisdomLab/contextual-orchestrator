@@ -373,13 +373,28 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
-def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_http_all_auto_candidates_rejecting_size_returns_413(cleanup_fails) -> None:
     """Provider-size exhaustion remains an OpenAI-compatible 413 at the gateway."""
+    retained_errors = []
+    original_closers = []
+
     class RejectingClient(ModelClient):
         def proxy_send_once(self, agent, endpoint, payload):
-            raise urllib.error.HTTPError(
+            assert all(error.closed for error in retained_errors), "close before next candidate"
+            response_error = urllib.error.HTTPError(
                 "https://provider.example/v1", 413, "too large", None, None
             )
+            original_close = response_error.close
+            original_closers.append(original_close)
+            if cleanup_fails:
+                def failing_close():
+                    """A secondary cleanup failure must preserve the final 413."""
+                    original_close()
+                    raise OSError("private cleanup failure")
+                response_error.close = failing_close
+            retained_errors.append(response_error)
+            raise response_error
 
         proxy_send = proxy_send_once
 
@@ -430,9 +445,13 @@ def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
             },
             token,
         )
+        assert len(retained_errors) == 2
+        assert all(error.closed for error in retained_errors)
     finally:
         server.shutdown()
         server.server_close()
+        for original_close in original_closers:
+            original_close()
 
     assert status == 413
     assert body["error"]["code"] == "request_too_large"
