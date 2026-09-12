@@ -92,3 +92,13 @@ for trait_correlation in [-0.8, 0.8] {
 
 Run `rustdoc --test docs/doctoring/lart_measurement_review.md`. This manual
 documentation test is not a hosted owner-estimator conformance test.
+
+Verification receipt: at `de01e9e1`, the command above passed one Rust
+documentation test in 2.89s (terminal process 2866). Root directly inspected
+the title/citation area and complete Rust code block in two browser screenshots
+at `http://127.0.0.1:18768/lart`, English, 1265 × 712. The inspected text and
+code were legible without horizontal clipping or overlap. Middle prose,
+other viewport sizes, link destinations and locales were not visually audited.
+Screenshots remain in the task output, not published image assets. The shared
+local preview has an exporter-oriented browser title/navigation; it is not
+the product UI or evidence of published documentation.
