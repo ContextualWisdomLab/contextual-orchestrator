@@ -93,9 +93,8 @@ def test_safe_message_prefers_nested_provider_error_fields() -> None:
 def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> None:
     """Schema field names are useful; field values and request bodies remain private."""
     actionable = "'messages' must contain the word 'json' to use json_object"
-    assert safe_provider_message(
-        _body_http_error(400, {"error": {"message": actionable}})
-    ) == "messages must mention json when response_format is json_object"
+    with _body_http_error(400, {"error": {"message": actionable}}) as response_error:
+        assert safe_provider_message(response_error) == "messages must mention json when response_format is json_object"
     for diagnostic in (
         "messages=[{'role':'user','content':'customer secret'}]",
         '"messages": [{"role":"user","content":"customer secret"}]',
@@ -103,22 +102,21 @@ def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> 
         "prompt=customer secret",
         "input: customer secret",
     ):
-        assert safe_provider_message(
-            _body_http_error(400, {"error": {"message": diagnostic}})
-        ) is None
+        with _body_http_error(400, {"error": {"message": diagnostic}}) as response_error:
+            assert safe_provider_message(response_error) is None
 
-    assert safe_provider_message(
-        _body_http_error(
-            400,
-            {"error": {"message": "messages rejected; customer-private-text"}},
-        )
-    ) is None
+    with _body_http_error(
+        400, {"error": {"message": "messages rejected; customer-private-text"}}
+    ) as response_error:
+        assert safe_provider_message(response_error) is None
 
 
 def test_safe_message_hides_unparseable_bodies_and_urls() -> None:
     """Non-JSON bodies return None so URLs/reasons never leak through fallback text."""
-    assert safe_provider_message(_http_error(500, b"upstream-secret http://10.0.0.9/internal")) is None
-    assert safe_provider_message(_http_error(502)) is None
+    with _http_error(500, b"upstream-secret http://10.0.0.9/internal") as response_error:
+        assert safe_provider_message(response_error) is None
+    with _http_error(502) as response_error:
+        assert safe_provider_message(response_error) is None
 
 
 def test_safe_message_reads_only_a_bounded_provider_body() -> None:
@@ -177,13 +175,13 @@ def test_safe_message_reuses_body_after_retryability_inspection() -> None:
 
 def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
     """Control characters cannot smuggle log or header content; length is bounded."""
-    long = safe_provider_message(
-        _body_http_error(400, {"error": {"message": "x" * 500}})
-    )
+    with _body_http_error(400, {"error": {"message": "x" * 500}}) as response_error:
+        long = safe_provider_message(response_error)
     assert long is not None
     assert len(long) == MAX_SAFE_MESSAGE_CHARS
     raw = "line1\nline2\ttabbed\x00nul\x7fdel\x85next"
-    collapsed = safe_provider_message(_body_http_error(400, {"error": {"message": raw}}))
+    with _body_http_error(400, {"error": {"message": raw}}) as response_error:
+        collapsed = safe_provider_message(response_error)
     assert collapsed is not None
     assert all(control not in collapsed for control in ("\n", "\x00", "\x7f", "\x85"))
     assert "\t" in collapsed  # tab is preserved for readability
@@ -263,7 +261,8 @@ def test_classification_handles_network_tls_and_unknown_causes() -> None:
     handshake = ssl.SSLError("handshake eof")
     assert classify_provider_failure(handshake, agent_id="a", model="m").retryable
 
-    unmapped = classify_provider_failure(_http_error(418), agent_id="a", model="m")
+    with _http_error(418) as response_error:
+        unmapped = classify_provider_failure(response_error, agent_id="a", model="m")
     assert unmapped.error_code == "api_error"
     assert not unmapped.retryable
 
@@ -599,9 +598,9 @@ def test_safe_message_discards_sensitive_provider_diagnostics() -> None:
         "token=abc123456789012345",
     )
     for diagnostic in diagnostics:
-        error = _body_http_error(400, {"error": {"message": diagnostic}})
-        assert safe_provider_message(error) is None
-        classified = classify_provider_failure(error, agent_id="a", model="m")
+        with _body_http_error(400, {"error": {"message": diagnostic}}) as error:
+            assert safe_provider_message(error) is None
+            classified = classify_provider_failure(error, agent_id="a", model="m")
         assert diagnostic not in str(classified)
         assert str(classified) == "provider rejected the request with HTTP 400"
 
