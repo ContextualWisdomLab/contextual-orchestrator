@@ -319,3 +319,37 @@ including zero, missing, transformed-input and row-alignment boundaries.
 Do not create a CO subtraction workaround or copy the estimator. Actual
 estimator execution and finite-output checks remain required after the chosen
 owner patch; current evidence is source inspection and data comparison only.
+
+### Upstream patch handoff
+
+[Upstream Draft PR #2](https://github.com/Toby-X/Latency-Response-Theory-Model/pull/2)
+owns the two-loader correction at
+`e5c82a91918a26fab469efd9f04d5152088b5c84`, via the personal fork
+`seonghobae/Latency-Response-Theory-Model`. The canonical upstream permission
+was read-only. No artifact values or estimator code were changed. The chosen
+compatibility contract preserves the pinned combined count-plus-one encoding;
+it is not proof of historical author intent. CO does not import this branch.
+
+Local upstream checkout: `/tmp/lart-upstream-contract-20260912`. At that head,
+`python -m unittest discover -s validation -p 'test_*.py' -v` passed four
+tests in 0.127s with installed numpy 2.3.5/pandas 2.2.3; actionlint passed.
+The exact extracted predictive loader reads real CSVs, preserves all 12,800
+encoded values, produces finite logs and rejects shape/row-order mismatch.
+Separate scalar-frame conversion checks cover both consumers; artifact checks
+cover 25,600 cells. These are not full module or estimator execution.
+
+Failed attempts and limits: the CO interpreter lacked pandas; the bundled
+analysis interpreter lacked scipy. No dependencies were installed. The first
+fork command used an unsupported `--remote` option; retry without that option
+created the verified personal fork. The original raw-count equality failure
+was downgraded to a provenance probe; the selected encoded-consumption contract
+then produced six RED scalar cases at `911fcb1` and GREEN at `3c52a82`.
+CI called undeclared pytest and a nonexistent tests directory; the owner patch
+uses stdlib unittest discovery and the actual regression files instead.
+
+The upstream PR remains Draft. Hosted acceptance, full estimator output,
+statistical effects and release are unverified. Research PR #1107's document
+delta remains preserved until the separate CO successor is published and
+fully compared; the existence of the upstream PR alone does not authorize its
+revert. Earlier source-only status above is superseded only by these explicitly
+bounded loading checks. New handoff text still requires visual inspection.

@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+LaRT count-encoding work is owned by the [upstream patch and handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Reuse its commands and distinguish scalar contract checks, real dataframe
+loading and unverified estimator integration; do not reapply a pseudocount.
+
 For autonomous experiments, also read and maintain
 [the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
 It records commands, environment limits, failed interpretations, and evidence
