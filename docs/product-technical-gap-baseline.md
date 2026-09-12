@@ -3884,3 +3884,12 @@ boundary. Public matrices do not supply CO decision timestamps or known true
 latent parameters, so neither decision-p95 nor true-parameter RMSE can be
 claimed from this retrospective experiment. Data rights, grouping verification,
 owner implementation and observed gains remain open; no route default changes.
+
+The [combined-item and preprocessing follow-up](doctoring/lart_measurement_review.md#predictive-application-preprocessing-follow-up)
+now verifies the benchmark-qualified retained-cell mapping against all eight
+pinned source matrices. Correctness matches in all 12,800 cells; combined
+length values are individually shifted by one in all 12,800 cells. The pinned
+predictive loader adds another one before held-out log transformation.
+Freeze the intended offset and test preprocessing sensitivity before adopting
+its results. This narrows the item-identity gap but does not resolve model
+family lineage, dataset rights, estimator validation or measured customer gain.
