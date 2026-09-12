@@ -1291,6 +1291,34 @@ def _task(task_id: str = "sample_task", expected: str = "zebra") -> dict:
     }
 
 
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_fails, monkeypatch):
+    """A consumed error closes without replacing its declared failure outcome."""
+    response_error = urllib.error.HTTPError(
+        FAKE_ENDPOINT, 503, "down", {}, io.BytesIO(b"unavailable")
+    )
+    original_close = response_error.close
+
+    def close_response():
+        original_close()
+        if cleanup_fails:
+            raise OSError("cleanup failed")
+
+    def fail_response():
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", close_response)
+    try:
+        outcome = nb.run_policy_cell(
+            "route_once", _task(), fail_response, {}, None, nb._deterministic_timer()
+        )
+        assert outcome["outcome_reason"] == "provider_http_error:503"
+        assert outcome["task_score"] is None
+        assert response_error.closed
+    finally:
+        original_close()
+
+
 def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
     agents_by_id = {"worker_one": "vendor/model-a"}
     ok = nb.run_policy_cell(
