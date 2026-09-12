@@ -37,6 +37,21 @@ failure's cause. No full suite, hosted acceptance, approval, release or
 customer KPI improvement follows. Later documentation heads must not relabel
 these tests as executed at that later revision.
 
+An additional read-only probe at documentation head
+`2f24036317b7ff326523d63263c60b7f7bf92584` retains a BytesIO-backed
+HTTPError 503, passes it through `run_policy_cell`, and checks closure before
+the probe's fallback cleanup. The returned classification is
+`provider_http_error:503` and the raw score remains null, but `error.closed`
+is false: the closure assertion fails, exit 1. Thus this consumer defect is
+directly observed, not merely inferred from garbage-collection warnings.
+Reproduce from the checkout with the shared interpreter:
+`-c 'import runpy; runpy.run_path("/tmp/co-nim-response-ownership-probe.py", run_name="__main__")'`.
+The standalone probe and log `/tmp/co-nim-response-ownership-2f240363.log`
+are local audit artifacts, not portable committed tests or customer data.
+Repair must close only consumed HTTP errors while retaining the original
+failure outcome if cleanup itself fails; propagated errors keep caller
+ownership. No such source repair is included in this restack.
+
 ## Decision
 
 The NVIDIA NIM benchmark is an optional, provider-neutral evaluation adapter.
