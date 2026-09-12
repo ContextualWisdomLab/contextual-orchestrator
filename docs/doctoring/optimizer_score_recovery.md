@@ -97,8 +97,8 @@ termination are outside this repair. Successful return shapes are unchanged.
 The final focused run passed 214 tests in 10.68s, including non-retained factories,
 prior successful evaluations, preexisting engine usage, original exception
 identity and unavailable analytics (`/tmp/co-quality-usage-green-final-20260912.log`).
-Current-repair full-suite, installed-wheel and rendered-document checks remain
-pending; the earlier receipts above apply only to their stated revisions.
+At that checkpoint, full-suite, installed-wheel and rendered-document checks
+were pending; the later frozen-repair receipt below supersedes that status.
 
 Independent follow-up review found two compatibility edges, reproduced at
 `6597712f` (2 failed, 3.36s): custom engines may return only the previously
@@ -136,8 +136,18 @@ the installed package, asserted its site-packages location, and ran
 15.05s**, exit 0 (session 38230). Wheel SHA-256:
 `d62e05d3d32dde50ba9f6687b03319a4661dafa5650b25301d4b132061527593`.
 These are mock-provider behavioral checks, not observed customer KPI evidence.
-Python 3.10 execution and the revised document's visual inspection remain
-unverified; the older visual receipt does not cover this revision.
+Python 3.10 execution remains unverified.
+
+Visual follow-up inspected the actual browser rendering of `bf4561b5` at
+`http://127.0.0.1:18769/optimizer`, English, 1265 × 712. Three overlapping
+screenshots were opened directly, covering the factory-discard section through
+the final acceptance boundaries. Text, long hashes and paths wrapped without
+horizontal clipping or overlap; heading spacing and contrast were legible.
+The historical pending-status paragraph was misleading beside the new receipt
+and is corrected here. This was a local documentation preview, not product UI;
+its exporter navigation/title was inherited preview furniture. Narrow layouts,
+other locales, link destinations and the revised paragraph are not visually
+accepted by those captures. Images are retained in this task's browser outputs.
 
 This follow-up preserves the existing PR and its valid delta. Push the repair
 non-forcibly for fresh review of the factory-discard finding; do not resolve
