@@ -219,3 +219,56 @@ must bind validation evidence to the actual rubric, judge revision, population
 and independent cohort before authorizing production changes. This bounded
 inspection does not establish that no other owner module or newer release
 provides such a contract, and adds no consumer-side replacement implementation.
+
+## Cardinality repair and corrected RED receipt
+
+Re-execution at `51dd1f65` found that the earlier six-failure count combined
+three genuine missing-guard failures with three fixture errors: `optimize`
+omitted `mode="route"`, so its test engine reached the nonbatch path and raised
+`AttributeError`. The earlier count did not prove six batch-path reproductions.
+Test-only `df4e7ac7` explicitly selects route mode; session `89770` then produced
+six `DID NOT RAISE ValueError` failures in 0.86s, 184 deselected. Log:
+`/tmp/co-cardinality-red-route-20260912.log`.
+
+Runtime `090b4ec841cfc78b45248b561f1cef6396b57429` rejects a batch result count
+different from the task count before any quality callback. Both optimizers use
+this shared boundary; the existing exception path retains incurred usage.
+This independently verified two-line repair is not claimed to reconstruct or
+adopt the unlocated 218-test patch. No predecessor delta or review was discarded.
+Equal-count custom results still require their provider's ordering/identity
+contract; cardinality alone does not establish semantic task/result alignment.
+
+Frozen source verification: **222 focused tests in 7.28s**, `-W error`, and
+**3,791 passed, 2 skipped in 164.54s**, full process `61076`, log
+`/tmp/co-quality-full-090b4ec8.log`. Independent bounded review found no regression
+in either caller or usage preservation. Full source used the existing root
+Python environment and unchanged read-only native namespace.
+
+Separate installed-core verification used archive
+`/tmp/co-cardinality-wheel-090b4ec8.fwO2im`, Python 3.14.6, the 46 hash-locked
+requirements and pytest 9.1.1. Wheel SHA-256:
+`ca295b0b5f9d73ae7c1c1d4df5b86e387a57975a9ac13cc2cfdb63d5e557861e`.
+Initial process `47038` failed collection because a sibling test helper was
+absent from the test search path. Process `89080` added only the archived tests
+directory, used `python -I` from `/tmp`, asserted the installed core import,
+then passed **222 tests in 13.57s** with importlib mode and `-W error`.
+Do not add the package source root to conceal installed-package failures.
+
+## Existing owner contract, not a new consumer manifest
+
+Independent owner inspection found `validation_profile.py` on protected owner
+revision `493326f2de49ea1704da0ded19868ed05d2fe00f`, binding protocol, rubric,
+population, model fingerprints and classified evidence references. Tag v0.9.1
+at `09f762ded35786dd1078222a4577ff09d649816f` lacks that module. Extend the
+existing owner contract rather than create a parallel CO manifest.
+[Owner PR #1737](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/1737),
+head `6a0e43e10192895703cf18c5f50fdfb0fa73cc76`, is a Draft preregistration
+chronology successor, not a released dependency. Its failed aggregate
+[job 100978763523](https://github.com/ContextualWisdomLab/fast-mlsirm/actions/runs/33820461734/job/100978763523)
+reports `python-matrix result=cancelled`; this is not evidence of a validation
+source defect. Cancellation cause and actual current-head test/review evidence
+remain unresolved. Preserve the owner successor and release boundary.
+
+PR #1137 remains Draft pending the separate psychometric evidence contract and
+current-head hosted review. The cardinality repair neither authorizes production
+ranking nor proves customer accuracy/latency improvement.

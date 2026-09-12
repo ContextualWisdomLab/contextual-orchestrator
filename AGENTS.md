@@ -1,5 +1,11 @@
 # AGENTS.md
 
+Optimizer batch results must match the complete task count before callbacks;
+retain usage on rejection. Explicitly select route mode in batch regressions.
+Installed tests may need their sibling test-helper directory, never the source
+package root. See `docs/doctoring/optimizer_score_recovery.md` for corrected RED
+receipts and the separate released-calibration boundary.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 

@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+For optimizer batch validation and installed-test setup, read
+`docs/doctoring/optimizer_score_recovery.md`. Match task/result counts before
+scoring and preserve usage on failure; batch fixtures must select route mode.
+Passing this boundary does not establish psychometric calibration eligibility.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
