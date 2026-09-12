@@ -666,12 +666,54 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
             "temperature": orchestrator.client.temperature,
-            "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
             "stream": False,
         }
     )
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
+    assert completion["mode"] == "conduct"
+    assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
+def test_fast_mlsirm_adapter_uses_selected_model_output_ceiling() -> None:
+    client = _ScriptedClient("judge-reply")
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "general_agent",
+                "model-x",
+                tags=("reasoning", "writing", "planning", "research"),
+                max_output_tokens=12345,
+            )
+        ],
+        client=client,
+    )
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+        mode="route",
+    )
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
+    }
+    with patch.object(
+        orchestrator.client,
+        "proxy_send",
+        return_value={
+            "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    ) as proxy:
+        completion = adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            mode="conduct",
+            response_format=response_format,
+        )
+
+    sent = proxy.call_args.args[2]
+    assert sent["max_tokens"] == 12345
     assert completion["mode"] == "conduct"
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
 

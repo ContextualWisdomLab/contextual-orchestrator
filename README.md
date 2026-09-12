@@ -84,6 +84,8 @@ docker compose run --rm gateway \
 docker compose restart gateway
 ```
 
+Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available.
+
 Discovered candidates remain governed rather than silently becoming routing truth. Explicitly review and enable the candidates or model-group members you want to route. `orchestrator/auto` and `orchestrator/free` are governed virtual pools; the latter fails closed unless an enabled candidate has explicit comparable zero prompt and completion prices.
 
 See [`docs/kv-credentials.md`](docs/kv-credentials.md) for provider credential names, discovery, persistence, activation, and cost-aware selection details before using those virtual pools.

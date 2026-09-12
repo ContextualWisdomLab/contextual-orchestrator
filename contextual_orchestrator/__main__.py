@@ -1006,8 +1006,10 @@ def main(argv: list[str] | None = None) -> None:
         default=0.2,
         help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
     )
-    parser.add_argument("--max-output-tokens", type=int, default=2048,
-                        help="Default provider output token cap (default: 2048).")
+    parser.add_argument("--max-output-tokens", type=_positive_int, default=None,
+                        help="Provider output token cap. Omitted by default so the selected "
+                             "model's published maximum output governs; set it to impose an "
+                             "explicit override.")
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
