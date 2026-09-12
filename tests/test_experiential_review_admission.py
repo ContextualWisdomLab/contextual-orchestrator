@@ -9,12 +9,14 @@ from contextual_orchestrator.model_discovery import DiscoveredModel
 
 @pytest.fixture(autouse=True)
 def isolated_credential_backend():
+    """Give each admission test an isolated in-memory credential registry."""
     set_backend(InMemoryCredentialBackend())
     yield
     set_backend(None)
 
 
 def _discovered_model(credential_name: str, model_id: str, *, token_price: float | None) -> DiscoveredModel:
+    """Build a discovered model with explicit pricing evidence for admission."""
     return DiscoveredModel(
         provider_name="experiential_labs",
         model_id=model_id,
@@ -30,6 +32,7 @@ def _discovered_model(credential_name: str, model_id: str, *, token_price: float
 
 
 def test_experiential_labs_free_review_admission_requires_explicit_evidence(monkeypatch):
+    """Admit only the explicitly free model and reject paid or unknown pricing."""
     credential_name = "EXPERIENTAL_LABS_API_KEY"
     discovered = [
         _discovered_model(credential_name, "experiential/free", token_price=0.0),
