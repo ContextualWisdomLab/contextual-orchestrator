@@ -3784,3 +3784,9 @@ without horizontal clipping or overlap in those views. The viewport edge cut
 off continuing vertical content normally; the final paragraph was not inspected.
 This is a local document preview, not Figma, product UI, mobile or locale
 acceptance; screenshots remain in the task tool output, not repository assets.
+
+Research intake: [LaRT measurement review](doctoring/lart_measurement_review.md)
+separates token-length evidence from wall-clock decision latency and
+full-data fitted references from known true parameters. The proposed
+fast-mlsirm-owned calibration experiment remains unimplemented and unmeasured;
+it does not change routing defaults or close the observed-outcome gap.
