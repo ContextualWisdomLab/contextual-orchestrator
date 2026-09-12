@@ -422,7 +422,8 @@ def test_http_tool_failures_are_classified_by_status(
     code: int,
     expected_kind: ToolFailureKind,
 ) -> None:
-    decision = classify_tool_failure(_http_error(code), idempotent=True)
+    with _http_error(code) as response_error:
+        decision = classify_tool_failure(response_error, idempotent=True)
     assert decision.kind is expected_kind
 
 
@@ -521,28 +522,32 @@ def test_http_tool_statuses_map_to_safe_actions(
     expected_kind: ToolFailureKind,
     expected_action: ToolFallbackAction,
 ) -> None:
-    decision = classify_tool_failure(_http_error(code), idempotent=True)
+    with _http_error(code) as response_error:
+        decision = classify_tool_failure(response_error, idempotent=True)
     assert decision.kind is expected_kind
     assert decision.action is expected_action
 
 
 def test_wrapped_http_permission_error_fails_closed() -> None:
     wrapper = RuntimeError("agent invocation failed")
-    wrapper.__cause__ = _http_error(403)
-    decision = classify_tool_failure(wrapper, idempotent=True)
+    with _http_error(403) as response_error:
+        wrapper.__cause__ = response_error
+        decision = classify_tool_failure(wrapper, idempotent=True)
     assert decision.kind is ToolFailureKind.PERMISSION_DENIED
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
 
 
 def test_non_idempotent_http_execution_error_fails_closed() -> None:
-    decision = classify_tool_failure(_http_error(500), idempotent=False)
+    with _http_error(500) as response_error:
+        decision = classify_tool_failure(response_error, idempotent=False)
     assert decision.kind is ToolFailureKind.EXECUTION_FAILED
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
 
 
 @pytest.mark.parametrize("code", [502, 503, 504])
 def test_non_idempotent_http_transport_uncertainty_fails_closed(code: int) -> None:
-    decision = classify_tool_failure(_http_error(code), idempotent=False)
+    with _http_error(code) as response_error:
+        decision = classify_tool_failure(response_error, idempotent=False)
     assert decision.kind is ToolFailureKind.AMBIGUOUS_OUTCOME
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
 
