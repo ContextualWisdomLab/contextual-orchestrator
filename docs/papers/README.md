@@ -191,6 +191,23 @@ verified observed-task evidence and the protected release process.
 
 ## Psychometrics beyond orchestration
 
+### Multilevel ability and measurement error
+
+Fox, J.-P., & Glas, C. A. W. (2001). Bayesian estimation of a multilevel IRT
+model using Gibbs sampling. *Psychometrika, 66*(2), 271–288.
+https://doi.org/10.1007/BF02294839
+
+The publisher abstract describes joint estimation of a two-parameter normal
+ogive measurement model and a two-level regression on latent ability using
+Gibbs sampling. Research lead: evaluate measurement error and clustering
+together rather than treating observed scores as error-free abilities.
+This is an engineering proposal, not an implemented CO estimator.
+Read status: abstract only; full method, identification assumptions,
+implementation and customer accuracy/latency gains remain unverified.
+The original publication year is 2001, not the publisher's 2025 online date.
+No PDF is attached: full-text access and redistribution permission have not
+been established. See the [discovery receipt](../doctoring/autonomous_kpi_runbook.md#local-zotero-discovery-2026-09-09).
+
 ### Cross-document reference index
 
 At `fcf0047c37706975d9bff1ab4b95c54a2a383f54`, a tracked-text census found
