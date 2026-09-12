@@ -44,6 +44,8 @@ def _wait_for_caplog(caplog, predicate, *, timeout: float = 1.0, interval: float
     open, so a late record is not filtered out by the time it arrives.
     """
 
+    import time
+
     deadline = time.monotonic() + timeout
     while not predicate(caplog.text):
         if time.monotonic() >= deadline:
