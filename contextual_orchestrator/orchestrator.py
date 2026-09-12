@@ -4009,6 +4009,7 @@ class _StateStore:
                 if not self._export_identifier(request_id) or request_id != admitted_identity:
                     observations.append({"admission_sequence": admission_sequence,
                                          "request_id": None, "link_status": "identity_unavailable",
+                                         "decision_latency_ms": None,
                                          "workflow_outcomes": [], "batch_associations": [],
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
@@ -4063,6 +4064,12 @@ class _StateStore:
                 ):
                     row["durable_ack_elapsed_ns"] = None
                     row["invalid_association_count"] += 1
+                # Convert only the validated request acknowledgement, never generation time.
+                validated_acknowledgement = row["durable_ack_elapsed_ns"]
+                row["decision_latency_ms"] = (
+                    validated_acknowledgement / 1_000_000
+                    if validated_acknowledgement is not None else None
+                )
                 policy_hash = measurement.get("policy_snapshot_hash")
                 row["policy_snapshot_hash"] = policy_hash if (
                     isinstance(policy_hash, str) and len(policy_hash) == 64
