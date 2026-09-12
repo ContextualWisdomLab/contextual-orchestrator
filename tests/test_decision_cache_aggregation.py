@@ -72,6 +72,28 @@ def test_cache_observation_preserves_existing_write_failure():
     assert store.records[-1][1]["status"] == "write_failed"
 
 
+def test_cache_observation_context_is_cleared_between_requests():
+    """A completed request cannot leak cache-only classification into its successor."""
+    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
+
+    first_store = RecordingStore()
+    first_measurement = DecisionMeasurement(first_store)
+    first_measurement.close()
+    assert _CURRENT_DECISION.get() is None
+    record_answer_cache_hit()
+    assert first_measurement._answer_cache_observed is False
+    second_store = RecordingStore()
+    second_measurement = DecisionMeasurement(second_store)
+    try:
+        assert second_measurement._answer_cache_observed is False
+        record_answer_cache_hit()
+    finally:
+        second_measurement.close()
+    assert _CURRENT_DECISION.get() is None
+    assert first_store.records[-1][1]["status"] == "unfinished"
+    assert second_store.records[-1][1]["status"] == "cache_hit"
+
+
 @pytest.mark.parametrize("item_order", [
     ["cached", "cached"], ["cached", "fresh"], ["fresh", "cached"],
     ["cached", "failure"],
