@@ -16,6 +16,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+Decision receipt startup remains explicit opt-in; reuse builder validation and
+do not infer complete KPI coverage from the bounded export. See the
+[entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
+for the exact-head ownership audit and warning-sensitive test results.
+
 For title-only research citations, verify and register the persistent identifier
 in the source document and paper inventory. Passing DOI discovery does not prove
 full bibliography coverage; see the KPI runbook's citation reconciliation.
