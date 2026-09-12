@@ -129,3 +129,36 @@ other viewport sizes, link destinations and locales were not visually audited.
 Screenshots remain in the task output, not published image assets. The shared
 local preview has an exporter-oriented browser title/navigation; it is not
 the product UI or evidence of published documentation.
+
+## Additional intake — model/prompt split and theorem boundary
+
+At official repository commit `8cb9639eb162ff3732df82d4e190e7f902bde19d`,
+[data documentation](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/data/README.md)
+describes rows as model/prompt combinations, not independent base models.
+[Predictive evaluation](https://github.com/Toby-X/Latency-Response-Theory-Model/blob/8cb9639eb162ff3732df82d4e190e7f902bde19d/applications/predictive_power.py)
+selects 100 of 128 rows randomly before fitting. Consequently, that split
+does not itself establish unseen-base-model or unseen-family generalization.
+This is an inference from the code, not a measured leakage magnitude or a
+claim that the authors targeted family holdout. CO's proposed experiment must
+group verified base-model/prompt siblings and keep family holdout distinct.
+The matrices omit raw generations; their availability alone does not establish
+complete failed-request denominators, data reuse permission, or CO latency.
+
+Root read Appendix D.1; independent review also checked PDF pages 32–34.
+Assumption 2 requires both component bounds to be negative whenever the joint
+trait differs from truth. At `theta = theta_true` and `tau != tau_true`, the
+accuracy log-ratio is identically zero, contradicting its strictly negative
+bound. The symmetric speed-axis case also fails. Separate suprema over the
+two-dimensional ball complement preserve this problem. This is a printed
+quantifier inconsistency, not evidence that the intended normality conclusion
+or empirical results are false. A possible repair is componentwise
+nonpositivity with joint uniform separation; Lemma 4 must also be revisited.
+No corrected theorem has been proved here. Primary locations:
+[Appendix D.1](https://arxiv.org/html/2512.07019v4#A4.SS1) and
+[PDF pages 32–34](https://arxiv.org/pdf/2512.07019v4#page=32).
+
+Owner acceptance implication: do not treat the printed assumption as a
+verified precondition for production uncertainty claims. Keep the existing
+finite-matrix unit check separate from an asymptotic proof and from held-out
+calibration. This intake changes no estimator or routing default; dataset
+licensing/provenance audit and final rendering of this addition are pending.
