@@ -16393,6 +16393,8 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
     try:
         if use_batch and mode == "route":
             records = orchestrator.batch_route([task["prompt"] for task in tasks])
+            if len(records) != len(tasks):
+                raise ValueError("batch result count must match task count")
             scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
         else:
             scores = [
