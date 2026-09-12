@@ -35,11 +35,15 @@ def test_http_preserves_caller_generation_limit(monkeypatch, endpoint_path, budg
     original_raw_mock = model_client._mock_raw
 
     def observe_mock(model_agent, *call_args, **call_kwargs):
+        """Record the budget effective at a mocked model invocation."""
         observed_limits.append(model_client.effective_max_output_tokens(model_agent))
         return original_mock(model_agent, *call_args, **call_kwargs)
 
     def observe_raw_mock(model_agent, provider_endpoint, provider_payload):
+        """Check the canonical Responses budget at the provider boundary."""
         assert provider_endpoint.strip("/") == "responses"
+        assert "max_tokens" not in provider_payload
+        assert "max_completion_tokens" not in provider_payload
         observed_limits.append(provider_payload.get("max_output_tokens"))
         return original_raw_mock(model_agent, provider_endpoint, provider_payload)
 
