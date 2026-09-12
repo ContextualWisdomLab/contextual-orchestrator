@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
+One admission may contain cached and uncached items: finalize cache-only status
+at request close, retain failures and isolate request context. The runbook owns
+reproduction, native prerequisites and separate installed-package evidence.
+
 Batch request lineage evidence and unresolved registry failure semantics live
 in `docs/doctoring/batch_request_lineage.md`; HTTP 201 alone does not establish
 durable lineage. Preserve job-scoped item IDs and original submission identity.
