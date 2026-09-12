@@ -173,6 +173,8 @@ def test_http_export_retains_fixed_cohort_links_after_restart(tmp_path):
         assert first["measurement_complete"] is False
         assert len(first["observations"]) == 1
         first_row = first["observations"][0]
+        assert first_row["durable_ack_elapsed_ns"] is not None
+        assert first_row["decision_latency_ms"] == first_row["durable_ack_elapsed_ns"] / 1_000_000
         assert len(first_row["workflow_outcomes"]) == 1
         assert first_row["batch_associations"] == []
         prior_run = restored._store.load("workflow_run")[0]
@@ -196,6 +198,7 @@ def test_http_export_retains_fixed_cohort_links_after_restart(tmp_path):
         assert rows[2]["workflow_outcomes"] == []
         assert rows[2]["batch_associations"] == []
         assert rows[2]["decision_status"] == "capacity_rejected"
+        assert rows[2]["decision_latency_ms"] is None
         assert remaining["next_after_sequence"] is None
         exported = str(rows)
         for private_field in ("private-prompt-marker", "private-batch-marker", "owner_id",
