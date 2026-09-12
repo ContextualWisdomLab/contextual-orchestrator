@@ -1293,8 +1293,8 @@ def _task(task_id: str = "sample_task", expected: str = "zebra") -> dict:
     }
 
 
-@pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_fails, monkeypatch):
+@pytest.mark.parametrize("cleanup_error", [None, OSError, RuntimeError])
+def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_error, monkeypatch):
     """A consumed error closes without replacing its declared failure outcome."""
     response_error = urllib.error.HTTPError(
         FAKE_ENDPOINT, 503, "down", {}, io.BytesIO(b"unavailable")
@@ -1303,8 +1303,8 @@ def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_fails, mon
 
     def close_response():
         original_close()
-        if cleanup_fails:
-            raise OSError("cleanup failed")
+        if cleanup_error is not None:
+            raise cleanup_error("cleanup failed")
 
     def fail_response():
         raise response_error
