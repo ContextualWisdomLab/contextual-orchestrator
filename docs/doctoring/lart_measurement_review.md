@@ -183,4 +183,13 @@ No response content was sent to a model; no dataset was committed.
 
 The existing finite-uncertainty Rust documentation test passed at `a73737e4`
 (session `30596`, 1 test, 1.30s). It does not test this CSV audit or prove a
-corrected asymptotic theorem. The new intake remains pending visual review.
+corrected asymptotic theorem.
+
+Visual follow-up: source `85fabb16` was rendered at
+`http://127.0.0.1:18774/lart`, English, 1265 × 712. Root directly opened two
+overlapping browser captures covering the complete additional intake and
+pinned-matrix audit through its final paragraph. Text, identifiers and links
+were readable without observed clipping or overlap. This supersedes the
+earlier pending-render statement for these additions only. Captures remain
+in the task output; other viewports/locales, link destinations and product UI
+were not audited. Dataset rights and all statistical/deployment limits remain.
