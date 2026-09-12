@@ -20,6 +20,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Finite administrator model timeouts now use one end-to-end deadline across
+  local admission, connection, retry, and streamed chunks; synchronous
+  embeddings use the selected model's policy. Timeout values are capped at the
+  socket-safe 2,147,483,647-second boundary. Pre-send local admission expiry
+  may fail over, while post-send timeout/reset outcomes never replay and remain
+  distinct from clean provider completion or caller cancellation.
 - Ambiguous transport outcomes on both concrete-model and virtual passthrough
   paths now fail closed as `provider_outcome_unknown`, never replay onto another
   provider, update circuit/group reliability evidence, omit provider-controlled

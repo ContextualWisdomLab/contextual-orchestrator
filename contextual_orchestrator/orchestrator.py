@@ -164,6 +164,7 @@ def _request_endpoint_partition() -> str:
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
+MAX_MODEL_TIMEOUT_SECONDS = 2_147_483_647.0
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
@@ -663,8 +664,14 @@ class ModelAgent:
             raise TypeError("stream_usage_supported must be a boolean")
         if self.model_timeout_seconds is not None:
             value = self.model_timeout_seconds
-            if type(value) not in (int, float) or not 0 < value <= 1.7976931348623157e308:
-                raise ValueError("model_timeout_seconds must be finite positive seconds or null")
+            if (
+                type(value) not in (int, float)
+                or not 0 < value <= MAX_MODEL_TIMEOUT_SECONDS
+            ):
+                raise ValueError(
+                    "model_timeout_seconds must be finite positive seconds no greater "
+                    f"than {MAX_MODEL_TIMEOUT_SECONDS:g}, or null"
+                )
             object.__setattr__(self, "model_timeout_seconds", float(value))
         if type(self.model_timeout_revision) is not int or self.model_timeout_revision < 0:
             raise ValueError("model_timeout_revision must be a non-negative integer")
@@ -1082,6 +1089,41 @@ def _local_provider_state(base_url: str) -> _LocalProviderState:
 
 class _LocalProviderAdmissionTimeout(TimeoutError):
     """A local slot expired before any upstream request could be sent."""
+
+
+class _AdministratorModelTimeout(TimeoutError):
+    """An explicit administrator-owned end-to-end model deadline expired."""
+
+
+def _model_deadline(timeout: float | None) -> float | None:
+    """Return one monotonic deadline for an explicit model timeout."""
+    return None if timeout is None else time.monotonic() + float(timeout)
+
+
+def _remaining_model_timeout(deadline: float | None) -> float | None:
+    """Return remaining model time or raise the distinct administrator timeout."""
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _AdministratorModelTimeout("administrator model timeout elapsed")
+    return remaining
+
+
+def _administrator_timeout_error(
+    agent: ModelAgent, transport: str
+) -> ProviderUpstreamError:
+    """Build the caller-safe non-retryable administrator-timeout surface."""
+    return ProviderUpstreamError(
+        agent_id=agent.id,
+        model=agent.model,
+        error_code="model_timeout",
+        message="administrator-configured model timeout elapsed",
+        client_status=504,
+        provider_status=None,
+        retryable=False,
+        transport=transport,
+    )
 
 
 @contextmanager
@@ -1768,6 +1810,25 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     return False
 
 
+def _is_timeout_transport_failure(exc: BaseException) -> bool:
+    """Recognize a timeout through a bounded exception chain."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
 def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
     """Recognize a structural capability mismatch, not a reliability failure.
 
@@ -2165,6 +2226,8 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
+        resolved_timeout = self._resolved_model_timeout(agent)
+        deadline = _model_deadline(resolved_timeout)
         with traced(
             f"chat {agent.model}",
             {
@@ -2175,8 +2238,15 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):
-            return self._send_with_retry(agent, payload, destination)
+        ), _local_provider_slot(agent, self.local_concurrency, resolved_timeout):
+            try:
+                if deadline is None:
+                    return self._send_with_retry(agent, payload, destination)
+                return self._send_with_retry(
+                    agent, payload, destination, timeout=_remaining_model_timeout(deadline)
+                )
+            except _AdministratorModelTimeout:
+                raise _administrator_timeout_error(agent, "chat") from None
 
     def apply_effort_profile(
         self,
@@ -2304,19 +2374,36 @@ class ModelClient:
         last_error: Exception | None = None
         allow_transient_retries = getattr(self._local, "allow_transient_retries", True)
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
+        deadline = _model_deadline(timeout)
         attempt = 0
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             _log_provider_attempt(agent, attempt, retry_limit)
             try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
+                attempt_timeout = _remaining_model_timeout(deadline)
+                if attempt_timeout is None:
+                    return self._send(agent, payload, destination)
+                return self._send(agent, payload, destination, timeout=attempt_timeout)
+            except _AdministratorModelTimeout:
+                raise
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 transient = is_transient_error(exc)
                 _log_provider_attempt_failed(agent, attempt, exc, transient)
+                if _is_ambiguous_passthrough_transport_failure(exc):
+                    if deadline is not None and _is_timeout_transport_failure(exc):
+                        raise _administrator_timeout_error(agent, "chat") from None
+                    raise ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                        message=(
+                            "the provider request outcome is unknown; "
+                            "automatic replay is unsafe"
+                        ),
+                        client_status=502,
+                        retryable=False,
+                        transport="chat",
+                    ) from None
                 if attempt >= retry_limit or not transient:
                     break
                 delay = self._backoff_delay(attempt)
@@ -2595,6 +2682,8 @@ class ModelClient:
             payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
+        resolved_timeout = self._resolved_model_timeout(agent)
+        deadline = _model_deadline(resolved_timeout)
         with traced(
             f"chat {agent.model}",
             {
@@ -2605,11 +2694,21 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+        ), _local_provider_slot(agent, self.local_concurrency, resolved_timeout):  # pragma: no cover
+            if deadline is None:
+                yield from self._stream_send(agent, payload, destination)
+            else:
+                yield from self._stream_send(
+                    agent, payload, destination, deadline=deadline
+                )
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        deadline: float | None = None,
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
@@ -2631,8 +2730,26 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         try:
-            with self._open_model_provider(request, destination, agent) as response:
-                for raw in response:
+            with self._open_model_provider(
+                request,
+                destination,
+                agent,
+                timeout=_remaining_model_timeout(deadline),
+            ) as response:
+                response_iterator = iter(response)
+                while True:
+                    remaining = _remaining_model_timeout(deadline)
+                    response_socket = getattr(
+                        getattr(getattr(response, "fp", None), "raw", None),
+                        "_sock",
+                        None,
+                    )
+                    if remaining is not None and response_socket is not None:
+                        response_socket.settimeout(remaining)
+                    try:
+                        raw = next(response_iterator)
+                    except StopIteration:
+                        break
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -2682,9 +2799,14 @@ class ModelClient:
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
             # classified, package-owned error instead of raw provider diagnostics.
-            stream_error = classify_provider_failure(
-                exc, agent_id=agent.id, model=agent.model, transport="stream"
-            )
+            if isinstance(exc, _AdministratorModelTimeout) or (
+                deadline is not None and _is_timeout_transport_failure(exc)
+            ):
+                stream_error = _administrator_timeout_error(agent, "stream")
+            else:
+                stream_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="stream"
+                )
         if stream_error is not None:
             raise stream_error
 
@@ -3458,7 +3580,7 @@ class _AgentPoolStore:
                 reasoning_effort_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 model_timeout_seconds REAL CHECK (model_timeout_seconds IS NULL OR
-                    (model_timeout_seconds > 0 AND model_timeout_seconds <= 1.7976931348623157e308)),
+                    (model_timeout_seconds > 0 AND model_timeout_seconds <= 2147483647)),
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_max_output_tokens_check
                     CHECK (
@@ -3613,7 +3735,7 @@ class _AgentPoolStore:
             conn.execute(
                 "ALTER TABLE agent_pool ADD COLUMN model_timeout_seconds REAL "
                 "CHECK (model_timeout_seconds IS NULL OR "
-                "(model_timeout_seconds > 0 AND model_timeout_seconds <= 1.7976931348623157e308))"
+                "(model_timeout_seconds > 0 AND model_timeout_seconds <= 2147483647))"
             )
             columns.add("model_timeout_seconds")
         if not cls._AGENT_COLUMNS.issubset(columns):
@@ -9010,6 +9132,10 @@ class TaskOrchestrator:
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         break
+                    elif isinstance(exc, _LocalProviderAdmissionTimeout):
+                        decision = downgrade_to_failover(
+                            classify_tool_failure(exc, idempotent=True)
+                        )
                     else:
                         decision = classify_tool_failure(exc)
                     action = decision.action

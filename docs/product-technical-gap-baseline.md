@@ -25,14 +25,28 @@ valid injected, unsafe-URL, and missing-credential boundaries. Pytest's
 asynchronous fixture-loop scope is now
 explicit rather than inherited from a deprecated plugin default.
 
-The reconciled tree's local full suite reports `3680 passed, 3 skipped, 1
+Five review-discovered timeout paths are also repaired on the same Proposed
+successor. Finite model policies now create one monotonic deadline before local
+admission and spend the remaining budget on connection, retries, and every
+stream read. A timeout caused by that explicit policy returns non-retryable
+`model_timeout`; a connection reset remains the distinct non-replayable
+`provider_outcome_unknown`. A local admission expiry occurs before any send and
+therefore moves directly to an eligible sibling without consuming the
+same-agent retry budget. Synchronous embeddings resolve the selected embedding
+agent's timeout instead of the client-wide default. Policy writes and OpenAPI
+now reject values above the socket-safe 2,147,483,647-second maximum. Focused
+tests cover post-send no-replay, streaming lifetime, pre-send failover,
+embedding selection, and the numeric boundary.
+
+The reconciled tree's local full suite reports `3686 passed, 3 skipped, 1
 deselected`; the deselected owner-contract test requires the released
 `fast-mlsirm` native extension, while this runner has neither that artifact nor
 a Rust toolchain. Public-object docstring coverage is 100%, Ruff and compileall
-are clean. Aggregate line coverage is 96%, so no full-repository 100% coverage
-claim is made and the PR remains Proposed pending hosted exact-head evidence.
+are clean. Aggregate branch-aware coverage is 94%, so no full-repository 100%
+coverage claim is made and the PR remains Proposed pending hosted exact-head
+evidence.
 
-This is Proposed exact-tree evidence. Protected merge, immutable release,
+This remains Proposed exact-tree evidence. Protected merge, immutable release,
 consumer pin update, and a live `orchestrator/free` recovery remain required.
 The triggering `.github` #2106 model gates therefore remain nonpassing even
 though its exact-head CodeQL run has subsequently settled successfully.

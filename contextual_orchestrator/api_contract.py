@@ -597,7 +597,11 @@ OPENAPI_SPEC = {
                                     "stream_usage_supported": {"type": "boolean"},
                                     "model_timeout_seconds": {
                                         "anyOf": [
-                                            {"type": "number", "exclusiveMinimum": 0},
+                                            {
+                                                "type": "number",
+                                                "exclusiveMinimum": 0,
+                                                "maximum": 2_147_483_647,
+                                            },
                                             {"type": "null"},
                                         ]
                                     },

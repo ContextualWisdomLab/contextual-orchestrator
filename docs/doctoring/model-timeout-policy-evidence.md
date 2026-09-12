@@ -262,6 +262,40 @@ admitted on the serving process. A stale serving snapshot still cannot
 overwrite a newer durable revision. HTTP restore and administrator UI remain
 unfinished. Cross-process serving refresh remains a separate gap.
 
+## Review follow-up: one deadline and transport-state separation
+
+The reconciled PR exposed five additional paths that the original serving
+slice did not cover. A finite timeout was reapplied independently to each retry
+and was only passed while opening a streaming response, so elapsed local queue
+time, retry time, and later chunks could exceed the administrator's value.
+Synchronous embeddings still used the client default. A local admission
+timeout, which proves no provider request was sent, was treated like a terminal
+unknown outcome. Conversely, raw timeout and connection-reset exceptions in
+the ordinary chat retry loop could replay a request whose provider outcome was
+unknown. Finally, values representable by SQLite and Python floats could exceed
+the platform socket timeout range.
+
+The Proposed repair creates one monotonic deadline before admission, passes
+only its remaining duration through transport retries, and resets the active
+response socket before each streamed read. Expiry caused by an explicit policy
+is surfaced as non-retryable `model_timeout`. Other ambiguous post-send
+transport failures remain non-retryable `provider_outcome_unknown`; clean EOF
+or `[DONE]` remains provider completion, and caller cancellation is not caught
+by these exception boundaries. Pre-send `_LocalProviderAdmissionTimeout` now
+fails over directly to an eligible sibling. The embeddings HTTP path resolves
+the selected agent's policy on each member attempt. Model construction,
+durable writes, and OpenAPI share a 2,147,483,647-second maximum so admitted
+values remain safe for CPython socket APIs.
+
+Regression coverage includes two post-send failure kinds, a multi-chunk stream
+whose deadline expires between chunks, exact pre-send failover without retry,
+selected-model embedding timeout propagation, and both sides of the numeric
+boundary. The resulting local full suite reports `3686 passed, 3 skipped, 1
+deselected`; the deselected case requires the unavailable `fast-mlsirm` native
+artifact. Public-object docstrings remain 100%; branch-aware aggregate coverage
+is 94%, not 100%. This is local Proposed evidence, not protected delivery or
+live provider recovery proof.
+
 ## Strix HTTP 500 and error correlation
 
 The [Strix run 34031339200](https://github.com/ContextualWisdomLab/.github/actions/runs/34031339200)
