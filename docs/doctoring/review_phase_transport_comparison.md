@@ -91,3 +91,10 @@ No paid fallback, consumer retry, timeout/default change, eligibility
 relaxation, push, or PR mutation was performed. HTTP integration, live
 provider behavior, final rendered-document visual inspection, and incident
 causal certainty remain unverified by this bounded exercise.
+
+Additional coordinator checks: `gh release list --limit 5` for this repository
+returned no entries; local `git tag --contains 1c61eff2` returned none (local
+tag inventory only); the public PyPI endpoint
+`https://pypi.org/pypi/contextual-orchestrator/json` returned HTTP 404 in a
+separate request. These checks do not rule out alternate distribution names
+or private registries. No immutable released adoption has been verified.
