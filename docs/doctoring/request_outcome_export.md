@@ -23,6 +23,41 @@ analytics-snapshot field or full real-world cohort reconciliation.
 ADR 0131 is retained as Proposed; recheck its number across live PRs before
 publication. No predecessor is closed and no historical recovery commit is removed.
 
+### Full and installed pre-repair acceptance
+
+Frozen `e2e66f00` first attempted full collection with the focused-test interpreter;
+process 95819 stopped with one collection error in 11.93s because Hypothesis was
+absent. No tests ran. Log: `/tmp/co-export-full-e2e66f00.log`.
+Using the existing root `.venv/bin/python` read-only, process 22202 completed
+**3,722 passed, 2 skipped, 144.70s**; log
+`/tmp/co-export-full-e2e66f00-locked.log`. Native namespace append makes this
+source integration evidence.
+
+Separately, the root reviewer built core from exact `e2e66f00` archive and installed
+core plus native into `/tmp/co-export-package-e2e66f00.XroFpq`. Process 12044
+completed **72 passed, 11.43s**, using `python -I` outside the checkout. Both import
+origins were asserted under installed site-packages. Runtime dependencies used
+the hash-locked requirements; test tooling included pytest 9.1.1.
+Core SHA-256: `4f8be3db93c0e22c3cc92f29b3a300b731c524674f0703ca4c12f78b81bf6b71`.
+Native SHA-256: `8dfee5d228a28733136e25c6006f77006bcba095863a667e0f2a3e71ca8c7c04`;
+the native source diff from its build checkpoint `3051bdf6` to `e2e66f00` was empty.
+
+### Malformed retained metadata follow-up
+
+`c4802bcc` added a real SQLite migration RED: syntactically invalid retained
+workflow-link JSON prevented index creation (1 failed, 1.93s). Earlier malformed
+tests covered valid JSON with invalid shapes, not invalid JSON syntax. Startup
+rolled back and preserved data, but export could not start.
+
+`3b7ac04e` guards both unique-index extraction and prior-origin lookup with
+`CASE WHEN json_valid(payload)`. The old unguarded index is replaced within the
+existing migration transaction; subsequent startup keeps the guarded index.
+Invalid metadata rows remain stored and counted by export; valid workflow origins
+remain unique. `4e89529c` verifies legacy-index upgrade, retained rows, uniqueness
+and repeat startup. The five focused suites completed **74 passed, 8.43s** at
+that exact head, process 66371. Full and installed results above precede this fix
+and do not prove its final acceptance; both must be repeated before delivery.
+
 ## PRD: operator job and acceptance
 
 An authorized service administrator needs a repeatable list of admitted requests
