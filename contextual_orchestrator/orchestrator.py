@@ -5192,127 +5192,134 @@ class TaskOrchestrator:
                             )
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                    if isinstance(exc, ToolFallbackStoppedError):
-                        raise
-                    request_too_large = _is_request_too_large_error(exc)
-                    saw_request_too_large = saw_request_too_large or request_too_large
-                    if repair_mode:
-                        # A repair stays bound to the candidate whose synthesis
-                        # failed: a size limit or a client-side rejection retires
-                        # that candidate at the call site, and the repair prompt
-                        # never migrates to another provider. A retryable
-                        # transport error may still fail over below.
-                        if request_too_large:
-                            raise ProviderRequestTooLargeError(
-                                "request body exceeds provider limit"
-                            ) from exc
-                        if isinstance(exc, ProviderResponseError):
+                    try:
+                        if isinstance(exc, ToolFallbackStoppedError):
                             raise
-                    if not allow_cross_candidate_fallback:
-                        if request_too_large:
-                            raise ProviderRequestTooLargeError(
-                                "request body exceeds provider limit"
-                            ) from exc
-                        if isinstance(exc, ProviderResponseError):
-                            raise
-                        raise classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="structured_repair",
-                        ) from None
-                    classified = (
-                        exc
-                        if isinstance(exc, ProviderUpstreamError)
-                        else classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="structured_synthesis",
+                        request_too_large = _is_request_too_large_error(exc)
+                        saw_request_too_large = saw_request_too_large or request_too_large
+                        if repair_mode:
+                            # A repair stays bound to the candidate whose synthesis
+                            # failed: a size limit or a client-side rejection retires
+                            # that candidate at the call site, and the repair prompt
+                            # never migrates to another provider. A retryable
+                            # transport error may still fail over below.
+                            if request_too_large:
+                                raise ProviderRequestTooLargeError(
+                                    "request body exceeds provider limit"
+                                ) from exc
+                            if isinstance(exc, ProviderResponseError):
+                                raise
+                        if not allow_cross_candidate_fallback:
+                            if request_too_large:
+                                raise ProviderRequestTooLargeError(
+                                    "request body exceeds provider limit"
+                                ) from exc
+                            if isinstance(exc, ProviderResponseError):
+                                raise
+                            raise classify_provider_failure(
+                                exc,
+                                agent_id=candidate.id,
+                                model=candidate.model,
+                                transport="structured_repair",
+                            ) from None
+                        classified = (
+                            exc
+                            if isinstance(exc, ProviderUpstreamError)
+                            else classify_provider_failure(
+                                exc,
+                                agent_id=candidate.id,
+                                model=candidate.model,
+                                transport="structured_synthesis",
+                            )
                         )
-                    )
-                    attempts.append(
-                        {
-                            "agent_id": candidate.id,
-                            "model": candidate.model,
-                            "outcome": (
-                                "request_too_large"
-                                if request_too_large
-                                else "retryable_transport"
-                                if isinstance(classified, ProviderUpstreamError)
-                                and classified.retryable
-                                else "fail_closed"
-                            ),
-                            "error_code": (
-                                classified.error_code
-                                if isinstance(classified, ProviderUpstreamError)
-                                else type(exc).__name__
-                            ),
-                            "provider_status": (
-                                classified.provider_status
-                                if isinstance(classified, ProviderUpstreamError)
-                                else None
-                            ),
-                        }
-                    )
-                    if request_too_large and not virtual_model:
-                        raise ProviderRequestTooLargeError(
-                            "request body exceeds provider limit"
-                        ) from exc
-                    if request_too_large and virtual_model:
-                        request_exclusions.add(candidate.id)
-                    if not request_too_large:
-                        if (
-                            virtual_model
-                            and isinstance(exc, ProviderResponseError)
-                        ):
-                            last_response_error = exc
-                            dropped_step = {
-                                "id": len(workflow["trace"])
-                                + len(structured_attempt_steps),
-                                "role": "synthesizer",
+                        attempts.append(
+                            {
                                 "agent_id": candidate.id,
-                                "subtask": "Provider-facing structured synthesis",
-                                "access": [
-                                    step["id"] for step in workflow["trace"]
-                                ],
-                                "latency_ms": round(
-                                    (time.perf_counter() - synthesis_started)
-                                    * 1000,
-                                    2,
+                                "model": candidate.model,
+                                "outcome": (
+                                    "request_too_large"
+                                    if request_too_large
+                                    else "retryable_transport"
+                                    if isinstance(classified, ProviderUpstreamError)
+                                    and classified.retryable
+                                    else "fail_closed"
                                 ),
-                                "output": "",
-                                "validation_outcome": "provider_error",
+                                "error_code": (
+                                    classified.error_code
+                                    if isinstance(classified, ProviderUpstreamError)
+                                    else type(exc).__name__
+                                ),
+                                "provider_status": (
+                                    classified.provider_status
+                                    if isinstance(classified, ProviderUpstreamError)
+                                    else None
+                                ),
                             }
-                            if isinstance(response, Mapping) and isinstance(response.get("usage"), dict):
-                                dropped_step["usage"] = _canonical_provider_usage(
-                                    response["usage"], responses=response_request
-                                )
-                            structured_attempt_steps.append(dropped_step)
+                        )
+                        if request_too_large and not virtual_model:
+                            raise ProviderRequestTooLargeError(
+                                "request body exceeds provider limit"
+                            ) from exc
+                        if request_too_large and virtual_model:
+                            request_exclusions.add(candidate.id)
+                        if not request_too_large:
+                            if (
+                                virtual_model
+                                and isinstance(exc, ProviderResponseError)
+                            ):
+                                last_response_error = exc
+                                dropped_step = {
+                                    "id": len(workflow["trace"])
+                                    + len(structured_attempt_steps),
+                                    "role": "synthesizer",
+                                    "agent_id": candidate.id,
+                                    "subtask": "Provider-facing structured synthesis",
+                                    "access": [
+                                        step["id"] for step in workflow["trace"]
+                                    ],
+                                    "latency_ms": round(
+                                        (time.perf_counter() - synthesis_started)
+                                        * 1000,
+                                        2,
+                                    ),
+                                    "output": "",
+                                    "validation_outcome": "provider_error",
+                                }
+                                if isinstance(response, Mapping) and isinstance(response.get("usage"), dict):
+                                    dropped_step["usage"] = _canonical_provider_usage(
+                                        response["usage"], responses=response_request
+                                    )
+                                structured_attempt_steps.append(dropped_step)
+                                record_synthesis_failure(candidate)
+                                # Check incurred usage before another call. A client
+                                # rejection before return has no reported usage;
+                                # never copy it from an earlier candidate.
+                                enforce_structured_budget()
+                                request_exclusions.add(candidate.id)
+                                continue
+                            if not isinstance(classified, ProviderUpstreamError):
+                                raise classified from None
                             record_synthesis_failure(candidate)
-                            # Check incurred usage before another call. A client
-                            # rejection before return has no reported usage;
-                            # never copy it from an earlier candidate.
-                            enforce_structured_budget()
-                            request_exclusions.add(candidate.id)
-                            continue
-                        if not isinstance(classified, ProviderUpstreamError):
-                            raise classified from None
-                        record_synthesis_failure(candidate)
-                        if virtual_model and classified.retryable:
-                            last_retryable_upstream_error = classified
-                            request_exclusions.add(candidate.id)
-                            continue
-                        if (
-                            virtual_model
-                            and classified.error_code == "model_not_found"
-                        ):
-                            last_model_not_found = classified
-                            request_exclusions.add(candidate.id)
-                            continue
-                        raise attach_route(
-                            classified, terminal_reason="fail_closed"
-                        ) from None
+                            if virtual_model and classified.retryable:
+                                last_retryable_upstream_error = classified
+                                request_exclusions.add(candidate.id)
+                                continue
+                            if (
+                                virtual_model
+                                and classified.error_code == "model_not_found"
+                            ):
+                                last_model_not_found = classified
+                                request_exclusions.add(candidate.id)
+                                continue
+                            raise attach_route(
+                                classified, terminal_reason="fail_closed"
+                            ) from None
+                    finally:
+                        if isinstance(exc, urllib.error.HTTPError):
+                            try:
+                                exc.close()
+                            except Exception:
+                                pass  # Cleanup must not replace the classified outcome.
             if last_retryable_upstream_error is not None:
                 raise attach_route(
                     last_retryable_upstream_error,
