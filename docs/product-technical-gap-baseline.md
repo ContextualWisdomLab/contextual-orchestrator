@@ -22,6 +22,26 @@ held-out harness's 2,000-sample interval remain later no-heuristics work.
 Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
 still needs independent review.
 
+## 2026-09-08 integrated psychometric evidence repair (proposed)
+
+PR #1074 source `d7e9d9a240854f9b06c891290d5d249bec8833ce` normally integrates
+parent #1067 `84a6052369a7bf8b6faae5db475bb68a5ad54a91`. Both preserve their
+existing deltas. Non-detections remain in fixed-horizon experiment denominators;
+delay summaries are explicitly conditional, and absent candidates remain null.
+Policy/candidate regressions, per-experiment baseline identity and citation-only
+IRT-Router rights handling are included. These are unit-evidence repairs, not
+observed customer accuracy or routing-latency gains.
+
+On that child source, 159 focused tests passed in 19.56 seconds. The separate
+CI-equivalent benchmark gate passed 169 tests in 55.47 seconds: 1271 statements
+and 480 branches, zero misses, plus 100% public-docstring coverage for
+`nim_benchmark.py` only. This does not establish repository-wide coverage or all
+edge cases. Parent full pytest on `84a60523` is a separate ongoing execution;
+no child full-suite, hosted acceptance, independent approval, immutable release
+or deployed-consumer result is claimed. Next acceptance remains current-head
+hosted checks and protected integration, followed by released-owner adoption
+and observed-task evaluation under the declared sampling and timing contracts.
+
 ## 2026-09-07 benchmark report identity coverage (proposed)
 
 Child [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
