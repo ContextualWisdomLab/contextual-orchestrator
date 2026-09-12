@@ -1,5 +1,42 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-12 Nonlinear response-process evidence gap
+
+Follow-up classification repair: RED `c8b358ad` reproduced a dry-run report
+being labelled for production-candidate review (1 failed, 1.87s). Runtime
+`383b4a1e` marks assembled dry-run reports `synthetic_diagnostic_only` and
+`benchmark_smoke_only`, preserving live sufficiency logic and the null routing
+recommendation. Both benchmark test suites passed: 126 tests in 8.65s,
+session 70083, exit 0. Independent read-only tracing found the misleading
+classification in published JSON/Markdown but no inspected deployment consumer
+that uses it to activate policy. This repairs evidence classification, not a
+demonstrated promotion bypass or measured accuracy/latency gain. Full suite,
+installed artifacts, rendered output and hosted review remain unverified for
+this repair; earlier research-branch runtime acceptance does not cover it.
+
+Evaluation readiness probe at `4359401f` ran the documented NIM command with
+`--dry-run --pricing-scenario examples/nim_pricing_scenario.json` and isolated
+output `/tmp/co-kpi-readiness-20260912.r1sYeS` (session 75417, exit 0).
+It completed 589 simulated requests, with 30 paired tasks and no production
+recommendation. All policy scores were zero and reported latency was the
+fixed 1 ms test value: neither is an observed KPI baseline. The generated
+report labels `decision_use=production_candidate_review` despite dry-run mode;
+admission semantics require audit before this label can support any decision.
+The readiness command proves harness execution only. No provider egress,
+observed cohort, independent adjudication, initial-decision p95, or production
+promotion was verified by this probe.
+
+Research baseline `60ee94c2e941d2883aca623867138798e2ba9bc9`, PR #1107:
+[external psychometrics intake](doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake)
+adds a diagnostic alternative to monotonic token-length assumptions. Proposed
+owner work belongs in fast-mlsirm; CO consumes a released calibration contract.
+Keep post-response observations out of the same request's initial routing
+features, and separate decision latency from generation and queueing time.
+No estimator, production default, observed KPI, or protected-main delivery is
+established by this literature addition. Remaining work includes full method
+audit, lawful observed data, held-out diagnostic comparison and frozen-policy
+accuracy/decision-latency measurement. Rendering of this addition is unverified.
+
 ## 2026-09-09 Optimizer score-domain repair finding
 
 Independent exact-source probing at

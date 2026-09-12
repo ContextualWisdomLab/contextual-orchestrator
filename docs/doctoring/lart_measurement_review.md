@@ -48,3 +48,84 @@ contract. No length proxy, subset stability statistic or test pass count may
 replace that measurement. No production default changes are authorized by
 this intake. Remaining gates: complete method audit, owner contract, licensed
 data provenance, held-out evaluation and uncertainty verification.
+
+## Nonlinear dependence: external psychometrics intake
+
+Bolsinova, M., & Molenaar, D. (2018). Modeling nonlinear conditional dependence
+between response time and accuracy. *Frontiers in Psychology, 9*, Article 1525.
+https://doi.org/10.3389/fpsyg.2018.01525
+
+Read scope on 2026-09-12: publisher HTML abstract, introduction, hierarchical
+model, existing conditional-dependence models and opening quadratic-model
+section. Equations omitted by HTML extraction, remaining methods, empirical
+results and supplements remain unaudited. This is not replication.
+
+The authors distinguish raw-time median splits from residual log-time effects:
+the former can mix higher-level ability/speed association with within-item
+dependence. They propose quadratic, multiple-category and nonparametric
+approaches, including posterior predictive evaluation of linearity. Opposing
+response processes may conceal dependence in a linear summary.
+
+CO-specific proposal, not the authors' result: before fast-mlsirm supplies a
+joint calibration contract, compare residual-dependence diagnostics with an
+accuracy-only baseline using held-out model-family/item clusters. Preserve
+generation time, queue/network time, reasoning-token count and decision-only
+time as different observables. A completed response's time or correctness
+cannot select that same request's initial route. Fit preprocessing only on
+training data; evaluate frozen policies on subsequent observations. Reject an
+uncalibrated monotonic length bonus. Neither human-test results nor this
+proposal establishes LLM transfer or the existing accuracy/decision-p95 KPI.
+
+## Executable marginal-uncertainty check
+
+Root read §5.2, including equation (7), on 2026-09-12. That equation reports
+the ability diagonal of joint posterior precision as inverse variance. For
+finite joint Gaussian uncertainty with unknown speed, marginal variance instead
+uses the corresponding diagonal of the inverse matrix. Conditional precision
+and marginal precision coincide only when the coupling vanishes or in an
+appropriate limiting argument. The asymptotic theorem's assumptions and error
+order still require a full audit; this check does not refute that theorem.
+
+Our algebraic unit check below uses fixed known likelihood information, not
+simulated customer outcomes or an implementation of LaRT. It checks zero
+correlation, both correlation signs, uninformative speed, and finite informative
+speed. At ability information 2, speed information 3 and correlation 0.8,
+marginal variance is `13/51`, whereas conditional variance is `9/43`.
+Neither is a measured CO improvement. Owner implementations must label the
+target uncertainty before adopting a formula.
+
+```rust
+fn marginal_variance(ability_information: f64, speed_information: f64,
+                     trait_correlation: f64) -> f64 {
+    let prior_precision = 1.0 / (1.0 - trait_correlation.powi(2));
+    let ability_precision = ability_information + prior_precision;
+    let speed_precision = speed_information + prior_precision;
+    let cross_precision = -trait_correlation * prior_precision;
+    let joint_determinant = ability_precision * speed_precision - cross_precision.powi(2);
+    assert!(joint_determinant > 0.0);
+    speed_precision / joint_determinant
+}
+for trait_correlation in [-0.8, 0.0, 0.8] {
+    assert!((marginal_variance(2.0, 0.0, trait_correlation) - 1.0 / 3.0).abs() < 1e-12);
+}
+assert!((marginal_variance(2.0, 3.0, 0.0) - 1.0 / 3.0).abs() < 1e-12);
+for trait_correlation in [-0.8, 0.8] {
+    let observed_variance = marginal_variance(2.0, 3.0, trait_correlation);
+    assert!((observed_variance - 13.0 / 51.0).abs() < 1e-12);
+    assert!(observed_variance > 9.0 / 43.0);
+    assert!(observed_variance < 1.0 / 3.0);
+}
+```
+
+Run `rustdoc --test docs/doctoring/lart_measurement_review.md`. This manual
+documentation test is not a hosted owner-estimator conformance test.
+
+Verification receipt: at `de01e9e1`, the command above passed one Rust
+documentation test in 2.89s (terminal process 2866). Root directly inspected
+the title/citation area and complete Rust code block in two browser screenshots
+at `http://127.0.0.1:18768/lart`, English, 1265 × 712. The inspected text and
+code were legible without horizontal clipping or overlap. Middle prose,
+other viewport sizes, link destinations and locales were not visually audited.
+Screenshots remain in the task output, not published image assets. The shared
+local preview has an exporter-oriented browser title/navigation; it is not
+the product UI or evidence of published documentation.

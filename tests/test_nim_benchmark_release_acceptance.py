@@ -345,7 +345,7 @@ def test_video_probe_fixture_is_one_decodable_frame_with_stable_hash() -> None:
 
 
 def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> None:
-    """The smoke manifest produces review evidence, not an automatic decision."""
+    """A simulated run cannot label its cells as production-candidate evidence."""
     report = nb.run_benchmark(
         "dry_run",
         TASK_MANIFEST_PATH,
@@ -356,8 +356,8 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
     )
     evaluation = report["evaluation"]
 
-    assert evaluation["evidence_status"] == "evidence_review_required"
-    assert evaluation["decision_use"] == "production_candidate_review"
+    assert evaluation["evidence_status"] == "synthetic_diagnostic_only"
+    assert evaluation["decision_use"] == "benchmark_smoke_only"
     assert evaluation["minimum_paired_task_count"] == 30
     assert evaluation["required_completion_fraction"] == 0.9
     assert evaluation["routing_recommendation"] is None
