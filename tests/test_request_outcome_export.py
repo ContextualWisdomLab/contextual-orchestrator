@@ -358,3 +358,31 @@ def test_malformed_retained_link_survives_index_migration(tmp_path):
                                    ('{broken',)).fetchone()[0] == 1
     finally:
         store.close()
+
+
+def test_legacy_origin_index_upgrade_keeps_uniqueness_and_rows(tmp_path):
+    """Upgrade the old expression once without relaxing valid origin uniqueness."""
+    import sqlite3
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    state_path = tmp_path / "old_index.db"
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(_StateStore._CREATE_RECORDS_SQL)
+        connection.execute("CREATE UNIQUE INDEX orchestration_records_workflow_origin "
+                           "ON orchestration_records(json_extract(payload, '$.workflow_run_id')) "
+                           "WHERE kind = 'workflow_request_link'")
+        connection.execute(_StateStore._INSERT_SQL, ("workflow_request_link", "request_one",
+                           '{"request_id":"request_one","workflow_run_id":"workflow_one"}'))
+    for _ in range(2):
+        store = _StateStore(str(state_path))
+        try:
+            assert store._conn.execute("SELECT count(*) FROM orchestration_records").fetchone()[0] == 1
+            with pytest.raises(sqlite3.IntegrityError):
+                with store._conn:
+                    store._conn.execute(_StateStore._INSERT_SQL, ("workflow_request_link", "request_two",
+                                        '{"request_id":"request_two","workflow_run_id":"workflow_one"}'))
+            assert "json_valid" in store._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'orchestration_records_workflow_origin'"
+            ).fetchone()[0]
+        finally:
+            store.close()
