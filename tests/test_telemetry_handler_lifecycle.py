@@ -7,6 +7,7 @@ import pytest
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.server import SecurityConfig, build_server
+from test_telemetry import _start_test_server
 
 
 @pytest.mark.parametrize("daemon_handlers", [True, False])
@@ -24,7 +25,6 @@ def test_shutdown_waits_for_final_request_logging(daemon_handlers):
     model_client._send = reject_send
     router.complete = fail_completion
     server = build_server(router, port=0, security=SecurityConfig(auth_token="unit-token"))
-    server.daemon_threads = daemon_handlers
     entered = threading.Event()
     release = threading.Event()
     finished = threading.Event()
@@ -45,8 +45,11 @@ def test_shutdown_waits_for_final_request_logging(daemon_handlers):
             finished.set()
 
     server.RequestHandlerClass._log_request_summary = blocked_summary
-    serving_thread = threading.Thread(target=server.serve_forever)
-    serving_thread.start()
+    if daemon_handlers:
+        serving_thread = threading.Thread(target=server.serve_forever)
+        serving_thread.start()
+    else:
+        serving_thread = _start_test_server(server)
     connection = http.client.HTTPConnection(*server.server_address, timeout=5)
     try:
         connection.request("POST", "/v1/chat/completions", json.dumps({
