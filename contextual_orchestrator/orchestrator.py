@@ -19439,6 +19439,13 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
         raise
 
 
+def _require_released_optimizer_selection_contract() -> None:
+    """Fail closed until fast-mlsirm releases candidate-selection authority."""
+    raise RuntimeError(
+        "optimizer selection requires a released fast-mlsirm candidate-selection contract"
+    )
+
+
 def optimize_orchestration(
     candidates: list[dict[str, Any]],
     tasks: list[dict[str, Any]],
@@ -19462,6 +19469,7 @@ def optimize_orchestration(
     mean rounding. This descriptive evidence does not establish calibration or
     applicability of the existing selection policy.
     """
+    _require_released_optimizer_selection_contract()
     results: list[dict[str, Any]] = []
     usage_receipts: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -19521,6 +19529,7 @@ def evolve_orchestration(
     Per-config ``score_observations`` retain input-task order before mean rounding.
     Their availability does not qualify the existing fitness policy psychometrically.
     """
+    _require_released_optimizer_selection_contract()
     rng = random.Random(seed)
     params = sorted(search_space)
 
