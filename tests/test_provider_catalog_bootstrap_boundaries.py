@@ -475,6 +475,104 @@ def test_credential_inventory_verdict_hard_fails_on_unexplained_restored_credent
     assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
 
 
+def test_credential_inventory_verdict_prefers_account_classification_over_provider_summary() -> None:
+    """A provider-level transient summary must not excuse one account's own
+    authentication failure when the report carries account-level evidence.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(
+            set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}
+        ),
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.TRANSIENT_FAILURE_CLASSIFICATION
+        },
+        provider_account_error_classifications={
+            "bytez": {"BYTEZ_API_KEY": pcb.AUTHENTICATION_FAILURE_CLASSIFICATION}
+        },
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "not a tolerated transient outage" in verdict.hard_fail_reason
+    assert "'BYTEZ_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
+
+
+def test_credential_inventory_verdict_tolerates_account_transient_despite_mixed_summary() -> None:
+    """The account's own transient classification is what matters; a mixed
+    provider summary (unknown_failure from an unreported sibling) must not
+    turn this account's isolated outage into a hard failure.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(
+            set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}
+        ),
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.UNKNOWN_FAILURE_CLASSIFICATION
+        },
+        provider_account_error_classifications={
+            "bytez": {"BYTEZ_API_KEY": pcb.TRANSIENT_FAILURE_CLASSIFICATION}
+        },
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is True
+    assert verdict.hard_fail_reason is None
+    assert verdict.warning_message is not None
+    assert "BYTEZ_API_KEY" in verdict.warning_message
+
+
+def test_credential_inventory_verdict_ignores_malformed_account_classification_map() -> None:
+    """A malformed report (untrusted input) must not crash the verdict; it
+    falls back to the provider-level summary, same as a legacy report.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(
+            set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}
+        ),
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.TRANSIENT_FAILURE_CLASSIFICATION
+        },
+        provider_account_error_classifications=["not", "a", "mapping"],
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is True
+    assert verdict.hard_fail_reason is None
+    assert verdict.warning_message is not None
+
+
+def test_credential_inventory_verdict_falls_back_to_provider_summary_without_account_evidence() -> None:
+    """A legacy report (only the provider-level key) still classifies
+    credential rollbacks by the provider summary.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(
+            set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}
+        ),
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.AUTHENTICATION_FAILURE_CLASSIFICATION
+        },
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "'BYTEZ_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
+
+
 def test_credential_inventory_verdict_tolerates_restored_transient_failure_when_registered_is_complete() -> None:
     """The fix must not over-correct: a restored name with a genuinely
     transient classification is still tolerated as a warning even when
