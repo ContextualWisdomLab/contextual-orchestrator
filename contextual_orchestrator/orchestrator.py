@@ -4050,6 +4050,10 @@ class _StateStore:
                     measurement.update(initial_phase)
                 if phases and not invalid_phase:
                     measurement.update(phase)
+                measurement["selection_elapsed_ns"] = phase.get(
+                    "selection_elapsed_ns",
+                    initial_phase.get("selection_elapsed_ns") if valid_initial else None,
+                ) if not invalid_phase else None
                 for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
                     field_value = (phase.get(field_name) if field_name == "durable_ack_elapsed_ns"
                                    else measurement.get(field_name))
