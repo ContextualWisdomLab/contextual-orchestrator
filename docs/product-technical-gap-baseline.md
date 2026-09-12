@@ -1,5 +1,36 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-08 Psychometrics evidence boundary: research trace added
+
+PR #1103 head `19448d95` adds APA 7 references and implementation constraints
+from Messick (validity arguments), Embretson and Reise (item information and
+identification), and Reise et al. (fit versus interpretation). These sources
+extend the IRT-Router review without claiming a production accuracy gain:
+buyer accuracy still requires observed outcomes, declared sampling and failure
+denominators, and uncertainty; route latency still requires request/decision
+timestamps and its own denominators. The new head is awaiting hosted checks and
+independent approval.
+
+## 2026-09-08 IRT interpretation gap: reviewed, not measured improvement
+
+Against source head `c648797dfbec58dbdce60f35ed6dc5b356953387`, the
+[IRT-Router measurement review](doctoring/irt_router_measurement_review.md)
+records publisher-page visual inspection and a coordinate-identification
+constraint relevant to the proposed parameter RMSE KPI in PR #1103.
+Prediction fit, parameter recovery, and observed buyer accuracy remain separate
+claims. No new estimator, production policy, or measured accuracy/latency gain
+is delivered by this review. Next acceptance requires released owner diagnostics,
+identified parameter-recovery tests, and observed-task evidence under the
+analytics specification; existing matrix-shape validation is insufficient.
+
+The linked review now includes a standalone Rust documentation test. On
+2026-09-08, `rustdoc --test docs/doctoring/irt_router_measurement_review.md`
+with rustdoc 1.97.1 passed one synthetic unit example: original and transformed
+inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
+This demonstrates the identification pitfall, not estimator accuracy or a
+latency improvement. It is a manual documentation check, not yet a hosted
+CI gate or a test of the released fast-mlsirm implementation.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
@@ -2317,6 +2348,23 @@ live work item.
 | P2 | Frontend component inventory is not applicable to the operative admin console. | An unwired `admin_ui/` React + Storybook scaffold and workspace entry exist, but the inline stdlib admin remains the served interface. | Keep the existing Figma artifact record; defer Storybook adoption until the frontend is built and wired under ADR 0033's triggers. |
 
 ## 7. Delivery gates
+
+### Current KPI-contract delivery
+
+The buyer-facing accuracy and decision-latency contract is proposed in
+[PR #1103](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1103)
+with historical snapshot `e14ee3170a4802e199316064b9ee0d3bfcc28d95`. That initial change
+adds true-parameter psychometric RMSE and p95 route-decision latency to the
+analytics specification; it does not change production routing defaults.
+Hosted evidence at this snapshot has CodeQL compatibility green, but OpenCode
+Review failed and independent approval is absent, so the contract is not yet
+protected-main evidence. These check results describe only that historical
+snapshot. The proposed KPI fields are not emitted by the runtime snapshot;
+implementation, observed buyer measurements, and consumer acceptance remain
+open. True-parameter recovery is a unit-test contract on an identified scale,
+not evidence of observed buyer accuracy. Accuracy claims require observed
+task outcomes; latency claims require request and decision traces rather
+than outcome labels. Later PR revisions require their own verification.
 
 For each PR, perform the following loop on the current head: inspect changed
 files and review threads, reproduce the claimed behavior, fix root causes in
