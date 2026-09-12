@@ -3910,3 +3910,25 @@ at `0024522146803627b8741470ebefaf79ffa4a310`, preserving the complete prior
 delta before this normal document revert. The [handoff](doctoring/lart_measurement_review.md#preprocessing-evidence-successor)
 keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
 rights, accuracy and latency gates visible. This is not gap closure or release.
+
+## 2026-09-13 constant-only KPI PR repair findings
+
+Exact-source review found that [PR #1125](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1125)
+at `dbfcc0c17177af0339f1b326f3584db866d8a943` only declares
+`ROUTE_DECISION_LATENCY_FIELD`; its test checks the constant's existence/value,
+not a measured trace interval. [PR #1126](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1126)
+at `2ecc4a03ffe30707d9ce69ae3448e9f83a50e312` does the same for
+`REQUEST_OUTCOME_ASSOCIATIONS_FIELD`, without exercising an authorized export.
+Both tests describe runtime behavior they do not actually assert. Passing them
+cannot establish decision latency, outcome linkage, or customer KPI acceptance.
+
+Keep both Draft PRs open as repair findings. Reconcile their proposed public
+field names with the canonical request measurement/export owner before any
+successor claims complete inheritance. Existing receipt timing is nanoseconds
+and request-scoped; do not copy it onto per-step traces or reinterpret total
+generation latency as decision time. Acceptance needs real HTTP requests,
+durable acknowledgement and missing-value checks, plus authorized one-to-many
+request/outcome joins retaining unfinished requests and excluding other owners.
+PR #1138 is an export candidate, not proof that either legacy field contract
+has already been adopted. No predecessor closure or production change follows
+from this audit.
