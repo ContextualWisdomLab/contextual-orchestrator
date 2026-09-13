@@ -1,5 +1,21 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Camoufox MCP renderer SDK contract
+
+`privacy_policy_analysis._render_policy_document_with_camoufox` imports the MCP
+Python SDK 2.x client API (`mcp.Client`, `streamable_http_client(url,
+http_client=...)`), but no document or dependency declaration said so. With a
+1.x SDK installed (1.23.3 locally) the import raised an opaque
+`cannot import name 'Client'`, `crawl_policy_document` swallowed it into the
+static-text fallback, and the pinned-client test crashed with `AttributeError`
+instead of skipping (full suite at `012beaac`: 1 failed / 3601 passed /
+1 skipped). Candidate `47db9ebf` raises an explicit `ImportError` naming the
+`>= 2.0` requirement and the installed version, skips the pinned-client test
+on a pre-2.0 SDK with that reason, and adds a 1.x stub regression test.
+Verified: mcp 1.23.3 → 10 passed, 1 skipped; isolated `mcp==2.2.0` → 11 passed.
+Not established: a live Camoufox round-trip, and an operator-visible signal when
+the fallback is taken (the fallback still swallows `ImportError`/`OSError`).
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
