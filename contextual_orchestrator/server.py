@@ -5906,6 +5906,19 @@ def build_server(
                             "The video provider is unavailable; restore its configured account and retry.",
                         ) from exc
                     return
+                if path == "/api/v1/provider_readiness":
+                    self._authorize("inference")
+                    raw_refresh = (query.get("refresh") or ["false"])[0].lower()
+                    if raw_refresh == "true":
+                        raise RequestError(
+                            400,
+                            "readiness_refresh_forbidden",
+                            "inference readiness is read-only",
+                        )
+                    if raw_refresh != "false":
+                        raise ValueError("refresh must be true or false")
+                    self._send(orchestrator.provider_readiness_report(refresh=False))
+                    return
                 self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
