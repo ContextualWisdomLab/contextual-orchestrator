@@ -4439,6 +4439,7 @@ class TaskOrchestrator:
         allow_empty_agents: bool = False,
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
+        rate_limit_unknown_cooldown_seconds: float = 5.0,
     ) -> None:
         self._assistant_message_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
@@ -4546,6 +4547,14 @@ class TaskOrchestrator:
         # exhaustion, not a model health failure, so it must never trip or feed
         # _circuit (see _record_failure call sites gated on rate_limit_signal).
         self._rate_limit_until: dict[str, float] = {}
+        # Agent ids whose current _rate_limit_until entry came from
+        # rate_limit_unknown_cooldown_seconds (the provider sent a 429/503
+        # with no Retry-After/x-ratelimit-reset*), not a provider-stated
+        # value. Kept in sync with _rate_limit_until: an entry is added or
+        # removed only when _record_rate_limit's own "only extend forward"
+        # gate actually changes which value is currently winning, and
+        # removed when _rate_limit_remaining expires the cooldown.
+        self._rate_limit_assumed: set[str] = set()
         self._rate_limit_lock = threading.Lock()
         # Injectable wait seam (mirrors _tool_retry_sleep) so a rate-limit-storm
         # test can assert the requested wait duration without a real sleep.
@@ -4566,6 +4575,29 @@ class TaskOrchestrator:
         # sourced from the KV-backed bootstrap config the caller resolves
         # before constructing this orchestrator, never from os.getenv here.
         self.rate_limit_wait_seconds = float(rate_limit_wait_seconds)
+        if (
+            isinstance(rate_limit_unknown_cooldown_seconds, bool)
+            or not isinstance(rate_limit_unknown_cooldown_seconds, (int, float))
+            or not math.isfinite(float(rate_limit_unknown_cooldown_seconds))
+            or rate_limit_unknown_cooldown_seconds < 0
+        ):
+            raise ValueError(
+                "rate_limit_unknown_cooldown_seconds must be a finite nonnegative number"
+            )
+        # Administrator-owned assumed cooldown applied when a 429/503 omits
+        # both Retry-After and x-ratelimit-reset* (RFC 9110 10.2.3 allows
+        # Retry-After to be absent entirely; several real providers, e.g.
+        # NIM and OpenRouter, frequently omit it). Without this, an unknown
+        # cooldown previously recorded nothing at all -- the candidate was
+        # never marked cooling, _await_rate_limit_recovery saw no candidates
+        # to wait for, and the request failed exactly as if this feature did
+        # not exist. This is a caller-contract bound, not a discovered
+        # provider fact: it is deliberately short (5s default) because an
+        # unknown cooldown should be re-probed soon rather than parked for a
+        # long assumed duration that may be wildly wrong in either
+        # direction. Sourced the same way as rate_limit_wait_seconds --
+        # never read from os.getenv here.
+        self.rate_limit_unknown_cooldown_seconds = float(rate_limit_unknown_cooldown_seconds)
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
         if cache_provider is not None and cache_ttl:
             raise ValueError("cache_provider and cache_ttl cannot both be configured")
@@ -4679,10 +4711,15 @@ class TaskOrchestrator:
         # Rate-limit-storm evidence for an org sidecar preflight (e.g.
         # contextual-orchestrator-preflight.json's ready_count/account_skip_after_429
         # fields) to wait on instead of exiting: exposes each currently
-        # cooling-down agent's remaining seconds and the soonest any of them
+        # cooling-down agent's remaining seconds, whether that cooldown was
+        # provider-stated or assumed (the provider sent 429/503 with no
+        # Retry-After/x-ratelimit-reset*), and the soonest any of them
         # clears, without probing external providers.
         rate_limited_until = {
-            item["agent_id"]: round(remaining, 3)
+            item["agent_id"]: {
+                "remaining_seconds": round(remaining, 3),
+                "cooldown_source": self._rate_limit_cooldown_source(item["agent_id"]),
+            }
             for item in active
             for remaining in (self._rate_limit_remaining(item["agent_id"]),)
             if remaining is not None
@@ -4696,7 +4733,11 @@ class TaskOrchestrator:
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "rate_limited_until": rate_limited_until,
             "earliest_ready_seconds": (
-                round(min(rate_limited_until.values()), 3) if rate_limited_until else None
+                round(
+                    min(entry["remaining_seconds"] for entry in rate_limited_until.values()), 3
+                )
+                if rate_limited_until
+                else None
             ),
             "items": items,
         }
@@ -5072,6 +5113,7 @@ class TaskOrchestrator:
                             resolve_retry_after_seconds(signal_http_error)
                             if signal_http_error is not None
                             else None,
+                            status=signal_status,
                         )
                     # A 429 is quota exhaustion, not a model health failure: it
                     # must never trip or feed the circuit breaker (unlike a
@@ -9229,7 +9271,9 @@ class TaskOrchestrator:
                             # health failure) so a caller-level storm-wait
                             # (_invoke_with_rate_limit_recovery) can see it.
                             self._record_rate_limit(
-                                agent.id, exc.extra_detail.get("retry_after_seconds")
+                                agent.id,
+                                exc.extra_detail.get("retry_after_seconds"),
+                                status=exc.provider_status,
                             )
                         if (
                             excluded_agent_ids is not None
@@ -9472,20 +9516,58 @@ class TaskOrchestrator:
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
-    def _record_rate_limit(self, agent_id: str, retry_after_seconds: float | None) -> None:
-        """Record one provider-declared quota cooldown; an unknown duration sets none.
+    #: Statuses for which an absent Retry-After/x-ratelimit-reset* still
+    #: records an assumed cooldown. Deliberately 429 only: 503 ("service
+    #: unavailable") is a genuine, possibly permanent availability signal
+    #: with no inherent quota-recovery semantics, so an unheadered 503
+    #: keeps requiring an explicit provider-stated duration to be treated as
+    #: cooling at all -- unlike 429, which is unambiguously quota exhaustion
+    #: even when the provider forgot to say for how long.
+    _ASSUMABLE_RATE_LIMIT_STATUSES = frozenset({429})
+
+    def _record_rate_limit(
+        self, agent_id: str, retry_after_seconds: float | None, *, status: int = 429
+    ) -> None:
+        """Record one 429/503 quota cooldown, provider-stated or assumed.
+
+        ``retry_after_seconds is None`` means the provider's response carried
+        no ``Retry-After``/``x-ratelimit-reset*`` at all (RFC 9110 10.2.3
+        permits this, and real providers -- NIM and OpenRouter among them --
+        routinely do it) -- NOT "no cooldown". Recording nothing in that case
+        was the original defect: a candidate whose 429 omitted the header was
+        never marked cooling, so an all-omitted-header storm looked identical
+        to "nothing is rate-limited" and failed exactly as if this whole
+        feature were absent. An unknown duration on a 429 (``status``'s
+        default) therefore records ``self.rate_limit_unknown_cooldown_seconds``
+        (an assumed cooldown, tracked in ``_rate_limit_assumed``) instead of
+        skipping the record. An unknown duration on any other status (pass
+        the real one explicitly) records nothing, preserving that status's
+        existing exhaustion behavior -- see
+        :data:`_ASSUMABLE_RATE_LIMIT_STATUSES`.
 
         Cooldowns only ever extend forward: a second, larger cooldown for the
-        same agent before the first expires replaces it, but a smaller/stale
-        one never shortens an in-flight cooldown.
+        same agent before the first expires replaces it (and its source
+        label with it), but a smaller/stale one -- provider-stated or
+        assumed -- never shortens an in-flight cooldown or overwrites its
+        source label.
         """
-        if retry_after_seconds is None:
+        assumed = retry_after_seconds is None
+        if assumed and status not in self._ASSUMABLE_RATE_LIMIT_STATUSES:
             return
-        until = time.monotonic() + max(float(retry_after_seconds), 0.0)
+        resolved_seconds = (
+            self.rate_limit_unknown_cooldown_seconds
+            if assumed
+            else max(float(retry_after_seconds), 0.0)
+        )
+        until = time.monotonic() + resolved_seconds
         with self._rate_limit_lock:
             current = self._rate_limit_until.get(agent_id)
             if current is None or until > current:
                 self._rate_limit_until[agent_id] = until
+                if assumed:
+                    self._rate_limit_assumed.add(agent_id)
+                else:
+                    self._rate_limit_assumed.discard(agent_id)
 
     def _rate_limit_remaining(self, agent_id: str, *, now: float | None = None) -> float | None:
         """Return remaining cooldown seconds for ``agent_id``, or ``None`` when clear."""
@@ -9497,8 +9579,20 @@ class TaskOrchestrator:
             remaining = until - moment
             if remaining <= 0:
                 self._rate_limit_until.pop(agent_id, None)
+                self._rate_limit_assumed.discard(agent_id)
                 return None
             return remaining
+
+    def _rate_limit_cooldown_source(self, agent_id: str) -> str:
+        """Return ``"assumed"`` when ``agent_id``'s active cooldown has no provider-stated duration, else ``"provider"``.
+
+        Meaningful only when the caller already knows ``agent_id`` is
+        currently rate-limited (a non-``None`` :meth:`_rate_limit_remaining`);
+        an agent with no active cooldown is reported ``"provider"`` here by
+        harmless default.
+        """
+        with self._rate_limit_lock:
+            return "assumed" if agent_id in self._rate_limit_assumed else "provider"
 
     def _rate_limited_snapshot(self) -> dict[str, float]:
         """Return ``{agent_id: remaining_seconds}`` for every currently cooling-down agent."""
@@ -9552,10 +9646,16 @@ class TaskOrchestrator:
         route_once/conduct) funnels through this one method instead of each
         re-deriving the earliest-ready/budget decision.
 
-        Returns ``False`` immediately when none of ``candidates`` is
-        currently rate-limited -- nothing to wait for; the caller's own
-        (unrelated) failure handling applies. Otherwise computes the
-        earliest known cooldown among the currently rate-limited members and:
+        Returns ``False`` immediately when ``candidates`` has fewer than two
+        members, or when none of them is currently rate-limited -- there is
+        no pool to wait out a *storm* across (a "storm" implies coordinated
+        failure over multiple alternatives), so the caller's own (unrelated)
+        failure handling applies and a single pinned/named candidate keeps
+        its existing immediate classified-error contract exactly as before
+        this feature existed -- the client already sees ``retryable=true``
+        and can retry on its own with no server-side latency added. With two
+        or more candidates, computes the earliest known cooldown among the
+        currently rate-limited members and:
 
         * waits for it (one bounded, non-busy ``time.sleep``-backed call)
           and returns ``True`` -- the caller should re-run candidate
@@ -9567,6 +9667,8 @@ class TaskOrchestrator:
           (429, ``Retry-After``) instead of letting the caller fail as a
           generic connection error or opaque exhaustion.
         """
+        if len(candidates) < 2:
+            return False
         now = time.monotonic()
         cooling = [
             candidate
@@ -9586,6 +9688,7 @@ class TaskOrchestrator:
                 model=earliest_agent.model,
                 retry_after_seconds=earliest_ready if earliest_ready is not None else 0.0,
                 transport=transport,
+                cooldown_source=self._rate_limit_cooldown_source(earliest_agent.id),
             ) from None
         # Single bounded wait, never a busy-loop; caller re-runs selection
         # once the earliest candidate's cooldown has elapsed.
@@ -9648,18 +9751,28 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not candidates or any(
-                    self._rate_limit_remaining(candidate.id) is None
-                    for candidate in candidates
+                if (
+                    len(candidates) < 2
+                    or any(
+                        self._rate_limit_remaining(candidate.id) is None
+                        for candidate in candidates
+                    )
                 ):
-                    # Not a universal storm: some eligible candidate is not
-                    # rate-limited (or there is none at all) -- a genuine,
+                    # Not a universal multi-candidate storm: a single pinned
+                    # candidate with no failover pool, or some eligible
+                    # candidate that is not rate-limited -- a genuine,
                     # unrelated exhaustion/failure. Preserve _invoke's own
                     # exhaustion contract exactly.
                     raise
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
-                self._await_rate_limit_recovery(candidates, deadline=wait_deadline, transport="chat")
+                if not self._await_rate_limit_recovery(
+                    candidates, deadline=wait_deadline, transport="chat"
+                ):
+                    # Defensive: _await_rate_limit_recovery agreed there was
+                    # nothing to wait for after all. Never loop without
+                    # having actually waited -- re-raise the real failure.
+                    raise
                 continue
 
     @staticmethod

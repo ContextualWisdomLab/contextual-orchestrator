@@ -2093,25 +2093,78 @@ synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
 site, so the worker step required by the owner's report gets the fix, and so
 do the other roles for free, without a second implementation.
 
-Tests: `tests/test_rate_limit_aware_admission.py` (17 tests) --
-`Retry-After`/`x-ratelimit-reset*` parsing, shared-helper skip and its
-all-limited fallback, a bounded real-time storm-with-budget wait that
-succeeds on retry, a storm-without-budget honest `429` at both the
-orchestrator and HTTP layers, a `429` that does not trip the circuit breaker,
-an HTTP-level `orchestrator/free`/route_once storm that waits and is served,
-the same with no budget returning `429`+`Retry-After`, and a conduct
-(deep-path) worker step that waits out the same storm mid-workflow. Full
-targeted suite (`test_api_contract`, `test_self_check`,
-`test_passthrough_provider_failover`, `test_provider_reliability`,
-`test_model_timeout_policy`, `test_actions_model_fallback`,
-`test_rate_limit_aware_admission`) passed except the pre-existing local-only
-`openai` SDK version pin (`test_sdk_passthrough_unknown_outcome_never_replays`,
-installed `2.44.0` vs pinned `2.54.0`); the repository-wide suite passed
-3701/3702 (1 skipped) with only that SDK-pin failure (repeated 3x across
-`test_tool_execution_fallback.py`) and the separately known local-only
-`mcp.Client` privacy test failure, neither touched by this change.
-`python -m interrogate -v contextual_orchestrator/` reported 100% docstring
-coverage.
+### Follow-up (same day): an omitted cooldown header must still count as cooling
+
+`_record_rate_limit(agent_id, None)` originally returned without recording
+anything, so a 429/503 whose provider omitted both `Retry-After` and
+`x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it entirely; NIM and
+OpenRouter routinely do) was never marked cooling -- `_await_rate_limit_recovery`
+saw no candidate to wait for and the request failed exactly as if this whole
+feature did not exist. The 2026-09-13 production storm may well have been
+exactly this shape.
+
+Fixed: an unknown-duration 429 now records the new administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s -- short by
+design, so an unknown cooldown is re-probed soon rather than parked) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+both `provider_readiness_report` and the honest-429 error detail (vs
+`"provider"` for a real header-derived value); the existing "cooldowns only
+extend forward" rule also protects the source label, so a later assumed
+cooldown can never shorten or relabel an active provider-stated one.
+
+Two scope refinements, both made after concrete regression evidence rather
+than by design intent alone:
+
+- **429 only, not 503.** Extending the assumption to a headerless 503
+  made several pre-existing exhaustion tests
+  (`test_mixed_failures_surface_the_final_classified_provider_failure`,
+  `test_default_mock_endpoint_represents_one_fixture_provider`) loop through
+  repeated assumed waits before finally raising the wrong (storm) error
+  identity for what was actually a permanent, unrelated failure double. A
+  503 ("service unavailable") is a genuine, possibly permanent availability
+  signal with no inherent quota-recovery semantics the way a 429 is, so it
+  keeps requiring an explicit provider-stated duration to be treated as
+  cooling at all.
+- **Two or more candidates required.** `_await_rate_limit_recovery` now
+  returns `False` (nothing to wait for) whenever fewer than two candidates
+  are passed in, regardless of rate-limit state: a "storm" implies
+  coordinated failure across a pool of alternatives, and a single
+  pinned/named candidate with no failover pool keeps its pre-existing
+  immediate classified-error contract -- the client already sees
+  `retryable=true` and can retry on its own with no server-side latency
+  added. Without this guard, `tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+  (one named model, always 429, no headers) hung waiting out an assumed
+  cooldown and blew past its 5s client-side read timeout -- the same
+  regression shape the coordinator warned the 2026-09-13 storm might be, now
+  reproduced directly against a stability-guaranteeing pre-existing test. A
+  bug in the initial fix for this guard (`_invoke_with_rate_limit_recovery`
+  looping unconditionally regardless of whether the shared helper actually
+  found anything to wait for) was caught by the same test and closed by
+  checking the helper's return value before retrying.
+
+Two pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally, as a stand-in for "some transient failover-eligible
+failure" unrelated to rate-limiting itself, across two real candidates each
+(so the two-candidate guard above did not save them); both were switched to
+500 to keep their actual intent isolated from this feature.
+
+Tests: `tests/test_rate_limit_aware_admission.py` (20 tests) -- adds a
+no-header 429 storm across two candidates that still waits the assumed
+cooldown and is served, the same with zero budget returning
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail, and confirmation
+that a provider-stated cooldown is never shortened or relabeled by a later
+assumed one -- on top of the 17 tests from the entry above.
+`python -m pytest tests/test_provider_error_taxonomy.py
+tests/test_rate_limit_aware_admission.py tests/test_passthrough_provider_failover.py
+-q` passed except the pre-existing local-only `openai` SDK version pin
+(`test_sdk_passthrough_unknown_outcome_never_replays`); the repository-wide
+suite passed 3704/3705 (1 skipped) with only that same SDK-pin failure and
+the separately known local-only `mcp.Client` privacy test failure, neither
+touched by this change. `python -m interrogate -v contextual_orchestrator/`
+reported 100% docstring coverage.
 
 ## 1. Product requirements (PRD)
 

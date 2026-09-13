@@ -21,3 +21,17 @@ a `502` connection failure. `provider_readiness_report`
 (`/api/v1/provider_readiness/latest`) now also reports `rate_limited_until` and
 `earliest_ready_seconds` so an external preflight/readiness sidecar can wait
 instead of exiting.
+
+A 429 that states no cooldown at all (RFC 9110 permits omitting
+`Retry-After`/`x-ratelimit-reset*`, and NIM/OpenRouter routinely do) now
+records an assumed cooldown -- the new `rate_limit_unknown_cooldown_seconds`
+default (5s) -- instead of nothing, so an all-omitted-header storm can no
+longer look identical to "nothing is rate-limited" and fail as if this
+feature did not exist; every cooldown surface labels itself
+`cooldown_source: "provider"` or `"assumed"` accordingly, and a provider-stated
+cooldown is never shortened or relabeled by a later assumed one. This
+assumption applies to 429 only (a 503 with no header keeps requiring a real
+provider-stated duration) and only across two or more candidates (a single
+pinned/named candidate keeps its pre-existing immediate classified-error
+contract unchanged) -- both scoped narrowly after concrete pre-existing-test
+regression evidence, not by design intent alone.

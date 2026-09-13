@@ -212,6 +212,7 @@ def rate_limited_storm_error(
     model: str,
     retry_after_seconds: float,
     transport: str = "passthrough",
+    cooldown_source: str = "provider",
 ) -> ProviderUpstreamError:
     """Build the honest 429 for a rate-limit storm the caller's budget can't wait out.
 
@@ -222,20 +223,35 @@ def rate_limited_storm_error(
     connection failure, so it is deliberately kept out of the
     ``provider_connection_error`` / 502 surface and marked retryable: the
     caller can retry after ``retry_after_seconds``.
+
+    ``cooldown_source`` is ``"provider"`` when ``retry_after_seconds`` came
+    from the provider's own ``Retry-After``/``x-ratelimit-reset*`` header, or
+    ``"assumed"`` when the provider stated no cooldown at all and
+    ``retry_after_seconds`` is instead the administrator-owned
+    ``rate_limit_unknown_cooldown_seconds`` default -- surfaced so the caller
+    can tell a measured wait apart from a guessed one.
     """
+    assumed_note = (
+        " (the provider stated no cooldown; this is an assumed wait)"
+        if cooldown_source == "assumed"
+        else ""
+    )
     return ProviderUpstreamError(
         agent_id=agent_id,
         model=model,
         error_code=PROVIDER_RATE_LIMITED_CODE,
         message=(
             "every eligible provider is rate-limited past this request's "
-            "wait budget"
+            f"wait budget{assumed_note}"
         ),
         client_status=429,
         provider_status=429,
         retryable=True,
         transport=transport,
-        extra_detail={"retry_after_seconds": retry_after_seconds},
+        extra_detail={
+            "retry_after_seconds": retry_after_seconds,
+            "cooldown_source": cooldown_source,
+        },
     )
 
 

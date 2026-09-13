@@ -743,9 +743,14 @@ def test_auto_virtual_model_fails_over_across_model_groups() -> None:
 
 def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
     """The free selector exhausts only explicitly zero-cost providers."""
+    # 500 here (not 429): this test is about the free/paid selection
+    # boundary, not rate-limiting -- a bare 429 with no Retry-After now
+    # assumes a short quota cooldown and waits/retries the single free
+    # candidate, which would make this test slow and flaky on call count
+    # instead of exercising the boundary it actually tests.
     client = SequencedProxyClient(
         {
-            "free_agent": _http_error(429),
+            "free_agent": _http_error(500),
             "paid_agent": {"model": "paid-model"},
         }
     )
@@ -1186,8 +1191,13 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
 def test_all_candidates_chain_the_last_failure() -> None:
     """Exhaustion reports one stable gateway error with the final provider cause."""
     final = _http_error(503)
+    # 500 here (not 429): this test is about which classified failure
+    # survives exhaustion, not rate-limiting -- a bare 429 with no
+    # Retry-After now assumes a short quota cooldown and waits, which would
+    # route this candidate's identity through the rate-limit-storm path
+    # instead of the plain exhaustion path this test actually exercises.
     orchestrator = _build(
-        SequencedProxyClient({"primary_agent": _http_error(429), "fallback_agent": final})
+        SequencedProxyClient({"primary_agent": _http_error(500), "fallback_agent": final})
     )
 
     with pytest.raises(ProviderUpstreamError) as caught:

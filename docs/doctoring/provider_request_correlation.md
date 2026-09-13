@@ -169,3 +169,47 @@ already reports `candidate`/`probed`/`rejected_count` and
 `account_skip_after_429` fields; those are the RED/GREEN evidence an external
 CI run can use to confirm this class of fix without needing gateway-internal
 access. This repo does not modify that org-owned sidecar script.
+
+### Follow-up: a 429/503 with no cooldown header at all (2026-09-14)
+
+The fix above still had a gap: `_record_rate_limit(agent_id, None)` returned
+without recording anything, so a 429/503 whose provider omitted both
+`Retry-After` and `x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it
+entirely, and NIM/OpenRouter routinely do) was never marked cooling --
+`_await_rate_limit_recovery` saw no candidate to wait for, and the request
+failed exactly as if this whole feature did not exist. The 2026-09-13
+production storm may well have been exactly this shape.
+
+Fixed: an unknown-duration 429 now records the administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+`provider_readiness_report` and in the honest-429 error detail (vs
+`"provider"` for a real `Retry-After`/`x-ratelimit-reset*` value); the
+existing "cooldowns only extend forward" rule also protects the source label,
+so a later assumed cooldown can never shorten or relabel an active
+provider-stated one. Scoped to 429 specifically, not 503: a 503 ("service
+unavailable") is a genuine, possibly permanent availability signal with no
+inherent quota-recovery semantics, and extending the assumption to it made
+several pre-existing exhaustion tests loop through repeated assumed waits
+before finally raising the wrong (storm) error identity for what was actually
+a permanent, unrelated failure -- concrete regression evidence, not a
+guess. Also added: `_await_rate_limit_recovery` only ever waits when there
+are two or more candidates to fail over across (a "storm" implies a pool of
+alternatives); a single pinned/named candidate with no failover pool keeps
+its pre-existing immediate classified-error contract unchanged -- confirmed
+against `tests/test_provider_error_taxonomy.py`'s single-candidate
+`rate_limit_exceeded` contract, which this same-shaped defect (before this
+guard existed) made hang past its 5s client timeout.
+
+Tests added to `tests/test_rate_limit_aware_admission.py`: a
+no-Retry-After/no-header 429 storm across two candidates still waits the
+assumed cooldown and is served; the same with zero budget returns
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail; a provider-stated
+cooldown is never shortened or relabeled by a later assumed one. Two
+pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally (to represent "some transient failover-eligible
+failure", not to test rate-limiting itself) and were switched to 500 to keep
+that intent isolated from this feature.

@@ -159,22 +159,47 @@ def test_currently_cooled_down_candidate_is_skipped_and_recorded_as_evidence() -
     assert result["orchestration"]["rate_limited_skipped"] == ["primary_agent"]
 
 
-def test_unknown_cooldown_candidate_is_not_skipped() -> None:
+def test_unknown_retry_after_assumes_a_short_cooldown_instead_of_recording_nothing() -> None:
+    """A 429/503 with no Retry-After/x-ratelimit-reset* must still count as cooling.
+
+    Recording nothing for an unknown duration was the original defect: a
+    candidate whose provider omitted the header (RFC 9110 permits this, and
+    NIM/OpenRouter routinely do it) was never marked rate-limited, so an
+    all-omitted-header storm looked identical to "nothing is rate-limited"
+    and failed exactly as if this feature did not exist.
+    """
     client = SequencedRateLimitClient(
-        {"primary_agent": [{"id": "chatcmpl_1", "choices": []}]}
+        {"fallback_agent": [{"id": "chatcmpl_1", "choices": []}]}
     )
     orchestrator = _two_agent_pool(client)
-    # An unknown retry-after (None) must never be recorded as a cooldown.
     orchestrator._record_rate_limit("primary_agent", None)
+
+    assert orchestrator._rate_limit_remaining("primary_agent") == pytest.approx(
+        orchestrator.rate_limit_unknown_cooldown_seconds, abs=0.5
+    )
+    assert orchestrator._rate_limit_cooldown_source("primary_agent") == "assumed"
 
     result = orchestrator.proxy_completion(
         {"model": "orchestrator/auto", "messages": [{"role": "user", "content": "hi"}]}
     )
 
-    assert client.calls == ["primary_agent"]
-    assert "orchestration" not in result or "rate_limited_skipped" not in result.get(
-        "orchestration", {}
-    )
+    assert client.calls == ["fallback_agent"]
+    assert result["orchestration"]["rate_limited_skipped"] == ["primary_agent"]
+
+
+def test_provider_stated_cooldown_is_never_shortened_by_a_later_assumed_one() -> None:
+    """The existing 'only extends forward' rule also protects the source label."""
+    client = SequencedRateLimitClient({})
+    orchestrator = _two_agent_pool(client)
+    orchestrator._record_rate_limit("primary_agent", 30.0)
+    assert orchestrator._rate_limit_cooldown_source("primary_agent") == "provider"
+
+    # A later, unknown-duration 429 for the same agent must not shorten the
+    # active 30s provider-stated cooldown, nor relabel it as "assumed".
+    orchestrator._record_rate_limit("primary_agent", None)
+
+    assert orchestrator._rate_limit_remaining("primary_agent") == pytest.approx(30.0, abs=0.5)
+    assert orchestrator._rate_limit_cooldown_source("primary_agent") == "provider"
 
 
 def test_failover_candidates_shared_helper_skips_rate_limited_by_default() -> None:
@@ -378,8 +403,15 @@ def test_429_does_not_trip_circuit_breaker_but_503_still_does() -> None:
 # --------------------------------------------------------------------------
 
 
-def _rate_limited_upstream_error(retry_after_seconds: float) -> ProviderUpstreamError:
-    """Build the classified 429 ``_invoke`` sees from ``ModelClient.chat``."""
+def _rate_limited_upstream_error(retry_after_seconds: float | None) -> ProviderUpstreamError:
+    """Build the classified 429 ``_invoke`` sees from ``ModelClient.chat``.
+
+    ``retry_after_seconds=None`` models a provider that stated no
+    Retry-After/x-ratelimit-reset* at all (RFC 9110 permits omitting it) --
+    ``classify_provider_failure`` never puts the key in ``extra_detail`` for
+    that case, so this omits it too rather than passing ``None`` through.
+    """
+    extra_detail = {} if retry_after_seconds is None else {"retry_after_seconds": retry_after_seconds}
     return ProviderUpstreamError(
         agent_id="unit",
         model="unit-model",
@@ -389,7 +421,7 @@ def _rate_limited_upstream_error(retry_after_seconds: float) -> ProviderUpstream
         provider_status=429,
         retryable=True,
         transport="chat",
-        extra_detail={"retry_after_seconds": retry_after_seconds},
+        extra_detail=extra_detail,
     )
 
 
@@ -525,6 +557,96 @@ def test_http_route_once_storm_without_budget_returns_429() -> None:
     assert status == 429, body
     assert response.getheader("retry-after") == "9"
     assert body["error"]["code"] == PROVIDER_RATE_LIMITED_CODE
+
+
+def test_http_route_once_storm_with_no_retry_after_waits_the_assumed_cooldown() -> None:
+    """Every candidate 429s with NO Retry-After/x-ratelimit-reset*: still waits and is served.
+
+    This is the shape the coordinator flagged as the remaining defect: a
+    provider (NIM/OpenRouter routinely do this) that returns 429/503 with no
+    cooldown header at all must not be treated as "not rate-limited" --
+    _record_rate_limit now assumes rate_limit_unknown_cooldown_seconds
+    instead of recording nothing.
+    """
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(),
+        tool_retry_attempts=0,
+        rate_limit_wait_seconds=5.0,
+        rate_limit_unknown_cooldown_seconds=1.0,
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(None), "served after wait"],
+            "fallback_free_agent": [_rate_limited_upstream_error(None)],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        started = time.monotonic()
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "served after wait"
+    assert elapsed < 3.0
+    assert chat_outcomes.calls.count("primary_free_agent") == 2
+    assert chat_outcomes.calls.count("fallback_free_agent") == 1
+
+
+def test_http_route_once_storm_with_no_retry_after_and_no_budget_returns_429_assumed() -> None:
+    """Same no-Retry-After storm with zero budget: honest 429 labeled ``cooldown_source: assumed``."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(),
+        tool_retry_attempts=0,
+        rate_limit_wait_seconds=0.0,
+        rate_limit_unknown_cooldown_seconds=4.0,
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(None)],
+            "fallback_free_agent": [_rate_limited_upstream_error(None)],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 429, body
+    assert response.getheader("retry-after") == "4"
+    assert body["error"]["code"] == PROVIDER_RATE_LIMITED_CODE
+    assert body["error"]["detail"]["cooldown_source"] == "assumed"
 
 
 def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
