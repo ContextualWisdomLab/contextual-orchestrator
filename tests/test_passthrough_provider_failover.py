@@ -7,6 +7,7 @@ import io
 import json
 import socket
 import urllib.error
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -47,6 +48,12 @@ class SequencedProxyClient:
         return deepcopy(outcome)
 
     proxy_send = proxy_send_once
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        """Accept the server's request-local settings boundary for HTTP tests."""
+        del overrides
+        yield
 
     def apply_effort_profile(
         self,
@@ -1291,6 +1298,33 @@ def test_only_temporary_dns_failures_advance(
             )
 
 
+@pytest.mark.parametrize("error_type", [TimeoutError, ConnectionError])
+def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
+    """Unknown transport outcomes remain terminal and expose no raw diagnostics."""
+    failure = error_type("provider outcome unknown token=private_test_value")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderUpstreamError) as raised:
+        orchestrator.proxy_completion(
+            {"messages": [{"role": "user", "content": "x"}]}
+        )
+
+    assert raised.value.error_code == "provider_outcome_unknown"
+    assert raised.value.client_status == 502
+    assert raised.value.provider_status is None
+    assert raised.value.retryable is False
+    assert raised.value.transport == "passthrough"
+    assert "private_test_value" not in str(raised.value)
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "primary_agent" in orchestrator._circuit
+
+
 def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
     """An explicit concrete model still fails closed after exactly one call.
 
@@ -1298,11 +1332,8 @@ def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
     never replayed on another candidate -- there is nothing safe to
     substitute an explicitly requested model with (#1045). An explicit model
     never enters the multi-candidate failover loop at all (it resolves
-    straight to that one agent and calls it once), so today's behavior is the
-    bare exception propagating with no breaker classification -- this test
-    pins that pre-existing, unchanged shape down so a future change to the
-    virtual-selector loop (below) cannot accidentally start replaying
-    explicit models too.
+    straight to that one agent and calls it once); it shares PR #1053's
+    outcome-unknown, non-retryable error shape with the virtual-selector path.
     """
     failure = TimeoutError("provider outcome unknown")
     client = SequencedProxyClient(
@@ -1313,7 +1344,7 @@ def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
     )
     orchestrator = _build(client)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(
             {
                 "model": "primary-model",
@@ -1321,47 +1352,10 @@ def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
             }
         )
 
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.client_status == 502
+    assert caught.value.retryable is False
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
-
-
-@pytest.mark.parametrize(
-    "model",
-    [None, TaskOrchestrator.AUTO_MODEL],
-    ids=["default_model", "auto_model"],
-)
-def test_ambiguous_timeout_on_virtual_selector_advances_to_next_candidate(
-    model: str | None,
-) -> None:
-    """A virtual selector may advance past one candidate's ambiguous timeout.
-
-    The caller delegated candidate selection to the gateway (it never named a
-    specific provider), so the gateway also owns failover across a timeout
-    whose outcome is unknown -- consistent with
-    ``_orchestrated_provider_completion``'s documented advance across
-    retryable transport failures. Three ready free-pool candidates going
-    uncalled after one timeout was the production defect (Strix run
-    34754423834 attempt 2, PR #1166); this reproduces the two-candidate case.
-    The failed candidate is still recorded as a breaker observation.
-    """
-    failure = TimeoutError("provider outcome unknown")
-    client = SequencedProxyClient(
-        {
-            "primary_agent": failure,
-            "fallback_agent": {"model": "fallback-model"},
-        }
-    )
-    orchestrator = _build(client)
-    body: dict[str, Any] = {"messages": [{"role": "user", "content": "x"}]}
-    if model is not None:
-        body["model"] = model
-
-    result = orchestrator.proxy_completion(body)
-
-    assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
-    ]
     assert "primary_agent" in orchestrator._circuit
 
 
@@ -1414,38 +1408,155 @@ def test_ambiguous_timeout_on_free_model_advances_to_next_free_candidate() -> No
     assert "free_primary_agent" in orchestrator._circuit
 
 
-def test_ambiguous_timeout_on_virtual_selector_exhausts_to_classified_502() -> None:
-    """When every candidate times out, the request still fails classified 502.
+def test_ambiguous_timeout_on_free_model_exhausts_to_outcome_unknown() -> None:
+    """When every ``FREE_MODEL`` candidate times out, the request still fails closed.
 
-    Every ranked, provider-diverse candidate is called exactly once and
-    recorded in the breaker; the final error is the same shape
-    (``classify_provider_failure``'s ``502 provider_connection_error``) the
-    single-candidate case always produced.
+    Advancing past an ambiguous transport failure is safe only because
+    ``FREE_MODEL`` candidates are admitted on explicit zero-cost evidence
+    (see ``_is_ambiguous_passthrough_transport_failure``); once every
+    candidate is exhausted the last one's outcome is still unknown, so the
+    request surfaces the same non-retryable ``provider_outcome_unknown``
+    shape PR #1053 defined -- never ``classify_provider_failure``'s
+    retryable classification. Every ranked candidate is called exactly once
+    and recorded in the breaker.
     """
     failure = TimeoutError("provider outcome unknown")
     client = SequencedProxyClient(
         {
-            "primary_agent": failure,
-            "fallback_agent": TimeoutError("provider outcome unknown"),
+            "free_primary_agent": failure,
+            "free_fallback_agent": TimeoutError("provider outcome unknown"),
         }
     )
-    orchestrator = _build(client)
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
 
     with pytest.raises(ProviderUpstreamError) as caught:
-        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        )
 
+    assert caught.value.error_code == "provider_outcome_unknown"
     assert caught.value.client_status == 502
-    assert caught.value.error_code == "provider_connection_error"
-    assert caught.value.retryable is True
+    assert caught.value.retryable is False
     assert caught.value.transport == "passthrough"
-    assert caught.value.agent_id == "fallback_agent"
-    assert caught.value.__cause__ is None
+    assert caught.value.agent_id == "free_fallback_agent"
     assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
+        "free_primary_agent",
+        "free_fallback_agent",
     ]
-    assert "primary_agent" in orchestrator._circuit
-    assert "fallback_agent" in orchestrator._circuit
+    assert "free_primary_agent" in orchestrator._circuit
+    assert "free_fallback_agent" in orchestrator._circuit
+
+
+@pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
+def test_wrapped_admission_timeout_does_not_authorize_replay(wrapper_type) -> None:
+    """Only the direct pre-send exception carries the local admission proof."""
+    from contextual_orchestrator.orchestrator import (
+        _LocalProviderAdmissionTimeout,
+        _is_passthrough_failover_error,
+    )
+
+    wrapped = wrapper_type("unknown outer operation")
+    wrapped.__cause__ = _LocalProviderAdmissionTimeout("earlier slot failure")
+    assert not _is_passthrough_failover_error(wrapped)
+
+
+@pytest.mark.parametrize("after_send", [False, True])
+def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send: bool) -> None:
+    """Only a failed slot acquisition may advance without replaying a sent request."""
+    from contextlib import nullcontext
+    from contextual_orchestrator.orchestrator import _local_provider_slot
+
+    client = ModelClient(timeout=0.001)
+    router = _build(client)
+    router.agents[0] = replace(
+        router.agents[0], base_url="local://127.0.0.1:19441/v1"
+    )
+    router.agents[1] = replace(
+        router.agents[1], base_url="local://127.0.0.1:19442/v1"
+    )
+    sent = []
+
+    def raw_send(agent, *args, **kwargs):
+        sent.append(agent.id)
+        if after_send:
+            raise TimeoutError("response not received after transport invocation")
+        return {"model": agent.model, "choices": []}
+
+    monkeypatch.setattr(client, "_send_raw_with_retry", raw_send)
+    slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
+    with slot:
+        if after_send:
+            with pytest.raises(ProviderUpstreamError) as raised:
+                router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert raised.value.error_code == "provider_outcome_unknown"
+            assert raised.value.retryable is False
+            assert sent == ["primary_agent"]
+        else:
+            result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert result["model"] == "fallback-model"
+            assert sent == ["fallback_agent"]
+
+
+def test_sdk_passthrough_unknown_outcome_never_replays() -> None:
+    """Exact SDK to real HTTP to passthrough preserves one unknown-outcome attempt."""
+    import asyncio
+    import threading
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    import openai as sdk
+    assert sdk.__version__ == "2.54.0"
+    transport = SequencedProxyClient({
+        "primary_agent": TimeoutError("token=private_test_value"),
+        "fallback_agent": {"model": "fallback-model"},
+    })
+    server = build_server(_build(transport), port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def request_completion():
+        async with sdk.AsyncOpenAI(
+            api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+        ) as client:
+            with pytest.raises(sdk.APIStatusError) as raised:
+                await client.chat.completions.create(
+                    model="primary-model",
+                    messages=[{"role": "user", "content": "inspect locally"}],
+                    tools=[{"type": "function", "function": {"name": "inspect", "parameters": {"type": "object"}}}],
+                )
+            assert raised.value.status_code == 502
+            assert raised.value.body["code"] == "provider_outcome_unknown"
+            assert raised.value.body["detail"]["retryable"] is False
+            assert raised.value.response.headers["x-should-retry"] == "false"
+            assert "private_test_value" not in str(raised.value)
+
+    try:
+        asyncio.run(request_completion())
+        assert [agent_id for agent_id, _ in transport.calls] == ["primary_agent"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_effort_profile_selects_a_supported_provider() -> None:
@@ -1706,13 +1817,7 @@ def _wrapped_url_error(cause: OSError) -> urllib.error.URLError:
     ids=["read-timeout", "reset", "incomplete-read", "remote-disconnected", "connect-timeout"],
 )
 def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseException) -> None:
-    """Every ambiguous transport failure on a virtual selector is recorded and advances.
-
-    ``"contextual-orchestrator"`` (``GATEWAY_DEFAULT_MODEL``) is a virtual
-    selector, so the request advances past the failed candidate to the next
-    ranked one instead of failing closed -- the failed candidate is still a
-    recorded, classified breaker observation either way.
-    """
+    """Every ambiguous transport failure fails closed the same way: classified, recorded, not replayed."""
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1721,19 +1826,20 @@ def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseExc
     )
     orchestrator = _build(client)
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": "contextual-orchestrator",
-            "messages": [{"role": "user", "content": "use the tool"}],
-            "tools": [{"type": "function", "function": {"name": "inspect"}}],
-        }
-    )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
 
-    assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
-    ]
+    assert caught.value.client_status == 502
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+    assert caught.value.__cause__ is None
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
     assert "primary_agent" in orchestrator._circuit
     assert _is_ambiguous_passthrough_transport_failure(failure)
 
@@ -1748,11 +1854,7 @@ def test_ambiguous_transport_predicate_excludes_status_and_dns_failures() -> Non
 
 
 def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
-    """A grouped candidate's ambiguous failure reaches its group's stability record too.
-
-    The default model is a virtual selector, so the request also advances to
-    the next ranked candidate rather than failing the whole request closed.
-    """
+    """A grouped candidate's ambiguous failure reaches its group's stability record too."""
     client = SequencedProxyClient(
         {
             "primary_agent": TimeoutError("read timed out"),
@@ -1764,14 +1866,11 @@ def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
         replace(agent, group_name="provider-group") for agent in orchestrator.agents
     ]
 
-    result = orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
-    assert result["model"] == "fallback-model"
     assert orchestrator._group_router.member_observation_count("primary_agent") == 1
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
-    ]
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:

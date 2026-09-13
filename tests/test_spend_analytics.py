@@ -7,6 +7,7 @@ import threading
 import urllib.request
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import orchestrator as orchestrator_module
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.token_counting import TokenCountUnavailable
 
@@ -28,7 +29,11 @@ def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
     )
 
 
-def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
+def test_exact_output_without_prompt_usage_is_explicitly_unavailable(monkeypatch) -> None:
+    # Isolate the contract under test: with the optional fast-mlsirm judge
+    # installed, the judge contributes a second usage source and the row reads
+    # "mixed" instead of the tokenizer-only contract this test names.
+    monkeypatch.setattr(orchestrator_module, "_resolve_fast_mlsirm_components", lambda: None)
     orchestrator = _orchestrator()
     orchestrator.run([{"role": "user", "content": "account for this"}])
     report = orchestrator.spend_analytics()
@@ -38,7 +43,7 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert report["totals"]["output_tokens"] > 0
     assert report["totals"]["prompt_tokens"] is None
     assert report["totals"]["cost_usd"] is None
-    assert row["usage_source"] == "mixed"
+    assert row["usage_source"] == "tokenizer"
     assert row["cost_usd"] is None
     assert not any("estimated" in key for key in row | report["totals"])
 
