@@ -114,8 +114,8 @@ ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "evidence_schema_version": "1.0.0",
     "source_title": "NVIDIA NIM General FAQ",
     "source_url": "https://docs.api.nvidia.com/nim/docs/product",
-    "reviewed_at_date": "2026-08-05",
-    "valid_until_date": "2026-09-04",
+    "reviewed_at_date": "2026-09-05",
+    "valid_until_date": "2026-10-05",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (
@@ -537,12 +537,13 @@ class EqualBudgetModelClient:
         return getattr(self._delegate, name)
 
     @property
-    def max_output_tokens(self) -> int:
+    def max_output_tokens(self) -> int | None:
         """Expose the delegate cap for compatibility with orchestration clients."""
-        return int(self._delegate.max_output_tokens)
+        value = self._delegate.max_output_tokens
+        return int(value) if value is not None else None
 
     @max_output_tokens.setter
-    def max_output_tokens(self, value: int) -> None:
+    def max_output_tokens(self, value: int | None) -> None:
         """Forward explicit cap changes to the delegated model client."""
         self._delegate.max_output_tokens = value
 
@@ -596,7 +597,10 @@ class EqualBudgetModelClient:
                 "policy cell total-token allowance exhausted"
             )
 
-        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
+        delegate_cap = self._delegate.max_output_tokens
+        output_cap = output_allowance
+        if type(delegate_cap) is int and delegate_cap > 0:
+            output_cap = min(delegate_cap, output_allowance)
         self.observed_calls += 1
         self.observed_prompt_tokens += prompt_tokens
         self.observed_tokens += prompt_tokens

@@ -25,8 +25,8 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
-from urllib.parse import quote, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from .chat_capability import (
     is_general_chat_agent_model_id,
@@ -135,12 +135,15 @@ def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
         r"\b(?:accepts?|allows?)\s+only\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?\b",
         r"\bmax(?:imum)?\s+of\s+one\s+tool(?:-?calls?)?\b",
     )
-    if (
-        any(re.search(pattern, text) for pattern in single_tool_limit_patterns)
-        or (
-            "parallel_tool_calls" in text
-            and any(phrase in text for phrase in ("not supported", "unsupported"))
-        )
+    parallel_tool_calls_rejected = re.search(
+        r"(?:\bparallel[ _-]+tool[ _-]+calls?\b\s+(?:(?:is|are)\s+)?"
+        r"(?:not supported|unsupported)|\bparallel[ _-]+tool[ _-]+calls?\b\s+"
+        r"(?:isn't|aren't)\s+supported|\b(?:does not support|doesn't support)\s+"
+        r"parallel[ _-]+tool[ _-]+calls?\b)",
+        text,
+    )
+    if any(re.search(pattern, text) for pattern in single_tool_limit_patterns) or (
+        parallel_tool_calls_rejected
     ):
         return False
     return None
@@ -339,6 +342,7 @@ class ProviderModelSource:
     auth_scheme: str = "Bearer"
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
+    fallback_task_filters: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     privacy_policy_urls: tuple[str, ...] = ()
     bootstrap_required: bool = True
@@ -457,6 +461,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
+        fallback_task_filters=("text-generation",),
         capabilities=("chat",),
     ),
 )
@@ -511,6 +516,7 @@ class DiscoveredModel:
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
+    supports_parallel_tool_calls: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
@@ -520,10 +526,16 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, error_code: str) -> None:
+    def __init__(
+        self, provider_name: str, error_code: str, credential_name: str | None = None
+    ) -> None:
         self.provider_name = provider_name
         self.error_code = error_code
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
+        self.credential_name = credential_name
+        account = f" account {credential_name!r}" if credential_name else ""
+        super().__init__(
+            f"model discovery failed for provider {provider_name!r}{account}: {error_code}"
+        )
 
 
 def _positive_int_metadata(value: object) -> int | None:
@@ -806,11 +818,17 @@ def _deduplicate_discovered_models(
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
             unit_prices=(),
+            capabilities=(),
+            input_modalities=(),
+            output_modalities=(),
+            privacy_policy_urls=(),
             is_free=False,
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
+            supports_parallel_tool_calls=None,
             zdr_capable=False,
+            spend_admitted=False,
         )
     return list(unique.values())
 
@@ -904,7 +922,21 @@ def _models_dev_cost_is_free(cost: object) -> bool:
 
 
 def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> Any:
-    """Join an availability catalog with Models.dev cost and modality evidence."""
+    """Join an availability catalog with Models.dev cost and modality evidence.
+
+    Free-model classification is always taken from Models.dev (see
+    ``_models_dev_cost_is_free`` and ADR 0041's cost-safety argument), so a
+    provider cannot certify itself as free. Modality and capacity evidence carries no such safety
+    argument -- it is not used to certify a model as free -- so those fields
+    are a field-level union instead: Models.dev's value wins only when
+    Models.dev actually reports one, and the provider's own catalog value
+    (already present on ``row``) survives untouched whenever Models.dev is
+    silent on that specific field. Without this fallback, a model matched in
+    Models.dev but missing ``modalities``/``limit`` data there would have its
+    own provider-reported architecture/context window/max output tokens
+    silently discarded in favor of nothing, even though nothing about that
+    absence casts any doubt on the provider's own value.
+    """
     rows = payload.get("data") if isinstance(payload, dict) else None
     provider_row = metadata.get(provider) if isinstance(metadata, dict) else None
     models = provider_row.get("models") if isinstance(provider_row, dict) else None
@@ -919,6 +951,7 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
             continue
         cost = model.get("cost")
         pricing: dict[str, str] = {}
+        original_pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         if isinstance(cost, dict):
             for source_key, target_key in (("input", "prompt"), ("output", "completion")):
                 value = cost.get(source_key)
@@ -926,17 +959,40 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
                     pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
         limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
+        model_provider = model.get("provider")
+        models_dev_npm = (
+            model_provider.get("npm")
+            if isinstance(model_provider, dict)
+            else provider_row.get("npm")
+        )
+        original_architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        merged_max_output_tokens = _positive_int_metadata(limits.get("output"))
+        if merged_max_output_tokens is None:
+            merged_max_output_tokens = row.get("max_output_tokens")
+        merged_context_window = _positive_int_metadata(limits.get("context"))
+        if merged_context_window is None:
+            merged_context_window = row.get("context_window", row.get("context_length"))
         enriched.append(
             {
                 **row,
-                "pricing": pricing,
+                "pricing": {**original_pricing, **pricing},
                 "architecture": {
-                    "input_modalities": modalities.get("input"),
-                    "output_modalities": modalities.get("output"),
+                    **original_architecture,
+                    "input_modalities": (
+                        modalities.get("input")
+                        if modalities.get("input") is not None
+                        else original_architecture.get("input_modalities")
+                    ),
+                    "output_modalities": (
+                        modalities.get("output")
+                        if modalities.get("output") is not None
+                        else original_architecture.get("output_modalities")
+                    ),
                 },
-                "max_output_tokens": _positive_int_metadata(limits.get("output")),
-                "context_window": _positive_int_metadata(limits.get("context")),
+                "max_output_tokens": merged_max_output_tokens,
+                "context_window": merged_context_window,
                 "is_free": _models_dev_cost_is_free(cost),
+                "_models_dev_npm": models_dev_npm,
             }
         )
     return {**payload, "data": enriched}
@@ -1394,6 +1450,9 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     if isinstance(row.get("supports_no_prompt_retention"), bool)
                     else None
                 ),
+                supports_parallel_tool_calls=_parallel_tool_call_evidence(
+                    supported_parameters
+                ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
                 evidence_only=(
                     source.provider_name == "opencode_go"
@@ -1477,6 +1536,95 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
             )
         )
     return _deduplicate_discovered_models(discovered)
+
+
+def _url_with_task_filter(url: str, task_filter: str) -> str:
+    """Return a provider URL with one encoded task filter."""
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["task"] = task_filter
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
+
+
+def _fetch_provider_json_with_retry(
+    fetch: Callable[..., Any],
+    url: str,
+    *,
+    timeout: float,
+    fetch_kwargs: Mapping[str, Any],
+) -> tuple[Any, Exception | None]:
+    """Fetch one catalog with the shared bounded transient retry contract."""
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
+        try:
+            return fetch(url, timeout=attempt_timeout, **fetch_kwargs), None
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            OSError,
+            RuntimeError,
+        ) as exc:
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    return None, last_exc
+
+
+def _discover_bytez_task_catalog(
+    source: ProviderModelSource,
+    *,
+    fetch: Callable[..., Any],
+    timeout: float,
+    fetch_kwargs: Mapping[str, Any],
+) -> list[DiscoveredModel]:
+    """Discover the first non-empty documented chat-compatible Bytez task."""
+    task_filters = tuple(
+        dict.fromkeys((source.task_filter, *source.fallback_task_filters))
+    )
+    last_exc: Exception | None = None
+    for task_filter in task_filters:
+        if not task_filter:
+            continue
+        payload, failure = _fetch_provider_json_with_retry(
+            fetch,
+            _url_with_task_filter(source.list_url, task_filter),
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
+        )
+        if failure is not None:
+            last_exc = failure
+            _LOGGER.info(
+                "discovery_task_result account=%s task=%s outcome=failed error_code=%s",
+                source.provider_name,
+                task_filter,
+                _provider_discovery_error_code(failure),
+            )
+            continue
+        discovered = _parse_bytez(payload, source)
+        _LOGGER.info(
+            "discovery_task_result account=%s task=%s outcome=%s model_count=%d",
+            source.provider_name,
+            task_filter,
+            "succeeded" if discovered else "empty",
+            len(discovered),
+        )
+        if discovered:
+            return discovered
+    if last_exc is not None:
+        raise ProviderDiscoveryError(
+            source.provider_name,
+            _provider_discovery_error_code(last_exc),
+            source.credential_name,
+        ) from None
+    raise ProviderDiscoveryError(
+        source.provider_name, "empty_provider_catalog", source.credential_name
+    )
 
 
 def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
@@ -1572,7 +1720,7 @@ def discover_provider_models(
     started = time.monotonic()
     url = source.list_url
     if source.task_filter:
-        url = f"{url}?task={source.task_filter}"
+        url = _url_with_task_filter(url, source.task_filter)
     fetch = (
         _fetch_configured_gateway_json
         if source.provider_name == "configured_gateway"
@@ -1583,25 +1731,19 @@ def discover_provider_models(
         "auth_scheme": source.auth_scheme,
         **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
     }
-    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
-    payload: Any = None
-    last_exc: Exception | None = None
-    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
-        try:
-            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
-            last_exc = None
-            break
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
-            # OSError covers ConnectionError/reset failures that are not URLError
-            # subclasses, and RuntimeError covers the configured-gateway transport's
-            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
-            # validation failures, so a raw provider transport failure can never
-            # escape the discovery boundary with provider text attached.
-            last_exc = exc
-            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
-            if is_last_attempt or not is_transient_error(exc):
-                break
-            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if source.style == "bytez" and source.fallback_task_filters:
+        return _discover_bytez_task_catalog(
+            source,
+            fetch=fetch,
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
+        )
+    payload, last_exc = _fetch_provider_json_with_retry(
+        fetch,
+        url,
+        timeout=timeout,
+        fetch_kwargs=fetch_kwargs,
+    )
     if last_exc is not None:
         error_code = _provider_discovery_error_code(last_exc)
         if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -1612,7 +1754,9 @@ def discover_provider_models(
                 type(last_exc).__name__,
                 redact_text(str(last_exc))[:500],
             )
-        raise ProviderDiscoveryError(source.provider_name, error_code) from None
+        raise ProviderDiscoveryError(
+            source.provider_name, error_code, source.credential_name
+        ) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             metadata = _fetch_models_dev_metadata(timeout=timeout)
@@ -1868,6 +2012,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("cost:free",) if discovered.is_free else ()),
             *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
+            *discovery_tool_call_tags(discovered),
             *discovered.capabilities,
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
