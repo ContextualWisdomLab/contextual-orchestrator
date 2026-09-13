@@ -4927,7 +4927,7 @@ class TaskOrchestrator:
             # but this served response's own tool_calls are still remembered
             # so a *later* virtual-selector follow-up can return to it.
             self._record_tool_loop_agents(
-                self._chat_response_tool_calls(result), agent.id
+                self._served_tool_calls(result, api_surface), agent.id
             )
             return result
 
@@ -5051,7 +5051,7 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             self._record_tool_loop_agents(
-                self._chat_response_tool_calls(result), candidate.id
+                self._served_tool_calls(result, api_surface), candidate.id
             )
             if tool_loop_evidence is not None and isinstance(result, dict):
                 orchestration_extension = result.get("orchestration")
@@ -5980,10 +5980,7 @@ class TaskOrchestrator:
         # later tool-loop follow-up on either surface returns to it (see the
         # reorder above and _record_tool_loop_agents).
         self._record_tool_loop_agents(
-            self._responses_output_tool_calls(raw)
-            if response_request
-            else self._chat_response_tool_calls(raw),
-            final_agent.id,
+            self._served_tool_calls(raw, api_surface), final_agent.id
         )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -9530,6 +9527,23 @@ class TaskOrchestrator:
             and item["call_id"]
         ]
         return [{"id": call_id} for call_id in call_ids] if call_ids else None
+
+    @staticmethod
+    def _served_tool_calls(response: Any, api_surface: str) -> list[Any] | None:
+        """Extract a served response's tool calls for whichever wire surface served it.
+
+        A single dispatch point for :meth:`_record_tool_loop_agents` callers
+        that can serve either surface (``proxy_completion``'s explicit-model
+        and virtual passthrough branches, and
+        ``_orchestrated_provider_completion``'s structured synthesis), so the
+        Responses-vs-chat extractor choice is made once instead of repeating
+        the same ``api_surface == "responses"`` branch at each call site.
+        """
+        return (
+            TaskOrchestrator._responses_output_tool_calls(response)
+            if api_surface == "responses"
+            else TaskOrchestrator._chat_response_tool_calls(response)
+        )
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:

@@ -1894,6 +1894,25 @@ def test_explicit_concrete_model_ignores_tool_loop_memory() -> None:
     assert "orchestration" not in result
 
 
+def test_explicit_model_responses_passthrough_records_the_serving_agent() -> None:
+    """Explicit-model /v1/responses passthrough remembers a served function_call's
+    agent (recording only -- an explicit concrete model is still never reordered
+    or given tool-loop evidence)."""
+    client = SequencedProxyClient(
+        {"primary_agent": _responses_function_call("resp_call_5", "primary-model")}
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {"model": "primary-model", "input": "call the tool"},
+        endpoint="responses",
+    )
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert orchestrator._tool_loop_memory["resp_call_5"] == "primary_agent"
+    assert "orchestration" not in result
+
+
 def test_free_model_follow_up_never_routes_to_a_non_free_emitting_agent() -> None:
     """orchestrator/free never returns to a paid emitting agent, even when remembered."""
     client = SequencedProxyClient(
