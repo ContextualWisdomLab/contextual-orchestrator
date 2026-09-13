@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 
 
 def _completion(content: str, usage: dict | None = None) -> dict:
@@ -117,7 +118,7 @@ def test_permanent_4xx_is_not_retried_over_http() -> None:
 
 
 def test_connection_error_is_transient_and_exhausts() -> None:
-    # Point at a port with nothing listening: a real urllib URLError, classified transient.
+    # Point at a port with nothing listening: no HTTP status proves a safe replay.
     client = ModelClient(max_retries=1, retry_backoff=0.0, timeout=2)
     agent = _agent("http://127.0.0.1:1")  # port 1: connection refused
     raised = False
@@ -125,7 +126,9 @@ def test_connection_error_is_transient_and_exhausts() -> None:
         client._send_with_retry(agent, {"model": "gpt-x"})
     except RuntimeError as exc:
         raised = True
-        assert "worker_agent" in str(exc)
+        assert isinstance(exc, ProviderUpstreamError)
+        assert exc.error_code == "provider_outcome_unknown"
+        assert exc.retryable is False
     assert raised
 
 
