@@ -4253,7 +4253,7 @@ class TaskOrchestrator:
     @staticmethod
     def _zdr_agent_allowed(agent: ModelAgent) -> bool:
         """Return whether one agent is eligible under the active privacy policy."""
-        return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
+        return not _REQUEST_ZDR_ONLY.get() or ("privacy:zdr" in agent.tags and "privacy:no_zdr" not in agent.tags)
 
     def select_model_group_members(
         self,

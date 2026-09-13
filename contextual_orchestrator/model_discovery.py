@@ -1960,7 +1960,7 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
-        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is True or discovered.zdr_capable) else ()),
+        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is not False and (discovered.supports_zero_data_retention is True or discovered.zdr_capable)) else ()),
         *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
         *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
         *(("privacy:training_only",) if discovered.supports_no_training is False else ()),

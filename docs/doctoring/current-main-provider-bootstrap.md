@@ -145,7 +145,10 @@ verdicts `zdr_all_rungs`, `zdr_enforceable` and `not_zdr` describe platform-fund
 lanes; they do not prove the organization policy or cover arbitrary BYOK and
 waterfall overrides. A Secret or one model attestation cannot authorize another
 model. The local require-ZDR policy excludes non-ZDR and unknown model evidence;
-its regression test does not verify remote organization enforcement. OpenRouter discovery
+its regression test does not verify remote organization enforcement.
+Explicit non-ZDR evidence vetoes a legacy positive ZDR marker. Persisted
+conflicting tags restore as non-ZDR and cannot enter a require-ZDR request;
+a policy-disabled request retains its normal eligibility rules. OpenRouter discovery
 attestation now applies only to OpenRouter rows; matching model identifiers at
 other providers cannot grant ZDR status. Independently supplied provider privacy
 evidence is preserved. This repairs the cross-provider finding from PR #971,
