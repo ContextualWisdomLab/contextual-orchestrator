@@ -185,14 +185,9 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo "TARGET_SHA=${target_sha}" >> "${GITHUB_ENV}"
 
-          # A published Release already existing does not mean nothing is
-          # left to resume: creating a Release can publish the Release
-          # object and then fail partway through uploading its assets, in
-          # which case the tag and the Release both already exist but a
-          # release asset can still be missing. A Release already existing
-          # for TARGET_SHA's tag remains a safe resume, but the publish job
-          # must restore and verify every mandatory release asset before it
-          # can report success.
+          # An interrupted draft can resume asset attachment. A published
+          # immutable release is verify-only: its assets cannot be changed.
+          # The publish job validates that lifecycle before any mutation.
           #
           # As with the tag lookup above, a failed `gh release view` is NOT
           # automatically "Release absent": only a confirmed 404 means that.
@@ -205,7 +200,7 @@ jobs:
               exit 1
             fi
           else
-            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming to verify or attach any still-missing mandatory release assets."
+            echo "::notice::Tag v${RELEASE_VERSION} already points at ${target_sha} and its GitHub Release already exists; resuming lifecycle validation before asset verification."
             echo "release_resume=true" >> "${GITHUB_OUTPUT}"
           fi
 
@@ -375,6 +370,21 @@ jobs:
             exit 1
           fi
 
+      - name: Validate the existing release lifecycle
+        if: env.RELEASE_RESUME == 'true'
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}")"
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+            .tag_name == $tag and .prerelease == false and
+            ((.draft == true and .immutable == false) or
+             (.draft == false and .immutable == true and
+              ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1))
+          ' <<<"${release}" >/dev/null; then
+            echo "::error::Existing release is neither a resumable draft nor a complete immutable release; refusing mutation." >&2
+            exit 1
+          fi
+
       - name: Create the GitHub Release
         if: env.RELEASE_RESUME != 'true'
         run: |
@@ -382,6 +392,8 @@ jobs:
           gh release create "v${RELEASE_VERSION}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "v${RELEASE_VERSION}" \
+            --verify-tag \
+            --draft \
             --notes-file release-notes.md
 
       - name: Attach required release SBOM
@@ -413,3 +425,32 @@ jobs:
             echo "::error::Published SBOM differs from verified evidence; refusing to overwrite it." >&2
             exit 1
           fi
+
+      - name: Publish the verified draft and require immutable attestation
+        run: |
+          set -euo pipefail
+          release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}"
+          release="$(gh api "${release_endpoint}")"
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+            .tag_name == $tag and .prerelease == false and
+            ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1 and
+            ((.draft == true and .immutable == false) or
+             (.draft == false and .immutable == true))
+          ' <<<"${release}" >/dev/null; then
+            echo "::error::Release lifecycle or mandatory asset changed before publication." >&2
+            exit 1
+          fi
+          if [ "$(jq -r '.draft' <<<"${release}")" = "true" ]; then
+            gh release edit "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          fi
+          release="$(gh api "${release_endpoint}")"
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+            .tag_name == $tag and .draft == false and
+            .prerelease == false and .immutable == true
+          ' <<<"${release}" >/dev/null; then
+            echo "::error::Published release is not immutable; it must not enter the released-owner inventory. Enable repository release immutability before publishing." >&2
+            exit 1
+          fi
+          gh release verify "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}"
+          gh release verify-asset "v${RELEASE_VERSION}" sbom-download/cyclonedx-sbom.json \
+            --repo "${GITHUB_REPOSITORY}"
