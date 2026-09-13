@@ -2,7 +2,10 @@
 
 import asyncio
 import base64
+import importlib.metadata
 import json
+import sys
+import types
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -267,8 +270,28 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
     }
 
 
+def _installed_mcp_major_version() -> int:
+    try:
+        return int(importlib.metadata.version("mcp").split(".")[0])
+    except importlib.metadata.PackageNotFoundError:
+        return 0
+
+
+def test_camoufox_render_reports_pre_v2_mcp_sdk(monkeypatch) -> None:
+    """A 1.x MCP SDK without ``mcp.Client`` fails with the required version named."""
+    legacy_mcp_module = types.ModuleType("mcp")
+    legacy_mcp_module.ClientSession = object
+    monkeypatch.setitem(sys.modules, "mcp", legacy_mcp_module)
+    with pytest.raises(ImportError, match=r"MCP Python SDK >= 2\.0") as raised:
+        asyncio.run(_render_policy_document_with_camoufox("https://provider.example/privacy"))
+    assert "installed:" in str(raised.value)
+    assert isinstance(raised.value.__cause__, ImportError)
+
+
 def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
     pytest.importorskip("mcp")
+    if _installed_mcp_major_version() < 2:
+        pytest.skip("Camoufox MCP transport targets MCP Python SDK >= 2.0 (mcp.Client API)")
     calls: list[tuple[str, dict[str, object]]] = []
 
     class _Context:
