@@ -1,3 +1,5 @@
+"""Experiential Labs provider discovery, bootstrap, and free-lane rejection contracts."""
+
 from __future__ import annotations
 
 import json
