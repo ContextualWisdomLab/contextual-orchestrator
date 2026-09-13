@@ -129,6 +129,167 @@ def test_speech_endpoint_preserves_binary_media_response() -> None:
         server.shutdown()
 
 
+def test_responses_input_tokens_requires_explicit_capability_and_validates_result() -> None:
+    """Forward only supported count fields and preserve the authoritative result."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    successes: list[str] = []
+    original_observe_success = orchestrator._group_router.observe_success
+    orchestrator._group_router.observe_success = (  # type: ignore[method-assign]
+        lambda agent_id, latency: successes.append(agent_id) or original_observe_success(agent_id, latency)
+    )
+    calls: list[tuple[str, dict]] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, endpoint, payload: calls.append((endpoint, payload))
+        or {"object": "response.input_tokens", "input_tokens": 17}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, raw, content_type = _post(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"model": "provider/token-counter", "input": "hello", "zdr_only": False},
+        )
+        assert status == 200 and content_type == "application/json"
+        assert json.loads(raw) == {"object": "response.input_tokens", "input_tokens": 17}
+        assert calls == [("responses/input_tokens", {"model": "provider/token-counter", "input": "hello"})]
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_accepts_nullable_model_and_zero_count() -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: forwarded.append(payload)
+        or {"object": "response.input_tokens", "input_tokens": 0}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, raw, _ = _post(
+            server.server_address[1], "/v1/responses/input_tokens", {"model": None, "input": "hello"}
+        )
+        assert status == 200
+        assert json.loads(raw)["input_tokens"] == 0
+        assert forwarded[0]["model"] == "provider/token-counter"
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_rejects_malformed_provider_count_before_success_accounting() -> None:
+    """Reject boolean counts without recording a successful provider outcome."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    successes: list[str] = []
+    original_observe_success = orchestrator._group_router.observe_success
+    orchestrator._group_router.observe_success = (  # type: ignore[method-assign]
+        lambda agent_id, latency: successes.append(agent_id) or original_observe_success(agent_id, latency)
+    )
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args: {"object": "response.input_tokens", "input_tokens": True}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"input": "hello"},
+        )
+        assert status == 502
+        assert error["error"]["code"] == "invalid_input_token_count_response"
+        assert successes == []
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_does_not_infer_capability_from_model_name() -> None:
+    """Require an operator-declared count capability instead of model-name inference."""
+    agent = ModelAgent("plain_agent", "responses-input-token-model")
+    orchestrator = TaskOrchestrator([agent])
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"model": "responses-input-token-model", "input": "hello"},
+        )
+        assert status == 503
+        assert error["error"]["code"] == "capability_unavailable"
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_accepts_optional_official_shapes_and_rejects_bad_truncation() -> None:
+    """Preserve mixed tool definitions and reject malformed truncation inputs."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: forwarded.append(payload)
+        or {"object": "response.input_tokens", "input_tokens": 1}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _raw, _ = _post(
+            server.server_address[1], "/v1/responses/input_tokens",
+            {"input": None, "conversation": {"id": "conv_1"}, "tools": [
+                {"type": "web_search_preview"},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+            ]},
+        )
+        assert status == 200
+        assert forwarded[0]["tools"] == [
+            {"type": "web_search_preview"},
+            {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+        ]
+        status, error = _post_error(
+            server.server_address[1], "/v1/responses/input_tokens", {"truncation": []}
+        )
+        assert status == 400 and error["error"]["code"] == "invalid_truncation"
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_requires_auth_before_provider_egress() -> None:
+    """Reject unauthenticated count requests before invoking the provider."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            _post(server.server_address[1], "/v1/responses/input_tokens", {"input": "hello"}, token="wrong")
+        assert raised.value.code == 401
+        assert calls == []
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("provider_result", [None, {"object": "response.input_tokens"}, {"object": "response.input_tokens", "input_tokens": -1}, {"object": "response.input_tokens", "input_tokens": "1"}])
+def test_responses_input_tokens_rejects_other_malformed_counts(provider_result: object) -> None:
+    """Reject malformed provider count envelopes at the authenticated HTTP boundary."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = lambda *_args: provider_result  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {"input": "hello"})
+        assert status == 502 and error["error"]["code"] == "invalid_input_token_count_response"
+    finally:
+        server.shutdown()
+
+
 def test_video_poll_and_content_use_the_submission_provider() -> None:
     """Async video follow-ups stay bound to the measured submission winner."""
     first = ModelAgent(
@@ -773,3 +934,22 @@ def test_fast_empty_media_response_cannot_beat_slower_valid_response() -> None:
         capability="image",
         endpoint="images/generations",
     ) == {"data": [{"url": "https://example.invalid/image.png"}]}
+
+
+@pytest.mark.parametrize("request_policy", [{"zdr_only": True}, {"model": "orchestrator/free"}])
+def test_input_token_count_rejects_unverified_policy_before_egress(request_policy: dict) -> None:
+    """A count capability alone cannot establish free pricing or ZDR eligibility."""
+    provider_agent = ModelAgent("count_provider", "provider/count-model", tags=("responses_input_tokens",))
+    task_orchestrator = TaskOrchestrator([provider_agent])
+    provider_calls: list[object] = []
+    task_orchestrator.client.proxy_send = lambda *call_args: provider_calls.append(call_args)  # type: ignore[method-assign]
+    http_server = build_server(task_orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=http_server.serve_forever, daemon=True).start()
+    try:
+        status_code, response_body = _post_error(
+            http_server.server_address[1], "/v1/responses/input_tokens", {"input": "hello", **request_policy}
+        )
+        assert status_code in (400, 503), response_body
+        assert provider_calls == []
+    finally:
+        http_server.shutdown()
