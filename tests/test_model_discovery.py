@@ -39,6 +39,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _OPENROUTER_PROVIDER_POLICIES_URL,
     _OPENROUTER_ZDR_ENDPOINTS_URL,
     _bytez_meter_price_is_free,
+    _apply_discovered_model_evidence,
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
@@ -2354,10 +2355,12 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
-def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:
+@pytest.mark.parametrize("provider_name", ["nvidia_nim", "experiential_labs"])
+def test_discover_all_models_keeps_zdr_evidence_provider_scoped(provider_name) -> None:
+    """An OpenRouter model match cannot attest another provider's retention."""
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
-        provider_name="nvidia_nim",
+        provider_name=provider_name,
         credential_name="NVIDIA_NIM_API_KEY",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
@@ -2385,8 +2388,23 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
         ("openrouter", True),
-        ("nvidia_nim", True),
+        (provider_name, False),
     ]
+
+
+def test_openrouter_evidence_preserves_other_provider_attestation() -> None:
+    """An unrelated feed cannot erase independently supplied ZDR evidence."""
+    attested_model = DiscoveredModel(
+        provider_name="experiential_labs",
+        model_id="independently-attested-model",
+        credential_name="EXPERIENTAL_LABS_API_KEY",
+        chat_base_url="https://api.experientiallabs.ai/v1",
+        auth_scheme="Bearer",
+        zdr_capable=True,
+    )
+    assert _apply_discovered_model_evidence(
+        [attested_model], {"unrelated/openrouter-model"}
+    ) == [attested_model]
 
 
 def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
