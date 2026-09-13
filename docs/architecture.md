@@ -77,6 +77,23 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+- Rate-limit-aware admission (2026-09-14): a 429/503 candidate failure records
+  a per-agent quota cooldown from `Retry-After` (or a numeric
+  `x-ratelimit-reset*` fallback; an unparseable/absent value stays "unknown"
+  and is never skipped) separately from the health circuit breaker -- a 429 is
+  quota exhaustion, not a model health failure, and does not trip it.
+  `TaskOrchestrator._failover_candidates` skips a currently cooled-down
+  candidate for every caller by default, falling back to the full list only
+  when every candidate is limited. `proxy_completion`'s own passthrough
+  failover loop additionally waits out the earliest cooldown -- one bounded
+  wait per round, never a busy-loop -- when it fits the request's
+  administrator-owned `model_timeout_seconds` deadline or the
+  `rate_limit_wait_seconds` caller-contract default, then retries; when
+  waiting is impossible it returns an honest `429`/`provider_rate_limited`
+  with a `Retry-After` header instead of a `502` connection-failure
+  misclassification. See the 2026-09-14 entry in
+  [the gap baseline](product-technical-gap-baseline.md) for the production
+  evidence and full scope note.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

@@ -1030,6 +1030,17 @@ def main(argv: list[str] | None = None) -> None:
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
+    parser.add_argument(
+        "--rate-limit-wait-seconds",
+        type=float,
+        default=30.0,
+        help=(
+            "Caller-contract bound (not a product limit) on how long a "
+            "passthrough request may wait out a provider rate-limit storm "
+            "when the primary candidate has no administrator-owned "
+            "model_timeout_seconds deadline (default: 30)."
+        ),
+    )
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     parser.add_argument(
@@ -1075,6 +1086,7 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        rate_limit_wait_seconds=args.rate_limit_wait_seconds,
         allow_empty_agents=args.auto_discover_model_agents,
         role_effort_catalog=(
             default_role_effort_catalog() if args.role_effort_catalog == "default" else None

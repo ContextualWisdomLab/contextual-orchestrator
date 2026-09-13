@@ -56,6 +56,8 @@ from .provider_errors import (
     ProviderUpstreamError,
     classify_provider_failure,
     provider_error_body,
+    rate_limited_storm_error,
+    resolve_retry_after_seconds,
 )
 from .telemetry import (
     annotate_current_span,
@@ -4436,6 +4438,7 @@ class TaskOrchestrator:
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
         allow_empty_agents: bool = False,
         token_counter: Any = None,
+        rate_limit_wait_seconds: float = 30.0,
     ) -> None:
         self._assistant_message_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
@@ -4538,6 +4541,31 @@ class TaskOrchestrator:
         self._provider_readiness_lock = threading.Lock()
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+        # Per-agent provider-declared quota cooldown (Retry-After / x-ratelimit-reset*),
+        # tracked separately from the health circuit breaker above: a 429 is quota
+        # exhaustion, not a model health failure, so it must never trip or feed
+        # _circuit (see _record_failure call sites gated on rate_limit_signal).
+        self._rate_limit_until: dict[str, float] = {}
+        self._rate_limit_lock = threading.Lock()
+        # Injectable wait seam (mirrors _tool_retry_sleep) so a rate-limit-storm
+        # test can assert the requested wait duration without a real sleep.
+        self._rate_limit_sleep = time.sleep
+        if (
+            isinstance(rate_limit_wait_seconds, bool)
+            or not isinstance(rate_limit_wait_seconds, (int, float))
+            or not math.isfinite(float(rate_limit_wait_seconds))
+            or rate_limit_wait_seconds < 0
+        ):
+            raise ValueError("rate_limit_wait_seconds must be a finite nonnegative number")
+        # Caller-contract bound (not a product limit): how long a passthrough
+        # request may block waiting out a rate-limit storm when the primary
+        # candidate carries no administrator-owned model_timeout_seconds
+        # (issue #1053). When that per-model deadline IS set, it always wins
+        # instead -- see _rate_limit_wait_budget. This constructor default is
+        # an operator/administrator choice (like circuit_reset_seconds above),
+        # sourced from the KV-backed bootstrap config the caller resolves
+        # before constructing this orchestrator, never from os.getenv here.
+        self.rate_limit_wait_seconds = float(rate_limit_wait_seconds)
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
         if cache_provider is not None and cache_ttl:
             raise ValueError("cache_provider and cache_ttl cannot both be configured")
@@ -4648,6 +4676,17 @@ class TaskOrchestrator:
         status = "unprobed" if not refresh else (
             "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
         )
+        # Rate-limit-storm evidence for an org sidecar preflight (e.g.
+        # contextual-orchestrator-preflight.json's ready_count/account_skip_after_429
+        # fields) to wait on instead of exiting: exposes each currently
+        # cooling-down agent's remaining seconds and the soonest any of them
+        # clears, without probing external providers.
+        rate_limited_until = {
+            item["agent_id"]: round(remaining, 3)
+            for item in active
+            for remaining in (self._rate_limit_remaining(item["agent_id"]),)
+            if remaining is not None
+        }
         return {
             "status": status,
             "probe": "refresh" if refresh else "none",
@@ -4655,6 +4694,10 @@ class TaskOrchestrator:
             "checked_at": int(time.time()) if refresh else None,
             "agent_count": len(active),
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
+            "rate_limited_until": rate_limited_until,
+            "earliest_ready_seconds": (
+                round(min(rate_limited_until.values()), 3) if rate_limited_until else None
+            ),
             "items": items,
         }
 
@@ -4931,6 +4974,10 @@ class TaskOrchestrator:
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
             effort_profile=effort_profile,
+            # This loop runs its own rate-limit-storm wait/earliest-ready
+            # admission below and needs the full ranked list (including
+            # currently cooled-down candidates) to do it.
+            skip_rate_limited=False,
         )
         ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
@@ -4947,69 +4994,150 @@ class TaskOrchestrator:
             candidates.append(candidate)
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
-        for candidate in candidates:
-            started_at = time.perf_counter()
-            candidate_payload = dict(upstream)
-            candidate_payload["model"] = candidate.model
-            if isinstance(file_replicas, dict):
-                candidate_payload = _bind_provider_file_ids(
-                    candidate_payload, file_replicas, candidate.id
-                )
-            if effort_profile is not None:
-                candidate_payload = self.client.apply_effort_profile(
-                    candidate,
-                    candidate_payload,
-                    effort_profile,
-                    api_surface=api_surface,
-                )
-            try:
-                send_once = getattr(self.client, "proxy_send_once", None)
-                if not callable(send_once):
-                    send_once = self.client.proxy_send
-                result = send_once(candidate, endpoint, candidate_payload)
-            except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                if not _is_passthrough_failover_error(exc):
-                    if _is_ambiguous_passthrough_transport_failure(exc):
-                        # The transport cannot prove whether the provider accepted
-                        # the request. Record the unhealthy route, but never replay.
+        # Rate-limit-storm admission (evidence: noema run 34758641142, strix
+        # run 34758679736 -- every candidate returned 429 within ~50ms;
+        # ContextualWisdomLab/.github#2148, #2165). ``wait_deadline`` is
+        # resolved once, lazily, from the primary candidate's own budget so a
+        # request that never hits a cooldown pays no extra cost.
+        rate_limited_skipped: list[str] = []
+        wait_deadline: float | None = None
+        while True:
+            eligible_round: list[ModelAgent] = []
+            round_now = time.monotonic()
+            for candidate in candidates:
+                if self._rate_limit_remaining(candidate.id, now=round_now) is None:
+                    eligible_round.append(candidate)
+                elif candidate.id not in rate_limited_skipped:
+                    # Record this evidence now: a round that succeeds returns
+                    # before the post-round recompute below ever runs.
+                    rate_limited_skipped.append(candidate.id)
+
+            for candidate in eligible_round:
+                started_at = time.perf_counter()
+                candidate_payload = dict(upstream)
+                candidate_payload["model"] = candidate.model
+                if isinstance(file_replicas, dict):
+                    candidate_payload = _bind_provider_file_ids(
+                        candidate_payload, file_replicas, candidate.id
+                    )
+                if effort_profile is not None:
+                    candidate_payload = self.client.apply_effort_profile(
+                        candidate,
+                        candidate_payload,
+                        effort_profile,
+                        api_surface=api_surface,
+                    )
+                try:
+                    send_once = getattr(self.client, "proxy_send_once", None)
+                    if not callable(send_once):
+                        send_once = self.client.proxy_send
+                    result = send_once(candidate, endpoint, candidate_payload)
+                except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                    if not _is_passthrough_failover_error(exc):
+                        if _is_ambiguous_passthrough_transport_failure(exc):
+                            # The transport cannot prove whether the provider accepted
+                            # the request. Record the unhealthy route, but never replay.
+                            self._record_failure(candidate.id)
+                            if candidate.group_name:
+                                self._group_router.observe_failure(candidate.id)
+                            raise ProviderUpstreamError(
+                                agent_id=candidate.id,
+                                model=candidate.model,
+                                error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                message="the provider request outcome is unknown; automatic replay is unsafe",
+                                client_status=502,
+                                retryable=False,
+                                transport="passthrough",
+                            ) from None
+                        if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                            raise classify_provider_failure(
+                                exc,
+                                agent_id=candidate.id,
+                                model=candidate.model,
+                                transport="passthrough",
+                            ) from None
+                        raise
+                    last_failure = (exc, candidate)
+                    request_too_large = _is_request_too_large_error(exc)
+                    every_failure_was_request_too_large = (
+                        every_failure_was_request_too_large
+                        and request_too_large
+                    )
+                    capability_mismatch = _is_capability_mismatch_failover_error(exc)
+                    rate_limit_signal = self._rate_limited_provider_signal(exc)
+                    if rate_limit_signal is not None:
+                        signal_status, signal_http_error = rate_limit_signal
+                        self._record_rate_limit(
+                            candidate.id,
+                            resolve_retry_after_seconds(signal_http_error)
+                            if signal_http_error is not None
+                            else None,
+                        )
+                    # A 429 is quota exhaustion, not a model health failure: it
+                    # must never trip or feed the circuit breaker (unlike a
+                    # 503, which stays a real availability signal).
+                    skip_breaker = (
+                        request_too_large
+                        or capability_mismatch
+                        or (rate_limit_signal is not None and rate_limit_signal[0] == 429)
+                    )
+                    if not skip_breaker:
                         self._record_failure(candidate.id)
-                        if candidate.group_name:
-                            self._group_router.observe_failure(candidate.id)
-                        raise ProviderUpstreamError(
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
-                            message="the provider request outcome is unknown; automatic replay is unsafe",
-                            client_status=502,
-                            retryable=False,
-                            transport="passthrough",
-                        ) from None
-                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                        raise classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="passthrough",
-                        ) from None
-                    raise
-                last_failure = (exc, candidate)
-                request_too_large = _is_request_too_large_error(exc)
-                every_failure_was_request_too_large = (
-                    every_failure_was_request_too_large
-                    and request_too_large
-                )
-                capability_mismatch = _is_capability_mismatch_failover_error(exc)
-                if not (request_too_large or capability_mismatch):
-                    self._record_failure(candidate.id)
-                if candidate.group_name and not (request_too_large or capability_mismatch):
-                    self._group_router.observe_failure(candidate.id)
-                continue
-            self._record_success(candidate.id)
-            if candidate.group_name:
-                self._group_router.observe_success(
-                    candidate.id, time.perf_counter() - started_at
-                )
-            return result
+                    if candidate.group_name and not skip_breaker:
+                        self._group_router.observe_failure(candidate.id)
+                    continue
+                self._record_success(candidate.id)
+                if candidate.group_name:
+                    self._group_router.observe_success(
+                        candidate.id, time.perf_counter() - started_at
+                    )
+                if rate_limited_skipped and isinstance(result, dict):
+                    orchestration = result.setdefault("orchestration", {})
+                    if isinstance(orchestration, dict):
+                        orchestration["rate_limited_skipped"] = list(
+                            dict.fromkeys(rate_limited_skipped)
+                        )
+                return result
+
+            # Recompute cooldowns AFTER the attempt round: a candidate that
+            # was eligible at the top (no pre-existing cooldown) can have
+            # just been rate-limited by the attempts above, so the pre-round
+            # snapshot alone would miss a storm that only reveals itself
+            # during this exact round.
+            post_round_now = time.monotonic()
+            cooldowns: dict[str, float] = {}
+            for candidate in candidates:
+                remaining = self._rate_limit_remaining(candidate.id, now=post_round_now)
+                if remaining is not None:
+                    cooldowns[candidate.id] = remaining
+            for skipped_id in cooldowns:
+                if skipped_id not in rate_limited_skipped:
+                    rate_limited_skipped.append(skipped_id)
+            if not cooldowns:
+                # Nothing is rate-limited: every candidate attempted this
+                # round failed for an unrelated reason -- fall through to
+                # normal failure reporting below.
+                break
+            earliest_agent_id = min(cooldowns, key=cooldowns.get)
+            earliest_ready = cooldowns[earliest_agent_id]
+            if wait_deadline is None:
+                wait_deadline = time.monotonic() + self._rate_limit_wait_budget(agent)
+            remaining_budget = wait_deadline - time.monotonic()
+            if remaining_budget <= 0 or earliest_ready > remaining_budget:
+                # Waiting is impossible: no budget left, or every cooldown
+                # outlasts it. Fail honestly as quota exhaustion (429), never
+                # as a connection failure (502) -- the gateway's job under a
+                # 429 storm is to not fail silently or misclassify (see
+                # ContextualWisdomLab/.github#2148, #2165).
+                raise rate_limited_storm_error(
+                    agent_id=earliest_agent_id,
+                    model=agent.model,
+                    retry_after_seconds=earliest_ready,
+                    transport="passthrough",
+                ) from None
+            # Single bounded wait, never a busy-loop; re-run selection once
+            # the earliest candidate's cooldown has elapsed.
+            self._rate_limit_sleep(earliest_ready)
         if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
@@ -9235,7 +9363,18 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         prompt_context: str | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
+        skip_rate_limited: bool = True,
     ) -> list[ModelAgent]:
+        """Rank and filter failover candidates for one role.
+
+        ``skip_rate_limited`` (default ``True``) drops a candidate with a
+        currently active provider-declared quota cooldown
+        (:meth:`_record_rate_limit`), the same way circuit-open candidates
+        are dropped below -- callers get this for free. A caller that needs
+        the FULL ranked list to run its own storm-wait/earliest-ready
+        decision (``proxy_completion``'s passthrough loop) passes
+        ``skip_rate_limited=False`` and does its own filtering.
+        """
         try:
             ranked = self._ranked_agents(
                 text,
@@ -9277,7 +9416,17 @@ class TaskOrchestrator:
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible
+        healthy = healthy or eligible
+        if skip_rate_limited:
+            not_rate_limited = [
+                agent for agent in healthy if self._rate_limit_remaining(agent.id) is None
+            ]
+            # If every healthy candidate is currently quota-limited, still
+            # return them rather than an empty list -- a caller with no
+            # storm-wait logic of its own should still get one honest
+            # attempt/failure instead of "no eligible provider candidate".
+            healthy = not_rate_limited or healthy
+        return healthy
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
@@ -9326,6 +9475,94 @@ class TaskOrchestrator:
             cleared = self._circuit.pop(agent_id, None)
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
+
+    def _record_rate_limit(self, agent_id: str, retry_after_seconds: float | None) -> None:
+        """Record one provider-declared quota cooldown; an unknown duration sets none.
+
+        Cooldowns only ever extend forward: a second, larger cooldown for the
+        same agent before the first expires replaces it, but a smaller/stale
+        one never shortens an in-flight cooldown.
+        """
+        if retry_after_seconds is None:
+            return
+        until = time.monotonic() + max(float(retry_after_seconds), 0.0)
+        with self._rate_limit_lock:
+            current = self._rate_limit_until.get(agent_id)
+            if current is None or until > current:
+                self._rate_limit_until[agent_id] = until
+
+    def _rate_limit_remaining(self, agent_id: str, *, now: float | None = None) -> float | None:
+        """Return remaining cooldown seconds for ``agent_id``, or ``None`` when clear."""
+        moment = now if now is not None else time.monotonic()
+        with self._rate_limit_lock:
+            until = self._rate_limit_until.get(agent_id)
+            if until is None:
+                return None
+            remaining = until - moment
+            if remaining <= 0:
+                self._rate_limit_until.pop(agent_id, None)
+                return None
+            return remaining
+
+    def _rate_limited_snapshot(self) -> dict[str, float]:
+        """Return ``{agent_id: remaining_seconds}`` for every currently cooling-down agent."""
+        now = time.monotonic()
+        with self._rate_limit_lock:
+            items = list(self._rate_limit_until.items())
+        snapshot: dict[str, float] = {}
+        expired: list[str] = []
+        for agent_id, until in items:
+            remaining = until - now
+            if remaining > 0:
+                snapshot[agent_id] = remaining
+            else:
+                expired.append(agent_id)
+        if expired:
+            with self._rate_limit_lock:
+                for agent_id in expired:
+                    stale = self._rate_limit_until.get(agent_id)
+                    if stale is not None and stale - time.monotonic() <= 0:
+                        self._rate_limit_until.pop(agent_id, None)
+        return snapshot
+
+    def _rate_limit_wait_budget(self, agent: ModelAgent) -> float:
+        """Resolve how long a rate-limit-storm wait may block for this request.
+
+        Prefers the administrator-owned ``model_timeout_seconds`` deadline
+        (issue #1053) on the primary candidate when one is set -- waiting for
+        a quota cooldown must never exceed a deadline the administrator
+        already promised bounds the request. Falls back to
+        ``self.rate_limit_wait_seconds`` (a caller-contract bound, documented
+        on the constructor, not a hidden product limit) only when no such
+        deadline is configured. A test double standing in for ``self.client``
+        need not implement the resolver at all.
+        """
+        resolver = getattr(self.client, "_resolved_model_timeout", None)
+        resolved = resolver(agent) if callable(resolver) else None
+        return resolved if resolved is not None else self.rate_limit_wait_seconds
+
+    @staticmethod
+    def _rate_limited_provider_signal(
+        exc: BaseException,
+    ) -> tuple[int, urllib.error.HTTPError | None] | None:
+        """Find a 429/503 status (and its HTTPError, for header access) in ``exc``'s chain."""
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+            if current is None or id(current) in seen:
+                return None
+            seen.add(id(current))
+            if isinstance(current, urllib.error.HTTPError) and current.code in (429, 503):
+                return current.code, current
+            if isinstance(current, ProviderUpstreamError) and current.provider_status in (429, 503):
+                return current.provider_status, None
+            if current.__cause__ is not None:
+                current = current.__cause__
+            elif current.__suppress_context__:
+                return None
+            else:
+                current = current.__context__
+        return None
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:

@@ -137,3 +137,31 @@ chat stopped-tool errors. The Responses fixture fixes the routing choice to
 isolate SSE framing; it does not test routing policy. The original cases failed
 identity equality; after repair, these and both debug logging suites passed
 (40 tests, 2.75 seconds). No hosted check or deployment is implied.
+
+## Rate-limit storm (2026-09-14)
+
+Distinct from the request-identity correlation issues above, but the same
+provider-request-boundary area: org CI review lanes calling this gateway with
+`orchestrator/free` saw every candidate return HTTP 429 within ~50ms during a
+free-pool rate-limit storm (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway failed the request instead of honoring the provider's declared
+cooldown. `ContextualWisdomLab/.github#2148` root-caused the same failure mode
+against a three-route OpenRouter `:free` ZDR pool wiped by a single 429 burst
+(its item 1: "honor provider-stated Retry-After, no arbitrary retry budget");
+`#2165` shows the resulting `noema-review`/`strix` failing closed on
+gateway-side 429/502 after failover, with caller `attempts=1`.
+
+Fixed: `Retry-After`/`x-ratelimit-reset*` parsing, a per-agent cooldown kept
+separate from the health circuit breaker, a shared skip in
+`_failover_candidates` for every caller, and a bounded wait-then-retry (or
+honest `429 provider_rate_limited` with a `Retry-After` header) in
+`proxy_completion`'s passthrough failover loop. Full detail, scope note, and
+test evidence: the 2026-09-14 entry in
+[the gap baseline](../product-technical-gap-baseline.md).
+
+The org sidecar's own preflight artifact (`contextual-orchestrator-preflight.json`)
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` fields; those are the RED/GREEN evidence an external
+CI run can use to confirm this class of fix without needing gateway-internal
+access. This repo does not modify that org-owned sidecar script.

@@ -2016,6 +2016,77 @@ normative ADR 0016 file remains. Privacy requirements additionally follow
 > checks, reviews, and base relationships can change after publication. Always
 > refetch the remote exact head and protected rules before acting on a row.
 
+## 2026-09-14 rate-limit-aware admission for a 429 storm
+
+Production evidence: org CI review lanes call this gateway with
+`orchestrator/free`. During a free-pool rate-limit storm every candidate
+returned HTTP 429 within ~50ms (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway simply failed the request. `ContextualWisdomLab/.github#2148`
+independently root-caused the same failure mode against a private-target ZDR
+pool of three OpenRouter `:free` routes on one account, wiped by a single 429
+burst; `#2165` shows `noema-review`/`strix` failing closed on the resulting
+429/502 with `attempts=1`, blocking unchanged consumer PRs. The owner's
+requirement across all three reports is the same: the gateway's job under a
+429 storm is to not fail.
+
+Fixed: `orchestrator.py` now parses `Retry-After` (delta-seconds or an
+HTTP-date; `provider_errors.parse_retry_after`) and falls back to a numeric
+`x-ratelimit-reset*` header when absent, recording a per-agent cooldown
+(`TaskOrchestrator._record_rate_limit`/`_rate_limit_remaining`) kept separate
+from the health circuit breaker -- a 429 is quota exhaustion, not a model
+health failure, and no longer trips `_circuit` (a direct 503 still does).
+`_failover_candidates` (shared by every caller, including `route_once`/
+`conduct`) now skips a currently cooled-down candidate by default, falling
+back to the full list only when every candidate is limited so a caller with no
+wait logic of its own still gets one honest attempt. `proxy_completion`'s own
+passthrough failover loop -- the request-response boundary that can report one
+provider-shaped answer -- additionally waits out the earliest known cooldown
+when it fits the request's administrator-owned `model_timeout_seconds`
+deadline (issue #1053) or the new `rate_limit_wait_seconds` constructor
+default (30s, a documented caller-contract bound, not a hidden product limit),
+via one bounded `time.sleep`-backed wait per round (never a busy-loop), then
+retries. When waiting is impossible it raises the new
+`provider_rate_limited` error code (429, `retryable=True`) instead of
+misclassifying quota exhaustion as a `502 provider_connection_error`;
+`server.py` answers with that same `429` and a `Retry-After` header (or the
+equivalent field in the terminal SSE error frame when headers are already
+flushed). `provider_readiness_report` now also reports `rate_limited_until`
+and `earliest_ready_seconds` per agent so an external preflight/readiness
+sidecar (the org sidecar's own `contextual-orchestrator-preflight.json`
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` as its RED/GREEN evidence for this class of change)
+can wait instead of exiting.
+
+Scope note: `_failover_candidates`'s default skip protects every caller,
+including the real `orchestrator/free` HTTP path (`route_once`/`conduct`,
+which has its own retry-budget model unrelated to `_failover_candidates`).
+The wait-then-429 admission itself is implemented on `proxy_completion`'s
+passthrough loop specifically, per the smallest-coherent-diff scope for this
+change; `proxy_completion`'s multi-candidate virtual-selector branch is
+reachable over HTTP only through direct API use today, since a virtual model
+with tools deliberately stays on Fugu route / TRINITY-Conductor conduct
+(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`)
+rather than single-agent passthrough. Extending the same wait-budget treatment
+to `route_once`/`conduct`'s own candidate exhaustion path, if wanted, is a
+follow-up, not part of this change.
+
+Tests: `tests/test_rate_limit_aware_admission.py` (`Retry-After`/
+`x-ratelimit-reset*` parsing, shared-helper skip and its all-limited fallback,
+a bounded real-time storm-with-budget wait that succeeds on retry, a
+storm-without-budget honest `429` at both the orchestrator and HTTP layers,
+and a `429` that does not trip the circuit breaker). Full targeted suite
+(`test_api_contract`, `test_self_check`, `test_passthrough_provider_failover`,
+`test_provider_reliability`, `test_model_timeout_policy`,
+`test_actions_model_fallback`) passed except the pre-existing local-only
+`openai` SDK version pin (`test_sdk_passthrough_unknown_outcome_never_replays`,
+installed `2.44.0` vs pinned `2.54.0`); the repository-wide suite passed
+3698/3701 with only that SDK-pin failure (repeated 3x across
+`test_tool_execution_fallback.py`) and the separately known local-only
+`mcp.Client` privacy test failure, neither touched by this change.
+`python -m interrogate -v contextual_orchestrator/` reported 100% docstring
+coverage (690/690).
+
 ## 1. Product requirements (PRD)
 
 Contextual Orchestrator must let an application keep using an OpenAI-compatible

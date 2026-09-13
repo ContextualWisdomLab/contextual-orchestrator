@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import mmap
 import secrets
 import socket
@@ -57,7 +58,11 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import PROVIDER_OUTCOME_UNKNOWN_CODE, ProviderUpstreamError
+from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
+    ProviderUpstreamError,
+)
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -723,6 +728,21 @@ def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
         exc.error_code, "Review the request or contact the operator."
     )
     return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+
+
+def _provider_upstream_extra_headers(exc: ProviderUpstreamError) -> dict[str, str] | None:
+    """Emit ``Retry-After`` for the honest rate-limit-storm 429, else nothing.
+
+    Only ``PROVIDER_RATE_LIMITED_CODE`` (every candidate quota-limited past
+    the request's wait budget) carries this header; the ordinary single-
+    candidate ``rate_limit_exceeded`` surface is unaffected.
+    """
+    if exc.error_code != PROVIDER_RATE_LIMITED_CODE:
+        return None
+    retry_after = exc.extra_detail.get("retry_after_seconds")
+    if not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+        return None
+    return {"retry-after": str(max(math.ceil(retry_after), 0))}
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -6316,6 +6336,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -6365,6 +6386,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -8085,6 +8107,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -8285,6 +8308,8 @@ def build_server(
             code: str,
             message: str,
             detail: dict[str, Any] | None = None,
+            *,
+            extra_headers: dict[str, str] | None = None,
         ) -> None:
             request_id = current_request_id() or uuid.uuid4().hex
             error_detail = {**(detail or {}), "request_id": request_id}
@@ -8295,6 +8320,8 @@ def build_server(
             if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
                 # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
                 self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            elif extra_headers:
+                self._send(payload, status, extra_headers=extra_headers)
             else:
                 self._send(payload, status)
 
