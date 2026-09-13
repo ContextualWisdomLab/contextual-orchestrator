@@ -128,7 +128,8 @@ jobs:
           IFS=$'\t' read -r tag_object_type tag_object_sha <<< "${tag_ref_output}"
           case "${tag_object_type}" in
             commit)
-              tag_commit="${tag_object_sha}"
+              echo "::error::Tag v${RELEASE_VERSION} is lightweight; the canonical release contract requires an annotated tag. Refusing to resume or replace it." >&2
+              exit 1
               ;;
             tag)
               if ! tag_object_output="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '[.object.type, .object.sha] | @tsv' 2>&1)"; then
