@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from contextual_orchestrator import review_gateway
@@ -57,3 +59,32 @@ def test_experiential_labs_free_review_admission_requires_explicit_evidence(monk
 
     assert [agent.model for agent in orchestrator.agents] == ["experiential/free"]
     assert [agent.credential_key for agent in orchestrator.agents] == [credential_name]
+
+
+def test_experiential_zdr_admission_requires_model_specific_declared_evidence():
+    """Require-ZDR follows declared per-model evidence, not provider attestation."""
+    from contextual_orchestrator.model_discovery import agent_from_discovered
+    from contextual_orchestrator.orchestrator import TaskOrchestrator
+
+    credential_name = "EXPERIENTAL_LABS_API_KEY"
+    models = []
+    for model_id, evidence in (
+        ("experiential/zdr", True),
+        ("experiential/no-zdr", False),
+        ("experiential/unknown", None),
+    ):
+        model = _discovered_model(credential_name, model_id, token_price=0.0)
+        model = replace(
+            model, supports_zero_data_retention=evidence, zdr_capable=False
+        )
+        models.append(model)
+
+    agents = [replace(agent_from_discovered(model), disabled=False) for model in models]
+    orchestrator = TaskOrchestrator(agents)
+    with orchestrator.request_policy(True):
+        assert [
+            agent.model
+            for agent in agents
+            if orchestrator._zdr_agent_allowed(agent)
+        ] == ["experiential/zdr"]
+        assert all(agent.credential_key == credential_name for agent in agents)
