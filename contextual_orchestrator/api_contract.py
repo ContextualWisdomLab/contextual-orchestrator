@@ -463,6 +463,24 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/responses/input_tokens": {
+            "post": {
+                "operationId": "count_response_input_tokens",
+                "summary": "Count input tokens for a Responses API request",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {"required": True, "content": {"application/json": {
+                    "schema": {"type": "object", "properties": {
+                        "model": {"type": ["string", "null"]}, "input": {}, "conversation": {"description": "Nonempty provider references are unsupported until principal-bound ownership is available."},
+                        "instructions": {}, "parallel_tool_calls": {"type": "boolean"},
+                        "personality": {}, "previous_response_id": {"description": "Nonempty provider references are unsupported until principal-bound ownership is available."},
+                        "reasoning": {}, "text": {}, "tool_choice": {},
+                        "tools": {"type": "array"}, "truncation": {"type": ["string", "null"], "enum": ["auto", "disabled", None]},
+                        "zdr_only": {"type": "boolean"},
+                    }}
+                }}},
+                "responses": {"200": {"description": "Input token count"}, "400": {"description": "Invalid request"}, "502": {"description": "Invalid provider response"}},
+            }
+        },
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",

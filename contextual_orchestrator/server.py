@@ -237,6 +237,11 @@ ALLOWED_RESPONSES_KEYS = {
     # (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
+ALLOWED_RESPONSES_INPUT_TOKENS_KEYS = {
+    "conversation", "input", "instructions", "model", "parallel_tool_calls",
+    "personality", "previous_response_id", "reasoning", "text", "tool_choice",
+    "tools", "truncation", "attribution", "routing", "zdr_only",
+}
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "zdr_only"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing", "zdr_only"}
 ALLOWED_EMBEDDINGS_KEYS = {
@@ -2366,6 +2371,113 @@ def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
             raise RequestError(400, "invalid_messages", "messages must be a non-empty array")
+
+
+class InvalidInputTokenCountResponse(ValueError):
+    """Provider returned a response outside the input-token-count contract."""
+
+
+def _validate_input_token_count_response(value: Any) -> dict[str, Any]:
+    """Validate the provider's exact OpenAI input-token-count response object."""
+    if not isinstance(value, dict):
+        raise InvalidInputTokenCountResponse("provider returned a non-object input token count")
+    if value.get("object") != "response.input_tokens":
+        raise InvalidInputTokenCountResponse("provider returned an invalid input token count object")
+    input_token_count = value.get("input_tokens")
+    if isinstance(input_token_count, bool) or not isinstance(input_token_count, int) or input_token_count < 0:
+        raise InvalidInputTokenCountResponse("provider returned an invalid input token count")
+    return value
+
+
+def _validate_input_token_count_request(body: dict[str, Any]) -> None:
+    """Apply the Responses field validators without requiring an input field."""
+    if "input" in body and body["input"] is not None and not isinstance(body["input"], (str, list)):
+        raise RequestError(400, "invalid_input", "input must be a string, array, or null")
+    def validate_input_item(item: Any) -> None:
+        """Check only Responses input-item protocol positions for remote IDs."""
+        if not isinstance(item, dict):
+            return
+        item_type = item.get("type")
+        if item_type == "item_reference":
+            raise RequestError(400, "invalid_input_reference", "item_reference is not supported on /v1/responses/input_tokens")
+        if item_type in ("input_image", "input_file") and item.get("file_id"):
+            raise RequestError(400, "invalid_input_file_reference", "file_id references require principal-bound file resolution")
+        content = item.get("content")
+        if isinstance(content, list):
+            for content_item in content:
+                validate_input_item(content_item)
+
+    input_items = body.get("input")
+    if isinstance(input_items, list):
+        for input_item in input_items:
+            if (
+                isinstance(input_item, dict)
+                and isinstance(input_item.get("id"), str)
+                and set(input_item) <= {"id", "type"}
+                and input_item.get("type") in (None, "item_reference")
+            ):
+                raise RequestError(400, "invalid_input_reference", "top-level item references require principal-bound resolution")
+            validate_input_item(input_item)
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_type = tool.get("type")
+            if tool_type == "file_search" and tool.get("vector_store_ids"):
+                raise RequestError(400, "invalid_tool_resource_reference", "vector_store_ids require principal-bound resource resolution")
+            if tool_type == "code_interpreter":
+                container = tool.get("container")
+                if isinstance(container, str) and container.strip():
+                    raise RequestError(400, "invalid_tool_resource_reference", "container identifiers require principal-bound resource resolution")
+                if isinstance(container, dict) and container.get("file_ids"):
+                    raise RequestError(400, "invalid_tool_resource_reference", "container.file_ids require principal-bound resource resolution")
+    if "previous_response_id" in body:
+        value = body["previous_response_id"]
+        if value is not None and not isinstance(value, str):
+            raise RequestError(400, "invalid_previous_response_id", "previous_response_id must be a string or null")
+        if isinstance(value, str) and value.strip():
+            raise RequestError(400, "invalid_previous_response_id", "previous_response_id references are not supported on /v1/responses/input_tokens")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            body.pop("previous_response_id", None)
+    conversation_reference = body.get("conversation")
+    if conversation_reference is not None and not isinstance(conversation_reference, (str, dict)):
+        raise RequestError(400, "invalid_conversation", "conversation must be a string, object, or null")
+    if isinstance(conversation_reference, str) and conversation_reference.strip():
+        raise RequestError(400, "invalid_conversation", "conversation references are not supported on /v1/responses/input_tokens")
+    if isinstance(conversation_reference, dict):
+        raise RequestError(400, "invalid_conversation", "conversation references are not supported on /v1/responses/input_tokens")
+    body.pop("conversation", None)
+    personality = body.get("personality")
+    # OpenAI documents personality as a string with a maximum length of 64.
+    if personality is not None and (not isinstance(personality, str) or len(personality) > 64):
+        raise RequestError(400, "invalid_personality", "personality must be a string of at most 64 characters or null")
+    if "instructions" in body:
+        _validate_responses_instructions(body)
+    if "reasoning" in body:
+        _validate_responses_reasoning(body)
+    if "text" in body:
+        _validate_responses_text(body)
+    if "parallel_tool_calls" in body:
+        _validate_responses_parallel_tool_calls(body)
+    if "tools" in body:
+        tools = body.get("tools")
+        if not isinstance(tools, list):
+            _validate_chat_tools(body)
+        else:
+            function_tools = [item for item in tools if isinstance(item, dict) and item.get("type") == "function"]
+            for item in tools:
+                if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+                    raise RequestError(400, "invalid_tools", "each tool must be an object with a type")
+            if function_tools:
+                function_body = {"tools": function_tools}
+                _validate_chat_tools(function_body)
+    if "tool_choice" in body:
+        _validate_chat_tool_choice(body)
+    if "truncation" in body and body["truncation"] is not None and (
+        not isinstance(body["truncation"], str) or body["truncation"] not in {"auto", "disabled"}
+    ):
+        raise RequestError(400, "invalid_truncation", "truncation must be auto or disabled")
 
 
 
@@ -6682,8 +6794,18 @@ def build_server(
                     "/v1/audio/transcriptions": ("transcription", "audio/transcriptions", False),
                     "/v1/rerank": ("rerank", "rerank", False),
                     "/v1/audio/generations": ("audio", "chat/completions", False),
+                    "/v1/responses/input_tokens": ("responses_input_tokens", "responses/input_tokens", False),
                 }
                 if path in capability_routes:
+                    if path == "/v1/responses/input_tokens":
+                        _reject_unknown_keys(body, ALLOWED_RESPONSES_INPUT_TOKENS_KEYS)
+                        if "model" in body and body["model"] is not None and (
+                            not isinstance(body["model"], str) or not body["model"].strip()
+                        ):
+                            raise RequestError(400, "invalid_model", "model must be a non-empty string or null")
+                        if body.get("model") is None:
+                            body.pop("model", None)
+                        _validate_input_token_count_request(body)
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
                     principal_id = security.principal_id(self.headers)
@@ -6702,6 +6824,10 @@ def build_server(
                         )
                         return response
 
+                    def validate_input_token_count(_agent: ModelAgent, provider_result: dict[str, Any]) -> dict[str, Any]:
+                        """Reject malformed provider counts before recording route success."""
+                        return _validate_input_token_count_response(provider_result)
+
                     try:
                         result = self._run(
                             lambda: orchestrator.proxy_capability(
@@ -6712,6 +6838,8 @@ def build_server(
                                 selection_sink=(
                                     register_video_job
                                     if capability == "video"
+                                    else validate_input_token_count
+                                    if capability == "responses_input_tokens"
                                     else None
                                 ),
                             )
@@ -6722,6 +6850,8 @@ def build_server(
                             "invalid_video_job_response",
                             "The video provider did not return a trackable job; retry after checking provider status.",
                         ) from exc
+                    except InvalidInputTokenCountResponse as exc:
+                        raise RequestError(502, "invalid_input_token_count_response", "The provider returned an invalid input token count response.") from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except ProviderRequestTooLargeError as exc:
