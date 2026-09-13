@@ -1,5 +1,43 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 context-window candidate filter: consumers hit context overflow
+
+`ModelAgent.context_window` is discovered and persisted (merged from
+OpenRouter `context_length` / models.dev `limit.context`) but was never
+consulted during virtual-selector candidate selection — only the dataclass,
+DB layer, and admin console read it. Consumers (`gyeot`/`scopeweave` via
+`orchestrator/free`, `orchestrator/auto`, and the plain default selector)
+could therefore be routed to a candidate whose known context window is
+provably smaller than the prompt, burning an attempt and, since PR #1174
+(`fix/context-length-exceeded-failover-20260913`), failing over only after
+the provider's own 400.
+
+`proxy_completion`'s passthrough loop, `route_once`, and `conduct`'s worker
+step now share one filtering hook inside `TaskOrchestrator._failover_candidates`
+that excludes a candidate only when its context window is a known positive
+int strictly smaller than a conservative, never-overestimating lower bound
+on the prompt's token count (`token_counting.prompt_token_lower_bound`: exact
+native tokenizer count when mapped for the model, otherwise the documented
+character-count heuristic `estimate_lower_bound_tokens`). An unknown window
+is never excluded, and an explicitly requested concrete model is never
+filtered — the provider's own error remains the honest answer for a caller's
+own choice. Exhausting every known-too-small candidate raises the existing
+`ProviderRequestTooLargeError` (413), naming the smallest known window and
+the lower-bound count, so this is the complementary pre-flight lane to PR
+#1174's after-the-fact all-providers-413 path, not a replacement for it.
+Evidence (`prompt_token_lower_bound`, `prompt_token_bound_source`,
+`context_window_excluded`) is attached to the response's `orchestration`
+extension only when the filter actually excluded a candidate. Local touched
+tests plus `test_api_contract.py`/`test_self_check.py` pass (full local suite:
+3670 passed, 4 known-local-only failures — pinned openai SDK 2.54.0 vs this
+machine's 2.44.0, and the `mcp.Client` privacy test — 4 skipped for tests that
+need an unavailable native tokenizer or postgres backend in this
+environment); `interrogate` reports 100% docstring coverage. Not yet
+verified: a live multi-provider pool with genuinely heterogeneous
+`context_window` values and real traffic, and whether the character-based
+lower bound is loose enough in practice to avoid over-excluding viable
+large-window candidates for very large prompts.
+
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
