@@ -453,6 +453,101 @@ def test_stream_route_persists_owner() -> None:
     assert next(iter(orchestrator._workflow_runs.values()))["owner_id"] == "principal_123"
 
 
+class _StreamFailThenServeClient:
+    """First candidate's ``stream_chat`` raises; the second yields deltas."""
+
+    def __init__(self, first_error: ProviderUpstreamError) -> None:
+        self._first_error = first_error
+        self.stream_calls: list[str] = []
+
+    def stream_chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+        del messages, kwargs
+        self.stream_calls.append(agent.id)
+        if agent.id == "primary_worker":
+            raise self._first_error
+        yield "served output"
+
+    def take_usage(self) -> None:
+        return None
+
+
+def _stream_failover_agents() -> list[ModelAgent]:
+    return [
+        ModelAgent(
+            "primary_worker",
+            "primary-model",
+            priority=10,
+            tags=("reasoning", "writing"),
+        ),
+        ModelAgent(
+            "fallback_worker",
+            "fallback-model",
+            priority=1,
+            tags=("reasoning", "writing"),
+        ),
+    ]
+
+
+def test_stream_route_records_typed_retryable_attempt_before_serving() -> None:
+    """A 503 on the first candidate is typed evidence, not just prose."""
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker",
+            model="primary-model",
+            error_code="service_unavailable",
+            message="provider rejected the request with HTTP 503",
+            client_status=503,
+            provider_status=503,
+            retryable=True,
+            transport="stream",
+        )
+    )
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+
+    answer = "".join(
+        orchestrator.stream_route([{"role": "user", "content": "stream this"}])
+    )
+
+    assert answer == "served output"
+    assert client.stream_calls == ["primary_worker", "fallback_worker"]
+    trace = next(iter(orchestrator._workflow_runs.values()))["trace"]
+    assert trace[0]["agent_id"] == "primary_worker"
+    assert trace[0]["outcome"] == "retryable_transport"
+    assert trace[0]["error_code"] == "service_unavailable"
+    assert trace[0]["provider_status"] == 503
+    assert trace[0]["retryable"] is True
+    assert trace[0]["transport"] == "stream"
+    assert trace[0]["reason"]
+    assert trace[1]["agent_id"] == "fallback_worker"
+
+
+def test_stream_route_records_typed_deadline_exceeded_attempt() -> None:
+    """An administrator model-timeout attempt is typed distinctly from other failures."""
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker",
+            model="primary-model",
+            error_code="model_timeout",
+            message="administrator-configured model timeout elapsed",
+            client_status=504,
+            provider_status=None,
+            retryable=False,
+            transport="stream",
+        )
+    )
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+
+    answer = "".join(
+        orchestrator.stream_route([{"role": "user", "content": "stream this"}])
+    )
+
+    assert answer == "served output"
+    trace = next(iter(orchestrator._workflow_runs.values()))["trace"]
+    assert trace[0]["outcome"] == "deadline_exceeded"
+    assert trace[0]["error_code"] == "model_timeout"
+    assert trace[0]["retryable"] is False
+
+
 def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
     """A disconnected SSE client releases the route without reading another provider delta."""
     server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
