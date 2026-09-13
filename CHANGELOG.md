@@ -20,6 +20,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Binary provider responses now downgrade active or unknown media types at the
+  shared HTTP response boundary, while preserving approved media and download
+  formats (issue #1161).
 - Response-format SSE requests may now ask for usage; the terminal usage chunk
   is emitted only when the workflow cost ledger marks the counts as measured.
 - Generation-token inputs retain positive-integer validation without an
