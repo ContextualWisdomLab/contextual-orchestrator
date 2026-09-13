@@ -65,14 +65,20 @@ is now closed by `TaskOrchestrator`'s bounded `tool_loop_memory` map
 (`tool_call_id -> emitting agent id`, see `_apply_tool_loop_route` in
 `contextual_orchestrator/orchestrator.py`): a follow-up's remembered emitting
 agent is moved to the front of the already-filtered candidate order on
-`proxy_completion`'s single-agent passthrough, `route_once`, and `conduct`'s
-worker step, but only when it is still eligible under the request's own
-constraints (explicit concrete model, free/ZDR, circuit state); otherwise
-routing falls back to the normal order. The served response's
-`orchestration` extension records `tool_loop_route`
-(`"emitting_agent"`/`"fallback"`) and `tool_loop_agent_id` as evidence. The
-Responses API's structured-synthesis path (`_orchestrated_provider_completion`)
-is not yet wired into this map and remains a known follow-up.
+`proxy_completion`'s single-agent passthrough, `route_once`, `conduct`'s
+worker step, and `_orchestrated_provider_completion`'s structured synthesis
+-- covering both of that path's callers (the Responses API and
+`response_format`-only chat passthrough) -- but only when it is still
+eligible under the request's own constraints (explicit concrete model,
+free/ZDR, circuit state); otherwise routing falls back to the normal order.
+On the Responses surface a served `function_call` item's `call_id` is
+recorded the same way a chat `tool_calls[].id` is, and a follow-up's
+`function_call_output` item needs no separate lookup: the existing
+input-to-chat conversion already turns it into a `role: "tool"` /
+`tool_call_id` message before candidate selection runs. The served
+response's `orchestration` extension records `tool_loop_route`
+(`"emitting_agent"`/`"fallback"`) and `tool_loop_agent_id` as evidence on
+every one of these paths.
 
 ## Implementation Mapping
 

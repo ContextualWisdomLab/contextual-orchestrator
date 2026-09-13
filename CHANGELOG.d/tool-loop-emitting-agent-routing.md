@@ -13,15 +13,18 @@ model could receive tool results for calls it never emitted.
 `TOOL_LOOP_MEMORY_MAX_ENTRIES = 4096`, configurable via the new
 `tool_loop_memory_max_entries` constructor argument) recorded whenever a
 served response carries `tool_calls` on `proxy_completion`'s single-agent
-passthrough, `route_once`, and `conduct`'s worker step. A follow-up whose
-`role: "tool"` messages reference a remembered `tool_call_id` moves that
-agent to the front of the already-fully-filtered candidate order — but only
-when it is still eligible under the request's own constraints (explicit
-concrete model, free/ZDR scope, circuit-breaker state); an ineligible
-remembered agent falls back to the normal order instead. Served responses
-now carry `orchestration.tool_loop_route` (`"emitting_agent"` or
-`"fallback"`) and `orchestration.tool_loop_agent_id` as routing evidence.
-
-The Responses API's structured-synthesis path
-(`_orchestrated_provider_completion`) is not yet wired into this map; it
-remains a follow-up.
+passthrough, `route_once`, `conduct`'s worker step, and
+`_orchestrated_provider_completion`'s structured synthesis (both the
+Responses API's `function_call` items, keyed by `call_id`, and
+`response_format`-only chat passthrough's `tool_calls`). A follow-up whose
+`role: "tool"` messages (or, on the Responses surface, `function_call_output`
+items — already normalized to the same `role: "tool"` / `tool_call_id` shape
+by the existing input-to-chat conversion) reference a remembered
+`tool_call_id`/`call_id` moves that agent to the front of the
+already-fully-filtered candidate order — but only when it is still eligible
+under the request's own constraints (explicit concrete model, free/ZDR
+scope, circuit-breaker state); an ineligible remembered agent falls back to
+the normal order instead. Served responses now carry
+`orchestration.tool_loop_route` (`"emitting_agent"` or `"fallback"`) and
+`orchestration.tool_loop_agent_id` as routing evidence on every one of these
+paths.

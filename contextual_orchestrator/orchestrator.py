@@ -5388,6 +5388,24 @@ class TaskOrchestrator:
                     transport="structured_synthesis",
                 )
             final_agent = synthesis_candidates[0]
+        # Route a Responses/structured-synthesis tool-loop follow-up back to
+        # the agent that emitted the call, mirroring proxy_completion's and
+        # conduct's worker step (Fugu report arXiv:2606.21228 S3 / Fugu-Ultra
+        # Conductor). ``messages`` is already the chat-shaped conversation
+        # (``_responses_to_chat_payload`` translated ``function_call_output``
+        # items into ``role: "tool"`` / ``tool_call_id`` for the Responses
+        # surface), so no separate lookup is needed for that surface.
+        # ``synthesis_candidates`` is already fully filtered (required tags,
+        # free/ZDR, request exclusions), so this only reorders within that
+        # eligible set; an explicit concrete model keeps a single-candidate
+        # list and is therefore never reordered.
+        tool_loop_evidence: dict[str, str] | None = None
+        if virtual_model:
+            synthesis_candidates, tool_loop_evidence = self._apply_tool_loop_route(
+                synthesis_candidates, messages
+            )
+            if synthesis_candidates and synthesis_candidates[0].id != final_agent.id:
+                final_agent = synthesis_candidates[0]
 
         def provider_output(agent: ModelAgent, response: Mapping[str, Any]) -> str:
             """Extract non-empty structured output from the attempted provider."""
@@ -5958,6 +5976,15 @@ class TaskOrchestrator:
             self._group_router.observe_success(
                 final_agent.id, time.perf_counter() - synthesis_started
             )
+        # Remember which agent emitted this served response's tool calls, so a
+        # later tool-loop follow-up on either surface returns to it (see the
+        # reorder above and _record_tool_loop_agents).
+        self._record_tool_loop_agents(
+            self._responses_output_tool_calls(raw)
+            if response_request
+            else self._chat_response_tool_calls(raw),
+            final_agent.id,
+        )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
         echo = raw.get("echo")
@@ -5983,6 +6010,8 @@ class TaskOrchestrator:
         }
         if isinstance(route, dict):
             raw["orchestration"]["route"] = route
+        if tool_loop_evidence is not None:
+            raw["orchestration"].update(tool_loop_evidence)
         return raw
 
     @contextmanager
@@ -9477,6 +9506,30 @@ class TaskOrchestrator:
         message = first.get("message") if isinstance(first, Mapping) else None
         tool_calls = message.get("tool_calls") if isinstance(message, Mapping) else None
         return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+
+    @staticmethod
+    def _responses_output_tool_calls(response: Any) -> list[dict[str, Any]] | None:
+        """Return a Responses-shaped provider response's ``function_call`` items.
+
+        Adapts each item's ``call_id`` into the ``{"id": ...}`` shape
+        :meth:`_record_tool_loop_agents` already expects from chat's
+        ``tool_calls``, so a Responses-surface tool call feeds the same
+        ``tool_loop_memory`` map as a chat one.
+        """
+        if not isinstance(response, Mapping):
+            return None
+        output = response.get("output")
+        if not isinstance(output, list):
+            return None
+        call_ids = [
+            item["call_id"]
+            for item in output
+            if isinstance(item, Mapping)
+            and item.get("type") == "function_call"
+            and isinstance(item.get("call_id"), str)
+            and item["call_id"]
+        ]
+        return [{"id": call_id} for call_id in call_ids] if call_ids else None
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
