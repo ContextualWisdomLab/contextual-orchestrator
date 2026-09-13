@@ -369,3 +369,220 @@ def test_429_does_not_trip_circuit_breaker_but_503_still_does() -> None:
     # A direct 503 failure (not quota) is still tracked by the breaker.
     orchestrator._record_failure("primary_agent")
     assert orchestrator._circuit["primary_agent"]["failures"] == 1.0
+
+
+# --------------------------------------------------------------------------
+# The real orchestrator/free production path: route_once and conduct, which
+# both reach a candidate through TaskOrchestrator._invoke via the shared
+# _invoke_with_rate_limit_recovery wrapper -- not proxy_completion.
+# --------------------------------------------------------------------------
+
+
+def _rate_limited_upstream_error(retry_after_seconds: float) -> ProviderUpstreamError:
+    """Build the classified 429 ``_invoke`` sees from ``ModelClient.chat``."""
+    return ProviderUpstreamError(
+        agent_id="unit",
+        model="unit-model",
+        error_code="rate_limit_exceeded",
+        message="rate limited",
+        client_status=429,
+        provider_status=429,
+        retryable=True,
+        transport="chat",
+        extra_detail={"retry_after_seconds": retry_after_seconds},
+    )
+
+
+class QueuedChatOutcomes:
+    """Stand in for ``ModelClient.chat``: pop one queued outcome per agent id."""
+
+    def __init__(self, outcomes: dict[str, list[Any]]) -> None:
+        self.outcomes = {key: list(value) for key, value in outcomes.items()}
+        self.calls: list[str] = []
+
+    def __call__(self, agent: ModelAgent, messages: Any, *args: Any, **kwargs: Any) -> str:
+        del messages, args, kwargs
+        self.calls.append(agent.id)
+        queue = self.outcomes.get(agent.id, [])
+        if not queue:
+            raise AssertionError(f"no more queued chat outcomes for {agent.id}")
+        outcome = queue.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _free_route_agents() -> list[ModelAgent]:
+    return [
+        ModelAgent(
+            "primary_free_agent",
+            "primary-free-model",
+            priority=10,
+            provider_name="primary",
+            tags=("cost:free", "reasoning", "coding"),
+        ),
+        ModelAgent(
+            "fallback_free_agent",
+            "fallback-free-model",
+            priority=1,
+            provider_name="fallback",
+            tags=("cost:free", "reasoning", "coding"),
+        ),
+    ]
+
+
+def _post_chat_completion(port: int, payload: dict[str, Any], token: str):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    try:
+        connection.request(
+            "POST",
+            "/v1/chat/completions",
+            json.dumps(payload),
+            {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+                "Connection": "close",
+            },
+        )
+        response = connection.getresponse()
+        body = json.loads(response.read().decode())
+        return response.status, body, response
+    finally:
+        connection.close()
+
+
+def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
+    """orchestrator/free over /v1/chat/completions (route_once) waits out a 429 storm."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(1.0), "served after wait"],
+            "fallback_free_agent": [_rate_limited_upstream_error(1.0)],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        started = time.monotonic()
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "served after wait"
+    assert elapsed < 3.0
+    assert chat_outcomes.calls.count("primary_free_agent") == 2
+    assert chat_outcomes.calls.count("fallback_free_agent") == 1
+
+
+def test_http_route_once_storm_without_budget_returns_429() -> None:
+    """Same storm with no wait budget: honest 429 + Retry-After on the route_once path."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=0.0
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(9.0)],
+            "fallback_free_agent": [_rate_limited_upstream_error(9.0)],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 429, body
+    assert response.getheader("retry-after") == "9"
+    assert body["error"]["code"] == PROVIDER_RATE_LIMITED_CODE
+
+
+def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
+    """A conduct (deep-path) request's worker step waits out the same storm."""
+    agents = [
+        ModelAgent(
+            "primary_agent",
+            "primary-model",
+            priority=10,
+            provider_name="primary",
+            tags=(
+                "cost:free",
+                "planning", "reasoning", "research",
+                "verification", "security", "review", "debugging",
+                "writing",
+                "coding", "implementation",
+            ),
+        ),
+        ModelAgent(
+            "fallback_agent",
+            "fallback-model",
+            priority=1,
+            provider_name="fallback",
+            tags=("cost:free", "coding", "implementation", "reasoning"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents, tool_retry_attempts=0, rate_limit_wait_seconds=5.0)
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_agent": [
+                "thinker plan",
+                _rate_limited_upstream_error(1.0),
+                "worker output after wait",
+                "verifier output",
+                "synthesizer output",
+            ],
+            "fallback_agent": [_rate_limited_upstream_error(1.0)],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    started = time.monotonic()
+    result = orchestrator.conduct(
+        [{"role": "user", "content": "do the task"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+    elapsed = time.monotonic() - started
+
+    # The request completes (no exception) with every step served, including
+    # the worker step that hit -- and waited out -- the storm. Whether the
+    # verifier's own (unrelated, judge-heuristic) verdict later prefers the
+    # worker's or the synthesizer's text as the final "answer" is not part of
+    # this admission contract, so this only pins the worker step itself.
+    assert elapsed < 3.0
+    worker_step = next(row for row in result["trace"] if row["role"] == "worker")
+    assert worker_step["output"] == "worker output after wait"
+    synthesizer_step = next(row for row in result["trace"] if row["role"] == "synthesizer")
+    assert synthesizer_step["output"] == "synthesizer output"
+    assert chat_outcomes.calls.count("primary_agent") == 5
+    assert chat_outcomes.calls.count("fallback_agent") == 1
+    orchestrator.close()

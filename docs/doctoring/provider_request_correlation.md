@@ -154,11 +154,15 @@ gateway-side 429/502 after failover, with caller `attempts=1`.
 
 Fixed: `Retry-After`/`x-ratelimit-reset*` parsing, a per-agent cooldown kept
 separate from the health circuit breaker, a shared skip in
-`_failover_candidates` for every caller, and a bounded wait-then-retry (or
-honest `429 provider_rate_limited` with a `Retry-After` header) in
-`proxy_completion`'s passthrough failover loop. Full detail, scope note, and
-test evidence: the 2026-09-14 entry in
-[the gap baseline](../product-technical-gap-baseline.md).
+`_failover_candidates` for every caller, and one shared bounded
+wait-then-retry (or honest `429 provider_rate_limited` with a `Retry-After`
+header) implementation, `_await_rate_limit_recovery`, reached from both
+`proxy_completion`'s passthrough failover loop and
+`_invoke_with_rate_limit_recovery` -- the wrapper around `_invoke`, the shared
+engine `route_once` and every `conduct` step use, so the real
+`orchestrator/free` HTTP path this incident describes is covered, not just
+direct-API passthrough use. Full detail and test evidence: the 2026-09-14
+entry in [the gap baseline](../product-technical-gap-baseline.md).
 
 The org sidecar's own preflight artifact (`contextual-orchestrator-preflight.json`)
 already reports `candidate`/`probed`/`rejected_count` and

@@ -364,6 +364,15 @@ def classify_provider_failure(
         client_status, error_code, retryable = PROVIDER_STATUS_SURFACES.get(
             status, _UNMAPPED_UPSTREAM_SURFACE
         )
+        # Quota-cooldown evidence, kept on every 429/503 classification (not
+        # just the passthrough transport's own header walk) so any caller
+        # holding just the classified ProviderUpstreamError -- e.g. _invoke's
+        # chat transport -- can still record and wait out the same cooldown.
+        extra_detail: dict[str, Any] = {}
+        if status in (429, 503):
+            retry_after = resolve_retry_after_seconds(exc)
+            if retry_after is not None:
+                extra_detail["retry_after_seconds"] = retry_after
         return ProviderUpstreamError(
             agent_id=agent_id,
             model=model,
@@ -376,6 +385,7 @@ def classify_provider_failure(
             provider_status=status,
             retryable=retryable,
             transport=transport,
+            extra_detail=extra_detail,
         )
     if isinstance(exc, ssl.SSLCertVerificationError):
         return ProviderUpstreamError(

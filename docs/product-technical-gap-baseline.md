@@ -2036,56 +2036,82 @@ HTTP-date; `provider_errors.parse_retry_after`) and falls back to a numeric
 (`TaskOrchestrator._record_rate_limit`/`_rate_limit_remaining`) kept separate
 from the health circuit breaker -- a 429 is quota exhaustion, not a model
 health failure, and no longer trips `_circuit` (a direct 503 still does).
+`classify_provider_failure` now attaches `retry_after_seconds` to any 429/503
+classification's `extra_detail`, so both the passthrough transport and the
+chat transport used by `_invoke` (route_once/conduct's shared engine) can
+record the same cooldown from one `ProviderUpstreamError`.
 `_failover_candidates` (shared by every caller, including `route_once`/
 `conduct`) now skips a currently cooled-down candidate by default, falling
 back to the full list only when every candidate is limited so a caller with no
-wait logic of its own still gets one honest attempt. `proxy_completion`'s own
-passthrough failover loop -- the request-response boundary that can report one
-provider-shaped answer -- additionally waits out the earliest known cooldown
-when it fits the request's administrator-owned `model_timeout_seconds`
-deadline (issue #1053) or the new `rate_limit_wait_seconds` constructor
-default (30s, a documented caller-contract bound, not a hidden product limit),
-via one bounded `time.sleep`-backed wait per round (never a busy-loop), then
-retries. When waiting is impossible it raises the new
-`provider_rate_limited` error code (429, `retryable=True`) instead of
-misclassifying quota exhaustion as a `502 provider_connection_error`;
-`server.py` answers with that same `429` and a `Retry-After` header (or the
-equivalent field in the terminal SSE error frame when headers are already
-flushed). `provider_readiness_report` now also reports `rate_limited_until`
+wait logic of its own still gets one honest attempt.
+
+The wait-then-retry/honest-429 admission decision itself is one shared
+implementation, `TaskOrchestrator._await_rate_limit_recovery(candidates, *,
+deadline, transport)`: it computes the earliest known cooldown among
+currently rate-limited members of `candidates`, waits for it (one bounded
+`time.sleep`-backed call, never a busy-loop) and returns `True` when it fits
+the remaining budget against `deadline` -- resolved from the request's
+administrator-owned `model_timeout_seconds` deadline (issue #1053) when set,
+else the new `rate_limit_wait_seconds` constructor/CLI default (30s, a
+documented caller-contract bound, not a hidden product limit) -- or raises the
+honest `provider_rate_limited` error code (429, `retryable=True`) instead of
+misclassifying quota exhaustion as a `502 provider_connection_error` when
+waiting is impossible. Two callers reach it:
+
+- `proxy_completion`'s own passthrough failover loop calls it directly each
+  round its ranked candidates are exhausted.
+- `TaskOrchestrator._invoke_with_rate_limit_recovery` wraps `_invoke` (the one
+  shared engine both `route_once` and every `conduct` step, including the
+  worker step, call to reach a candidate): when `_invoke`'s own candidate
+  exhaustion raises a 429/503 `ProviderUpstreamError` AND every candidate
+  currently eligible for that call is rate-limited (a genuine storm, not a
+  mixed failure set), it calls the same helper and retries the whole
+  `_invoke` call instead of propagating the exhaustion. A mixed failure set
+  re-raises exactly as `_invoke` would have, unchanged.
+
+`server.py` answers a raised `provider_rate_limited` error with `429` and a
+`Retry-After` header (or the equivalent field in the terminal SSE error frame
+when headers are already flushed) regardless of which of the two callers
+raised it. `provider_readiness_report` now also reports `rate_limited_until`
 and `earliest_ready_seconds` per agent so an external preflight/readiness
 sidecar (the org sidecar's own `contextual-orchestrator-preflight.json`
 already reports `candidate`/`probed`/`rejected_count` and
 `account_skip_after_429` as its RED/GREEN evidence for this class of change)
 can wait instead of exiting.
 
-Scope note: `_failover_candidates`'s default skip protects every caller,
-including the real `orchestrator/free` HTTP path (`route_once`/`conduct`,
-which has its own retry-budget model unrelated to `_failover_candidates`).
-The wait-then-429 admission itself is implemented on `proxy_completion`'s
-passthrough loop specifically, per the smallest-coherent-diff scope for this
-change; `proxy_completion`'s multi-candidate virtual-selector branch is
-reachable over HTTP only through direct API use today, since a virtual model
-with tools deliberately stays on Fugu route / TRINITY-Conductor conduct
-(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`)
-rather than single-agent passthrough. Extending the same wait-budget treatment
-to `route_once`/`conduct`'s own candidate exhaustion path, if wanted, is a
-follow-up, not part of this change.
+Coverage note: this closes the real `orchestrator/free` HTTP path.
+`route_once`/`conduct` (via `_invoke`) is the path CI review lanes actually hit
+over `/v1/chat/completions` for a virtual model, since a virtual model with
+tools deliberately stays on Fugu route / TRINITY-Conductor conduct rather than
+single-agent passthrough
+(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`);
+`proxy_completion`'s own multi-candidate virtual-selector branch remains
+reachable over HTTP only through direct API use, but now shares the identical
+wait/honest-429 decision through `_await_rate_limit_recovery` rather than a
+separate implementation. Every conduct step (thinker/worker/verifier/
+synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
+site, so the worker step required by the owner's report gets the fix, and so
+do the other roles for free, without a second implementation.
 
-Tests: `tests/test_rate_limit_aware_admission.py` (`Retry-After`/
-`x-ratelimit-reset*` parsing, shared-helper skip and its all-limited fallback,
-a bounded real-time storm-with-budget wait that succeeds on retry, a
-storm-without-budget honest `429` at both the orchestrator and HTTP layers,
-and a `429` that does not trip the circuit breaker). Full targeted suite
-(`test_api_contract`, `test_self_check`, `test_passthrough_provider_failover`,
-`test_provider_reliability`, `test_model_timeout_policy`,
-`test_actions_model_fallback`) passed except the pre-existing local-only
+Tests: `tests/test_rate_limit_aware_admission.py` (17 tests) --
+`Retry-After`/`x-ratelimit-reset*` parsing, shared-helper skip and its
+all-limited fallback, a bounded real-time storm-with-budget wait that
+succeeds on retry, a storm-without-budget honest `429` at both the
+orchestrator and HTTP layers, a `429` that does not trip the circuit breaker,
+an HTTP-level `orchestrator/free`/route_once storm that waits and is served,
+the same with no budget returning `429`+`Retry-After`, and a conduct
+(deep-path) worker step that waits out the same storm mid-workflow. Full
+targeted suite (`test_api_contract`, `test_self_check`,
+`test_passthrough_provider_failover`, `test_provider_reliability`,
+`test_model_timeout_policy`, `test_actions_model_fallback`,
+`test_rate_limit_aware_admission`) passed except the pre-existing local-only
 `openai` SDK version pin (`test_sdk_passthrough_unknown_outcome_never_replays`,
 installed `2.44.0` vs pinned `2.54.0`); the repository-wide suite passed
-3698/3701 with only that SDK-pin failure (repeated 3x across
+3701/3702 (1 skipped) with only that SDK-pin failure (repeated 3x across
 `test_tool_execution_fallback.py`) and the separately known local-only
 `mcp.Client` privacy test failure, neither touched by this change.
 `python -m interrogate -v contextual_orchestrator/` reported 100% docstring
-coverage (690/690).
+coverage.
 
 ## 1. Product requirements (PRD)
 

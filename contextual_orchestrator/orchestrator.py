@@ -5104,40 +5104,26 @@ class TaskOrchestrator:
             # just been rate-limited by the attempts above, so the pre-round
             # snapshot alone would miss a storm that only reveals itself
             # during this exact round.
-            post_round_now = time.monotonic()
-            cooldowns: dict[str, float] = {}
             for candidate in candidates:
-                remaining = self._rate_limit_remaining(candidate.id, now=post_round_now)
-                if remaining is not None:
-                    cooldowns[candidate.id] = remaining
-            for skipped_id in cooldowns:
-                if skipped_id not in rate_limited_skipped:
-                    rate_limited_skipped.append(skipped_id)
-            if not cooldowns:
-                # Nothing is rate-limited: every candidate attempted this
-                # round failed for an unrelated reason -- fall through to
-                # normal failure reporting below.
-                break
-            earliest_agent_id = min(cooldowns, key=cooldowns.get)
-            earliest_ready = cooldowns[earliest_agent_id]
+                if (
+                    self._rate_limit_remaining(candidate.id) is not None
+                    and candidate.id not in rate_limited_skipped
+                ):
+                    rate_limited_skipped.append(candidate.id)
             if wait_deadline is None:
                 wait_deadline = time.monotonic() + self._rate_limit_wait_budget(agent)
-            remaining_budget = wait_deadline - time.monotonic()
-            if remaining_budget <= 0 or earliest_ready > remaining_budget:
-                # Waiting is impossible: no budget left, or every cooldown
-                # outlasts it. Fail honestly as quota exhaustion (429), never
-                # as a connection failure (502) -- the gateway's job under a
-                # 429 storm is to not fail silently or misclassify (see
-                # ContextualWisdomLab/.github#2148, #2165).
-                raise rate_limited_storm_error(
-                    agent_id=earliest_agent_id,
-                    model=agent.model,
-                    retry_after_seconds=earliest_ready,
-                    transport="passthrough",
-                ) from None
-            # Single bounded wait, never a busy-loop; re-run selection once
-            # the earliest candidate's cooldown has elapsed.
-            self._rate_limit_sleep(earliest_ready)
+            # Delegate the earliest-ready/budget decision to the single
+            # shared implementation (also used by
+            # _invoke_with_rate_limit_recovery for route_once/conduct): waits
+            # and returns True to retry selection, or raises the honest
+            # rate_limited_storm_error when the budget can't cover it. A
+            # False return means nothing is currently rate-limited -- every
+            # candidate attempted this round failed for an unrelated reason
+            # -- so fall through to normal failure reporting below.
+            if not self._await_rate_limit_recovery(
+                candidates, deadline=wait_deadline, transport="passthrough"
+            ):
+                break
         if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
@@ -7610,12 +7596,14 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
-                candidate,
-                messages,
-                text=text,
-                role="worker",
-                allowed_agent_ids=allowed_agent_ids,
+            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = (
+                self._invoke_with_rate_limit_recovery(
+                    candidate,
+                    messages,
+                    text=text,
+                    role="worker",
+                    allowed_agent_ids=allowed_agent_ids,
+                )
             )
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
@@ -7878,7 +7866,7 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, _served_model, usage = self._invoke(
+            output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
                 step_messages,
                 text=task,
@@ -9235,6 +9223,14 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
+                        if exc.provider_status in (429, 503):
+                            # Quota cooldown, tracked separately from the
+                            # circuit breaker below (a 429 is not a model
+                            # health failure) so a caller-level storm-wait
+                            # (_invoke_with_rate_limit_recovery) can see it.
+                            self._record_rate_limit(
+                                agent.id, exc.extra_detail.get("retry_after_seconds")
+                            )
                         if (
                             excluded_agent_ids is not None
                             and exc.error_code == "model_not_found"
@@ -9540,6 +9536,131 @@ class TaskOrchestrator:
         resolver = getattr(self.client, "_resolved_model_timeout", None)
         resolved = resolver(agent) if callable(resolver) else None
         return resolved if resolved is not None else self.rate_limit_wait_seconds
+
+    def _await_rate_limit_recovery(
+        self,
+        candidates: list[ModelAgent],
+        *,
+        deadline: float,
+        transport: str = "passthrough",
+    ) -> bool:
+        """Wait out a rate-limit storm across ``candidates``, or fail honestly.
+
+        The single shared implementation of the wait-then-retry admission
+        contract: every caller with a genuine storm (``proxy_completion``'s
+        passthrough loop, and ``_invoke_with_rate_limit_recovery`` for
+        route_once/conduct) funnels through this one method instead of each
+        re-deriving the earliest-ready/budget decision.
+
+        Returns ``False`` immediately when none of ``candidates`` is
+        currently rate-limited -- nothing to wait for; the caller's own
+        (unrelated) failure handling applies. Otherwise computes the
+        earliest known cooldown among the currently rate-limited members and:
+
+        * waits for it (one bounded, non-busy ``time.sleep``-backed call)
+          and returns ``True`` -- the caller should re-run candidate
+          selection -- when it fits inside the remaining budget against
+          ``deadline`` (an absolute ``time.monotonic()`` instant the caller
+          already resolved via :meth:`_rate_limit_wait_budget`);
+        * otherwise raises the honest
+          :func:`contextual_orchestrator.provider_errors.rate_limited_storm_error`
+          (429, ``Retry-After``) instead of letting the caller fail as a
+          generic connection error or opaque exhaustion.
+        """
+        now = time.monotonic()
+        cooling = [
+            candidate
+            for candidate in candidates
+            if self._rate_limit_remaining(candidate.id, now=now) is not None
+        ]
+        if not cooling:
+            return False
+        earliest_agent = min(
+            cooling, key=lambda candidate: self._rate_limit_remaining(candidate.id, now=now)
+        )
+        earliest_ready = self._rate_limit_remaining(earliest_agent.id, now=now)
+        remaining_budget = deadline - now
+        if earliest_ready is None or remaining_budget <= 0 or earliest_ready > remaining_budget:
+            raise rate_limited_storm_error(
+                agent_id=earliest_agent.id,
+                model=earliest_agent.model,
+                retry_after_seconds=earliest_ready if earliest_ready is not None else 0.0,
+                transport=transport,
+            ) from None
+        # Single bounded wait, never a busy-loop; caller re-runs selection
+        # once the earliest candidate's cooldown has elapsed.
+        self._rate_limit_sleep(earliest_ready)
+        return True
+
+    def _invoke_with_rate_limit_recovery(
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        allowed_agent_ids: set[str] | None = None,
+        eligibility_role: str | None = None,
+        excluded_agent_ids: set[str] | None = None,
+    ) -> tuple[str, str, str, dict[str, Any] | None]:
+        """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
+
+        route_once and conduct's per-step call both reach candidate
+        exhaustion through :meth:`_invoke`. When that exhaustion's last
+        failure is a 429/503 AND every candidate currently eligible for this
+        call is rate-limited (a genuine storm, not a mixed failure set),
+        waits out the earliest cooldown via :meth:`_await_rate_limit_recovery`
+        and retries the whole call instead of propagating the exhaustion --
+        the same admission contract ``proxy_completion`` applies to its own
+        passthrough failover loop. A mixed failure set (some candidate is not
+        rate-limited) re-raises exactly as :meth:`_invoke` would have,
+        unchanged.
+        """
+        wait_deadline: float | None = None
+        while True:
+            try:
+                return self._invoke(
+                    primary,
+                    messages,
+                    text=text,
+                    role=role,
+                    allowed_agent_ids=allowed_agent_ids,
+                    eligibility_role=eligibility_role,
+                    excluded_agent_ids=excluded_agent_ids,
+                )
+            except ProviderUpstreamError as exc:
+                if exc.provider_status not in (429, 503):
+                    raise
+                required_tags = ("vision",) if self._source_image_parts(messages) else ()
+                prompt_context = self._prompt_interaction(messages)
+                candidates = self._failover_candidates(
+                    primary,
+                    text,
+                    eligibility_role or role,
+                    required_tags=required_tags,
+                    allowed_agent_ids=allowed_agent_ids,
+                    prompt_context=prompt_context,
+                    skip_rate_limited=False,
+                )
+                if excluded_agent_ids:
+                    candidates = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.id not in excluded_agent_ids
+                    ]
+                if not candidates or any(
+                    self._rate_limit_remaining(candidate.id) is None
+                    for candidate in candidates
+                ):
+                    # Not a universal storm: some eligible candidate is not
+                    # rate-limited (or there is none at all) -- a genuine,
+                    # unrelated exhaustion/failure. Preserve _invoke's own
+                    # exhaustion contract exactly.
+                    raise
+                if wait_deadline is None:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                self._await_rate_limit_recovery(candidates, deadline=wait_deadline, transport="chat")
+                continue
 
     @staticmethod
     def _rate_limited_provider_signal(
