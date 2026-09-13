@@ -10,8 +10,12 @@ from types import ModuleType
 
 import pytest
 
-if importlib.util.find_spec("atheris") is None:
+try:
+    import atheris  # noqa: F401 - presence and interpreter support check only
+except ImportError:
     pytest.skip("The dedicated Security fuzz job installs locked Atheris", allow_module_level=True)
+except RuntimeError as exc:  # atheris 2.x refuses interpreters newer than 3.12 at import time
+    pytest.skip(f"Atheris does not support this interpreter: {exc}", allow_module_level=True)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
