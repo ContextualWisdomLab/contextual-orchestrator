@@ -419,6 +419,92 @@ def test_batch_routing_jobs_are_principal_bound_for_poll_and_results() -> None:
         server.shutdown()
 
 
+def test_batch_results_require_explicit_trace_authority() -> None:
+    """Plain inference retrieves answers while trace opt-in stays privileged."""
+    inference_token = "batch_inference_owner"
+    trace_token = "batch_trace_reader"
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: (
+            token == inference_token and scope == "inference"
+        )
+        or (token == trace_token and scope in {"inference", "trace"}),
+        principal_resolver=lambda token: (
+            "tenant-a/owner-a" if token in {inference_token, trace_token} else None
+        ),
+    )
+    agent = ModelAgent("mock_worker", "mock-a", base_url="mock://a")
+    orchestrator = TaskOrchestrator([agent])
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=security,
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, submitted = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs",
+            inference_token,
+            {"requests": [{"messages": [{"role": "user", "content": "owned"}]}]},
+        )
+        assert status == 201
+        results_url = f"{base}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
+
+        bodyless_request = urllib.request.Request(
+            results_url,
+            method="POST",
+            headers={"authorization": f"Bearer {inference_token}"},
+        )
+        with urllib.request.urlopen(bodyless_request) as response:
+            bodyless = json.loads(response.read())
+        assert response.status == 200
+        assert bodyless["results"][0]["answer"]
+        assert "trace" not in json.dumps(bodyless)
+
+        status, plain = _request("POST", results_url, inference_token, {})
+        assert status == 200
+        assert plain["results"][0]["answer"]
+        assert "cost_amount" in plain["results"][0]
+        assert "trace" not in json.dumps(plain)
+
+        for invalid in ("false", 1, None, [], {}):
+            status, body = _request(
+                "POST",
+                results_url,
+                inference_token,
+                {"include_orchestration_trace": invalid},
+            )
+            assert status == 400
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
+
+        status, denied = _request(
+            "POST",
+            results_url,
+            inference_token,
+            {"include_orchestration_trace": True},
+        )
+        assert status == 401
+        assert denied["error"]["code"] == "unauthorized"
+
+        status, traced = _request(
+            "POST",
+            results_url,
+            trace_token,
+            {"include_orchestration_trace": True},
+        )
+        assert status == 200
+        assert traced["results"][0]["trace"]
+        assert any(
+            event["event_type"] == "orchestration_trace_access_granted"
+            for event in orchestrator.list_recent_audit_events()
+        )
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"
