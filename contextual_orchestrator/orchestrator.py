@@ -1720,14 +1720,14 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     * An explicit concrete model was named by the caller, so there is no
       other candidate it is safe to substitute -- the request fails closed
       on this single attempt and is never replayed
-      (``test_ambiguous_timeout_is_not_replayed``).
+      (``test_ambiguous_timeout_on_explicit_model_is_not_replayed``).
     * A virtual selector (``None``/``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``/
       ``FREE_MODEL``) means the caller delegated candidate selection to the
       gateway, so the gateway also owns failover across this ambiguous
       attempt -- consistent with ``_orchestrated_provider_completion``,
       whose docstring already states that virtual selectors advance across
-      retryable transport failures (502/429/timeout). Fixed by #1166 (Strix
-      run 34754423834 attempt 2): three ready free-pool candidates went
+      retryable transport failures (502/429/timeout). Evidence: PR #1166
+      noema-review run 34754423834 attempt 2: three ready free-pool candidates went
       uncalled after one candidate's read timeout, even though the caller
       (a virtual ``orchestrator/free`` request) never pinned a single
       provider.
@@ -4684,14 +4684,14 @@ class TaskOrchestrator:
                         #   failures (502/429/timeout) -- continue to the
                         #   next ranked candidate instead of failing the
                         #   whole request on one ambiguous attempt when other
-                        #   ready candidates exist (Strix run 34754423834
+                        #   ready candidates exist (noema-review run 34754423834
                         #   attempt 2, PR #1166: three ready free-pool
                         #   candidates went uncalled after one timeout).
                         # * Explicit concrete model: the caller named exactly
                         #   this provider and there is nothing safe to
                         #   substitute it with, so the request still fails
                         #   closed without replay, exactly as before #1045
-                        #   intended (``test_ambiguous_timeout_is_not_replayed``).
+                        #   intended (``test_ambiguous_timeout_on_explicit_model_is_not_replayed``).
                         self._record_failure(candidate.id)
                         if candidate.group_name:
                             self._group_router.observe_failure(candidate.id)
