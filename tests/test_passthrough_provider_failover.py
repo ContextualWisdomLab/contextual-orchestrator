@@ -7,6 +7,7 @@ import io
 import json
 import socket
 import urllib.error
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -47,6 +48,12 @@ class SequencedProxyClient:
         return deepcopy(outcome)
 
     proxy_send = proxy_send_once
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        """Accept the server's request-local settings boundary for HTTP tests."""
+        del overrides
+        yield
 
     def apply_effort_profile(
         self,
@@ -1291,17 +1298,10 @@ def test_only_temporary_dns_failures_advance(
             )
 
 
-def test_ambiguous_timeout_is_not_replayed() -> None:
-    """A timeout may follow provider acceptance, so passthrough fails closed.
-
-    Failing closed means no replay on another candidate. It does not mean the
-    bare ``TimeoutError`` escapes: that left the HTTP handler answering
-    ``500 internal_error`` and the breaker never hearing about the stalled
-    candidate (Strix run 33993155419, ContextualWisdomLab/.github#1812, #1045).
-    The caller now receives the classified ``502 provider_connection_error``
-    and the candidate is a breaker observation.
-    """
-    failure = TimeoutError("provider outcome unknown")
+@pytest.mark.parametrize("error_type", [TimeoutError, ConnectionError])
+def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
+    """Unknown transport outcomes remain terminal and expose no raw diagnostics."""
+    failure = error_type("provider outcome unknown token=private_test_value")
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1310,16 +1310,110 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
     )
     orchestrator = _build(client)
 
-    with pytest.raises(ProviderUpstreamError) as caught:
-        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    with pytest.raises(ProviderUpstreamError) as raised:
+        orchestrator.proxy_completion(
+            {"messages": [{"role": "user", "content": "x"}]}
+        )
 
-    assert caught.value.client_status == 502
-    assert caught.value.error_code == "provider_connection_error"
-    assert caught.value.retryable is True
-    assert caught.value.transport == "passthrough"
-    assert caught.value.__cause__ is None
+    assert raised.value.error_code == "provider_outcome_unknown"
+    assert raised.value.client_status == 502
+    assert raised.value.provider_status is None
+    assert raised.value.retryable is False
+    assert raised.value.transport == "passthrough"
+    assert "private_test_value" not in str(raised.value)
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
     assert "primary_agent" in orchestrator._circuit
+
+
+@pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
+def test_wrapped_admission_timeout_does_not_authorize_replay(wrapper_type) -> None:
+    """Only the direct pre-send exception carries the local admission proof."""
+    from contextual_orchestrator.orchestrator import (
+        _LocalProviderAdmissionTimeout,
+        _is_passthrough_failover_error,
+    )
+
+    wrapped = wrapper_type("unknown outer operation")
+    wrapped.__cause__ = _LocalProviderAdmissionTimeout("earlier slot failure")
+    assert not _is_passthrough_failover_error(wrapped)
+
+
+@pytest.mark.parametrize("after_send", [False, True])
+def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send: bool) -> None:
+    """Only a failed slot acquisition may advance without replaying a sent request."""
+    from contextlib import nullcontext
+    from contextual_orchestrator.orchestrator import _local_provider_slot
+
+    client = ModelClient(timeout=0.001)
+    router = _build(client)
+    router.agents[0] = replace(
+        router.agents[0], base_url="local://127.0.0.1:19441/v1"
+    )
+    router.agents[1] = replace(
+        router.agents[1], base_url="local://127.0.0.1:19442/v1"
+    )
+    sent = []
+
+    def raw_send(agent, *args, **kwargs):
+        sent.append(agent.id)
+        if after_send:
+            raise TimeoutError("response not received after transport invocation")
+        return {"model": agent.model, "choices": []}
+
+    monkeypatch.setattr(client, "_send_raw_with_retry", raw_send)
+    slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
+    with slot:
+        if after_send:
+            with pytest.raises(ProviderUpstreamError) as raised:
+                router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert raised.value.error_code == "provider_outcome_unknown"
+            assert raised.value.retryable is False
+            assert sent == ["primary_agent"]
+        else:
+            result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert result["model"] == "fallback-model"
+            assert sent == ["fallback_agent"]
+
+
+def test_sdk_passthrough_unknown_outcome_never_replays() -> None:
+    """Exact SDK to real HTTP to passthrough preserves one unknown-outcome attempt."""
+    import asyncio
+    import threading
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    import openai as sdk
+    assert sdk.__version__ == "2.54.0"
+    transport = SequencedProxyClient({
+        "primary_agent": TimeoutError("token=private_test_value"),
+        "fallback_agent": {"model": "fallback-model"},
+    })
+    server = build_server(_build(transport), port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def request_completion():
+        async with sdk.AsyncOpenAI(
+            api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+        ) as client:
+            with pytest.raises(sdk.APIStatusError) as raised:
+                await client.chat.completions.create(
+                    model="primary-model",
+                    messages=[{"role": "user", "content": "inspect locally"}],
+                    tools=[{"type": "function", "function": {"name": "inspect", "parameters": {"type": "object"}}}],
+                )
+            assert raised.value.status_code == 502
+            assert raised.value.body["code"] == "provider_outcome_unknown"
+            assert raised.value.body["detail"]["retryable"] is False
+            assert raised.value.response.headers["x-should-retry"] == "false"
+            assert "private_test_value" not in str(raised.value)
+
+    try:
+        asyncio.run(request_completion())
+        assert [agent_id for agent_id, _ in transport.calls] == ["primary_agent"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_effort_profile_selects_a_supported_provider() -> None:
@@ -1599,7 +1693,9 @@ def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseExc
         )
 
     assert caught.value.client_status == 502
-    assert caught.value.error_code == "provider_connection_error"
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+    assert caught.value.__cause__ is None
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
     assert "primary_agent" in orchestrator._circuit
     assert _is_ambiguous_passthrough_transport_failure(failure)
