@@ -20,6 +20,7 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.privacy_policy_analysis import (
+    _installed_mcp_sdk_version,
     _call_analyzer,
     _render_policy_document_with_camoufox,
     _wardnet_browser_proxy,
@@ -271,11 +272,36 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
     }
 
 
-def _installed_mcp_major_version() -> int:
-    try:
-        return int(importlib.metadata.version("mcp").split(".")[0])
-    except importlib.metadata.PackageNotFoundError:
-        return 0
+def _install_stub_mcp_sdk(monkeypatch, *, client, streamable_http_client, create_mcp_http_client) -> None:
+    """Install a minimal MCP SDK 2.x module surface so the renderer runs without the package."""
+    modules = {
+        "mcp": types.ModuleType("mcp"),
+        "mcp.client": types.ModuleType("mcp.client"),
+        "mcp.client.streamable_http": types.ModuleType("mcp.client.streamable_http"),
+        "mcp.shared": types.ModuleType("mcp.shared"),
+        "mcp.shared._httpx_utils": types.ModuleType("mcp.shared._httpx_utils"),
+    }
+    modules["mcp"].Client = client
+    modules["mcp"].client = modules["mcp.client"]
+    modules["mcp"].shared = modules["mcp.shared"]
+    modules["mcp.client"].streamable_http = modules["mcp.client.streamable_http"]
+    modules["mcp.client.streamable_http"].streamable_http_client = streamable_http_client
+    modules["mcp.shared"]._httpx_utils = modules["mcp.shared._httpx_utils"]
+    modules["mcp.shared._httpx_utils"].create_mcp_http_client = create_mcp_http_client
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_installed_mcp_sdk_version_names_both_states(monkeypatch) -> None:
+    """The diagnostic names the installed version, or says the package is absent."""
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.23.3")
+    assert _installed_mcp_sdk_version() == "mcp 1.23.3"
+
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    assert _installed_mcp_sdk_version() == "mcp not installed"
 
 
 def test_camoufox_render_reports_pre_v2_mcp_sdk(monkeypatch) -> None:
@@ -289,10 +315,8 @@ def test_camoufox_render_reports_pre_v2_mcp_sdk(monkeypatch) -> None:
     assert isinstance(raised.value.__cause__, ImportError)
 
 
-def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
-    pytest.importorskip("mcp")
-    if _installed_mcp_major_version() < 2:
-        pytest.skip("Camoufox MCP transport targets MCP Python SDK >= 2.0 (mcp.Client API)")
+def test_pinned_mcp_client_renders_and_closes_camoufox_tab(monkeypatch) -> None:
+    """The renderer drives the SDK 2.x surface (verified against mcp==2.2.0) via stubs."""
     calls: list[tuple[str, dict[str, object]]] = []
 
     class _Context:
@@ -332,25 +356,24 @@ def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
         "CAMOUFOX_MCP_TOKEN": "mcp-token",
     }.items():
         register_credential(name, value)
+    _install_stub_mcp_sdk(
+        monkeypatch,
+        client=_Client,
+        streamable_http_client=lambda url, http_client: (
+            "streamable-transport"
+            if url == "http://127.0.0.1:9377/mcp" and http_client is not None
+            else None
+        ),
+        create_mcp_http_client=lambda **kwargs: (
+            _Context()
+            if kwargs == {"headers": {"authorization": "Bearer mcp-token"}}
+            else None
+        ),
+    )
     try:
-        with patch("mcp.Client", _Client), patch(
-            "mcp.client.streamable_http.streamable_http_client",
-            side_effect=lambda url, http_client: (
-                "streamable-transport"
-                if url == "http://127.0.0.1:9377/mcp" and http_client is not None
-                else None
-            ),
-        ), patch(
-            "mcp.shared._httpx_utils.create_mcp_http_client",
-            side_effect=lambda **kwargs: (
-                _Context()
-                if kwargs == {"headers": {"authorization": "Bearer mcp-token"}}
-                else None
-            ),
-        ):
-            rendered = asyncio.run(
-                _render_policy_document_with_camoufox("https://provider.example/privacy")
-            )
+        rendered = asyncio.run(
+            _render_policy_document_with_camoufox("https://provider.example/privacy")
+        )
     finally:
         set_backend(None)
 
