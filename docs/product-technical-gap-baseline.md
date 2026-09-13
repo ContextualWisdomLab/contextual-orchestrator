@@ -1,5 +1,15 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 artifact runtime migration — Proposed
+
+Source `7032bee94c85d4937ddad21de88bccd35051ff29` upgrades four artifact
+pins to the verified Node 24 action, preserving every upload option and gate.
+Actionlint and eight workflow contracts pass locally; hosted publication and
+review remain unproven. The central owner still needs a released reusable
+contract preserving CO quality, wheel and fuzz requirements before thin-caller
+migration. [Evidence and alternatives](doctoring/artifact_runtime_migration.md).
+This is operational maintenance, not measured accuracy or decision-latency gain.
+
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169

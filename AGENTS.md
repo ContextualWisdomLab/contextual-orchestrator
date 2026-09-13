@@ -1,5 +1,9 @@
 # AGENTS.md
 
+For artifact runtime warnings, inspect the exact action manifest rather than
+its version comment. Preserve upload options and security gates; see
+`docs/doctoring/artifact_runtime_migration.md` for owner migration and checks.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 

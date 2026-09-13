@@ -53,7 +53,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip install --no-deps -e .",
         "python -m pip_audit -r requirements.lock",
         "cyclonedx-py environment",
-        "actions/upload-artifact@v5",
+        "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
