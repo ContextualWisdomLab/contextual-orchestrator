@@ -36,7 +36,7 @@ from .chat_capability import (
     requires_non_text_input,
 )
 from .conventions import legacy_discovered_agent_id
-from .credentials import get_credential
+from .credentials import NotConfigured, get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -1590,12 +1590,10 @@ def _openrouter_zdr_model_ids(*, timeout: float | None) -> set[str]:
 def _apply_discovered_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Apply model-level ZDR evidence to matching rows from every provider.
+    """Apply OpenRouter ZDR evidence only to its own provider rows.
 
-    Providers may expose the same canonical model id as OpenRouter while using
-    a different upstream endpoint. Exact canonical ids are the only portable
-    identity; suffix matching would transfer privacy evidence to an unrelated
-    model that merely shares a display name.
+    Model identity does not establish another endpoint's retention policy.
+    Other providers retain their independently supplied privacy evidence.
     """
     if not zdr_model_ids:
         return discovered
@@ -1610,6 +1608,8 @@ def _apply_discovered_model_evidence(
             model,
             zdr_capable=not model.evidence_only and matches(model.model_id),
         )
+        if model.provider_name == "openrouter"
+        else model
         for model in discovered
     ]
 
