@@ -8818,6 +8818,12 @@ def build_server(
         def _send_security_headers(self) -> None:
             if getattr(self, "close_connection", False):
                 self.send_header("connection", "close")
+            # Server-generated identity only (never a caller-supplied header value):
+            # the same id error payloads already carry, so a caller can correlate a
+            # served request to gateway logs too (issue #1016).
+            request_id = current_request_id()
+            if request_id:
+                self.send_header("x-request-id", request_id)
             self.send_header("x-content-type-options", "nosniff")
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
