@@ -113,67 +113,75 @@ def validate_provenance(provenance: object) -> dict[str, str]:
     return normalized
 
 
-def _residue(final: Path, kind: str) -> list[Path]:
-    """Return private publication residue for one final directory."""
-    prefix = f".{final.name}.{kind}-"
-    return sorted(path for path in final.parent.iterdir() if path.name.startswith(prefix))
+def _publication_residue_paths(
+    final_directory: Path, residue_kind: str
+) -> list[Path]:
+    """Return private publication residue for one final evidence directory."""
+    residue_prefix = f".{final_directory.name}.{residue_kind}-"
+    return sorted(
+        residue_path
+        for residue_path in final_directory.parent.iterdir()
+        if residue_path.name.startswith(residue_prefix)
+    )
 
 
 @contextmanager
-def _publication_lock(final: Path) -> Iterator[None]:
+def _publication_lock(final_directory: Path) -> Iterator[None]:
     """Serialize publishers that target the same evidence directory."""
-    lock_path = final.parent / f".{final.name}.publish-lock"
+    lock_path = final_directory.parent / f".{final_directory.name}.publish-lock"
     if lock_path.is_symlink():
         raise NimEvidenceError("publication lock must not be a symbolic link")
-    flags = os.O_CREAT | os.O_RDWR
+    open_flags = os.O_CREAT | os.O_RDWR
     if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+        open_flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, flags, 0o600)
+        lock_descriptor = os.open(lock_path, open_flags, 0o600)
     except OSError as exc:
         raise NimEvidenceError("publication lock could not be opened safely") from exc
     try:
         if fcntl is not None:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
         else:  # pragma: no cover - Windows compatibility
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"\0")
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            if os.fstat(lock_descriptor).st_size == 0:
+                os.write(lock_descriptor, b"\0")
+            os.lseek(lock_descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(lock_descriptor, msvcrt.LK_LOCK, 1)
         yield
     finally:
         if fcntl is not None:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         else:  # pragma: no cover - Windows compatibility
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-        os.close(descriptor)
+            os.lseek(lock_descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(lock_descriptor, msvcrt.LK_UNLCK, 1)
+        os.close(lock_descriptor)
 
 
-def _remove_staging(path: Path) -> None:
+def _remove_staging(staging_path: Path) -> None:
     """Remove private staging even when a crash preserved a read-only mode."""
     try:
-        path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IRWXU)
-        shutil.rmtree(path)
+        staging_path.chmod(
+            stat.S_IMODE(staging_path.stat().st_mode) | stat.S_IRWXU
+        )
+        shutil.rmtree(staging_path)
     except OSError as exc:
         raise NimEvidenceError("abandoned publication staging requires operator review") from exc
 
 
-def _recover_publication(final: Path) -> None:
+def _recover_publication(final_directory: Path) -> None:
     """Remove abandoned staging and restore one unambiguous crash backup."""
-    for staging in _residue(final, "staging"):
-        _remove_staging(staging)
-    backups = _residue(final, "backup")
-    if len(backups) > 1:
+    for staging_path in _publication_residue_paths(final_directory, "staging"):
+        _remove_staging(staging_path)
+    backup_paths = _publication_residue_paths(final_directory, "backup")
+    if len(backup_paths) > 1:
         raise NimEvidenceError("multiple publication backups require operator review")
-    if backups:
-        if final.exists():
+    if backup_paths:
+        if final_directory.exists():
             try:
-                _remove_staging(backups[0])
+                _remove_staging(backup_paths[0])
             except NimEvidenceError:
                 pass
         else:
-            os.replace(backups[0], final)
+            os.replace(backup_paths[0], final_directory)
 
 
 def publish_artifact_set(
@@ -192,38 +200,50 @@ def publish_artifact_set(
         raise NimEvidenceError("run_provenance.json must contain valid UTF-8 JSON") from exc
     validate_provenance(provenance)
 
-    final = Path(output_directory).expanduser()
-    if final.name in {"", ".", ".."}:
+    final_directory = Path(output_directory).expanduser()
+    if final_directory.name in {"", ".", ".."}:
         raise NimEvidenceError("output directory must name a dedicated directory")
-    final = final.parent.resolve() / final.name
-    if final.is_symlink() or (final.exists() and not final.is_dir()):
+    final_directory = final_directory.parent.resolve() / final_directory.name
+    if final_directory.is_symlink() or (
+        final_directory.exists() and not final_directory.is_dir()
+    ):
         raise NimEvidenceError("output directory must be a real directory")
-    final.parent.mkdir(parents=True, exist_ok=True)
-    with _publication_lock(final):
-        _recover_publication(final)
-        staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
-        staging.mkdir(mode=0o700)
-        final_mode = stat.S_IMODE(final.stat().st_mode) if final.exists() else None
-        backup: Path | None = None
+    final_directory.parent.mkdir(parents=True, exist_ok=True)
+    with _publication_lock(final_directory):
+        _recover_publication(final_directory)
+        staging_directory = (
+            final_directory.parent
+            / f".{final_directory.name}.staging-{uuid.uuid4().hex}"
+        )
+        staging_directory.mkdir(mode=0o700)
+        final_directory_mode = (
+            stat.S_IMODE(final_directory.stat().st_mode)
+            if final_directory.exists()
+            else None
+        )
+        backup_directory: Path | None = None
         try:
-            for name, payload in artifacts.items():
-                (staging / name).write_bytes(payload)
-            if final_mode is not None:
-                staging.chmod(final_mode)
-            if final.exists():
-                backup = final.parent / f".{final.name}.backup-{uuid.uuid4().hex}"
-                os.replace(final, backup)
+            for artifact_name, artifact_payload in artifacts.items():
+                (staging_directory / artifact_name).write_bytes(artifact_payload)
+            if final_directory_mode is not None:
+                staging_directory.chmod(final_directory_mode)
+            if final_directory.exists():
+                backup_directory = (
+                    final_directory.parent
+                    / f".{final_directory.name}.backup-{uuid.uuid4().hex}"
+                )
+                os.replace(final_directory, backup_directory)
             try:
-                os.replace(staging, final)
+                os.replace(staging_directory, final_directory)
             except BaseException:
-                if backup is not None and backup.exists():
-                    os.replace(backup, final)
+                if backup_directory is not None and backup_directory.exists():
+                    os.replace(backup_directory, final_directory)
                 raise
-            if backup is not None:
+            if backup_directory is not None:
                 try:
-                    _remove_staging(backup)
+                    _remove_staging(backup_directory)
                 except NimEvidenceError:
                     pass
         finally:
-            if staging.exists():
-                _remove_staging(staging)
+            if staging_directory.exists():
+                _remove_staging(staging_directory)
