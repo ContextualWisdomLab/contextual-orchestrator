@@ -51,6 +51,7 @@ from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
     MAX_PROVIDER_ERROR_BODY_BYTES,
     ProviderUpstreamError,
     classify_provider_failure,
@@ -163,6 +164,7 @@ def _request_endpoint_partition() -> str:
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
+MAX_MODEL_TIMEOUT_SECONDS = 2_147_483_647.0
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
@@ -632,6 +634,9 @@ class ModelAgent:
     endpoint_equivalence: dict[str, Any] | None = None
     # Provider-declared support for the Chat Completions terminal usage frame.
     stream_usage_supported: bool = False
+    # Administrator-owned execution policy; runtime admission is a separate gate.
+    model_timeout_seconds: float | None = None
+    model_timeout_revision: int = 0
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -657,6 +662,19 @@ class ModelAgent:
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
             raise TypeError("stream_usage_supported must be a boolean")
+        if self.model_timeout_seconds is not None:
+            value = self.model_timeout_seconds
+            if (
+                type(value) not in (int, float)
+                or not 0 < value <= MAX_MODEL_TIMEOUT_SECONDS
+            ):
+                raise ValueError(
+                    "model_timeout_seconds must be finite positive seconds no greater "
+                    f"than {MAX_MODEL_TIMEOUT_SECONDS:g}, or null"
+                )
+            object.__setattr__(self, "model_timeout_seconds", float(value))
+        if type(self.model_timeout_revision) is not int or self.model_timeout_revision < 0:
+            raise ValueError("model_timeout_revision must be a non-negative integer")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -682,6 +700,8 @@ class ModelAgent:
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
             "stream_usage_supported": self.stream_usage_supported,
+            "model_timeout_seconds": self.model_timeout_seconds,
+            "model_timeout_revision": self.model_timeout_revision,
         }
 
     @property
@@ -721,6 +741,8 @@ class ModelAgent:
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
             stream_usage_supported=value.get("stream_usage_supported", False),
+            model_timeout_seconds=value.get("model_timeout_seconds"),
+            model_timeout_revision=value.get("model_timeout_revision", 0),
         )
 
 
@@ -1065,6 +1087,45 @@ def _local_provider_state(base_url: str) -> _LocalProviderState:
         return _LOCAL_PROVIDER_STATES.setdefault(key, _LocalProviderState())
 
 
+class _LocalProviderAdmissionTimeout(TimeoutError):
+    """A local slot expired before any upstream request could be sent."""
+
+
+class _AdministratorModelTimeout(TimeoutError):
+    """An explicit administrator-owned end-to-end model deadline expired."""
+
+
+def _model_deadline(timeout: float | None) -> float | None:
+    """Return one monotonic deadline for an explicit model timeout."""
+    return None if timeout is None else time.monotonic() + float(timeout)
+
+
+def _remaining_model_timeout(deadline: float | None) -> float | None:
+    """Return remaining model time or raise the distinct administrator timeout."""
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _AdministratorModelTimeout("administrator model timeout elapsed")
+    return remaining
+
+
+def _administrator_timeout_error(
+    agent: ModelAgent, transport: str
+) -> ProviderUpstreamError:
+    """Build the caller-safe non-retryable administrator-timeout surface."""
+    return ProviderUpstreamError(
+        agent_id=agent.id,
+        model=agent.model,
+        error_code="model_timeout",
+        message="administrator-configured model timeout elapsed",
+        client_status=504,
+        provider_status=None,
+        retryable=False,
+        transport=transport,
+    )
+
+
 @contextmanager
 def _local_provider_slot(
     agent: ModelAgent,
@@ -1092,7 +1153,7 @@ def _local_provider_slot(
 
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
-                raise TimeoutError("local provider endpoint is busy past its request deadline")
+                raise _LocalProviderAdmissionTimeout("local provider endpoint is busy past its request deadline")
             state.condition.wait(remaining)
 
     try:
@@ -1385,17 +1446,24 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
 def _log_provider_attempt_failed(
     agent: ModelAgent, attempt: int, exc: Exception, transient: bool
 ) -> None:
-    """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
+    """DEBUG-log typed status evidence without reading or stringifying provider content."""
     if _LOGGER.isEnabledFor(logging.DEBUG):
+        provider_status = (
+            exc.code if isinstance(exc, urllib.error.HTTPError)
+            else exc.provider_status if isinstance(exc, ProviderUpstreamError)
+            else None
+        )
+        if type(provider_status) is not int or not 100 <= provider_status <= 599:
+            provider_status = None
         _LOGGER.debug(
-            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s request_id=%s error_message=%s",
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s provider_status=%s request_id=%s error_message=<omitted>",
             agent.id,
             agent.model,
             attempt + 1,
             type(exc).__name__,
             transient,
+            provider_status,
             current_request_id() or "-",
-            redact_text(str(exc))[:500],
         )
 
 
@@ -1663,6 +1731,8 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
 
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
     """Recognize failures proving that a passthrough request was not accepted."""
+    if isinstance(exc, _LocalProviderAdmissionTimeout):
+        return True
     if _is_request_too_large_error(exc):
         return True
     current: BaseException | None = exc
@@ -1710,9 +1780,8 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     passthrough request must fail closed on it and never be replayed on
     another candidate (``test_ambiguous_timeout_is_not_replayed``). It is
     still a failure *of this candidate*: the breaker must learn it and the
-    caller must receive the classified ``502 provider_connection_error`` that
-    ``classify_provider_failure`` already defines for these types -- not the
-    bare exception, which the HTTP handler could only answer with
+    caller must receive a non-retryable ``502 provider_outcome_unknown`` -- not
+    the bare exception, which the HTTP handler could only answer with
     ``500 internal_error`` (Strix run 33993155419: 83 such responses, ~90 s
     apart, the same never-recorded first-ranked route every time; #1045).
     A URLError around a DNS failure is not ambiguous (nothing was sent) and
@@ -1731,6 +1800,25 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
             and not isinstance(current, urllib.error.HTTPError)
             and not isinstance(current.reason, socket.gaierror)
         ):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
+def _is_timeout_transport_failure(exc: BaseException) -> bool:
+    """Recognize a timeout through a bounded exception chain."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):
             return True
         if current.__cause__ is not None:
             current = current.__cause__
@@ -2138,6 +2226,8 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
+        resolved_timeout = self._resolved_model_timeout(agent)
+        deadline = _model_deadline(resolved_timeout)
         with traced(
             f"chat {agent.model}",
             {
@@ -2148,8 +2238,15 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_with_retry(agent, payload, destination)
+        ), _local_provider_slot(agent, self.local_concurrency, resolved_timeout):
+            try:
+                if deadline is None:
+                    return self._send_with_retry(agent, payload, destination)
+                return self._send_with_retry(
+                    agent, payload, destination, timeout=_remaining_model_timeout(deadline)
+                )
+            except _AdministratorModelTimeout:
+                raise _administrator_timeout_error(agent, "chat") from None
 
     def apply_effort_profile(
         self,
@@ -2277,19 +2374,36 @@ class ModelClient:
         last_error: Exception | None = None
         allow_transient_retries = getattr(self._local, "allow_transient_retries", True)
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
+        deadline = _model_deadline(timeout)
         attempt = 0
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             _log_provider_attempt(agent, attempt, retry_limit)
             try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
+                attempt_timeout = _remaining_model_timeout(deadline)
+                if attempt_timeout is None:
+                    return self._send(agent, payload, destination)
+                return self._send(agent, payload, destination, timeout=attempt_timeout)
+            except _AdministratorModelTimeout:
+                raise
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 transient = is_transient_error(exc)
                 _log_provider_attempt_failed(agent, attempt, exc, transient)
+                if _is_ambiguous_passthrough_transport_failure(exc):
+                    if deadline is not None and _is_timeout_transport_failure(exc):
+                        raise _administrator_timeout_error(agent, "chat") from None
+                    raise ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                        message=(
+                            "the provider request outcome is unknown; "
+                            "automatic replay is unsafe"
+                        ),
+                        client_status=502,
+                        retryable=False,
+                        transport="chat",
+                    ) from None
                 if attempt >= retry_limit or not transient:
                     break
                 delay = self._backoff_delay(attempt)
@@ -2353,11 +2467,7 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        opened = (
-            self._open_provider(request, destination)
-            if timeout is None
-            else self._open_provider(request, destination, timeout=timeout)
-        )
+        opened = self._open_model_provider(request, destination, agent, timeout)
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
@@ -2434,6 +2544,29 @@ class ModelClient:
             raise RuntimeError(f"provider host {hostname!r} has no stream address")
         return resolved
 
+    def _resolved_model_timeout(
+        self, agent: ModelAgent, timeout: float | None = None
+    ) -> float | None:
+        """Prefer an explicit call timeout, then the model policy, then the client default."""
+        if timeout is not None:
+            return timeout
+        if agent.model_timeout_seconds is not None:
+            return agent.model_timeout_seconds
+        return self.timeout
+
+    def _open_model_provider(
+        self,
+        request: urllib.request.Request,
+        destination: ProviderDestination | None,
+        agent: ModelAgent,
+        timeout: float | None = None,
+    ) -> Any:
+        """Open one model request using the resolved per-model wait, or none."""
+        resolved = self._resolved_model_timeout(agent, timeout)
+        if resolved is None:
+            return self._open_provider(request, destination)
+        return self._open_provider(request, destination, timeout=resolved)
+
     def _open_provider(
         self,
         request: urllib.request.Request,
@@ -2457,7 +2590,7 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = timeout if timeout is not None else self.timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -2549,6 +2682,8 @@ class ModelClient:
             payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
+        resolved_timeout = self._resolved_model_timeout(agent)
+        deadline = _model_deadline(resolved_timeout)
         with traced(
             f"chat {agent.model}",
             {
@@ -2559,11 +2694,21 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+        ), _local_provider_slot(agent, self.local_concurrency, resolved_timeout):  # pragma: no cover
+            if deadline is None:
+                yield from self._stream_send(agent, payload, destination)
+            else:
+                yield from self._stream_send(
+                    agent, payload, destination, deadline=deadline
+                )
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        deadline: float | None = None,
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
@@ -2585,8 +2730,26 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         try:
-            with self._open_provider(request, destination) as response:
-                for raw in response:
+            with self._open_model_provider(
+                request,
+                destination,
+                agent,
+                timeout=_remaining_model_timeout(deadline),
+            ) as response:
+                response_iterator = iter(response)
+                while True:
+                    remaining = _remaining_model_timeout(deadline)
+                    response_socket = getattr(
+                        getattr(getattr(response, "fp", None), "raw", None),
+                        "_sock",
+                        None,
+                    )
+                    if remaining is not None and response_socket is not None:
+                        response_socket.settimeout(remaining)
+                    try:
+                        raw = next(response_iterator)
+                    except StopIteration:
+                        break
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -2636,9 +2799,14 @@ class ModelClient:
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
             # classified, package-owned error instead of raw provider diagnostics.
-            stream_error = classify_provider_failure(
-                exc, agent_id=agent.id, model=agent.model, transport="stream"
-            )
+            if isinstance(exc, _AdministratorModelTimeout) or (
+                deadline is not None and _is_timeout_transport_failure(exc)
+            ):
+                stream_error = _administrator_timeout_error(agent, "stream")
+            else:
+                stream_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="stream"
+                )
         if stream_error is not None:
             raise stream_error
 
@@ -2748,7 +2916,7 @@ class ModelClient:
                     chat_payload.setdefault("max_tokens", local_cap)
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):
                     chat_response = self._send_raw_with_retry(
                         agent,
                         "chat/completions",
@@ -2757,7 +2925,7 @@ class ModelClient:
                         allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -2783,7 +2951,7 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
                 return response.read(), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
             raise classify_provider_failure(
@@ -2827,8 +2995,8 @@ class ModelClient:
             headers=headers,
             method="GET",
         )
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent)
+        with self._open_model_provider(  # pragma: no cover
+            request, self._validate_provider(agent), agent
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
@@ -2864,8 +3032,8 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent)
+        with self._open_model_provider(  # pragma: no cover
+            request, self._validate_provider(agent), agent
         ) as response:
             result = json.loads(
                 self._read_bounded_response(response, max_response_bytes).decode("utf-8")
@@ -2950,7 +3118,7 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         return data
@@ -3246,7 +3414,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(
@@ -3268,7 +3436,7 @@ class ModelClient:
             },
             method=method,
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
             return json.loads(raw.decode("utf-8"))
 
@@ -3294,7 +3462,7 @@ class ModelClient:
             headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
             method="GET",
         )
-        with self._open_provider(request, destination) as response:
+        with self._open_model_provider(request, destination, agent) as response:
             return response.read()
 
 
@@ -3371,6 +3539,7 @@ class _AgentPoolStore:
             "context_window",
             "reasoning_effort_supported",
             "stream_usage_supported",
+            "model_timeout_seconds",
         }
     )
 
@@ -3410,6 +3579,8 @@ class _AgentPoolStore:
                 context_window INTEGER,
                 reasoning_effort_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
+                model_timeout_seconds REAL CHECK (model_timeout_seconds IS NULL OR
+                    (model_timeout_seconds > 0 AND model_timeout_seconds <= 2147483647)),
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_max_output_tokens_check
                     CHECK (
@@ -3469,8 +3640,9 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported,
+                model_timeout_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -3487,6 +3659,7 @@ class _AgentPoolStore:
                 config["context_window"],
                 config["reasoning_effort_supported"],
                 int(config["stream_usage_supported"]),
+                config["model_timeout_seconds"],
             ),
         )
         conn.executemany(
@@ -3558,6 +3731,13 @@ class _AgentPoolStore:
                 "CHECK (stream_usage_supported IN (0, 1))"
             )
             columns.add("stream_usage_supported")
+        if "model_timeout_seconds" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN model_timeout_seconds REAL "
+                "CHECK (model_timeout_seconds IS NULL OR "
+                "(model_timeout_seconds > 0 AND model_timeout_seconds <= 2147483647))"
+            )
+            columns.add("model_timeout_seconds")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -3599,6 +3779,25 @@ class _AgentPoolStore:
                 "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE RESTRICT)"
             )
             self._migrate_legacy_groups(conn)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS model_timeout_history ("
+                "policy_revision INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "agent_id TEXT NOT NULL REFERENCES agent_pool(agent_id), "
+                "previous_seconds REAL, timeout_seconds REAL, "
+                "created_at REAL NOT NULL)"
+            )
+            history_columns = {row[1] for row in conn.execute("PRAGMA table_info(model_timeout_history)")}
+            if "actor_id" not in history_columns:
+                conn.execute("ALTER TABLE model_timeout_history ADD COLUMN actor_id TEXT")
+            if "restored_from_revision" not in history_columns:
+                conn.execute(
+                    "ALTER TABLE model_timeout_history ADD COLUMN restored_from_revision INTEGER "
+                    "REFERENCES model_timeout_history(policy_revision)"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS model_timeout_history_agent_revision "
+                "ON model_timeout_history(agent_id, policy_revision)"
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -3640,133 +3839,252 @@ class _AgentPoolStore:
             )
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
-    def save(self, agent: "ModelAgent") -> None:
-        """Persist one normalized model-agent definition."""
+    @contextmanager
+    def _write_transaction(self) -> Iterable[sqlite3.Connection]:
+        """Commit the complete pool operation or roll back every affected row."""
         with self._lock:
             conn = self._connect(self._path)
             try:
-                config = agent.to_config()
-                conn.execute(
-                    """
-                    UPDATE agent_pool SET
-                        model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
-                        priority = ?, disabled = ?, provider_name = ?,
-                        local_credential_key = ?, auth_scheme = ?,
-                        max_output_tokens = ?, context_window = ?,
-                        reasoning_effort_supported = ?, stream_usage_supported = ?
-                    WHERE agent_id = ?
-                    """,
-                    (
-                        config["model"],
-                        config["base_url"],
-                        config["api_key_env"],
-                        config["credential_key"],
-                        config["priority"],
-                        int(config["disabled"]),
-                        config["provider_name"],
-                        config["local_credential_key"],
-                        config["auth_scheme"],
-                        config["max_output_tokens"],
-                        config["context_window"],
-                        config["reasoning_effort_supported"],
-                        int(config["stream_usage_supported"]),
-                        agent.id,
-                    ),
-                )
-                if conn.execute("SELECT changes()").fetchone()[0] == 0:
-                    self._insert_agent(conn, agent)
-                else:
-                    conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
-                    conn.execute(
-                        "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
-                        (agent.id,),
-                    )
-                    conn.executemany(
-                        "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
-                        [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
-                    )
-                    conn.executemany(
-                        """
-                        INSERT INTO agent_pool_provider_exclusions
-                            (agent_id, exclusion_position, provider_name)
-                        VALUES (?, ?, ?)
-                        """,
-                        [
-                            (agent.id, position, provider)
-                            for position, provider in enumerate(agent.provider_exclusions)
-                        ],
-                    )
-                # Model-group membership is a normalized relation beside the pool.
-                conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
-                if agent.group_name:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
-                        (agent.group_name,),
-                    )
-                    conn.execute(
-                        "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
-                        (agent.id, agent.group_name),
-                    )
-                conn.execute(
-                    "DELETE FROM model_group WHERE NOT EXISTS ("
-                    "SELECT 1 FROM model_group_member "
-                    "WHERE model_group_member.group_name = model_group.group_name)"
-                )
-                conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
-                conn.execute(
-                    "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
-                    "SELECT 1 FROM endpoint_equivalence_member "
-                    "WHERE endpoint_equivalence_member.contract_id = "
-                    "endpoint_equivalence_contract.contract_id)"
-                )
-                if agent.endpoint_equivalence is not None:
-                    contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
-                    conn.execute(
-                        "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
-                        "reasoning_effort_profile=excluded.reasoning_effort_profile, "
-                        "structured_output_contract=excluded.structured_output_contract, "
-                        "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
-                        "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
-                        "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
-                        "cancellation_supported=excluded.cancellation_supported, "
-                        "execution_policy=excluded.execution_policy",
-                        (
-                            contract.contract_id, contract.model_revision,
-                            contract.reasoning_effort_profile, contract.structured_output_contract,
-                            contract.accuracy_class, contract.data_residency_policy,
-                            contract.retention_policy, contract.context_limit,
-                            contract.pricing_evidence_id, int(contract.hedge_eligible),
-                            int(contract.cancellation_supported), contract.execution_policy,
-                        ),
-                    )
-                    conn.execute(
-                        "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
-                        (contract.contract_id,),
-                    )
-                    conn.executemany(
-                        "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
-                        [(contract.contract_id, name) for name in contract.capability_set],
-                    )
-                    conn.execute(
-                        "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
-                        (agent.id, contract.contract_id),
-                    )
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
                 conn.commit()
             finally:
                 conn.close()
+
+    def save(
+        self, agent: "ModelAgent", *, timeout_previous: "ModelAgent | None" = None,
+        actor_id: str | None = None,
+        restored_from_revision: int | None = None,
+    ) -> int | None:
+        """Persist one normalized model-agent definition."""
+        with self._write_transaction() as conn:
+            return self._save_in_transaction(
+                conn, agent, timeout_previous=timeout_previous, actor_id=actor_id,
+                restored_from_revision=restored_from_revision,
+            )
+
+    def save_many(self, agents: Iterable["ModelAgent"]) -> None:
+        """Persist a group or discovery operation without partial model updates."""
+        with self._write_transaction() as conn:
+            for agent in agents:
+                self._save_in_transaction(conn, agent)
+
+    def _save_in_transaction(
+        self, conn: sqlite3.Connection, agent: "ModelAgent", *,
+        timeout_previous: "ModelAgent | None" = None,
+        actor_id: str | None = None,
+        restored_from_revision: int | None = None,
+    ) -> int | None:
+        """Apply existing normalized writes inside the caller's transaction."""
+        if timeout_previous is not None:
+            revision = conn.execute(
+                "SELECT COALESCE(MAX(policy_revision), 0) FROM model_timeout_history WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone()[0]
+            row = conn.execute(
+                "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone()
+            if (
+                revision != timeout_previous.model_timeout_revision
+                or (
+                    row is not None
+                    and row[0] != timeout_previous.model_timeout_seconds
+                )
+            ):
+                raise ValueError("model timeout policy changed; reload before updating")
+            if row is not None:
+                conn.execute(
+                    "UPDATE agent_pool SET model_timeout_seconds = ? WHERE agent_id = ?",
+                    (agent.model_timeout_seconds, agent.id),
+                )
+                revision = self._append_timeout_history(
+                    conn,
+                    timeout_previous,
+                    agent,
+                    actor_id,
+                    restored_from_revision,
+                )
+                return revision
+        config = agent.to_config()
+        conn.execute(
+            """
+            UPDATE agent_pool SET
+                model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
+                priority = ?, disabled = ?, provider_name = ?,
+                local_credential_key = ?, auth_scheme = ?,
+                max_output_tokens = ?, context_window = ?,
+                reasoning_effort_supported = ?, stream_usage_supported = ?
+            WHERE agent_id = ?
+            """,
+            (
+                config["model"],
+                config["base_url"],
+                config["api_key_env"],
+                config["credential_key"],
+                config["priority"],
+                int(config["disabled"]),
+                config["provider_name"],
+                config["local_credential_key"],
+                config["auth_scheme"],
+                config["max_output_tokens"],
+                config["context_window"],
+                config["reasoning_effort_supported"],
+                int(config["stream_usage_supported"]),
+                agent.id,
+            ),
+        )
+        if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            self._insert_agent(conn, agent)
+        else:
+            conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
+            conn.execute(
+                "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
+                (agent.id,),
+            )
+            conn.executemany(
+                "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+                [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+            )
+            conn.executemany(
+                """
+                INSERT INTO agent_pool_provider_exclusions
+                    (agent_id, exclusion_position, provider_name)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (agent.id, position, provider)
+                    for position, provider in enumerate(agent.provider_exclusions)
+                ],
+            )
+        # Model-group membership is a normalized relation beside the pool.
+        conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
+        if agent.group_name:
+            conn.execute(
+                "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
+                (agent.group_name,),
+            )
+            conn.execute(
+                "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                (agent.id, agent.group_name),
+            )
+        conn.execute(
+            "DELETE FROM model_group WHERE NOT EXISTS ("
+            "SELECT 1 FROM model_group_member "
+            "WHERE model_group_member.group_name = model_group.group_name)"
+        )
+        conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
+        conn.execute(
+            "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
+            "SELECT 1 FROM endpoint_equivalence_member "
+            "WHERE endpoint_equivalence_member.contract_id = "
+            "endpoint_equivalence_contract.contract_id)"
+        )
+        if agent.endpoint_equivalence is not None:
+            contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
+            conn.execute(
+                "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
+                "reasoning_effort_profile=excluded.reasoning_effort_profile, "
+                "structured_output_contract=excluded.structured_output_contract, "
+                "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
+                "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
+                "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
+                "cancellation_supported=excluded.cancellation_supported, "
+                "execution_policy=excluded.execution_policy",
+                (
+                    contract.contract_id, contract.model_revision,
+                    contract.reasoning_effort_profile, contract.structured_output_contract,
+                    contract.accuracy_class, contract.data_residency_policy,
+                    contract.retention_policy, contract.context_limit,
+                    contract.pricing_evidence_id, int(contract.hedge_eligible),
+                    int(contract.cancellation_supported), contract.execution_policy,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
+                (contract.contract_id,),
+            )
+            conn.executemany(
+                "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
+                [(contract.contract_id, name) for name in contract.capability_set],
+            )
+            conn.execute(
+                "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
+                (agent.id, contract.contract_id),
+            )
+        if timeout_previous is not None:
+            revision = self._append_timeout_history(conn, timeout_previous, agent, actor_id, restored_from_revision)
+        return revision if timeout_previous is not None else None
+
+    @staticmethod
+    def _append_timeout_history(
+        conn: sqlite3.Connection, previous: "ModelAgent", updated: "ModelAgent",
+        actor_id: str | None,
+        restored_from_revision: int | None,
+    ) -> int:
+        """Write the policy change using the same uncommitted configuration transaction."""
+        if restored_from_revision is not None:
+            historical = conn.execute(
+                "SELECT timeout_seconds FROM model_timeout_history WHERE agent_id = ? AND policy_revision = ?",
+                (updated.id, restored_from_revision),
+            ).fetchone()
+            if historical is None or historical[0] != updated.model_timeout_seconds:
+                raise ValueError("restored timeout must match this model's historical revision")
+        cursor = conn.execute(
+            "INSERT INTO model_timeout_history "
+            "(agent_id, previous_seconds, timeout_seconds, created_at, actor_id, restored_from_revision) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (updated.id, previous.model_timeout_seconds, updated.model_timeout_seconds,
+             time.time(), actor_id, restored_from_revision),
+        )
+        return int(cursor.lastrowid)
+
+    def timeout_history(self, agent_id: str, page_size: int, before_revision: int | None) -> list[dict[str, Any]]:
+        """Read one bounded, model-scoped audit page plus a continuation sentinel."""
+        with self._lock:
+            conn = self._connect(self._path)
+            try:
+                rows = conn.execute(
+                    "SELECT policy_revision, previous_seconds, timeout_seconds, created_at, "
+                    "actor_id, restored_from_revision FROM model_timeout_history "
+                    "WHERE agent_id = ? AND (? IS NULL OR policy_revision < ?) "
+                    "ORDER BY policy_revision DESC LIMIT ?",
+                    (agent_id, before_revision, before_revision, page_size + 1),
+                ).fetchall()
+            finally:
+                conn.close()
+        fields = ("revision", "previous_seconds", "configured_seconds", "changed_at",
+                  "actor_id", "restored_from_revision")
+        return [dict(zip(fields, row)) for row in rows]
+
+    def timeout_at_revision(self, agent_id: str, policy_revision: int) -> float | None:
+        """Read a historical value only when its revision belongs to this model."""
+        with self._lock:
+            conn = self._connect(self._path)
+            try:
+                row = conn.execute(
+                    "SELECT timeout_seconds FROM model_timeout_history WHERE agent_id = ? AND policy_revision = ?",
+                    (agent_id, policy_revision),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            raise KeyError("model timeout revision not found")
+        return row[0]
 
     def load_all(self) -> list["ModelAgent"]:
         """Load every persisted model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
             try:
+                conn.execute("BEGIN")
                 rows = conn.execute(
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
                            max_output_tokens, context_window,
-                           reasoning_effort_supported, stream_usage_supported
+                           reasoning_effort_supported, stream_usage_supported, model_timeout_seconds
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -3781,6 +4099,9 @@ class _AgentPoolStore:
                 groups = conn.execute(
                     "SELECT agent_id, group_name FROM model_group_member ORDER BY agent_id"
                 ).fetchall()
+                timeout_revisions = dict(conn.execute(
+                    "SELECT agent_id, MAX(policy_revision) FROM model_timeout_history GROUP BY agent_id"
+                ).fetchall())
                 contracts = conn.execute(
                     "SELECT endpoint_equivalence_member.agent_id, endpoint_equivalence_contract.* "
                     "FROM endpoint_equivalence_member JOIN endpoint_equivalence_contract USING (contract_id)"
@@ -3832,6 +4153,8 @@ class _AgentPoolStore:
                 context_window=row[11],
                 reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
                 stream_usage_supported=bool(row[13]),
+                model_timeout_seconds=row[14],
+                model_timeout_revision=timeout_revisions.get(row[0], 0),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -4548,6 +4871,22 @@ class TaskOrchestrator:
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
+                if _is_ambiguous_passthrough_transport_failure(exc):
+                    self._record_failure(agent.id)
+                    if agent.group_name:
+                        self._group_router.observe_failure(agent.id)
+                    raise ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                        message=(
+                            "the provider request outcome is unknown; "
+                            "automatic replay is unsafe"
+                        ),
+                        client_status=502,
+                        retryable=False,
+                        transport="passthrough",
+                    ) from None
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
@@ -4630,20 +4969,22 @@ class TaskOrchestrator:
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
-                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                        raise classify_provider_failure(
-                            exc,
-                            agent_id=candidate.id,
-                            model=candidate.model,
-                            transport="passthrough",
-                        ) from None
                     if _is_ambiguous_passthrough_transport_failure(exc):
-                        # Fail closed without replay (the outcome is unknown),
-                        # but as a recorded failure of this candidate and as a
-                        # classified upstream error -- see the predicate.
+                        # The transport cannot prove whether the provider accepted
+                        # the request. Record the unhealthy route, but never replay.
                         self._record_failure(candidate.id)
                         if candidate.group_name:
                             self._group_router.observe_failure(candidate.id)
+                        raise ProviderUpstreamError(
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                            message="the provider request outcome is unknown; automatic replay is unsafe",
+                            client_status=502,
+                            retryable=False,
+                            transport="passthrough",
+                        ) from None
+                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
                         raise classify_provider_failure(
                             exc,
                             agent_id=candidate.id,
@@ -6691,7 +7032,12 @@ class TaskOrchestrator:
             "verifier": run.get("verification"),
         }
 
-    def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    def patch_agent(
+        self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any], *,
+        actor_id: str | None = None,
+        expected_timeout_revision: int | None = None,
+        restored_from_revision: int | None = None,
+    ) -> dict[str, Any]:
         """Apply governance updates without invalidating the active effort catalog."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
@@ -6718,6 +7064,8 @@ class TaskOrchestrator:
             patched = replace(patched, max_output_tokens=patch["max_output_tokens"])
         if "context_window" in patch:
             patched = replace(patched, context_window=patch["context_window"])
+        if "model_timeout_seconds" in patch:
+            patched = replace(patched, model_timeout_seconds=patch["model_timeout_seconds"])
         if "endpoint_equivalence" in patch:
             value = patch["endpoint_equivalence"]
             if value is not None and not isinstance(value, dict):
@@ -6733,6 +7081,40 @@ class TaskOrchestrator:
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
         self._require_role_effort_pool(updated_candidates)
+        if "model_timeout_seconds" in patch:
+            if set(patch) != {"model_timeout_seconds"}:
+                raise ValueError("model timeout policy must be updated separately")
+            if expected_timeout_revision is not None and (
+                type(expected_timeout_revision) is not int
+                or expected_timeout_revision != current.model_timeout_revision
+            ):
+                raise ValueError("model timeout policy changed; reload before updating")
+            if actor_id is not None and (
+                type(actor_id) is not str or len(actor_id) != 64
+                or any(character not in "0123456789abcdef" for character in actor_id)
+            ):
+                raise ValueError("timeout actor must be an opaque principal digest")
+            if self._pool_store is None:
+                raise ValueError("model timeout policy requires a durable agent store")
+            revision = self._pool_store.save(
+                patched, timeout_previous=current, actor_id=actor_id,
+                restored_from_revision=restored_from_revision,
+            )
+            patched = replace(patched, model_timeout_revision=revision)
+            updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+            updated_agents = [agent for agent in updated_candidates if not agent.disabled]
+            self.candidates = updated_candidates
+            self.agents = updated_agents
+            self._append_audit_event(
+                "model_timeout_policy_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "worker_agent_id": worker_agent_id,
+                    "revision": revision,
+                    "restored_from_revision": restored_from_revision,
+                },
+            )
+            return self._agent_to_admin_payload(patched)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self.candidates = updated_candidates
@@ -6771,6 +7153,65 @@ class TaskOrchestrator:
                 },
             )
         return self._agent_to_admin_payload(patched)
+
+    def get_model_timeout_policy(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Read configured policy and whether serving applies the selected model wait."""
+        serving = self._agent_in_pool(agent_pool_id, worker_agent_id)
+        configured = serving
+        if self._pool_store is not None:
+            # ponytail: one full snapshot per admin read; indexed lookup if pool size warrants it.
+            configured = next(
+                (agent for agent in self._pool_store.load_all() if agent.id == worker_agent_id),
+                serving,
+            )
+        return {
+            "configured_seconds": configured.model_timeout_seconds,
+            "revision": configured.model_timeout_revision,
+            "unit": "seconds",
+            "serving_snapshot_seconds": serving.model_timeout_seconds,
+            "serving_snapshot_revision": serving.model_timeout_revision,
+            "enforcement_available": True,
+        }
+
+    def list_model_timeout_history(
+        self, agent_pool_id: str, worker_agent_id: str, *, page_size: int = 20,
+        before_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Page older model policy changes without offset drift during new writes."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be an integer between 1 and 100")
+        if before_revision is not None and (
+            type(before_revision) is not int or not 1 <= before_revision <= _AGENT_POOL_INTEGER_MAX
+        ):
+            raise ValueError("before_revision must be a positive stored revision")
+        rows = self._pool_store.timeout_history(worker_agent_id, page_size, before_revision) if self._pool_store else []
+        items = rows[:page_size]
+        return {
+            "items": items,
+            "next_before_revision": items[-1]["revision"] if len(rows) > page_size else None,
+            "history_available": self._pool_store is not None,
+        }
+
+    def restore_model_timeout(
+        self, agent_pool_id: str, worker_agent_id: str, source_revision: int, *,
+        expected_revision: int, actor_id: str,
+    ) -> dict[str, Any]:
+        """Restore a model-owned historical value as a new revision, never rewrite history."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(source_revision) is not int or not 0 < source_revision <= _AGENT_POOL_INTEGER_MAX:
+            raise ValueError("source_revision must be a positive integer")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected_revision must be a non-negative integer")
+        if actor_id is None:
+            raise ValueError("restore requires an opaque principal digest")
+        if self._pool_store is None:
+            raise ValueError("model timeout policy requires a durable agent store")
+        value = self._pool_store.timeout_at_revision(worker_agent_id, source_revision)
+        return self.patch_agent(
+            agent_pool_id, worker_agent_id, {"model_timeout_seconds": value}, actor_id=actor_id,
+            expected_timeout_revision=expected_revision, restored_from_revision=source_revision,
+        )
 
     def list_model_groups(self) -> list[dict[str, Any]]:
         """Return operator-defined logical models and measured member evidence."""
@@ -6822,22 +7263,18 @@ class TaskOrchestrator:
             else agent
             for agent in self.candidates
         ]
-        self.candidates = updated
-        self.agents = [agent for agent in updated if not agent.disabled]
         changed = {
             before.id
             for before, after in zip(previous_candidates, updated)
             if before.group_name != after.group_name
         }
+        if self._pool_store is not None:
+            self._pool_store.save_many(agent for agent in updated if agent.id in requested | previous)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
         self._routers_reset_members(changed)
         for agent_id in changed:
             self._routers_register_member(agent_id)
-        for agent in updated:
-            if agent.id in requested:
-                if self._pool_store is not None:
-                    self._pool_store.save(agent)
-            elif agent.id in previous and self._pool_store is not None:
-                self._pool_store.save(agent)
         self._routers_forget_members({agent.id for agent in updated})
         self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
         return self.get_model_group(name)
@@ -6847,15 +7284,14 @@ class TaskOrchestrator:
         current = self.get_model_group(group_name)
         name = current["group_name"]
         member_ids = set(current["member_agent_ids"])
+        updated = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
+        if self._pool_store is not None:
+            self._pool_store.save_many(agent for agent in updated if agent.id in member_ids)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
         self._routers_reset_members(member_ids)
         for agent_id in member_ids:
             self._routers_register_member(agent_id)
-        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
-        self.agents = [agent for agent in self.candidates if not agent.disabled]
-        if self._pool_store is not None:
-            for agent in self.candidates:
-                if agent.id in member_ids:
-                    self._pool_store.save(agent)
         self._routers_forget_members({agent.id for agent in self.candidates})
         self._append_audit_event("model_group_deleted", {"group_name": name})
         return {"group_name": name, "deleted": True}
@@ -6915,14 +7351,15 @@ class TaskOrchestrator:
                 agent = replace(
                     agent,
                     group_name=updated_candidates[index].group_name,
+                    model_timeout_seconds=updated_candidates[index].model_timeout_seconds,
+                    model_timeout_revision=updated_candidates[index].model_timeout_revision,
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
             effective_discovered_agents.append(agent)
         self._require_role_effort_pool(updated_candidates)
         if self._pool_store is not None:
-            for agent in effective_discovered_agents:
-                self._pool_store.save(agent)
+            self._pool_store.save_many(effective_discovered_agents)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
@@ -6949,14 +7386,13 @@ class TaskOrchestrator:
             agent for agent in self.candidates if agent.id != worker_agent_id
         ]
         self._require_role_effort_pool(remaining_candidates)
+        if self._pool_store is not None:
+            # Persist the tombstone before removing the serving candidate.
+            self._pool_store.save(replace(target, disabled=True, group_name=""))
         self.candidates = remaining_candidates
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
-        if self._pool_store is not None:
-            # Disabled tombstone (not a row delete): it overlays the seed file on restart
-            # and startup drops disabled agents, so removal survives even for seed agents.
-            self._pool_store.save(replace(target, disabled=True, group_name=""))
         self._append_audit_event(
             "agent_removed",
             {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
@@ -8696,6 +9132,10 @@ class TaskOrchestrator:
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         break
+                    elif isinstance(exc, _LocalProviderAdmissionTimeout):
+                        decision = downgrade_to_failover(
+                            classify_tool_failure(exc, idempotent=True)
+                        )
                     else:
                         decision = classify_tool_failure(exc)
                     action = decision.action
@@ -9238,6 +9678,8 @@ class TaskOrchestrator:
             "max_output_tokens": agent.max_output_tokens,
             "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
+            "model_timeout_seconds": agent.model_timeout_seconds,
+            "model_timeout_revision": agent.model_timeout_revision,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
