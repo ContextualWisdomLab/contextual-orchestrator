@@ -17,6 +17,8 @@ from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
 TOKEN = "multimodal_group_token"
+
+
 @pytest.fixture
 def raise_test_http_error(request):
     """Register synthetic provider errors for close after their consumer runs."""
@@ -367,8 +369,8 @@ def test_responses_input_tokens_requires_auth_before_provider_egress(request) ->
     try:
         with pytest.raises(urllib.error.HTTPError) as raised:
             _post(server.server_address[1], "/v1/responses/input_tokens", {"input": "hello"}, token="wrong")
-        assert raised.value.code == 401
         request.addfinalizer(raised.value.close)
+        assert raised.value.code == 401
         assert calls == []
     finally:
         server.shutdown()
