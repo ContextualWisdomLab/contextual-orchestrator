@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -1742,3 +1743,511 @@ def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
             except ValueError as outer:
                 error = outer
     assert _is_ambiguous_passthrough_transport_failure(error) is False
+
+
+def _tool_call_choice(call_id: str) -> dict[str, Any]:
+    """Build a chat-completions-shaped provider response carrying one tool call."""
+    return {
+        "model": "fallback-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "inspect", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+
+def _plain_choice(model: str) -> dict[str, Any]:
+    """Build a chat-completions-shaped provider response with plain text content."""
+    return {
+        "model": model,
+        "choices": [
+            {"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}
+        ],
+    }
+
+
+def _tool_result_followup(
+    tools_body: dict[str, Any], call_id: str, *, model: str
+) -> dict[str, Any]:
+    """Build a follow-up chat/completions body carrying one tool result."""
+    return {
+        "model": model,
+        "messages": [
+            *tools_body["messages"],
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "inspect", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": "42"},
+        ],
+        "tools": tools_body["tools"],
+    }
+
+
+def test_tool_loop_follow_up_returns_to_the_emitting_agent() -> None:
+    """A tool-result follow-up is served by the agent that emitted the call, not the top-ranked one."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_1"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+
+    first = orchestrator.proxy_completion(body)
+
+    assert first["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert orchestrator._tool_loop_memory["call_1"] == "fallback_agent"
+
+    client.calls.clear()
+    client.outcomes["fallback_agent"] = _plain_choice("fallback-model")
+    follow_up = _tool_result_followup(body, "call_1", model=TaskOrchestrator.AUTO_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    # The top-ranked primary_agent is never attempted: the follow-up goes
+    # straight to the agent that emitted call_1.
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "emitting_agent"
+    assert result["orchestration"]["tool_loop_agent_id"] == "fallback_agent"
+
+
+def test_tool_loop_falls_back_when_emitting_agent_circuit_is_open() -> None:
+    """A circuit-open emitting agent is skipped; routing falls back and says so."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_2"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_2"] == "fallback_agent"
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure("fallback_agent")
+    assert orchestrator._circuit_open("fallback_agent") is True
+
+    client.calls.clear()
+    client.outcomes["primary_agent"] = _plain_choice("primary-model")
+    follow_up = _tool_result_followup(body, "call_2", model=TaskOrchestrator.AUTO_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "fallback"
+    assert result["orchestration"]["tool_loop_agent_id"] == "fallback_agent"
+
+
+def test_explicit_concrete_model_ignores_tool_loop_memory() -> None:
+    """An explicit concrete model is never re-ranked toward a remembered emitting agent."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_3"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_3"] == "fallback_agent"
+
+    client.calls.clear()
+    client.outcomes["primary_agent"] = _plain_choice("primary-model")
+    follow_up = _tool_result_followup(body, "call_3", model="primary-model")
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "orchestration" not in result
+
+
+def test_explicit_model_responses_passthrough_records_the_serving_agent() -> None:
+    """Explicit-model /v1/responses passthrough remembers a served function_call's
+    agent (recording only -- an explicit concrete model is still never reordered
+    or given tool-loop evidence)."""
+    client = SequencedProxyClient(
+        {"primary_agent": _responses_function_call("resp_call_5", "primary-model")}
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {"model": "primary-model", "input": "call the tool"},
+        endpoint="responses",
+    )
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert orchestrator._tool_loop_memory["resp_call_5"] == "primary_agent"
+    assert "orchestration" not in result
+
+
+def test_free_model_follow_up_never_routes_to_a_non_free_emitting_agent() -> None:
+    """orchestrator/free never returns to a paid emitting agent, even when remembered."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _tool_call_choice("call_4"),
+            "fallback_agent": _plain_choice("fallback-model"),
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free"))
+        if agent.id == "fallback_agent"
+        else agent
+        for agent in orchestrator.agents
+    ]
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_4"] == "primary_agent"
+
+    client.calls.clear()
+    follow_up = _tool_result_followup(body, "call_4", model=TaskOrchestrator.FREE_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "fallback"
+    assert result["orchestration"]["tool_loop_agent_id"] == "primary_agent"
+
+
+def _structured_workflow() -> dict[str, Any]:
+    """Return bounded pre-synthesis evidence for _orchestrated_provider_completion tests."""
+    return {
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {},
+        "plan_source": "template",
+    }
+
+
+def _retryable_upstream_error(agent: ModelAgent) -> ProviderUpstreamError:
+    """Build a retryable structured-synthesis transport failure for one agent."""
+    return ProviderUpstreamError(
+        agent_id=agent.id,
+        model=agent.model,
+        error_code="api_error",
+        message="synthetic upstream failure",
+        client_status=502,
+        provider_status=502,
+        retryable=True,
+        transport="structured_synthesis",
+    )
+
+
+def _responses_function_call(call_id: str, model: str) -> dict[str, Any]:
+    """Build a Responses-shaped provider response carrying one function_call."""
+    return {
+        "model": model,
+        "output_text": "calling tool",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": "inspect",
+                "arguments": "{}",
+            }
+        ],
+    }
+
+
+def _responses_plain_output(model: str, text: str) -> dict[str, Any]:
+    """Build a Responses-shaped provider response with no tool call."""
+    return {"model": model, "output_text": text, "output": []}
+
+
+def test_orchestrated_responses_function_call_records_the_serving_agent() -> None:
+    """A served Responses ``function_call`` remembers call_id -> serving agent."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, Any]):
+        if agent.id == first.id:
+            raise _retryable_upstream_error(first)
+        return _responses_function_call("resp_call_1", second.model)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_structured_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "input": "call the tool",
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            endpoint="responses",
+            single_agent=False,
+        )
+
+    assert orchestrator._tool_loop_memory["resp_call_1"] == "second_agent"
+
+
+def test_orchestrated_responses_follow_up_routes_to_the_emitting_agent() -> None:
+    """A Responses ``function_call_output`` follow-up returns to the emitting agent."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+    orchestrator._tool_loop_memory["resp_call_2"] = "second_agent"
+
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, Any]):
+        calls.append(agent.id)
+        return _responses_plain_output(agent.model, "done")
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_structured_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "resp_call_2",
+                        "name": "inspect",
+                        "arguments": "{}",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "resp_call_2",
+                        "output": "42",
+                    },
+                ],
+            },
+            endpoint="responses",
+            single_agent=False,
+        )
+
+    # The top-ranked first_agent is never attempted: the follow-up goes
+    # straight to the agent that emitted resp_call_2.
+    assert calls == ["second_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "emitting_agent"
+    assert result["orchestration"]["tool_loop_agent_id"] == "second_agent"
+
+
+def test_explicit_concrete_model_on_responses_path_ignores_tool_loop_memory() -> None:
+    """An explicit concrete model on the Responses surface is never re-ranked."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+    orchestrator._tool_loop_memory["resp_call_3"] = "second_agent"
+
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, Any]):
+        calls.append(agent.id)
+        return _responses_plain_output(agent.model, "done")
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_structured_workflow()),
+        patch.object(orchestrator.client, "proxy_send", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": "first-model",
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "resp_call_3",
+                        "output": "42",
+                    },
+                ],
+            },
+            endpoint="responses",
+            single_agent=False,
+        )
+
+    assert calls == ["first_agent"]
+    orchestration = result.get("orchestration") or {}
+    assert "tool_loop_route" not in orchestration
+    assert "tool_loop_agent_id" not in orchestration
+
+
+def test_response_format_chat_passthrough_follow_up_routes_to_the_emitting_agent() -> None:
+    """response_format-only chat passthrough (the other _orchestrated_provider_completion
+    caller) also returns a tool-loop follow-up to the emitting agent."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "classify and maybe call a tool"}],
+        "response_format": {"type": "json_object"},
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, Any]):
+        calls.append(agent.id)
+        if agent.id == first.id:
+            raise _retryable_upstream_error(first)
+        # Content satisfies the requested json_object contract *and* the
+        # message carries a tool call, so this is accepted without a repair
+        # round while still exercising tool-loop recording.
+        return {
+            "model": second.model,
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"status":"pending"}',
+                        "tool_calls": [
+                            {
+                                "id": "chat_call_1",
+                                "type": "function",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_structured_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        orchestrator.proxy_completion(body, single_agent=False)
+
+    assert calls == ["first_agent", "second_agent"]
+    assert orchestrator._tool_loop_memory["chat_call_1"] == "second_agent"
+
+    calls.clear()
+    follow_up = {
+        **_tool_result_followup(body, "chat_call_1", model=TaskOrchestrator.AUTO_MODEL),
+        "response_format": {"type": "json_object"},
+    }
+
+    def follow_up_send(agent: ModelAgent, _endpoint: str, _payload: dict[str, Any]):
+        calls.append(agent.id)
+        return {
+            "model": agent.model,
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": '{"status":"ok"}'},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_structured_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=follow_up_send),
+    ):
+        result = orchestrator.proxy_completion(follow_up, single_agent=False)
+
+    assert calls == ["second_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "emitting_agent"
+    assert result["orchestration"]["tool_loop_agent_id"] == "second_agent"
+
+
+def test_tool_loop_memory_evicts_the_oldest_entry_past_its_bound() -> None:
+    """The bounded tool_loop_memory map is an LRU, not a growing log."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_agent", "solo-model")],
+        client=SequencedProxyClient({}),
+        tool_loop_memory_max_entries=1,
+    )
+
+    orchestrator._record_tool_loop_agents(
+        [{"id": "call_old", "type": "function"}], "agent_x"
+    )
+    orchestrator._record_tool_loop_agents(
+        [{"id": "call_new", "type": "function"}], "agent_y"
+    )
+
+    assert dict(orchestrator._tool_loop_memory) == {"call_new": "agent_y"}
+
+
+def test_route_once_explicit_model_carries_no_tool_loop_evidence() -> None:
+    """``route_once`` with a pinned concrete model emits no tool-loop evidence.
+
+    The remembered emitting agent differs from the pinned one, so an unguarded
+    call would have produced ``tool_loop_route: "fallback"`` for a request the
+    gateway never re-ranked (CodeRabbit review on PR #1177).
+    """
+    agents = [
+        ModelAgent("primary_agent", "primary-model", base_url="mock://primary", priority=10),
+        ModelAgent("fallback_agent", "fallback-model", base_url="mock://fallback", priority=5),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    called: list[str] = []
+
+    def chat(agent: ModelAgent, _messages: list[dict], **_kwargs: object) -> str:
+        called.append(agent.id)
+        return f"served by {agent.id}"
+
+    orchestrator.client.chat = chat  # type: ignore[method-assign]
+    orchestrator._record_tool_loop_agents([{"id": "call_9"}], "fallback_agent")
+    messages = [
+        {"role": "user", "content": "inspect"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_9", "type": "function", "function": {"name": "inspect", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_9", "content": "ok"},
+    ]
+
+    pinned = orchestrator.route_once(messages, model_name="primary-model")
+    assert called == ["primary_agent"]
+    assert "tool_loop_route" not in pinned
+    assert "tool_loop_agent_id" not in pinned
+
+    called.clear()
+    virtual = orchestrator.route_once(messages, model_name=TaskOrchestrator.AUTO_MODEL)
+    assert called[0] == "fallback_agent"
+    assert virtual["tool_loop_route"] == "emitting_agent"
+    assert virtual["tool_loop_agent_id"] == "fallback_agent"
