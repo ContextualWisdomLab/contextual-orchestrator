@@ -10,9 +10,11 @@ http_client=...)`), but no document or dependency declaration said so. With a
 static-text fallback, and the pinned-client test crashed with `AttributeError`
 instead of skipping (full suite at `012beaac`: 1 failed / 3601 passed /
 1 skipped). Candidate `47db9ebf` raises an explicit `ImportError` naming the
-`>= 2.0` requirement and the installed version, skips the pinned-client test
-on a pre-2.0 SDK with that reason, and adds a 1.x stub regression test.
-Verified: mcp 1.23.3 → 10 passed, 1 skipped; isolated `mcp==2.2.0` → 11 passed.
+`>= 2.0` requirement and the installed version, runs the pinned-client test
+through `sys.modules` stubs of the 2.x surface (no SDK needed, import path
+covered in CI), and adds a 1.x stub regression test plus both states of the
+installed-version helper. Verified: mcp 1.23.3 → 12 passed; 2.x API
+introspected from an isolated `mcp==2.2.0` environment.
 Not established: a live Camoufox round-trip, and an operator-visible signal when
 the fallback is taken (the fallback still swallows `ImportError`/`OSError`).
 
