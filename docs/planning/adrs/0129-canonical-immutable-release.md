@@ -44,7 +44,7 @@ The release mechanism therefore owns only publication identity and publication e
 1. No automatic release on every merge. Publication is a deliberate `workflow_dispatch` operation on `main`.
 2. A fresh publication must operate on the protected `main` tip that was actually verified. If `main` advances before mutation, publication fails closed.
 3. An existing release tag is immutable. It is never moved, rewritten, or reused for another commit.
-4. A previously pushed tag may be resumed only when its target is an ancestor of current `main`. Every resume gate evaluates the tag's own target commit, not a newer dispatch SHA.
+4. A previously pushed **annotated** release tag may be resumed only when its target is an ancestor of current `main`. Every resume gate evaluates the tag's own target commit, not a newer dispatch SHA. A pre-existing lightweight `vX.Y.Z` tag is rejected rather than promoted, replaced, or resumed as a canonical release.
 5. Tag absence is established only by a confirmed exact-tag 404. Authentication, rate-limit, network, or server failures are not interpreted as absence.
 6. A canonical release is incomplete without its required exact-commit CycloneDX SBOM. SBOM lookup, download, handoff, upload, and post-upload verification are fail-closed.
 7. The release workflow does not weaken or substitute repository/org checks, self-approve, or synthesize GREEN from a predecessor head.
@@ -62,11 +62,11 @@ GitHub's reference API requires callers to distinguish `heads/<branch>` from `ta
 
 The returned Git object is handled explicitly:
 
-- `object.type == commit`: lightweight tag; that commit is the tag target.
+- `object.type == commit`: lightweight tag; fail closed because the canonical release contract requires an annotated tag. The workflow does not resume, replace, or retag it.
 - `object.type == tag`: annotated tag; peel the tag object once through `/git/tags/{sha}` and require its target type to be `commit`.
 - any other or ambiguous type: fail closed.
 
-This repository creates annotated tags for fresh publications. The workflow nevertheless reads lightweight tags defensively because a pre-existing ref can exist independently of this workflow and must be classified before any decision is made.
+This repository creates annotated tags for fresh publications and accepts only annotated tags for interrupted-publication resume. A pre-existing lightweight tag is still classified explicitly, but classification exists to reject the ambiguous/non-canonical state before any publication mutation.
 
 Immediately before GitHub Release creation, the publish job independently verifies that remote `refs/tags/vX.Y.Z` exists, that its Git object SHA matches the fetched/created local tag object, and that the local tag peels to `TARGET_SHA`. `gh release create` is never allowed to become the mechanism that implicitly creates an unverified tag from a default branch or other commit-ish.
 
@@ -74,9 +74,9 @@ Immediately before GitHub Release creation, the publish job independently verifi
 
 No existing exact tag means a fresh publication. `TARGET_SHA` is the dispatch SHA and must equal protected `main`'s current tip before verification and again immediately before mutation.
 
-An existing exact tag means resume only when its target is identical to or an ancestor of current `main`. `TARGET_SHA` becomes the tag target. Main is allowed to have advanced after the earlier tag push because the tag is already immutable; version validation, checks, tests, release-note rendering, and SBOM lookup all operate on `TARGET_SHA`.
+An existing exact **annotated** tag means resume only when its target is identical to or an ancestor of current `main`. `TARGET_SHA` becomes the tag target. Main is allowed to have advanced after the earlier tag push because the tag is already immutable; version validation, checks, tests, release-note rendering, and SBOM lookup all operate on `TARGET_SHA`.
 
-A tag that is not on current `main` history is a conflict, not a recovery case. The workflow fails and requires a new version rather than moving the tag.
+A lightweight tag, a tag that is not on current `main` history, or an unsupported/ambiguous tag object is a conflict, not a recovery case. The workflow fails and requires repair or a new version rather than mutating the existing tag.
 
 ### Verification gate
 
@@ -90,7 +90,7 @@ For `TARGET_SHA`, the read-only verify job:
 6. finds a successful exact-commit `security.yml` run and downloads its `cyclonedx-sbom` artifact;
 7. requires a non-empty `cyclonedx-sbom.json` and hands both notes and SBOM to the write-scoped publish job with `if-no-files-found: error`.
 
-The write-scoped publish job repeats the checks gate immediately before mutation, verifies the downloaded inputs, creates the annotated tag only for a fresh publication, verifies exact remote tag identity, creates or resumes the GitHub Release, and verifies the mandatory SBOM is attached. If Release creation succeeds but SBOM attachment fails, the workflow fails; a later dispatch resumes the same immutable tag/Release until the mandatory asset is present. That transient partial state is not reported as a successful canonical release.
+The write-scoped publish job repeats the checks gate immediately before mutation, verifies the downloaded inputs, creates the annotated tag only for a fresh publication, verifies exact remote tag identity, creates or resumes the GitHub Release, and verifies the mandatory SBOM is attached. If Release creation succeeds but SBOM attachment fails, the workflow fails; a later dispatch resumes the same immutable annotated tag/Release until the mandatory asset is present. That transient partial state is not reported as a successful canonical release.
 
 ### Least privilege
 
@@ -104,14 +104,19 @@ The current repair lineage on #1030 includes:
 - `788dfce254604f1d8cec1681205faf19d6125333`: production GREEN using exact `git/ref/tags/...` identity and fail-closed SBOM evidence/attachment.
 - `29ee4ce28d68c7dc825a998434dd944aff2352f5`: contract assertions aligned to the repaired workflow step names.
 - `d22586f8e8dd9be3762ed7bf02762c9f82fbf771`: release runbook brought code-current with the same invariants.
+- `7a37d595ff3d39d7eb05d6030790c0c05d312741`: test-first child repair proving a lightweight release tag must be rejected rather than accepted as a resumable canonical release; merged normally into #1030 as `b73b5fed144dedf4bd4e4fb2bf5dbf886414ee40`.
 
-Hosted GREEN is not claimed from these commits. On the previously observed `d22586f8...` head, CodeQL PR run `33688739873` ended in `startup_failure` and other required workflows were non-terminal. The central runner/control-plane owner path is tracked in `ContextualWisdomLab/.github#712`.
+The current `b73b5fed...` generation has terminal repository/org review checks, including Required Noema, without a failing check-run; that does not transfer protected-main or release authority. #1030 remains Draft because it is still diverged from protected `main` and its Python-runtime prerequisite #995 remains unmerged. The central runner/control-plane owner path is tracked separately; checks on predecessor heads are historical only.
 
 ## Alternatives considered
 
 ### Use the generic commits endpoint for `vX.Y.Z`
 
 Rejected. A commit-ish resolver is not an exact tag-namespace assertion. The release identity must distinguish `refs/tags/...` from `refs/heads/...` before publication.
+
+### Accept or convert a lightweight `vX.Y.Z` tag during resume
+
+Rejected. A lightweight tag has no annotated tag object and therefore does not satisfy this release mechanism's canonical identity contract. Replacing or retagging it would mutate an existing version identity. The workflow fails closed before publication mutation; the operator must repair the versioning state without moving an already-published canonical tag.
 
 ### Let `gh release create` create a missing tag implicitly
 
@@ -135,7 +140,8 @@ Positive effects:
 
 - consumers gain a future immutable owner-issued pin instead of source copying;
 - branch/tag namespace confusion is removed from release identity;
-- interrupted tag/Release publication can be resumed without retagging;
+- interrupted annotated-tag/Release publication can be resumed without retagging;
+- lightweight release tags are rejected before they can be treated as canonical resume identities;
 - missing exact-commit SBOM evidence blocks successful publication;
 - write credentials are kept away from repository-controlled test execution.
 
@@ -144,22 +150,22 @@ Costs and residual risks:
 - GitHub does not expose an atomic "create tag only if branch still equals SHA" operation, so a small fresh-publish check-then-act window remains after the final `main`-tip check. The mitigation is fail-closed prechecks plus exact remote tag verification; if a concurrent merge wins that window, publish a new patch/minor version and never move the earlier tag.
 - GitHub Release creation and asset upload are separate mutations. A Release can therefore exist temporarily without the SBOM after an interrupted run; workflow success is withheld until the asset is verified.
 - The current path establishes SBOM evidence but does not yet establish the broader provenance/attestation and reproducibility evidence required by the fleet's final release-ready definition. Those are follow-up acceptance items; this ADR remains Proposed until they are resolved or explicitly superseded by another owner decision.
-- #1030 currently depends on #995's supported-runtime correction and on recovery of hosted runner/control-plane execution. Neither is bypassed here.
+- #1030 currently depends on #995's supported-runtime correction and on reconciliation with the current protected-main lineage. Neither is bypassed here.
 
 ## Rollback and recovery
 
 Published release tags are immutable. Functional rollback is a forward fix in a new patch/minor release. Routine delete/retag is not a recovery mechanism.
 
-For an interrupted publication on a valid existing tag, re-dispatch the same version. The workflow re-verifies that tag target and completes any missing Release/SBOM mutation without moving the tag.
+For an interrupted publication on a valid existing annotated tag, re-dispatch the same version. The workflow re-verifies that tag target and completes any missing Release/SBOM mutation without moving the tag.
 
-A tag pointing outside current `main` history, an ambiguous tag object, an unconfirmed lookup failure, a failed exact-commit check, or missing SBOM evidence is a stop condition requiring repair before publication.
+A lightweight tag, a tag pointing outside current `main` history, an ambiguous tag object, an unconfirmed lookup failure, a failed exact-commit check, or missing SBOM evidence is a stop condition requiring repair before publication.
 
 ## Acceptance before status may become Accepted
 
 - #995 merged normally and #1030 non-force-restacked to the resulting protected-main descendant.
 - all final exact-head required repository and org-central checks terminal GREEN with no valid unresolved review findings.
 - release docs and product/technical gap baseline agree with the final implementation.
-- first canonical version published at an exact tag with verified mandatory SBOM.
+- first canonical version published at an exact annotated tag with verified mandatory SBOM.
 - release provenance/attestation and reproducibility requirements either implemented and tested or governed by a separate Accepted owner ADR with an explicit contract.
 - consumer bump validated against the released API/client/schema rather than this PR branch or an arbitrary source SHA.
 
