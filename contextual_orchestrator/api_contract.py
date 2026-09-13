@@ -470,11 +470,11 @@ OPENAPI_SPEC = {
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {"required": True, "content": {"application/json": {
                     "schema": {"type": "object", "properties": {
-                        "model": {"type": "string"}, "input": {}, "conversation": {"description": "Nonempty provider references are unsupported until principal-bound ownership is available."},
+                        "model": {"type": ["string", "null"]}, "input": {}, "conversation": {"description": "Nonempty provider references are unsupported until principal-bound ownership is available."},
                         "instructions": {}, "parallel_tool_calls": {"type": "boolean"},
                         "personality": {}, "previous_response_id": {"description": "Nonempty provider references are unsupported until principal-bound ownership is available."},
                         "reasoning": {}, "text": {}, "tool_choice": {},
-                        "tools": {"type": "array"}, "truncation": {"type": "string"},
+                        "tools": {"type": "array"}, "truncation": {"type": ["string", "null"], "enum": ["auto", "disabled", None]},
                         "zdr_only": {"type": "boolean"},
                     }}
                 }}},
