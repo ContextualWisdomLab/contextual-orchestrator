@@ -20,6 +20,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Local SSE provider test fixtures now close their listening sockets after shutdown, preventing `ResourceWarning` / `PytestUnraisableExceptionWarning` failures under warnings-as-errors execution.
+
 - Finite administrator model timeouts now use one end-to-end deadline across
   local admission, connection, retry, and streamed chunks; synchronous
   embeddings use the selected model's policy. Timeout values are capped at the
