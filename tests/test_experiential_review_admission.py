@@ -33,8 +33,8 @@ def _discovered_model(credential_name: str, model_id: str, *, token_price: float
     )
 
 
-def test_experiential_labs_free_review_admission_requires_explicit_evidence(monkeypatch):
-    """Admit only the explicitly free model and reject paid or unknown pricing."""
+def test_experiential_labs_free_review_admission_fails_closed_without_lane_evidence(monkeypatch):
+    """Reject promotional zero pricing until free-only enforcement is proven."""
     credential_name = "EXPERIENTAL_LABS_API_KEY"
     discovered = [
         _discovered_model(credential_name, "experiential/free", token_price=0.0),
@@ -55,10 +55,8 @@ def test_experiential_labs_free_review_admission_requires_explicit_evidence(monk
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    orchestrator = review_gateway.build_review_orchestrator({credential_name: "secret"})
-
-    assert [agent.model for agent in orchestrator.agents] == ["experiential/free"]
-    assert [agent.credential_key for agent in orchestrator.agents] == [credential_name]
+    with pytest.raises(review_gateway.NotConfigured, match="no eligible zero-cost"):
+        review_gateway.build_review_orchestrator({credential_name: "secret"})
 
 
 def test_experiential_zdr_admission_requires_model_specific_declared_evidence():
@@ -88,3 +86,22 @@ def test_experiential_zdr_admission_requires_model_specific_declared_evidence():
             if orchestrator._zdr_agent_allowed(agent)
         ] == ["experiential/zdr"]
         assert all(agent.credential_key == credential_name for agent in agents)
+
+
+def test_experiential_free_tags_cannot_reach_persisted_or_capability_routes():
+    """Reject stale promotional free tags at the serving-agent choke point."""
+    from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
+
+    agent = ModelAgent(
+        id="experiential_free",
+        model="gpt-5.6-luna",
+        provider_name="experiential_labs",
+        tags=("chat", "cost:free", "embedding"),
+    )
+    orchestrator = TaskOrchestrator([agent])
+
+    assert orchestrator._is_free_agent(agent) is False
+    assert orchestrator._is_general_free_agent(agent) is False
+    with pytest.raises(RuntimeError, match="no enabled zero-cost model"):
+        orchestrator._capability_agents("embedding", orchestrator.FREE_MODEL)
+    assert orchestrator._capability_agents("embedding", agent.model) == [agent]

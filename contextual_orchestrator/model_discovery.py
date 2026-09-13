@@ -2184,10 +2184,13 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
+    # Promotional zero prices do not prevent Experiential paid waterfall overflow.
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if model.provider_name != "experiential_labs"
+        and is_routable_discovered_model(model)
+        and not _requires_non_text_input(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates

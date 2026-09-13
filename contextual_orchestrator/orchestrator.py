@@ -7889,7 +7889,15 @@ class TaskOrchestrator:
         genuinely free transcription/video/image agent unreachable through
         its own capability's free route. See :meth:`_is_general_free_agent`
         for the stricter, blind-general-chat variant.
+
+        Experiential promotional/free metadata is deliberately excluded here
+        as well as in discovery-time selection. Its waterfall can spend
+        credits after a free limit, and the public contract exposes no
+        request-level free-only enforcement evidence. This protects durable
+        agents and capability-scoped routes that predate the discovery guard.
         """
+        if agent.provider_name == "experiential_labs":
+            return False
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
         return self.price_per_million.get(agent.model) == 0 and sum(
