@@ -155,11 +155,21 @@ evidence is preserved. This repairs the cross-provider finding from PR #971,
 but does not verify Experiential organization settings or free-route entitlement.
 Provider support alone does not establish that a consumer's hosted review now passes.
 
+Pinned producer source: [experientiallabs/experiential discovery.py](https://github.com/experientiallabs/experiential/blob/ff8d0eb8e499edaec574b96d08528504e9e0e548/exp/runtime/gateway/discovery.py) at `ff8d0eb8e499edaec574b96d08528504e9e0e548`.
+
 References (retrieved September 12–13, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
 [API reference](https://platform.experientiallabs.ai/docs/reference), and
 [Models](https://platform.experientiallabs.ai/docs/models).
 
-The review gateway accepts this credential as a free-pool source, but admits
-only models already satisfying its explicit zero-cost serving contract. Paid
-and unknown-price models remain excluded, as do credentials absent from the
+The review gateway recognizes this credential during bootstrap and ordinary
+routing may use its discovered models. Experiential rows remain excluded from
+the free pool until an enforceable provider-specific free-route contract exists;
+paid and unknown-price models remain excluded, as do credentials absent from the
 current bootstrap. This source authorization is not live pricing evidence.
+
+The public documentation describes an optional nano-USD pricing extension, but
+the pinned public producer route currently serializes a strict ID-only
+`/v1/models` envelope and its extension helper has no served-route caller in
+that source snapshot. The hosted deployment revision has not been verified
+against this public snapshot. Prices therefore remain unknown until a verified
+served contract is available; this repository does not claim hosted pricing support.
