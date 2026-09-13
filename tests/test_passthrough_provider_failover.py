@@ -1943,3 +1943,47 @@ def test_tool_loop_memory_evicts_the_oldest_entry_past_its_bound() -> None:
     )
 
     assert dict(orchestrator._tool_loop_memory) == {"call_new": "agent_y"}
+
+
+def test_route_once_explicit_model_carries_no_tool_loop_evidence() -> None:
+    """``route_once`` with a pinned concrete model emits no tool-loop evidence.
+
+    The remembered emitting agent differs from the pinned one, so an unguarded
+    call would have produced ``tool_loop_route: "fallback"`` for a request the
+    gateway never re-ranked (CodeRabbit review on PR #1177).
+    """
+    agents = [
+        ModelAgent("primary_agent", "primary-model", base_url="mock://primary", priority=10),
+        ModelAgent("fallback_agent", "fallback-model", base_url="mock://fallback", priority=5),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    called: list[str] = []
+
+    def chat(agent: ModelAgent, _messages: list[dict], **_kwargs: object) -> str:
+        called.append(agent.id)
+        return f"served by {agent.id}"
+
+    orchestrator.client.chat = chat  # type: ignore[method-assign]
+    orchestrator._record_tool_loop_agents([{"id": "call_9"}], "fallback_agent")
+    messages = [
+        {"role": "user", "content": "inspect"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_9", "type": "function", "function": {"name": "inspect", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_9", "content": "ok"},
+    ]
+
+    pinned = orchestrator.route_once(messages, model_name="primary-model")
+    assert called == ["primary_agent"]
+    assert "tool_loop_route" not in pinned
+    assert "tool_loop_agent_id" not in pinned
+
+    called.clear()
+    virtual = orchestrator.route_once(messages, model_name=TaskOrchestrator.AUTO_MODEL)
+    assert called[0] == "fallback_agent"
+    assert virtual["tool_loop_route"] == "emitting_agent"
+    assert virtual["tool_loop_agent_id"] == "fallback_agent"

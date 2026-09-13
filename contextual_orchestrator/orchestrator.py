@@ -7517,9 +7517,13 @@ class TaskOrchestrator:
         # A tool-result follow-up returns to its emitting agent when that
         # agent is still one of the already role/free/ZDR-filtered
         # ``ranked_pool`` candidates above (Fugu report arXiv:2606.21228 S3 /
-        # Fugu-Ultra Conductor). ``requested`` (an explicit concrete model)
-        # collapses ranked_pool to one entry, so this is a no-op there.
-        ranked_pool, tool_loop_evidence = self._apply_tool_loop_route(ranked_pool, messages)
+        # Fugu-Ultra Conductor). An explicit concrete model (``requested``)
+        # is never re-ranked and must not carry tool-loop evidence either:
+        # the caller pinned the agent, so neither ``emitting_agent`` nor
+        # ``fallback`` describes a gateway decision there.
+        tool_loop_evidence: dict[str, str] | None = None
+        if requested is None:
+            ranked_pool, tool_loop_evidence = self._apply_tool_loop_route(ranked_pool, messages)
 
         max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         trace_rows: list[dict[str, Any]] = []
