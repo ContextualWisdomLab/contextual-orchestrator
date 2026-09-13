@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -121,6 +122,7 @@ def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_model_in_agent_pool() -> None:
@@ -138,6 +140,7 @@ def test_http_embeddings_accepts_model_in_agent_pool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
@@ -149,6 +152,7 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_uses_selected_model_timeout_policy() -> None:
@@ -211,6 +215,7 @@ def test_http_embeddings_null_model_is_rejected() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> None:
@@ -222,6 +227,7 @@ def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_explicit_model_without_embedding_capability() -> None:
@@ -245,6 +251,7 @@ def test_http_embeddings_rejects_explicit_model_without_embedding_capability() -
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_explicit_excluded_embedding_model() -> None:
@@ -275,6 +282,7 @@ def test_http_embeddings_rejects_explicit_excluded_embedding_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_rejects_model_outside_agent_pool() -> None:
@@ -292,6 +300,7 @@ def test_http_batch_embeddings_rejects_model_outside_agent_pool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_model_in_agent_pool() -> None:
@@ -308,6 +317,7 @@ def test_http_batch_embeddings_accepts_model_in_agent_pool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_auto_selects_enabled_embedding_agent() -> None:
@@ -319,6 +329,7 @@ def test_http_batch_embeddings_auto_selects_enabled_embedding_agent() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

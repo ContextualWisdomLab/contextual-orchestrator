@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_completions_accepts_token_id_array_prompt() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_batch_of_token_arrays_prompt() -> None:
@@ -80,6 +82,7 @@ def test_http_completions_accepts_batch_of_token_arrays_prompt() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_bool_and_negative_token_prompts() -> None:
@@ -95,6 +98,7 @@ def test_http_completions_still_rejects_bool_and_negative_token_prompts() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_token_prompt_still_accepts_string_array() -> None:
@@ -108,3 +112,4 @@ def test_http_completions_token_prompt_still_accepts_string_array() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

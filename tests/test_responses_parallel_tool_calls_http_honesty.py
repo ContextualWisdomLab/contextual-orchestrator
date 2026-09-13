@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -56,6 +57,7 @@ def test_http_responses_accepts_omitted_parallel_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_false_parallel_tool_calls_without_tools() -> None:
@@ -73,6 +75,7 @@ def test_http_responses_accepts_false_parallel_tool_calls_without_tools() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_true_parallel_tool_calls_with_tools() -> None:
@@ -99,6 +102,7 @@ def test_http_responses_accepts_true_parallel_tool_calls_with_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_true_parallel_tool_calls_without_tools() -> None:
@@ -117,6 +121,7 @@ def test_http_responses_rejects_true_parallel_tool_calls_without_tools() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_boolean_parallel_tool_calls() -> None:
@@ -135,6 +140,7 @@ def test_http_responses_rejects_non_boolean_parallel_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_integer_parallel_tool_calls() -> None:
@@ -153,6 +159,7 @@ def test_http_responses_rejects_integer_parallel_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

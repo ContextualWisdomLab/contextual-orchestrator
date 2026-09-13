@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_responses_accepts_empty_and_valid_logit_bias() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_digit_logit_bias_key() -> None:
@@ -86,6 +88,7 @@ def test_http_responses_rejects_non_digit_logit_bias_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_out_of_range_logit_bias_value() -> None:
@@ -104,6 +107,7 @@ def test_http_responses_rejects_out_of_range_logit_bias_value() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_logprobs_false() -> None:
@@ -117,6 +121,7 @@ def test_http_responses_accepts_logprobs_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_logprobs_true_with_top_logprobs() -> None:
@@ -135,6 +140,7 @@ def test_http_responses_accepts_logprobs_true_with_top_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_top_logprobs_without_logprobs() -> None:
@@ -149,6 +155,7 @@ def test_http_responses_rejects_top_logprobs_without_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_boolean_logprobs() -> None:
@@ -163,6 +170,7 @@ def test_http_responses_rejects_non_boolean_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

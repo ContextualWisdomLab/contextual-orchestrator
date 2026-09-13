@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_embeddings_accepts_casefold_float_encoding_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_base64_encoding_format() -> None:
@@ -84,6 +86,7 @@ def test_http_embeddings_accepts_base64_encoding_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_stream_false_string_forms() -> None:
@@ -99,6 +102,7 @@ def test_http_responses_accepts_stream_false_string_forms() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_stream_true_string() -> None:
@@ -115,6 +119,7 @@ def test_http_responses_rejects_stream_true_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_logprobs_false_zero_omit_forms() -> None:
@@ -130,6 +135,7 @@ def test_http_completions_accepts_logprobs_false_zero_omit_forms() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_logprobs_true_and_nonzero() -> None:
@@ -146,3 +152,4 @@ def test_http_completions_rejects_logprobs_true_and_nonzero() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

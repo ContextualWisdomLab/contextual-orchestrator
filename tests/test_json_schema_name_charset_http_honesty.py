@@ -62,7 +62,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -151,6 +152,7 @@ def test_http_chat_rejects_punctuated_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_overlong_json_schema_name() -> None:
@@ -175,6 +177,7 @@ def test_http_responses_rejects_overlong_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_validate_chat_response_format_rejects_unicode_json_schema_name() -> None:
@@ -221,6 +224,7 @@ def test_http_chat_rejects_unicode_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unicode_json_schema_name() -> None:
@@ -245,6 +249,7 @@ def test_http_responses_rejects_unicode_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_keeps_legal_json_schema_name() -> None:
@@ -270,6 +275,7 @@ def test_http_responses_keeps_legal_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_keeps_legal_json_schema_name() -> None:
@@ -313,6 +319,7 @@ def test_http_chat_keeps_legal_json_schema_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
