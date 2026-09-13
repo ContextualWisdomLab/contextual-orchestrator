@@ -1,5 +1,38 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Output-budget clamp evidence (#1169)
+
+`ModelClient._clamp_agent_token_budget` silently rewrote an explicit caller
+budget (`max_tokens`/`max_completion_tokens`/`max_output_tokens`) down to the
+served agent's published `max_output_tokens` ceiling with no error, header,
+trace field, or usage marker telling the caller its budget was not the budget
+applied — filed as #1169 during the local reproduction review of #1154
+(removal of the global generation-token ceiling per #1151). ADR
+[0130](planning/adrs/0130-output-budget-clamp-evidence.md) records the
+decision to surface the clamp in-band rather than via a response header
+(unavailable on the streaming path, since `_begin_sse()` flushes headers
+before the provider call and its clamp decision exist) or a hard `400`
+rejection (would break `noema`/`opencode`, which send a large `max_tokens` as
+a ceiling, not a demand). `ModelClient` now records
+`requested_output_tokens`/`effective_output_tokens`/`output_budget_clamped`
+per thread (`_clamp_agent_token_budget_with_evidence` /
+`take_output_budget()`, mirroring the existing `take_usage()` pattern), and
+`TaskOrchestrator._invoke`'s non-race branch exposes it the same way it
+already exposes assistant-message extras (`_last_output_budget`, mirroring
+`_last_assistant_message`). The `route`/`conduct` trace-row builders attach
+the three fields to the relevant provider-call trace row, and
+`chat_completion_response` / `chat_completion_chunks` copy them onto the
+existing `orchestration` extension object already used for `cost` and
+`verification`. Verified by
+`tests/test_output_budget_model_max.py` (clamped, unclamped, and
+no-explicit-budget cases, at both the `ModelClient` and `TaskOrchestrator`
+layers) plus the full suite (3587 passed, 1 skipped, one pre-existing
+unrelated `mcp.Client` environment failure deselected) and
+`interrogate` at 100% on `contextual_orchestrator/`. Not yet covered: the
+multi-endpoint `immediate_race` branch and the structured/`free_only`
+synthesis and streaming (`_stream_send`/`proxy_send`) clamp call sites still
+clamp silently — tracked as follow-up, not claimed complete by this entry.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
