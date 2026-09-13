@@ -238,7 +238,7 @@ def test_responses_input_tokens_accepts_optional_official_shapes_and_rejects_bad
     try:
         status, _raw, _ = _post(
             server.server_address[1], "/v1/responses/input_tokens",
-            {"input": None, "conversation": {"id": "conv_1"}, "tools": [
+            {"input": None, "tools": [
                 {"type": "web_search_preview"},
                 {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
             ]},
@@ -252,6 +252,24 @@ def test_responses_input_tokens_accepts_optional_official_shapes_and_rejects_bad
             server.server_address[1], "/v1/responses/input_tokens", {"truncation": []}
         )
         assert status == 400 and error["error"]["code"] == "invalid_truncation"
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("reference", [("conversation", {"id": "foreign_conv"}), ("conversation", "foreign_conv"), ("previous_response_id", "resp_foreign")])
+def test_responses_input_tokens_rejects_remote_references_before_provider_egress(reference: tuple[str, object]) -> None:
+    """Reject unowned provider references without invoking shared credentials."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        reference_field, reference_value = reference
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {reference_field: reference_value})
+        assert status == 400 and error["error"]["code"] == f"invalid_{reference_field}"
+        assert calls == []
     finally:
         server.shutdown()
 

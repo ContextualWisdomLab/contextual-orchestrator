@@ -2395,18 +2395,20 @@ def _validate_input_token_count_request(body: dict[str, Any]) -> None:
         raise RequestError(400, "invalid_input", "input must be a string, array, or null")
     if "previous_response_id" in body:
         value = body["previous_response_id"]
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise RequestError(400, "invalid_previous_response_id", "previous_response_id must be a non-empty string or null")
+        if value is not None and not isinstance(value, str):
+            raise RequestError(400, "invalid_previous_response_id", "previous_response_id must be a string or null")
+        if isinstance(value, str) and value.strip():
+            raise RequestError(400, "invalid_previous_response_id", "previous_response_id references are not supported on /v1/responses/input_tokens")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            body.pop("previous_response_id", None)
     conversation_reference = body.get("conversation")
     if conversation_reference is not None and not isinstance(conversation_reference, (str, dict)):
         raise RequestError(400, "invalid_conversation", "conversation must be a string, object, or null")
-    if isinstance(conversation_reference, str) and not conversation_reference.strip():
-        raise RequestError(400, "invalid_conversation", "conversation must be non-empty when provided")
-    conversation = body.get("conversation")
-    if isinstance(conversation, dict) and (
-        set(conversation) != {"id"} or not isinstance(conversation.get("id"), str) or not conversation["id"].strip()
-    ):
-        raise RequestError(400, "invalid_conversation", "conversation must contain a non-empty id")
+    if isinstance(conversation_reference, str) and conversation_reference.strip():
+        raise RequestError(400, "invalid_conversation", "conversation references are not supported on /v1/responses/input_tokens")
+    if isinstance(conversation_reference, dict):
+        raise RequestError(400, "invalid_conversation", "conversation references are not supported on /v1/responses/input_tokens")
+    body.pop("conversation", None)
     personality = body.get("personality")
     # OpenAI documents personality as a string with a maximum length of 64.
     if personality is not None and (not isinstance(personality, str) or len(personality) > 64):

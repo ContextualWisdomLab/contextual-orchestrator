@@ -12,6 +12,10 @@ gateway and are not sent upstream. The response must contain
 `input_tokens`; booleans and malformed provider objects produce HTTP 502 before
 success accounting is recorded.
 
+Nonempty `conversation` and `previous_response_id` references are rejected
+with named 400 errors until a principal-bound reference registry exists. Null
+or empty optional references are treated as omitted.
+
 This slice does not generate a local count or automatically preflight
 generation requests. Shared
 conversation budgeting and automatic count generation remain future work.
