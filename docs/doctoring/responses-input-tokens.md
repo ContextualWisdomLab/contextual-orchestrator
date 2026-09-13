@@ -16,6 +16,11 @@ Nonempty `conversation` and `previous_response_id` references are rejected
 with named 400 errors until a principal-bound reference registry exists. Null
 or empty optional references are treated as omitted.
 
+Nested item references, provider file IDs, and hosted tool resource IDs are
+also rejected at their documented Responses protocol positions until they can
+be resolved through the authenticated principal's resource registry. Ordinary
+schema `id` fields remain allowed.
+
 This slice does not generate a local count or automatically preflight
 generation requests. Shared
 conversation budgeting and automatic count generation remain future work.

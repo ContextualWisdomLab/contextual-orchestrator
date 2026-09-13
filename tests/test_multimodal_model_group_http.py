@@ -274,6 +274,65 @@ def test_responses_input_tokens_rejects_remote_references_before_provider_egress
         server.shutdown()
 
 
+@pytest.mark.parametrize("payload", [
+    {"input": [{"type": "item_reference", "id": "foreign_item"}]},
+    {"input": [{"type": "input_file", "file_id": "foreign_file"}]},
+    {"input": [{"type": "input_image", "file_id": "foreign_image"}]},
+    {"tools": [{"type": "file_search", "vector_store_ids": ["foreign_store"]}]},
+    {"tools": [{"type": "code_interpreter", "container": {"file_ids": ["foreign_file"]}}]},
+    {"tools": [{"type": "code_interpreter", "container": "foreign_container"}]},
+])
+def test_responses_input_tokens_rejects_nested_unbound_resources_before_provider_egress(payload: dict) -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", payload)
+        assert status == 400
+        assert error["error"]["code"] in {"invalid_input_reference", "invalid_input_file_reference", "invalid_tool_resource_reference"}
+        assert calls == []
+    finally:
+        server.shutdown()
+
+
+def test_responses_input_tokens_preserves_schema_ids_and_omitted_item_reference_type() -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = lambda _agent, _endpoint, payload: forwarded.append(payload) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _raw, _ = _post(server.server_address[1], "/v1/responses/input_tokens", {
+            "input": [{"id": "item_1", "content": [{"type": "input_text", "text": "schema id"}]}],
+            "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}],
+        })
+        assert status == 200
+        assert forwarded[0]["input"][0]["id"] == "item_1"
+        assert forwarded[0]["tools"][0]["parameters"]["properties"]["id"]["type"] == "string"
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("item", [{"id": "foreign_item"}, {"id": "foreign_item", "type": None}, {"id": "foreign_item", "type": "item_reference"}])
+def test_responses_input_tokens_rejects_top_level_item_references(item: dict) -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {"input": [item]})
+        assert status == 400 and error["error"]["code"] == "invalid_input_reference"
+        assert calls == []
+    finally:
+        server.shutdown()
+
+
 def test_responses_input_tokens_requires_auth_before_provider_egress() -> None:
     """Reject unauthenticated count requests before invoking the provider."""
     agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))

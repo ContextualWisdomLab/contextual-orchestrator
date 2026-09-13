@@ -2393,6 +2393,45 @@ def _validate_input_token_count_request(body: dict[str, Any]) -> None:
     """Apply the Responses field validators without requiring an input field."""
     if "input" in body and body["input"] is not None and not isinstance(body["input"], (str, list)):
         raise RequestError(400, "invalid_input", "input must be a string, array, or null")
+    def validate_input_item(item: Any) -> None:
+        """Check only Responses input-item protocol positions for remote IDs."""
+        if not isinstance(item, dict):
+            return
+        item_type = item.get("type")
+        if item_type == "item_reference":
+            raise RequestError(400, "invalid_input_reference", "item_reference is not supported on /v1/responses/input_tokens")
+        if item_type in ("input_image", "input_file") and item.get("file_id"):
+            raise RequestError(400, "invalid_input_file_reference", "file_id references require principal-bound file resolution")
+        content = item.get("content")
+        if isinstance(content, list):
+            for content_item in content:
+                validate_input_item(content_item)
+
+    input_items = body.get("input")
+    if isinstance(input_items, list):
+        for input_item in input_items:
+            if (
+                isinstance(input_item, dict)
+                and isinstance(input_item.get("id"), str)
+                and set(input_item) <= {"id", "type"}
+                and input_item.get("type") in (None, "item_reference")
+            ):
+                raise RequestError(400, "invalid_input_reference", "top-level item references require principal-bound resolution")
+            validate_input_item(input_item)
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_type = tool.get("type")
+            if tool_type == "file_search" and tool.get("vector_store_ids"):
+                raise RequestError(400, "invalid_tool_resource_reference", "vector_store_ids require principal-bound resource resolution")
+            if tool_type == "code_interpreter":
+                container = tool.get("container")
+                if isinstance(container, str) and container.strip():
+                    raise RequestError(400, "invalid_tool_resource_reference", "container identifiers require principal-bound resource resolution")
+                if isinstance(container, dict) and container.get("file_ids"):
+                    raise RequestError(400, "invalid_tool_resource_reference", "container.file_ids require principal-bound resource resolution")
     if "previous_response_id" in body:
         value = body["previous_response_id"]
         if value is not None and not isinstance(value, str):
