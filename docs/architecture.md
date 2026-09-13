@@ -77,6 +77,25 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+- Context-window candidate filtering: `proxy_completion`'s passthrough loop,
+  `route_once`, and `conduct`'s worker step all funnel virtual-selector
+  candidate ranking through `TaskOrchestrator._failover_candidates`, which
+  optionally skips a candidate whose `ModelAgent.context_window` is a known
+  positive int provably smaller than a conservative lower bound on the
+  request's prompt tokens (`token_counting.prompt_token_lower_bound`: the
+  exact native tokenizer count when one is mapped for the candidate's model,
+  otherwise a character-count heuristic documented never to overestimate). A
+  ``None`` window is never treated as evidence of a too-small window, and an
+  explicitly requested concrete model is never filtered -- only virtual
+  selection opts in the bound. Filtering every remaining candidate raises the
+  same `ProviderRequestTooLargeError` (413) the all-providers-413 path uses,
+  naming the smallest known window and the lower-bound count, rather than
+  leaving the caller to burn an attempt and rely on the provider's own
+  request-too-large rejection (the complementary lane fixed by PR #1174,
+  `fix/context-length-exceeded-failover-20260913`). A response whose filter
+  excluded at least one candidate carries the evidence in its `orchestration`
+  extension: `prompt_token_lower_bound`, `prompt_token_bound_source`
+  (`"exact"` or `"estimate_lower_bound"`), and `context_window_excluded`.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
