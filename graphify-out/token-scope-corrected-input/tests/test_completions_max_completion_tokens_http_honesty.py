@@ -1,4 +1,4 @@
-"""Chat Completions max_completion_tokens honesty over HTTP (budget precedence)."""
+"""Completions max_completion_tokens honesty over HTTP (chat-era alias)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
-_TEST_AUTH_TOKEN = "chat_max_completion_tokens_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "completions_max_completion_tokens_http_honesty_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -23,9 +23,9 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
+def _post(port: int, payload: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
+        f"http://127.0.0.1:{port}/v1/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -35,7 +35,7 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
@@ -48,15 +48,14 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_max_completion_tokens() -> None:
+def test_http_completions_accepts_max_completion_tokens() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "budget 64"}],
+                "prompt": "hello mct",
                 "max_completion_tokens": 64,
             },
         )
@@ -67,37 +66,34 @@ def test_http_chat_accepts_max_completion_tokens() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_max_completion_tokens_zero() -> None:
+def test_http_completions_prefers_max_completion_tokens_over_max_tokens() -> None:
     server, thread, port = _server()
     try:
+        # Both present: max_completion_tokens wins (chat-era precedence).
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "zero budget"}],
-                "max_completion_tokens": 0,
+                "prompt": "hello both",
+                "max_tokens": 8,
+                "max_completion_tokens": 128,
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_max_completion_tokens" in blob
-        assert "positive" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_max_completion_tokens_bool() -> None:
+def test_http_completions_rejects_zero_max_completion_tokens() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "bool budget"}],
-                "max_completion_tokens": True,
+                "prompt": "hello zero",
+                "max_completion_tokens": 0,
             },
         )
         assert status == 400, body
@@ -107,56 +103,33 @@ def test_http_chat_rejects_max_completion_tokens_bool() -> None:
         thread.join(timeout=5)
 
 
-
-def test_http_chat_prefers_max_completion_tokens_when_both_set() -> None:
-    """When both budgets are present, request must still succeed (max_completion wins)."""
+def test_http_completions_rejects_non_integer_max_completion_tokens() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "both budgets"}],
-                "max_tokens": 8,
-                "max_completion_tokens": 32,
-            },
-        )
-        assert status == 200, body
-        assert "choices" in body
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_chat_rejects_invalid_max_tokens_when_only_legacy() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "legacy zero"}],
-                "max_tokens": 0,
+                "prompt": "hello float",
+                "max_completion_tokens": 1.5,
             },
         )
         assert status == 400, body
-        assert "invalid_max_tokens" in json.dumps(body)
+        assert "invalid_max_completion_tokens" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_max_completion_tokens_omitted() -> None:
+def test_http_completions_still_accepts_legacy_max_tokens() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "no budget field"}],
+                "prompt": "hello legacy",
+                "max_tokens": 32,
             },
         )
         assert status == 200, body
@@ -166,10 +139,9 @@ def test_http_chat_accepts_max_completion_tokens_omitted() -> None:
 
 
 if __name__ == "__main__":
-    test_http_chat_accepts_max_completion_tokens()
-    test_http_chat_rejects_max_completion_tokens_zero()
-    test_http_chat_rejects_max_completion_tokens_bool()
-    test_http_chat_prefers_max_completion_tokens_when_both_set()
-    test_http_chat_rejects_invalid_max_tokens_when_only_legacy()
-    test_http_chat_accepts_max_completion_tokens_omitted()
+    test_http_completions_accepts_max_completion_tokens()
+    test_http_completions_prefers_max_completion_tokens_over_max_tokens()
+    test_http_completions_rejects_zero_max_completion_tokens()
+    test_http_completions_rejects_non_integer_max_completion_tokens()
+    test_http_completions_still_accepts_legacy_max_tokens()
     print("ok")

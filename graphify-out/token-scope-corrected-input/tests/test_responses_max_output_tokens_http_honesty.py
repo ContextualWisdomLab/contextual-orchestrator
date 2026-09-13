@@ -1,4 +1,4 @@
-"""Chat Completions max_completion_tokens honesty over HTTP (budget precedence)."""
+"""Responses max_output_tokens (OpenAI-native budget) honesty over HTTP."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
-_TEST_AUTH_TOKEN = "chat_max_completion_tokens_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "responses_max_output_tokens_http_honesty_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -23,9 +23,9 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
+def _post(port: int, payload: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
+        f"http://127.0.0.1:{port}/v1/responses",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -35,7 +35,7 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
@@ -48,116 +48,33 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_max_completion_tokens() -> None:
+def test_http_responses_accepts_valid_max_output_tokens() -> None:
+    """Official Responses clients send max_output_tokens — must not be unknown_fields."""
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "budget 64"}],
-                "max_completion_tokens": 64,
+                "input": "hello max_output_tokens",
+                "max_output_tokens": 256,
             },
         )
         assert status == 200, body
-        assert "choices" in body
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_chat_rejects_max_completion_tokens_zero() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "zero budget"}],
-                "max_completion_tokens": 0,
-            },
-        )
-        assert status == 400, body
         blob = json.dumps(body)
-        assert "invalid_max_completion_tokens" in blob
-        assert "positive" in blob
+        assert "unknown_fields" not in blob
+        assert "invalid_max_output_tokens" not in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_max_completion_tokens_bool() -> None:
+def test_http_responses_accepts_omit_max_output_tokens() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "bool budget"}],
-                "max_completion_tokens": True,
-            },
-        )
-        assert status == 400, body
-        assert "invalid_max_completion_tokens" in json.dumps(body)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-
-def test_http_chat_prefers_max_completion_tokens_when_both_set() -> None:
-    """When both budgets are present, request must still succeed (max_completion wins)."""
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "both budgets"}],
-                "max_tokens": 8,
-                "max_completion_tokens": 32,
-            },
-        )
-        assert status == 200, body
-        assert "choices" in body
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_chat_rejects_invalid_max_tokens_when_only_legacy() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "legacy zero"}],
-                "max_tokens": 0,
-            },
-        )
-        assert status == 400, body
-        assert "invalid_max_tokens" in json.dumps(body)
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_chat_accepts_max_completion_tokens_omitted() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "no budget field"}],
-            },
+            {"model": "mock-planner", "input": "hello omit budget"},
         )
         assert status == 200, body
     finally:
@@ -165,11 +82,73 @@ def test_http_chat_accepts_max_completion_tokens_omitted() -> None:
         thread.join(timeout=5)
 
 
-if __name__ == "__main__":
-    test_http_chat_accepts_max_completion_tokens()
-    test_http_chat_rejects_max_completion_tokens_zero()
-    test_http_chat_rejects_max_completion_tokens_bool()
-    test_http_chat_prefers_max_completion_tokens_when_both_set()
-    test_http_chat_rejects_invalid_max_tokens_when_only_legacy()
-    test_http_chat_accepts_max_completion_tokens_omitted()
-    print("ok")
+def test_http_responses_rejects_zero_max_output_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "zero budget",
+                "max_output_tokens": 0,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_output_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_non_integer_max_output_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "float budget",
+                "max_output_tokens": 1.5,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_output_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_boolean_max_output_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "bool budget",
+                "max_output_tokens": True,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_output_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_oversize_max_output_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "huge budget",
+                "max_output_tokens": 2_000_000,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_output_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
