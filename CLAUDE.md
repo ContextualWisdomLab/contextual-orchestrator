@@ -14,6 +14,7 @@ deadline, cancellation/drain provenance, and honest duplicate-cost evidence.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
 - **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. As of 2026-08-18, OpenCode/Noema/Strix (the org's CI review pipeline in `ContextualWisdomLab/.github`) are being migrated onto this gateway as their shared backend — see AGENTS.md's "This repo: the org LLM gateway" section for the full policy and scope.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
+- **Loop-goal execution control**: for all repo PRs and issues, follow AGENTS.md's "Loop-goal execution control" section (structure → Gap → baseline → KPI → experiment order, ledger + Todo discipline, scoped waits, separate branch/worktree for independent work).
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
 
