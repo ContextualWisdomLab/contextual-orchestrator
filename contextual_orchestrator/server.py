@@ -2397,12 +2397,11 @@ def _validate_input_token_count_request(body: dict[str, Any]) -> None:
         value = body["previous_response_id"]
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise RequestError(400, "invalid_previous_response_id", "previous_response_id must be a non-empty string or null")
-    for field in ("conversation",):
-        value = body.get(field)
-        if value is not None and not isinstance(value, (str, dict)):
-            raise RequestError(400, f"invalid_{field}", f"{field} must be a string, object, or null")
-        if isinstance(value, str) and not value.strip():
-            raise RequestError(400, f"invalid_{field}", f"{field} must be non-empty when provided")
+    conversation_reference = body.get("conversation")
+    if conversation_reference is not None and not isinstance(conversation_reference, (str, dict)):
+        raise RequestError(400, "invalid_conversation", "conversation must be a string, object, or null")
+    if isinstance(conversation_reference, str) and not conversation_reference.strip():
+        raise RequestError(400, "invalid_conversation", "conversation must be non-empty when provided")
     conversation = body.get("conversation")
     if isinstance(conversation, dict) and (
         set(conversation) != {"id"} or not isinstance(conversation.get("id"), str) or not conversation["id"].strip()
