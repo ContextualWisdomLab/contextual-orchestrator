@@ -1,5 +1,12 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 context-length-exceeded failover (#1174)
+
+A provider HTTP 400 context-window overflow is classified as a request-size
+rejection (`_is_context_length_exceeded_error` inside
+`_is_request_too_large_error`), so virtual-selector failover advances without
+debiting provider/member health. Complementary pre-flight exclusion is #1178/#1200.
+
 ## 2026-09-14 trace-scope token (issue #117 acceptance item 9)
 
 Issue #117's maintainer verification map, acceptance item 9, flagged that
