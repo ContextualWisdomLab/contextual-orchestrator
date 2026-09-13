@@ -23,15 +23,35 @@ already exposes assistant-message extras (`_last_output_budget`, mirroring
 the three fields to the relevant provider-call trace row, and
 `chat_completion_response` / `chat_completion_chunks` copy them onto the
 existing `orchestration` extension object already used for `cost` and
-`verification`. Verified by
-`tests/test_output_budget_model_max.py` (clamped, unclamped, and
-no-explicit-budget cases, at both the `ModelClient` and `TaskOrchestrator`
-layers) plus the full suite (3587 passed, 1 skipped, one pre-existing
-unrelated `mcp.Client` environment failure deselected) and
-`interrogate` at 100% on `contextual_orchestrator/`. Not yet covered: the
-multi-endpoint `immediate_race` branch and the structured/`free_only`
-synthesis and streaming (`_stream_send`/`proxy_send`) clamp call sites still
-clamp silently — tracked as follow-up, not claimed complete by this entry.
+`verification`. This now extends to the remaining call paths flagged as follow-up in the
+initial cut: the multi-endpoint `immediate_race` branch (`TaskOrchestrator
+._invoke`'s race `call()` closure also takes `take_output_budget()` and
+records only the winning endpoint's evidence — a losing attempt's clamp
+decision is discarded along with the rest of that attempt), structured/
+`free_only` synthesis (`ModelClient._send_raw` now uses
+`_clamp_agent_token_budget_with_evidence`, and `_orchestrated_provider
+_completion`'s `send_synthesis`/final-response assembly carries the evidence
+on the same ad hoc `orchestration` object it already attaches next to
+`route`), and true-streaming passthrough (`ModelClient._stream_send` now
+uses the evidence-recording clamp too, and `TaskOrchestrator.stream_route`
+gained an `output_budget_callback` parameter — mirroring its existing
+`usage_callback` — that `server.py`'s `_stream_route_completion` uses to
+carry the evidence on the final SSE chunk's `orchestration` object, since
+`_begin_sse()` has already flushed headers by the time the clamp decision
+exists). Verified by `tests/test_output_budget_model_max.py` (clamped,
+unclamped, and no-explicit-budget cases at the `ModelClient` and
+`TaskOrchestrator` layers, plus one clamped/unclamped pair each for the race
+winner, structured/`free_only` synthesis, and streaming-passthrough final
+chunk) plus `tests/test_orchestrator_client_boundaries.py`,
+`tests/test_true_streaming.py`, `tests/test_api_contract.py`, and
+`tests/test_passthrough_provider_failover.py` (168 passed, 1 pre-existing
+unrelated `openai` SDK version-pin failure), the full suite (3697 passed, 1
+skipped, the same SDK version-pin failures plus one pre-existing unrelated
+`mcp.Client`/camoufox environment failure), and `interrogate` at 100% on
+`contextual_orchestrator/`. Not yet covered: the async-batch-submission call
+site (`ModelClient._batch_run`'s `batch_body`/`_clamp_agent_token_budget`
+call) has no synchronous trace or response to attach evidence to and remains
+a separate follow-up.
 
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 

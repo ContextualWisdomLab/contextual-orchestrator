@@ -8,6 +8,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import inspect
 import ipaddress
 import json
 import logging
@@ -8756,12 +8757,22 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_output_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
 
-            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
+                nonlocal stream_output_budget
+                stream_output_budget = output_budget
+
+            def frame(
+                delta: dict[str, Any],
+                finish: str | None = None,
+                *,
+                orchestration: dict[str, Any] | None = None,
+            ) -> str:
                 payload = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -8773,6 +8784,8 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if orchestration:
+                    payload["orchestration"] = orchestration
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:
@@ -8797,6 +8810,18 @@ def build_server(
                         "workflow_run_id": run_id,
                         "model_name": model_name,
                     }
+                    # ADR 0130: only pass this to a stream_route that actually
+                    # declares it -- a duck-typed stand-in (e.g. a test double
+                    # that only implements the plain positional/keyword shape)
+                    # must keep working exactly as before this evidence wiring.
+                    try:
+                        stream_route_params = inspect.signature(
+                            orchestrator.stream_route
+                        ).parameters
+                    except (TypeError, ValueError):
+                        stream_route_params = {}
+                    if "output_budget_callback" in stream_route_params:
+                        stream_kwargs["output_budget_callback"] = capture_output_budget
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
@@ -8804,7 +8829,23 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    # ADR 0130: the clamp decision is only known once
+                    # orchestrator.stream_route's final take_output_budget()
+                    # runs above, after _begin_sse() has already flushed
+                    # headers -- so it rides the final content SSE chunk's
+                    # orchestration object, exactly like chat_completion_chunks.
+                    final_orchestration = (
+                        {
+                            key: value
+                            for key, value in stream_output_budget.items()
+                            if value is not None
+                        }
+                        if isinstance(stream_output_budget, dict)
+                        else None
+                    )
+                    if not self._write_sse(
+                        frame({}, finish="stop", orchestration=final_orchestration)
+                    ):
                         return
                     if (
                         include_usage

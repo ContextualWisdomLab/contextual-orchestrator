@@ -120,14 +120,24 @@ only makes an existing enforcement action observable.
   `take_assistant_message` pattern instead of changing any public method
   signature; the direct unit test of `_clamp_agent_token_budget` itself is
   unaffected.
-- Only the `route`/`conduct` single-call and per-step invocation path
-  (`TaskOrchestrator._invoke`'s non-race branch) is wired for evidence in
-  this change. The multi-endpoint `immediate_race` branch and the
-  structured/`free_only` synthesis payload-builder call sites
-  (`ModelClient._clamp_agent_token_budget` at the `_stream_send` and
-  `proxy_send`/batch-request-body call sites) still clamp silently; carrying
-  the same evidence through those paths is tracked as follow-up work, not
-  claimed as complete by this ADR.
+- All four call paths now wire this evidence through: the `route`/`conduct`
+  single-call and per-step invocation path (`TaskOrchestrator._invoke`'s
+  non-race branch), the multi-endpoint `immediate_race` branch (the winning
+  endpoint's evidence only -- a losing attempt's clamp decision is discarded
+  along with the rest of that attempt, per `_race_attempt_collector`),
+  structured/`free_only` synthesis (`ModelClient._send_raw`'s
+  evidence-recording clamp, surfaced on the ad hoc `orchestration` object
+  `_orchestrated_provider_completion` already attaches to the raw provider
+  response next to `route`), and true-streaming passthrough
+  (`ModelClient._stream_send`'s evidence-recording clamp, threaded through
+  `TaskOrchestrator.stream_route`'s new `output_budget_callback` parameter
+  into the final SSE chunk's `orchestration` object -- the same
+  headers-already-flushed constraint that ruled out a header-only signal
+  applies here, so the evidence rides the last content frame instead).
+  The async-batch-submission call site (`ModelClient._batch_run`'s
+  `batch_body`/`_clamp_agent_token_budget` call) is a separate, not yet
+  covered, provider surface: it has no synchronous trace/response to attach
+  evidence to, and remains a follow-up.
 
 ## Verification
 
@@ -142,3 +152,11 @@ only makes an existing enforcement action observable.
   (the existing direct test of `_clamp_agent_token_budget`) is unchanged and
   still passes, confirming the clamp's own enforcement behavior was not
   altered.
+- `tests/test_output_budget_model_max.py` additionally asserts the same
+  clamped/unclamped evidence for the three follow-up sites: the
+  `immediate_race` winner (via `route_once`'s trace row, top-level result,
+  and `chat_completion_response`), structured/`free_only` synthesis (via
+  `proxy_completion(..., single_agent=False)`'s returned `orchestration`
+  object), and true-streaming passthrough (via a real `/v1/chat/completions`
+  `stream=true` HTTP round trip against a local fake SSE provider, asserting
+  the final `finish_reason="stop"` chunk's `orchestration` object).
