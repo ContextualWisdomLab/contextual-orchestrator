@@ -36,17 +36,20 @@ that separate system.
    through the normal PR process (review, required checks, no exceptions).
 2. `CHANGELOG.md` has a `## [X.Y.Z]` section (an `- Unreleased` or dated
    suffix is fine) with real, non-empty content describing what changed.
-3. Either no exact tag ref `refs/tags/vX.Y.Z` exists yet, or one does and
-   resolves to a commit that is an ancestor of `main`'s current tip (the
-   commit you're dispatching, or an earlier one `main` has since advanced
-   past) — in which case the workflow safely resumes using **the tag's own
-   target commit**, never a same-named branch and never the commit you happen
-   to be dispatching against. If that tag has no GitHub Release published
-   yet, the workflow creates one; if the Release already exists after a
-   previously interrupted publication, the workflow verifies or restores
-   the mandatory release assets without moving the tag. A tag that resolves
-   to a commit that is **not** an ancestor of `main`'s current tip is rejected
-   outright: bump the version rather than reusing or moving an immutable tag.
+3. Either no exact tag ref `refs/tags/vX.Y.Z` exists yet, or an **annotated**
+   one does and resolves to a commit that is an ancestor of `main`'s current
+   tip (the commit you're dispatching, or an earlier one `main` has since
+   advanced past) — in which case the workflow safely resumes using **the
+   annotated tag's own target commit**, never a same-named branch and never
+   the commit you happen to be dispatching against. If that tag has no
+   GitHub Release published yet, the workflow creates one; if the Release
+   already exists after a previously interrupted publication, the workflow
+   verifies or restores the mandatory release assets without moving the tag.
+   A lightweight `vX.Y.Z` tag is **not** a resumable canonical release tag:
+   the workflow fails closed rather than replacing, promoting, or retagging
+   it. An annotated tag whose target is **not** an ancestor of `main`'s
+   current tip is also rejected outright: repair the versioning state or bump
+   the version rather than reusing or moving an immutable tag.
 4. `main` is currently green — its own required checks (Tests, Security,
    Fuzz, and the org-central Strix/OpenCode/security-scan/OSV/Scorecard
    checks from `ContextualWisdomLab/.github`) are passing. The release
@@ -84,17 +87,18 @@ that separate system.
    - **`verify`** (read-only):
      - queries `repos/$REPO/git/ref/tags/vX.Y.Z`, not the generic commits
        endpoint, so a same-named branch cannot impersonate a release tag.
-       A lightweight tag resolves directly to its commit; an annotated tag
-       is peeled through the tag-object API and must resolve to a commit;
+       A lightweight tag is classified and rejected immediately because the
+       canonical release identity must be annotated; an annotated tag is
+       peeled through the tag-object API and must resolve to a commit;
      - decides `TARGET_SHA`, the exact commit every later gate evaluates
        against. No tag yet: `TARGET_SHA` is the dispatched commit itself (a
-       fresh publish). A tag that exists and is an ancestor of `main`'s
-       current tip: `TARGET_SHA` is the *tag's own target commit* (a resume),
-       regardless of how far `main` has advanced. A tag that is not an
-       ancestor of `main` fails closed. A failed tag or Release lookup is
-       treated as "absent" only on a *confirmed* 404 / "release not found";
-       rate-limit, auth, network, or 5xx errors fail closed instead of being
-       guessed away;
+       fresh publish). An annotated tag that exists and is an ancestor of
+       `main`'s current tip: `TARGET_SHA` is the *tag's own target commit* (a
+       resume), regardless of how far `main` has advanced. A lightweight tag,
+       a tag that is not an ancestor of `main`, or an unsupported tag object
+       fails closed. A failed tag or Release lookup is treated as "absent"
+       only on a *confirmed* 404 / "release not found"; rate-limit, auth,
+       network, or 5xx errors fail closed instead of being guessed away;
      - checks out `TARGET_SHA` so every subsequent step reads *that* commit's
        tree, never a possibly-newer `main` tip;
      - for a **fresh publish only**, fails closed if `TARGET_SHA` is not
@@ -120,12 +124,12 @@ that separate system.
        while `verify` was testing; for both fresh and resumed publication,
        re-verifies every check for `TARGET_SHA` immediately before mutation;
      - verifies the downloaded release notes and SBOM are non-empty;
-     - creates and pushes annotated tag `vX.Y.Z` only when it does not already
-       exist;
+     - creates and pushes annotated tag `vX.Y.Z` only for a fresh publication;
+       a resume can only arrive here with a previously verified annotated tag;
      - verifies `refs/tags/vX.Y.Z` really exists on `origin`, its remote Git
-       object matches the fetched local tag object, and the tag peels to
-       `TARGET_SHA`. GitHub Release creation never gets a chance to synthesize
-       an implicit tag from a branch/default branch;
+       object matches the fetched local annotated tag object, and the tag
+       peels to `TARGET_SHA`. GitHub Release creation never gets a chance to
+       synthesize an implicit tag from a branch/default branch;
      - creates the GitHub Release using the verified notes unless resuming an
        already-created Release;
      - verifies `cyclonedx-sbom.json` is attached. If it is missing, uploads
@@ -147,11 +151,12 @@ that separate system.
 
 ## Known limitations
 
-**This section describes a fresh publish only.** A resume of a tag-only
+**This section describes a fresh publish only.** A resume of an annotated-tag
 interrupted publication evaluates every gate against the tag's own target
 commit, which is already immutable once pushed — there is no live
 `main`-tip comparison to race for a resume, so the window below does not
-apply to it.
+apply to it. A lightweight tag is not a recovery state and is rejected before
+these resume semantics apply.
 
 **A small, accepted check-then-act window remains before the tag/Release are
 actually created.** `publish`'s recheck of `main`'s tip and of every check
@@ -172,9 +177,9 @@ overwriting the asset; investigate the provenance mismatch before retrying.
 A Release object can also exist temporarily without its required SBOM when
 `gh release create` succeeds and a later asset upload fails. That state is
 **not** a successful canonical release run: the workflow fails closed and a
-re-dispatch resumes at the same immutable tag/Release until the mandatory
-asset is present and verified. Consumers should use a version as release-ready
-only after the release workflow itself has completed successfully.
+re-dispatch resumes at the same immutable annotated tag/Release until the
+mandatory asset is present and verified. Consumers should use a version as
+release-ready only after the release workflow itself has completed successfully.
 
 ## Rollback
 
