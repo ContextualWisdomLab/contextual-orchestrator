@@ -5870,6 +5870,19 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "model_not_found", f"model {model_id!r} not found")
                     return
+                if path == "/v1/readiness":
+                    # Inference-scoped readiness/liveness probe (issue #926): a
+                    # CI/review-sidecar caller with only an inference-scoped
+                    # bearer gets the same per-candidate diagnostics as the
+                    # admin-scoped /api/v1/provider_readiness/latest, minus
+                    # every operator-only field, so it never needs an
+                    # admin-scoped token just to check gateway liveness.
+                    self._authorize("inference")
+                    raw_refresh = (query.get("refresh") or ["false"])[0].lower()
+                    if raw_refresh not in {"true", "false"}:
+                        raise ValueError("refresh must be true or false")
+                    self._send(orchestrator.inference_readiness_report(refresh=raw_refresh == "true"))
+                    return
                 if path == "/v1/files" or path.startswith("/v1/files/"):
                     self._authorize("inference")
                     principal_id = security.principal_id(self.headers)
