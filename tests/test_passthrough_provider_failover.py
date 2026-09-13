@@ -1742,3 +1742,204 @@ def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
             except ValueError as outer:
                 error = outer
     assert _is_ambiguous_passthrough_transport_failure(error) is False
+
+
+def _tool_call_choice(call_id: str) -> dict[str, Any]:
+    """Build a chat-completions-shaped provider response carrying one tool call."""
+    return {
+        "model": "fallback-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "inspect", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+
+def _plain_choice(model: str) -> dict[str, Any]:
+    """Build a chat-completions-shaped provider response with plain text content."""
+    return {
+        "model": model,
+        "choices": [
+            {"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}
+        ],
+    }
+
+
+def _tool_result_followup(
+    tools_body: dict[str, Any], call_id: str, *, model: str
+) -> dict[str, Any]:
+    """Build a follow-up chat/completions body carrying one tool result."""
+    return {
+        "model": model,
+        "messages": [
+            *tools_body["messages"],
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "inspect", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": "42"},
+        ],
+        "tools": tools_body["tools"],
+    }
+
+
+def test_tool_loop_follow_up_returns_to_the_emitting_agent() -> None:
+    """A tool-result follow-up is served by the agent that emitted the call, not the top-ranked one."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_1"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+
+    first = orchestrator.proxy_completion(body)
+
+    assert first["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert orchestrator._tool_loop_memory["call_1"] == "fallback_agent"
+
+    client.calls.clear()
+    client.outcomes["fallback_agent"] = _plain_choice("fallback-model")
+    follow_up = _tool_result_followup(body, "call_1", model=TaskOrchestrator.AUTO_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    # The top-ranked primary_agent is never attempted: the follow-up goes
+    # straight to the agent that emitted call_1.
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "emitting_agent"
+    assert result["orchestration"]["tool_loop_agent_id"] == "fallback_agent"
+
+
+def test_tool_loop_falls_back_when_emitting_agent_circuit_is_open() -> None:
+    """A circuit-open emitting agent is skipped; routing falls back and says so."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_2"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_2"] == "fallback_agent"
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure("fallback_agent")
+    assert orchestrator._circuit_open("fallback_agent") is True
+
+    client.calls.clear()
+    client.outcomes["primary_agent"] = _plain_choice("primary-model")
+    follow_up = _tool_result_followup(body, "call_2", model=TaskOrchestrator.AUTO_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "fallback"
+    assert result["orchestration"]["tool_loop_agent_id"] == "fallback_agent"
+
+
+def test_explicit_concrete_model_ignores_tool_loop_memory() -> None:
+    """An explicit concrete model is never re-ranked toward a remembered emitting agent."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _tool_call_choice("call_3"),
+        }
+    )
+    orchestrator = _build(client)
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_3"] == "fallback_agent"
+
+    client.calls.clear()
+    client.outcomes["primary_agent"] = _plain_choice("primary-model")
+    follow_up = _tool_result_followup(body, "call_3", model="primary-model")
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "orchestration" not in result
+
+
+def test_free_model_follow_up_never_routes_to_a_non_free_emitting_agent() -> None:
+    """orchestrator/free never returns to a paid emitting agent, even when remembered."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _tool_call_choice("call_4"),
+            "fallback_agent": _plain_choice("fallback-model"),
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free"))
+        if agent.id == "fallback_agent"
+        else agent
+        for agent in orchestrator.agents
+    ]
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "review code"}],
+        "tools": [{"type": "function", "function": {"name": "inspect"}}],
+    }
+
+    orchestrator.proxy_completion(body)
+    assert orchestrator._tool_loop_memory["call_4"] == "primary_agent"
+
+    client.calls.clear()
+    follow_up = _tool_result_followup(body, "call_4", model=TaskOrchestrator.FREE_MODEL)
+
+    result = orchestrator.proxy_completion(follow_up)
+
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert result["orchestration"]["tool_loop_route"] == "fallback"
+    assert result["orchestration"]["tool_loop_agent_id"] == "primary_agent"
+
+
+def test_tool_loop_memory_evicts_the_oldest_entry_past_its_bound() -> None:
+    """The bounded tool_loop_memory map is an LRU, not a growing log."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_agent", "solo-model")],
+        client=SequencedProxyClient({}),
+        tool_loop_memory_max_entries=1,
+    )
+
+    orchestrator._record_tool_loop_agents(
+        [{"id": "call_old", "type": "function"}], "agent_x"
+    )
+    orchestrator._record_tool_loop_agents(
+        [{"id": "call_new", "type": "function"}], "agent_y"
+    )
+
+    assert dict(orchestrator._tool_loop_memory) == {"call_new": "agent_y"}
