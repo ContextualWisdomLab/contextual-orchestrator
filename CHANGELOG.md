@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Binary provider responses now downgrade active or unknown media types at the
+  shared HTTP response boundary, while preserving approved media and download
+  formats (issue #1161).
+
 - Virtual `orchestrator/free` structured completions (`response_format`, no
   tools/stream) fail over a retryable synthesizer 502/429 onto the next
   eligible free worker and attach request-scoped eligible/attempted
