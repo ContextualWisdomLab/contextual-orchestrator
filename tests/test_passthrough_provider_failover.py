@@ -983,6 +983,29 @@ def test_free_pool_keeps_single_tool_call_agent_for_single_call_shapes(
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+@pytest.mark.parametrize("tools", [None, []], ids=["no_tools_key", "empty_tools"])
+def test_free_pool_keeps_single_tool_call_agent_for_requests_without_tools(tools) -> None:
+    """A request that carries no tools never triggers the single-call exclusion."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+    body = {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "plain text"}],
+    }
+    if tools is not None:
+        body["tools"] = tools
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
     """Absent evidence never excludes: ADR-0035 capability tags are positive declarations."""
     client = SequencedProxyClient(
