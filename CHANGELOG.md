@@ -20,6 +20,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Binary provider responses now downgrade active or unknown media types at the
+  shared HTTP response boundary, while preserving approved media and download
+  formats (issue #1161).
+
+
 - Finite administrator model timeouts now use one end-to-end deadline across
   local admission, connection, retry, and streamed chunks; synchronous
   embeddings use the selected model's policy. Timeout values are capped at the
