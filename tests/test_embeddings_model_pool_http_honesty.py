@@ -151,6 +151,57 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         thread.join(timeout=5)
 
 
+def test_http_embeddings_uses_selected_model_timeout_policy() -> None:
+    """Sync embeddings inherit the selected model policy, not a client-wide timeout."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_agent",
+                "embedding-model",
+                tags=("embedding",),
+                model_timeout_seconds=17,
+            )
+        ]
+    )
+    orchestrator.client.timeout = 2
+    observed: list[float | None] = []
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    def complete(inputs, *, model, wait_timeout=None, **kwargs):
+        del kwargs
+        observed.append(wait_timeout)
+        return {
+            "status": "completed",
+            "model": model,
+            "embeddings": [
+                {"object": "embedding", "index": index, "embedding": [0.5]}
+                for index, _item in enumerate(inputs)
+            ],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        }
+
+    coordinator.complete_embeddings_batch = complete  # type: ignore[method-assign]
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/v1/embeddings",
+            {"model": "embedding-model", "input": "invoice search chunk"},
+        )
+        assert status == 200, body
+        assert observed == [17.0]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_embeddings_null_model_is_rejected() -> None:
     server, thread, port = _server()
     try:

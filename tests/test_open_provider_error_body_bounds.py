@@ -15,7 +15,6 @@ the ``HTTPError`` status intact.
 from __future__ import annotations
 
 import http.client
-import io
 import json
 import socket
 import sys
