@@ -2988,7 +2988,7 @@ tools through this gateway.
 
 Local repair: `TaskOrchestrator` now keeps a bounded, thread-safe
 `tool_loop_memory` map (`tool_call_id -> emitting agent id`, LRU-bounded by
-`tool_loop_memory_max_entries`, default 512 — a memory bound, not a product
+`tool_loop_memory_max_entries`, default 4096 — a memory bound, not a product
 limit) recorded whenever a served response carries `tool_calls` on
 `proxy_completion`'s single-agent passthrough, `route_once`, and `conduct`'s
 worker step. `_apply_tool_loop_route` moves a follow-up's remembered

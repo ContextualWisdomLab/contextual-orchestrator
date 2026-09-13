@@ -4425,8 +4425,11 @@ class TaskOrchestrator:
     #: many in-flight tool loops a deployment may run; an LRU eviction is
     #: sufficient because a tool loop that idles past the bound has, in
     #: practice, already completed or been abandoned by the caller, so no TTL
-    #: is layered on top.
-    TOOL_LOOP_MEMORY_MAX_ENTRIES = 512
+    #: is layered on top. The default is sized for concurrent callers (the
+    #: org CI review lanes run many tool loops in parallel, each with several
+    #: call ids): 4096 two-string entries cost well under 1 MiB, while an
+    #: in-flight loop evicted early would silently degrade to ``fallback``.
+    TOOL_LOOP_MEMORY_MAX_ENTRIES = 4096
 
     def __init__(
         self,

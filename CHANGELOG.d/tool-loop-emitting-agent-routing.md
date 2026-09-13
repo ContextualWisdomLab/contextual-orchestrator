@@ -10,7 +10,7 @@ model could receive tool results for calls it never emitted.
 
 `TaskOrchestrator` now keeps a bounded, thread-safe `tool_loop_memory` map
 (`tool_call_id -> emitting agent id`, default bound
-`TOOL_LOOP_MEMORY_MAX_ENTRIES = 512`, configurable via the new
+`TOOL_LOOP_MEMORY_MAX_ENTRIES = 4096`, configurable via the new
 `tool_loop_memory_max_entries` constructor argument) recorded whenever a
 served response carries `tool_calls` on `proxy_completion`'s single-agent
 passthrough, `route_once`, and `conduct`'s worker step. A follow-up whose
