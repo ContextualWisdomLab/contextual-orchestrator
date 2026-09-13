@@ -23,11 +23,9 @@ with atheris.instrument_imports():
 
 def one_input(data: bytes) -> None:
     """Feed one Atheris-fuzzed byte string through the profile parser."""
-    fdp = atheris.FuzzedDataProvider(data)
-    text = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
     try:
-        value = json.loads(text)
-    except (ValueError, RecursionError):
+        value = json.loads(data)
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return
     exercise_reasoning_effort_profile(value)
 
