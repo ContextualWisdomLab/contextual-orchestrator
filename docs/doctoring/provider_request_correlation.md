@@ -255,3 +255,49 @@ exactly one eligible candidate that 429s with `Retry-After: 1` then succeeds
 on retry (waits once, served), the same shape with no budget (honest 429),
 and an explicit concrete model with a single always-429 candidate (fails
 fast, no wait).
+
+## Typed streaming fallback attempt evidence (issue #1016, rows 2/4)
+
+A missing correlation ID is not the only gap a per-attempt log line can have:
+until now, `stream_route`'s single-worker fallback trace step recorded a failed
+candidate as prose only (`"subtask": "Failed direct route attempt (streamed)"`),
+with no machine-typed outcome, error code, or provider status -- unlike the
+structured-synthesis candidate loop's `route.attempted[]` entries. A debug-log
+consumer correlating requests by ID still could not tell *why* an earlier
+streaming attempt failed without parsing prose.
+
+Each streaming fallback trace step now also carries the same typed fields the
+structured path emits, built by the shared `_typed_attempt_entry` helper:
+
+```json
+{
+  "id": 0,
+  "role": "worker",
+  "agent_id": "primary_worker",
+  "model": "primary-model",
+  "subtask": "Failed direct route attempt (streamed)",
+  "reason": "provider rejected the request with HTTP 503",
+  "outcome": "retryable_transport",
+  "error_code": "service_unavailable",
+  "provider_status": 503,
+  "retryable": true,
+  "transport": "stream"
+}
+```
+
+`outcome` follows a fixed vocabulary: `retryable_transport`, `request_too_large`,
+`deadline_exceeded` (the administrator `model_timeout` policy from PR #1053
+elapsed -- no second vocabulary was invented for it), or `fail_closed`. The
+prose `subtask`/`reason` fields remain for humans; they are no longer the only
+signal available to callers or log consumers. This shape is now a documented,
+versioned contract (`OrchestrationRouteAttempt` / `OrchestrationRoute` in
+`contextual_orchestrator/api_contract.py`, spec version `0.3.0`), validated by
+`tests/test_api_contract.py` against both a real structured-synthesis failover
+and a real streaming failover. Reproduce with:
+
+```sh
+python -m pytest tests/test_true_streaming.py tests/test_api_contract.py -q
+```
+
+This is a shape/typing fix, not a change to which candidate is selected, to
+retry/circuit-breaker behavior, or to request-ID correlation itself.

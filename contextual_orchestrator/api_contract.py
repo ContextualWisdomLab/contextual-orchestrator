@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -102,7 +102,95 @@ OPENAPI_SPEC = {
                             "omitted (never estimated) otherwise."
                         ),
                     },
-                    "orchestration": {"type": "object"},
+                    "orchestration": {
+                        "type": "object",
+                        "description": (
+                            "Sibling usage_source/measurement_status fields on this "
+                            "response label estimates; they never present a gateway "
+                            "estimate as authoritative provider usage."
+                        ),
+                        "properties": {
+                            "route": {"$ref": "#/components/schemas/OrchestrationRoute"},
+                        },
+                    },
+                },
+            },
+            "OrchestrationRouteAttempt": {
+                "type": "object",
+                "description": (
+                    "One per-candidate attempt evidence entry, recorded before "
+                    "(and, for the served candidate, alongside) a completion. "
+                    "Emitted by both the structured-synthesis candidate loop "
+                    "(_orchestrated_provider_completion) and the single-worker "
+                    "streaming fallback (stream_route) so callers see one fixed "
+                    "vocabulary regardless of path (issue #1016, rows 2 and 4)."
+                ),
+                "required": ["agent_id", "model", "outcome"],
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "model": {"type": "string"},
+                    "outcome": {
+                        "type": "string",
+                        "enum": [
+                            "served",
+                            "request_too_large",
+                            "retryable_transport",
+                            "deadline_exceeded",
+                            "fail_closed",
+                        ],
+                        "description": (
+                            "served: this candidate returned the completion. "
+                            "request_too_large: the payload exceeded a provider "
+                            "limit (HTTP 413). retryable_transport: a transient "
+                            "transport/provider failure (429/5xx/network) eligible "
+                            "for failover. deadline_exceeded: the administrator-"
+                            "configured model_timeout policy elapsed before a "
+                            "response was returned (reuses PR #1053's "
+                            "model_timeout error_code rather than a second "
+                            "vocabulary). fail_closed: a non-transient provider "
+                            "or client error that stops that candidate."
+                        ),
+                    },
+                    "error_code": {
+                        "type": "string",
+                        "description": "Optional OpenAI-compatible error code; absent when outcome is served.",
+                    },
+                    "provider_status": {
+                        "type": ["integer", "null"],
+                        "description": "Optional upstream HTTP status when the failure had one.",
+                    },
+                    "retryable": {
+                        "type": "boolean",
+                        "description": "Optional: whether the gateway's own transient-retry policy would retry this failure.",
+                    },
+                    "transport": {
+                        "type": "string",
+                        "description": (
+                            "Optional transport tag identifying which call path "
+                            "produced this attempt, e.g. structured_synthesis or stream."
+                        ),
+                    },
+                },
+            },
+            "OrchestrationRoute": {
+                "type": "object",
+                "description": (
+                    "Route evidence for one completion: every eligible agent, "
+                    "every attempt made (including the served one), and why the "
+                    "route terminated. Stable across the structured-synthesis "
+                    "and single-worker streaming fallback paths."
+                ),
+                "required": ["eligible_agent_ids", "attempted"],
+                "properties": {
+                    "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
+                    "attempted": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/OrchestrationRouteAttempt"},
+                    },
+                    "terminal_reason": {
+                        "type": "string",
+                        "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
+                    },
                 },
             },
             "ModelGroupWrite": {
