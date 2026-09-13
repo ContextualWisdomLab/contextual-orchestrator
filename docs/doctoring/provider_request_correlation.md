@@ -137,3 +137,25 @@ chat stopped-tool errors. The Responses fixture fixes the routing choice to
 isolate SSE framing; it does not test routing policy. The original cases failed
 identity equality; after repair, these and both debug logging suites passed
 (40 tests, 2.75 seconds). No hosted check or deployment is implied.
+# Request identity on every response (2026-09-13)
+
+Issue #1016 asked how a long-running caller can tie its own attempt to gateway
+evidence. Before this change the trusted, server-generated request identity
+(`telemetry.request_identity`, bound per connection in `server.py`) reached only
+error payloads (`error.detail.request_id`); a served request carried an
+unrelated `chatcmpl-…` id and no header, so successful requests could not be
+correlated at all. `_send_security_headers` now emits `x-request-id` with the
+same identity on every response path that already shares those headers: JSON
+bodies, buffered SSE, and incremental SSE started by `_begin_sse`. The value is
+never taken from a caller header; the tests send `x-request-id:
+untrusted-client-id` and assert the server value differs.
+
+Reproduce with `python -m pytest tests/test_request_id_response_header.py -q`.
+Three real HTTP cases cover a served non-streaming chat completion, a 401
+whose header equals the body `request_id`, and a served streaming completion.
+Before the change the header was absent on all three; after it, 3 passed, and
+`tests/test_stream_error_identity.py` still passes, so streamed error framing
+keeps the same identity. This adds correlation only: it does not add typed
+per-attempt outcome evidence to the single-worker route path, does not touch
+`/v1/provider_readiness` (preflight-only), and does not define a versioned
+outcome contract; those remain open under #1016.
