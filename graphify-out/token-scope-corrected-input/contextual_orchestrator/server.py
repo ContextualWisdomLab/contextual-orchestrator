@@ -1,0 +1,8838 @@
+"""HTTP server exposing chat, admin, governance, and evaluation endpoints."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from email.message import Message
+from http.cookies import CookieError, SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
+import hashlib
+import ipaddress
+import json
+import logging
+import mmap
+import secrets
+import socket
+import struct
+import tempfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.parse
+from typing import Any, Callable, Mapping
+import uuid
+
+from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
+from .api_contract import OPENAPI_SPEC
+from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
+from .cost_router import (
+    BatchModelSelectionError,
+    CostRoutingCoordinator,
+    InvalidBatchModelError,
+)
+from .batch_routing import BatchDownloadError, BatchRequest, RoutingHints
+from .debug_logging import (
+    redact_credential_shaped_keys,
+    response_metadata_for_log,
+    summarize_payload_for_log,
+    summarize_request_for_log,
+)
+from .orchestrator import (
+    BudgetExceededError,
+    EndpointUnavailableError,
+    MAX_LOCAL_CONCURRENCY,
+    ProviderRequestTooLargeError,
+    ProviderResponseError,
+    ModelAgent,
+    TaskOrchestrator,
+    normalize_endpoint_selector,
+    _new_chat_completion_id,
+    _responses_to_chat_payload,
+    chat_completion_chunks,
+    chat_completion_response,
+    text_completion_response,
+    redact_value,
+    sse_stream_body,
+)
+from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .provider_errors import ProviderUpstreamError
+from .tool_fallback import ToolFallbackStoppedError
+from .model_group import canonical_group_name
+from .release_authorization import verify_release_authority_snapshot
+from .telemetry import (
+    attach_trace_context,
+    configure_telemetry,
+    current_session_id,
+    current_request_id,
+    request_identity,
+    detach_trace_context,
+    reset_session_id,
+    session_id_from_headers,
+    session_id_from_metadata,
+    session_id_from_request,
+    session_id_hash,
+    set_session_id,
+)
+from .video_jobs import (
+    VideoJobContractError,
+    VideoJobRegistry,
+    video_agent_affinity_key,
+)
+from .file_registry import (
+    FileContractError,
+    FileProviderUnavailableError,
+    FileRegistry,
+    file_agent_affinity_key,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# OpenAI's image-input contract permits a 512 MB total request payload.  That
+# includes JSON requests carrying data-URL/base64 images, not only /files.
+DEFAULT_MAX_JSON_BODY_BYTES = 64 * 1024
+MAX_MULTIMODAL_JSON_BODY_BYTES = 512 * 1024 * 1024
+MAX_FILE_UPLOAD_BYTES = 512 * 1024 * 1024
+MAX_FILE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+MAX_FILE_UPLOAD_REQUEST_BYTES = (
+    MAX_FILE_UPLOAD_BYTES + MAX_FILE_MULTIPART_OVERHEAD_BYTES
+)
+MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
+
+
+def _multipart_upload_metadata(body: Any, content_type: str) -> tuple[str, str, int]:
+    """Read purpose, filename, and file length from a seekable multipart body."""
+    message = Message()
+    message["content-type"] = content_type
+    boundary = message.get_param("boundary", header="content-type")
+    if not isinstance(boundary, str) or not boundary or len(boundary) > 70:
+        raise RequestError(400, "invalid_file", "multipart boundary is invalid")
+    try:
+        marker = b"--" + boundary.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RequestError(400, "invalid_file", "multipart boundary must be ASCII") from exc
+    purpose: str | None = None
+    filename: str | None = None
+    file_size: int | None = None
+    body.flush()
+    with mmap.mmap(body.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+        position = 0
+        while True:
+            boundary_start = mapped.find(marker, position)
+            if boundary_start < 0:
+                break
+            headers_start = boundary_start + len(marker)
+            if mapped[headers_start : headers_start + 2] == b"--":
+                break
+            if mapped[headers_start : headers_start + 2] != b"\r\n":
+                raise RequestError(400, "invalid_file", "multipart delimiter is malformed")
+            headers_start += 2
+            headers_end = mapped.find(b"\r\n\r\n", headers_start, headers_start + 64 * 1024)
+            if headers_end < 0:
+                raise RequestError(400, "invalid_file", "multipart part headers are malformed")
+            next_boundary = mapped.find(b"\r\n" + marker, headers_end + 4)
+            if next_boundary < 0:
+                raise RequestError(400, "invalid_file", "multipart body is incomplete")
+            part_headers = Message()
+            for line in mapped[headers_start:headers_end].decode("latin-1").split("\r\n"):
+                name, separator, value = line.partition(":")
+                if not separator:
+                    raise RequestError(400, "invalid_file", "multipart part header is malformed")
+                part_headers[name] = value.strip()
+            disposition_message = Message()
+            disposition_message["content-disposition"] = part_headers.get("content-disposition", "")
+            field_name = disposition_message.get_param("name", header="content-disposition")
+            part_start = headers_end + 4
+            if field_name == "purpose":
+                raw_purpose = mapped[part_start:next_boundary]
+                if len(raw_purpose) > 64:
+                    raise RequestError(400, "invalid_file", "purpose is too long")
+                purpose = raw_purpose.decode("utf-8").strip()
+            elif field_name == "file":
+                filename = disposition_message.get_param("filename", header="content-disposition")
+                file_size = next_boundary - part_start
+            position = next_boundary + 2
+    if not purpose or not isinstance(filename, str) or not filename or file_size is None:
+        raise RequestError(400, "invalid_file", "multipart upload requires purpose and file fields")
+    return purpose, filename, file_size
+
+
+class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Serve slow upstream calls concurrently without a five-connection backlog.
+
+    ``ThreadingHTTPServer`` already isolates each request in a daemon thread,
+    which is appropriate for the gateway's blocking provider transports.  Its
+    inherited five-connection listen backlog is not: a burst of slow provider
+    calls can leave even ``/healthz`` waiting to connect.  Use the operating
+    system's native maximum backlog rather than an application guess.
+    """
+
+    request_queue_size = socket.SOMAXCONN
+    embedding_batch_backend: Any = None
+    embedding_backend_closer: Any = None
+
+    def _close_embedding_backend(self) -> None:
+        if callable(self.embedding_backend_closer):
+            self.embedding_backend_closer()
+            return
+        close = getattr(self.embedding_batch_backend, "close", None)
+        if callable(close):
+            close()
+
+    def shutdown(self) -> None:
+        """Stop accepting requests and release embedding worker threads."""
+        try:
+            super().shutdown()
+        finally:
+            self._close_embedding_backend()
+
+    def server_close(self) -> None:
+        """Close the listener and workers on normal or abnormal serve exit."""
+        try:
+            self._close_embedding_backend()
+        finally:
+            super().server_close()
+
+# OpenAI request params forwarded verbatim to the provider on passthrough.
+OPENAI_PASSTHROUGH_PARAM_KEYS = {
+    "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop",
+    "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
+    "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
+    "response_format", "tools", "tool_choice", "functions", "function_call",
+    "modalities", "prediction", "store", "service_tier", "stream_options",
+    # Chat-era surfaces accepted only for explicit unsupported errors.
+    "audio", "web_search_options",
+    # Modern OpenAI SDK control fields — accepted only for named unsupported errors.
+    "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
+    # Responses-style reasoning object on chat — named unsupported (not effort string).
+    "reasoning",
+    # Async background mode — not supported on this gateway.
+    "background",
+    "include",
+    # Assistants-style tool_resources — named unsupported (not unknown_fields).
+    "tool_resources",
+}
+# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
+PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+ALLOWED_CHAT_KEYS = {
+    "model", "messages", "orchestration", "orchestration_mode", "mode",
+    "include_orchestration_trace", "stream", "attribution", "routing", "zdr_only",
+    "session_id",
+    # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
+    "max_tool_calls",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+# Responses API body keys (`input` replaces `messages`).
+ALLOWED_RESPONSES_KEYS = {
+    "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "prompt_cache_key", "client_metadata",
+    # OpenAI Responses native output budget (not max_tokens on this surface).
+    "max_output_tokens",
+    # Tool-loop budget — accepted only for explicit unsupported error (no multi-step tool loop).
+    "max_tool_calls",
+    # Gateway cost/routing control plane (stripped before provider passthrough).
+    "attribution", "routing", "zdr_only",
+    # previous_response_id / conversation / truncation / include fail closed
+    # with named unsupported errors. Official text.format is validated
+    # (omit-real optionals), not rejected wholesale.
+    "previous_response_id", "conversation", "truncation", "include", "text",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "zdr_only"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing", "zdr_only"}
+ALLOWED_EMBEDDINGS_KEYS = {
+    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "zdr_only",
+}
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
+    "logprobs", "top_logprobs", "n", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "user", "seed",
+    "presence_penalty", "frequency_penalty", "logit_bias", "service_tier", "metadata",
+    "store",
+    # Chat-era tool surfaces — accepted only for explicit unsupported errors.
+    "tools", "tool_choice", "functions", "function_call", "parallel_tool_calls",
+    # Tool-loop budget (chat/Responses-native) — named unsupported, not unknown_fields.
+    "max_tool_calls",
+    "response_format",
+    # Chat-era structured/output controls — accepted only for explicit migration errors.
+    "modalities", "prediction", "reasoning_effort",
+    # Chat-era multimodal/search — accepted only for named unsupported errors.
+    "audio", "web_search_options",
+    # Modern OpenAI SDK control fields — named unsupported errors.
+    "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
+    "reasoning", "background", "include",
+    "tool_resources",
+} | {"attribution", "routing", "zdr_only"}
+ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+# Chat message object keys this gateway interprets. Anything else fails closed
+# with unknown_message_fields (named error, not silent strip/smuggle).
+ALLOWED_MESSAGE_KEYS = {
+    "role",
+    "content",
+    "name",
+    "tool_call_id",
+    "tool_calls",
+    "refusal",
+    "annotations",
+    "audio",
+    "function_call",
+    "weight",
+    "prefix",
+}
+ALLOWED_MODES = {"auto", "route", "conduct"}
+ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
+ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
+ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
+ALLOWED_SESSION_KEYS = {"token"}
+ALLOWED_AGENT_PATCH_KEYS = {
+    "status", "priority", "tags", "provider_exclusions", "group_name",
+    "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
+    "context_window",
+}
+ALLOWED_AGENT_CREATE_KEYS = {
+    "id",
+    "model",
+    "base_url",
+    "api_key_env",
+    "credential_key",
+    "tags",
+    "priority",
+    "disabled",
+    "provider_name",
+    "provider_exclusions",
+    "group_name",
+    "endpoint_equivalence",
+    "stream_usage_supported",
+    "max_output_tokens",
+    "context_window",
+}
+ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
+ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
+ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
+DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_MAX_ADMIN_SESSIONS = 256
+
+
+class RequestError(Exception):
+    """HTTP-safe request failure."""
+
+    def __init__(self, status: int, code: str, message: str, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.detail = detail or {}
+
+
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
+    return body_size
+
+
+@dataclass
+class SecurityConfig:
+    """Runtime safety controls for the stdlib HTTP server."""
+
+    auth_token: str = ""
+    admin_token: str = ""
+    inference_token: str = ""
+    allow_public_bind: bool = False
+    expose_trace_by_default: bool = False
+    max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
+    max_concurrent_runs: int = 8
+    admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
+    admin_session_secure_cookie: bool = True
+    # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
+    # relying-party adapter). The core deliberately does not decode JWTs with
+    # an unsafe hand-rolled parser or own Keycloak admin credentials.
+    bearer_verifier: Callable[[str, str], bool] | None = None
+    # Optional companion seam for external verifiers that can expose a stable,
+    # tenant-scoped principal key without exposing the bearer itself.
+    principal_resolver: Callable[[str], str | None] | None = None
+    _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
+    _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
+    _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _admin_session_principals: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.auth_token and (self.admin_token or self.inference_token):
+            raise ValueError("single auth_token cannot be combined with split tokens")
+        if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
+            raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.allow_public_bind and self.bearer_verifier is None and not (
+            self.admin_token and self.inference_token
+        ):
+            raise ValueError(
+                "public bind requires split admin_token and inference_token credentials"
+            )
+        if (
+            self.allow_public_bind
+            and self.bearer_verifier is None
+            and self.admin_token == self.inference_token
+        ):
+            raise ValueError("public bind requires distinct admin_token and inference_token credentials")
+        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive integer")
+        if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
+            raise ValueError(
+                f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
+            )
+        if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
+            raise ValueError("rate_limit_window_seconds must be an integer >= 1")
+        if type(self.rate_limit_requests) is not int or self.rate_limit_requests < 1:
+            raise ValueError("rate_limit_requests must be an integer >= 1")
+        if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
+            raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
+        if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
+            raise ValueError("max_admin_sessions must be an integer >= 1")
+        if type(self.admin_session_secure_cookie) is not bool:
+            raise ValueError("admin_session_secure_cookie must be a boolean")
+        self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+
+    @staticmethod
+    def _constant_time_token_match(presented: str, expected: str) -> bool:
+        """Compare UTF-8 secret bytes without leaking non-ASCII failures."""
+        if not isinstance(presented, str) or not isinstance(expected, str):
+            return False
+        try:
+            return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+        except (TypeError, ValueError):
+            return False
+
+    def check_bind(self, host: str, *, allow_public_bind: bool | None = None) -> None:
+        """Require explicit opt-in before binding the API to public interfaces."""
+        normalized_host = host.strip().lower()
+        try:
+            is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+        except ValueError:
+            is_loopback = normalized_host == "localhost"
+        public_bind_allowed = self.allow_public_bind if allow_public_bind is None else allow_public_bind
+        if not is_loopback and not public_bind_allowed:  # nosec B104 - non-loopback binds require explicit opt-in.
+            raise ValueError("public bind requires --allow-public-bind")
+
+    def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
+        """Resolve and validate the route-owned purpose for an authenticated role."""
+        if scope not in PURPOSES_BY_SCOPE:
+            raise RequestError(403, "invalid_scope", "authorization scope is not supported")
+        effective = purpose or DEFAULT_PURPOSE_BY_SCOPE[scope]
+        if effective not in PURPOSES_BY_SCOPE[scope]:
+            raise RequestError(403, "purpose_not_allowed", "purpose is not allowed for this scope")
+        return effective
+
+    def authorize(
+        self,
+        headers: Any,
+        scope: str,
+        client_address: str,
+        purpose: str | None = None,
+    ) -> str:
+        """Validate a bearer token or an opaque admin session; return the authorized purpose."""
+        effective_purpose = self.resolve_purpose(scope, purpose)
+        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
+            raise RequestError(401, "unauthorized", "bearer token is required")
+        if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
+            # An active opaque session authorizes the admin role; the route-owned
+            # purpose is still resolved and validated so a session holder cannot
+            # exceed the scope's purpose allowlist.
+            return effective_purpose
+        raw = headers.get("authorization", "")
+        if not raw.lower().startswith("bearer "):
+            raise RequestError(401, "unauthorized", "bearer token is required")
+        token = raw.split(" ", 1)[1].strip()
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(token, scope))
+            except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
+                valid = False
+        else:
+            if scope == "admin":
+                expected = self.admin_token or self.auth_token
+            elif scope == "inference":
+                expected = self.inference_token or self.auth_token
+            elif scope == "trace":
+                # Static single-token mode is a local escape hatch. Production
+                # deployments should use bearer_verifier for a separate purpose claim.
+                expected = self.auth_token
+            else:
+                expected = ""
+            valid = bool(expected) and secrets.compare_digest(token, expected)
+        if not valid:
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        return effective_purpose
+
+    def principal_id(self, headers: Any) -> str:
+        """Return a stable non-secret owner key for the authenticated deployment principal."""
+        raw = headers.get("authorization", "")
+        token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+        if not token:
+            session_id = self._extract_admin_session_cookie(headers)
+            if self._admin_session_is_active(session_id):
+                with self._session_lock:
+                    principal = self._admin_session_principals.get(session_id)
+                if principal:
+                    return principal
+            raise RequestError(401, "unauthorized", "authenticated principal is required")
+        return self._principal_digest(token)
+
+    def _principal_digest(self, token: str) -> str:
+        """Hash a stable deployment principal without retaining bearer material."""
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        elif self.principal_resolver is None:
+            # Back-compatible fallback for adapters that only return bool;
+            # token rotation can intentionally revoke old resource access.
+            principal_material = f"bearer:{token}"
+        else:
+            try:
+                resolved = self.principal_resolver(token)
+            except Exception as exc:  # noqa: BLE001 - identity adapter failure denies access
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable") from exc
+            if not isinstance(resolved, str) or not resolved.strip():
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable")
+            principal_material = f"principal:{resolved}"
+        return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _extract_bearer_token(headers: Any) -> str:
+        """Return the bearer value when the Authorization header has the expected shape."""
+        raw = headers.get("authorization", "") or ""
+        return raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+
+    @staticmethod
+    def _extract_admin_session_cookie(headers: Any) -> str:
+        """Return the opaque admin session id from the request cookie, if present."""
+        raw = headers.get("cookie", "") or ""
+        if not raw:
+            return ""
+        jar = SimpleCookie()
+        try:
+            jar.load(raw)
+        except CookieError:
+            return ""
+        morsel = jar.get(ADMIN_SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def establish_admin_session(self, presented_token: str) -> str:
+        """Mint a bounded opaque session after validating the admin credential."""
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(presented_token, "admin"))
+            except Exception:  # noqa: BLE001 - auth adapter failures deny establishment
+                valid = False
+        else:
+            expected = self.admin_token or self.auth_token
+            valid = bool(expected) and self._constant_time_token_match(presented_token, expected)
+        if not valid:
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        session_id = secrets.token_urlsafe(32)
+        expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        principal = self._principal_digest(presented_token)
+        with self._session_lock:
+            self._purge_expired_admin_sessions_locked(time.monotonic())
+            overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
+            if overflow > 0:
+                for session_key, _ in sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]:
+                    self._admin_sessions.pop(session_key, None)
+                    self._admin_session_principals.pop(session_key, None)
+            self._admin_sessions[session_id] = expires_at
+            self._admin_session_principals[session_id] = principal
+        return session_id
+
+    def _admin_session_is_active(self, session_id: str) -> bool:
+        """Return whether an opaque session exists and has not expired."""
+        if not session_id:
+            return False
+        with self._session_lock:
+            expires_at = self._admin_sessions.get(session_id)
+            if expires_at is None:
+                return False
+            if time.monotonic() >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
+                return False
+            return True
+
+    def _purge_expired_admin_sessions_locked(self, now: float) -> None:
+        """Remove expired sessions while the caller holds the session lock."""
+        for session_id, expires_at in list(self._admin_sessions.items()):
+            if now >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
+
+    def revoke_admin_session(self, session_id: str) -> bool:
+        """Revoke one opaque admin session without retaining the bearer."""
+        with self._session_lock:
+            removed = self._admin_sessions.pop(session_id, None) is not None if session_id else False
+            self._admin_session_principals.pop(session_id, None)
+            return removed
+
+    def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
+        """Return a secure-by-default HttpOnly, same-origin session cookie header."""
+        age = self.admin_session_ttl_seconds if max_age is None else max_age
+        parts = [
+            f"{ADMIN_SESSION_COOKIE}={session_id}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            f"Max-Age={int(age)}",
+        ]
+        if self.admin_session_secure_cookie:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def admin_session_clear_cookie_header(self) -> str:
+        """Return the deletion cookie for an opaque admin session."""
+        return self.admin_session_cookie_header("", max_age=0)
+
+    def validate_admin_session_origin(self, headers: Any) -> None:
+        """Reject cross-origin state changes authenticated only by a session cookie."""
+        if not self._extract_admin_session_cookie(headers):
+            return
+        origin = (headers.get("origin", "") or "").strip()
+        host = (headers.get("host", "") or "").strip()
+        if not origin or origin == "null" or urllib.parse.urlparse(origin).netloc != host:
+            raise RequestError(403, "csrf_origin_rejected", "browser session origin is not allowed")
+
+    def check_rate_limit(self, key: str) -> None:
+        """Apply a simple per-client fixed-window request budget."""
+        now = time.monotonic()
+        with self._rate_lock:
+            count, reset_at = self._rate_buckets.get(key, (0, now + self.rate_limit_window_seconds))
+            if now >= reset_at:
+                count, reset_at = 0, now + self.rate_limit_window_seconds
+            if count >= self.rate_limit_requests:
+                raise RequestError(429, "rate_limit_exceeded", "request rate limit exceeded")
+            self._rate_buckets[key] = (count + 1, reset_at)
+
+    def acquire_run_slot(self) -> None:
+        """Reserve a run slot, rejecting quickly when the process is saturated."""
+        if not self._run_semaphore.acquire(blocking=False):
+            raise RequestError(503, "concurrency_limit_exceeded", "too many concurrent orchestration runs")
+
+    def release_run_slot(self) -> None:
+        """Release a run slot acquired by acquire_run_slot."""
+        self._run_semaphore.release()
+
+    def readiness_profile(self) -> dict[str, Any]:
+        """Return a secret-free security profile for sales-readiness evidence."""
+        if self.bearer_verifier is not None:
+            auth_mode = "external_bearer_verifier"
+        elif self.admin_token and self.inference_token:
+            auth_mode = "split_token"
+        elif self.auth_token:
+            auth_mode = "single_token"
+        else:
+            auth_mode = "auth_not_configured"
+        return {
+            "auth_mode": auth_mode,
+            "allow_public_bind": self.allow_public_bind,
+            "expose_trace_by_default": self.expose_trace_by_default,
+            "rate_limit_requests": self.rate_limit_requests,
+            "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "max_concurrent_runs": self.max_concurrent_runs,
+            "max_admin_sessions": self.max_admin_sessions,
+            "admin_session_secure_cookie": self.admin_session_secure_cookie,
+        }
+
+
+def _error_payload(error_code: str, error_message: str, error_detail: dict[str, Any] | None = None) -> dict[str, Any]:
+    detail = error_detail or {}
+    return {
+        "error": {"code": error_code, "message": error_message, "detail": detail},
+        "error_code": error_code,
+        "error_message": error_message,
+        "error_detail": detail,
+    }
+
+
+_PROVIDER_FAILURE_GUIDANCE: dict[str, str] = {
+    "invalid_request_error": "Adjust the request parameters and retry.",
+    "authentication_error": "Verify the credential registered for this model in the credential registry.",
+    "payment_required": "Add payment capacity to the provider account that serves this model.",
+    "permission_error": "Request provider access for this model from the operator.",
+    "model_not_found": "Check the model id against the provider's model list and retry with a valid one.",
+    "request_too_large": "Reduce the request size (shorter input or lower max tokens).",
+    "rate_limit_exceeded": "Retry after a short delay; the provider is throttling this model.",
+    "conflict": "Resolve the conflicting in-flight operation before retrying.",
+    "provider_timeout": "The provider accepted but did not finish in time; retrying may succeed.",
+    "provider_connection_error": "The provider was unreachable; check network reachability before retrying.",
+    "tls_failure": "A transport-layer security error interrupted the provider connection; retrying may succeed.",
+    "tls_verification_failed": "Verify the provider endpoint certificate chain before retrying.",
+    "api_error": "The provider reported an internal failure; retrying may succeed.",
+    "service_unavailable": "The provider is temporarily unavailable; retry after a short delay.",
+}
+
+
+def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
+    """Build one caller-actionable sentence for a classified upstream failure.
+
+    The message names which model/agent failed and what to do next; it never
+    echoes raw provider diagnostics beyond the bounded redacted sentence.
+    """
+    guidance = _PROVIDER_FAILURE_GUIDANCE.get(
+        exc.error_code, "Review the request or contact the operator."
+    )
+    return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+
+
+def _cache_bypass_header(value: str | None) -> bool:
+    """Parse the opt-in cache bypass header without accepting ambiguous values."""
+    if value is None or not value.strip():
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise RequestError(400, "invalid_cache_bypass", "X-Cache-Bypass must be true, false, 1, or 0")
+
+
+MAX_JSON_NESTING_DEPTH = 32
+
+
+def _reject_excessive_json_nesting(payload: bytes, max_depth: int = MAX_JSON_NESTING_DEPTH) -> None:
+    """Reject JSON with object/array nesting deeper than max_depth before parsing.
+
+    json.loads() has no built-in depth cap, so a deeply nested payload well
+    under max_body_bytes can still burn disproportionate CPU/stack during
+    parsing (JSON-bomb DoS). Structural brackets are always single ASCII
+    bytes and UTF-8 continuation/lead bytes are always >= 0x80, so a raw
+    byte scan that only toggles on an unescaped '"' is safe without decoding.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in payload:
+        char = chr(byte)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+            if depth > max_depth:
+                raise RequestError(400, "invalid_json", "request body JSON nesting exceeds the allowed depth")
+        elif char in "}]":
+            depth -= 1
+
+
+TOOL_FALLBACK_STOPPED_STATUS = 409
+TOOL_FALLBACK_STOPPED_CODE = "tool_execution_stopped"
+TOOL_FALLBACK_STOPPED_MESSAGE = (
+    "tool execution stopped because no safe retry or failover was available"
+)
+
+
+def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, Any]:
+    """Return secret-free structured evidence for one fail-closed tool decision."""
+    decision = error.decision
+    detail = {
+        "action": decision.action.value,
+        "failure_kind": decision.kind.value,
+        "reason_code": decision.reason_code,
+    }
+    observed_kind = decision.observed_kind or decision.kind
+    if observed_kind is not decision.kind:
+        detail["observed_failure_kind"] = observed_kind.value
+    return detail
+
+
+def _coerce_json(payload: bytes) -> dict[str, Any]:
+    _reject_excessive_json_nesting(payload)
+    value = json.loads(payload.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise RequestError(400, "invalid_json", "request body must be a JSON object")
+    return value
+
+
+
+
+def _coerce_optional_bool(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> bool | None:
+    """Treat null/empty as omit; accept bool, 0/1 int or whole float, and true/false strings.
+
+    ``True``/``False`` are not accepted via the int branch (``bool`` is a
+    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce. Whole
+    floats (``0.0``/``1.0``) and whole-float strings (``"0.0"``/``"1.0"``) from
+    form/JS SDKs coerce the same way. Other strings are case-insensitive
+    ``true``/``false`` (with incidental whitespace stripped).
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    if type(value) is float and value in (0.0, 1.0):
+        return bool(int(value))
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+        # Whole-float digit strings ("0.0", "1.00") from form encodings.
+        try:
+            as_float = float(lowered)
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+        if as_float in (0.0, 1.0) and as_float.is_integer():
+            return bool(int(as_float))
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_int(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> int | None:
+    """Treat null/empty as omit; accept int, digit strings, and whole-number floats.
+
+    JS JSON and some SDKs serialize integers as strings (``"1"``), whole floats
+    (``1.0``), or whole-float *strings* (``"1.0"`` / ``"0.0"`` from form encodings).
+    All coerce to ``int``; non-integral floats/strings and bools fail closed.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
+            return int(stripped)
+        # Whole-number float strings ("1.0", "0.0", " 2.00 ") from JS form SDKs.
+        try:
+            as_float = float(stripped)
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+        if as_float.is_integer() and abs(as_float) <= 2**53:
+            return int(as_float)
+        raise RequestError(400, error_code, message)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer() and abs(value) <= 2**53:
+            return int(value)
+        raise RequestError(400, error_code, message)
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_float(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> float | None:
+    """Treat null/empty as omit; accept int/float and numeric strings."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+    raise RequestError(400, error_code, message)
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Legacy Completions ``prompt`` → single user message list.
+
+    Accepts OpenAI shapes:
+
+    - non-empty string
+    - non-empty array of non-empty strings (at most 128 items; joined with newlines)
+    - non-empty array of non-negative token integers (whole floats like ``1.0`` ok)
+    - non-empty array of token-integer arrays (joined like string arrays)
+
+    Token sequences are re-encoded to a stable text surrogate for string
+    completion backends (same encoding as embeddings). Bools, negatives,
+    non-integral floats, and mixed token/string batches fail closed.
+    """
+    if isinstance(prompt, str):
+        if not prompt.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 128:
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "prompt array must contain at most 128 items",
+            )
+        # Single token sequence: [1, 2, 3] / [1.0, 2.0] → one user message.
+        coerced_tokens = _coerce_embedding_token_sequence(prompt)
+        if coerced_tokens is not None:
+            text = _embedding_token_sequence_to_text(coerced_tokens)
+            if len(text) > 32_000:
+                raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+            return [{"role": "user", "content": text}]
+        # Batch of token sequences: [[1,2],[3]] — join surrogates like string arrays.
+        if isinstance(prompt[0], list):
+            batch_tokens: list[list[int]] = []
+            for item in prompt:
+                coerced = _coerce_embedding_token_sequence(item)
+                if coerced is None:
+                    raise RequestError(
+                        400,
+                        "invalid_prompt",
+                        "token-id prompt arrays must contain non-negative token integers",
+                    )
+                batch_tokens.append(coerced)
+            parts = [_embedding_token_sequence_to_text(item) for item in batch_tokens]
+            joined = "\n".join(parts)
+            if len(joined) > 32_000:
+                raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+            return [{"role": "user", "content": joined}]
+        # Apparent token sequence with bools/negatives/non-integral floats — fail closed.
+        if all(_is_token_id_shaped(item) for item in prompt):
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "token-id prompts must be non-negative integers",
+            )
+        parts = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            if not item.strip():
+                raise RequestError(
+                    400,
+                    "invalid_prompt",
+                    "prompt array items must be non-empty strings",
+                )
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(joined) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+
+
+def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``stream`` — strict boolean honesty contract.
+
+    OpenAI Completions accepts streaming. This gateway:
+    - accepts omit and ``stream=false`` as the non-streaming text_completion path
+    - rejects ``stream=true`` with a clear redirect to chat completions
+    - rejects non-boolean values fail-closed (no silent coercion)
+    """
+    if "stream" not in body:
+        return None
+    stream = body.get("stream")
+    stream = _coerce_optional_bool(
+        stream, error_code="invalid_stream", message="stream must be a boolean"
+    )
+    if stream is None:
+        return None
+    if stream is True:
+        raise RequestError(
+            400,
+            "invalid_stream",
+            "stream is not supported on /v1/completions; use /v1/chat/completions",
+        )
+    return stream
+
+
+def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``echo`` — boolean / JS 0/1; ``true`` is not supported.
+
+    OpenAI can prepend the prompt to the completion when ``echo`` is true. This
+    gateway does not implement that behaviour, so ``echo=true`` fails closed with
+    a clear ``invalid_echo`` error. ``false``/``0`` and omit remain valid.
+    """
+    if "echo" not in body:
+        return None
+    echo = _coerce_optional_bool(
+        body.get("echo"),
+        error_code="invalid_echo",
+        message="echo must be a boolean",
+    )
+    if echo is None:
+        return None
+    if echo is True:
+        raise RequestError(
+            400,
+            "invalid_echo",
+            "echo=true is not supported on /v1/completions",
+        )
+    return echo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _coerce_logit_bias_value(value: Any) -> float:
+    """Coerce a logit_bias map value to float in [-100, 100].
+
+    Accepts int/float and numeric strings (JS form SDKs); bools fail closed.
+    """
+    number = _coerce_optional_float(
+        value,
+        error_code="invalid_logit_bias",
+        message="logit_bias values must be numbers in [-100, 100]",
+    )
+    if number is None or isinstance(value, bool):
+        raise RequestError(
+            400,
+            "invalid_logit_bias",
+            "logit_bias values must be numbers in [-100, 100]",
+        )
+    if number < -100 or number > 100:
+        raise RequestError(
+            400,
+            "invalid_logit_bias",
+            "logit_bias values must be numbers in [-100, 100]",
+        )
+    return float(number)
+
+
+def _coerce_logit_bias_token_key(key: Any) -> str:
+    """Normalize a logit_bias map key to a digit token id string.
+
+    Form/JS SDKs often pad numeric keys with incidental whitespace (``" 100 "``).
+    Strip before the digit check so type validation matches OpenAI token-id
+    maps; empty-after-strip and non-digit keys fail closed.
+    """
+    token = str(key).strip()
+    if not token.isdigit():
+        raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+    return token
+
+
+def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Legacy Completions ``logit_bias`` — empty object is a no-op; non-empty fails closed.
+
+    OpenAI uses logit_bias to bias token sampling. This gateway does not apply
+    token biases on the Completions route. An empty object is an honest no-op
+    (SDK clients often send ``{}``). Any non-empty map is type-checked then
+    rejected so clients never believe sampling bias was applied.
+    """
+    if "logit_bias" not in body:
+        return None
+    bias = body.get("logit_bias")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if bias is None:
+        return None
+    if not isinstance(bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object of token biases")
+    # Empty object: no tokens to bias — treat as omit (honest no-op).
+    if len(bias) == 0:
+        return {}
+    if len(bias) > 300:
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
+    for key, value in bias.items():
+        _coerce_logit_bias_token_key(key)
+        _coerce_logit_bias_value(value)
+    raise RequestError(
+        400,
+        "invalid_logit_bias",
+        "logit_bias is not supported on /v1/completions",
+    )
+
+
+
+def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str | None:
+    """OpenAI ``service_tier`` — known tier names are no-ops; unknown fail closed.
+
+    OpenAI uses service_tier for capacity priority (auto/default/flex/priority).
+    This gateway has no separate tiered capacity plane, so recognised OpenAI
+    names are accepted as default-capacity no-ops (SDK clients often send flex).
+    Explicit JSON null or empty string is treat-as-omit. Unknown values fail
+    closed so clients cannot invent tier labels.
+    """
+    if "service_tier" not in body:
+        return None
+    service_tier = body.get("service_tier")
+    # Explicit JSON null or empty string is treat-as-omit (SDK optional default).
+    if service_tier is None or (isinstance(service_tier, str) and not service_tier.strip()):
+        return None
+    if not isinstance(service_tier, str):
+        raise RequestError(400, "invalid_service_tier", "service_tier must be a string")
+    # Strip incidental whitespace and casefold so " AUTO " / " Flex " match.
+    service_tier = service_tier.strip().lower()
+    if service_tier not in {"auto", "default", "flex", "priority"}:
+        raise RequestError(
+            400,
+            "invalid_service_tier",
+            "service_tier must be one of auto, default, flex, priority "
+            f"on {endpoint_path}",
+        )
+    body["service_tier"] = service_tier
+    return service_tier
+
+
+def _validate_completions_user(body: dict[str, Any]) -> str | None:
+    """OpenAI ``user`` end-user id — optional string, max 64 characters.
+
+    Explicit JSON null is treat-as-omit (SDK optional default). Empty or
+    whitespace-only strings still fail closed so clients cannot attribute spend
+    to a blank identity. Scalar bool/int/float values coerce to strings (JS/form
+    SDKs often send numeric account ids); objects/arrays fail closed. Coerced
+    values are written back so proxy/egress sees an honest string identity.
+    """
+    if "user" not in body:
+        return None
+    user = body.get("user")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if user is None:
+        return None
+    if isinstance(user, bool):
+        # JSON bool → lowercase OpenAI-style string form (parity with metadata).
+        user = "true" if user else "false"
+    elif type(user) is int:
+        user = str(user)
+    elif isinstance(user, float):
+        # Whole floats stringify compactly (1.0 → "1"); others use str().
+        if user.is_integer() and abs(user) <= 2**53:
+            user = str(int(user))
+        else:
+            user = str(user)
+    elif not isinstance(user, str):
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    if not user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string of at most 64 characters")
+    if len(user) > 64:
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    body["user"] = user
+    return user
+
+def _validate_completions_n(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``n`` — positive integer; only ``n=1`` is supported.
+
+    OpenAI can return multiple completions when ``n > 1``. This gateway always
+    returns a single choice, so ``n > 1`` fails closed. ``n=1`` and omit remain
+    valid. Cap 128 is retained for clear range errors before the support check.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "n" not in body:
+        return None
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be a positive integer",
+    )
+    if n is None:
+        return None
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if n > 128:
+        raise RequestError(400, "invalid_n", "n must be at most 128")
+    if n > 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n greater than 1 is not supported on /v1/completions",
+        )
+    return n
+
+
+def _validate_responses_n(body: dict[str, Any]) -> int | None:
+    """Responses ``n`` — only omit or 1; multi-choice is not framed on passthrough.
+
+    OpenAI may request multiple samples via ``n``. This gateway's Responses
+    passthrough returns a single completion shape, so ``n`` greater than 1
+    fails closed. ``n=1`` and omit remain valid.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "n" not in body:
+        return None
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be an integer",
+    )
+    if n is None:
+        return None
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if n > 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n greater than 1 is not supported on /v1/responses",
+        )
+    return n
+
+
+
+def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Responses ``logit_bias`` — digit-token map values in [-100, 100]; pass through.
+
+    Invalid shapes fail closed before provider egress. Valid maps (including empty)
+    are forwarded on Responses passthrough. Numeric strings coerce (JS form SDKs);
+    padded digit keys strip before write-back so providers see clean token ids.
+    """
+    if "logit_bias" not in body:
+        return None
+    bias = body.get("logit_bias")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if bias is None:
+        return None
+    if not isinstance(bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object of token biases")
+    if len(bias) > 300:
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
+    cleaned: dict[str, float] = {}
+    for key, value in bias.items():
+        token = _coerce_logit_bias_token_key(key)
+        cleaned[token] = _coerce_logit_bias_value(value)
+    body["logit_bias"] = cleaned
+    return cleaned
+
+
+def _validate_responses_logprobs(body: dict[str, Any]) -> None:
+    """Responses ``logprobs`` / ``top_logprobs`` — OpenAI shape; invalid fail closed.
+
+    ``logprobs`` must be boolean when present. ``top_logprobs`` requires
+    ``logprobs=true`` and must be an integer in [0, 20].
+    Explicit JSON null for either field is treat-as-omit (SDK optional default).
+    """
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if lp is not None:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            else:
+                body["logprobs"] = coerced
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            return
+        if body.get("logprobs") is not True:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs requires logprobs=true on /v1/responses",
+            )
+        # Digit strings / whole floats coerce (JS JSON integer-as-string).
+        coerced_tlp = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer in [0, 20]",
+        )
+        if coerced_tlp is None:
+            return
+        if coerced_tlp < 0 or coerced_tlp > 20:
+            raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer in [0, 20]")
+        body["top_logprobs"] = coerced_tlp
+
+
+
+def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None:
+    """Responses ``parallel_tool_calls`` — strict boolean when present.
+
+    OpenAI uses this flag to allow concurrent tool invocations. Invalid types
+    fail closed before provider passthrough so clients never believe a coerced
+    value was applied. ``true`` requires a non-empty ``tools`` array (chat parity).
+    """
+    if "parallel_tool_calls" not in body:
+        return None
+    value = body.get("parallel_tool_calls")
+    value = _coerce_optional_bool(
+        value,
+        error_code="invalid_parallel_tool_calls",
+        message="parallel_tool_calls must be a boolean",
+    )
+    if value is None:
+        return None
+    if value is True:
+        tools = body.get("tools") if "tools" in body else None
+        if not isinstance(tools, list) or not tools:
+            raise RequestError(
+                400,
+                "invalid_parallel_tool_calls",
+                "parallel_tool_calls=true requires tools on /v1/responses",
+            )
+    return value
+
+
+def _validate_responses_seed(body: dict[str, Any]) -> int | None:
+    """Responses ``seed`` — signed int64; valid values pass through to the provider.
+
+    Unlike Completions (where seed is not applied), Responses passthrough forwards
+    seed to the selected agent. Invalid types/ranges fail closed before egress.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "seed" not in body:
+        return None
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
+        return None
+    body["seed"] = seed
+    if seed < -(2**63) or seed > (2**63 - 1):
+        raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
+    return seed
+
+
+def _validate_responses_stop(body: dict[str, Any]) -> str | list[str] | None:
+    """Responses ``stop`` — string or ≤4 non-empty strings (≤256 chars); pass through.
+
+    Shape matches OpenAI. Valid stop values are forwarded on Responses passthrough;
+    invalid shapes fail closed so clients never believe a broken stop list was applied.
+    """
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if stop is None:
+        return None
+    if isinstance(stop, str):
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
+            return None
+        if len(stop) > 256:
+            raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+        return stop
+    if isinstance(stop, list):
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
+        if not stop:
+            return None
+        if len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+        for item in stop:
+            if not isinstance(item, str) or not item:
+                raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+            if len(item) > 256:
+                raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+        return stop
+    raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+
+
+def _validate_completions_stop(body: dict[str, Any]) -> str | list[str] | None:
+    """Legacy Completions ``stop`` — type-checked then rejected (not applied).
+
+    OpenAI uses stop sequences to cut generation early. This gateway validates
+    shape (string or ≤4 non-empty strings, each ≤256 chars) but does not apply
+    stop sequences on the Completions path, so any provided non-empty ``stop`` fails closed. Empty string/array/null are omit no-ops.
+    """
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if stop is None:
+        return None
+    if isinstance(stop, str):
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
+            return None
+        if len(stop) > 256:
+            raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    elif isinstance(stop, list):
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
+        if not stop:
+            return None
+        if len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+        for item in stop:
+            if not isinstance(item, str) or not item:
+                raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+            if len(item) > 256:
+                raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    else:
+        raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+    raise RequestError(
+        400,
+        "invalid_stop",
+        "stop sequences are not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_seed(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``seed`` — type-checked then rejected (not applied).
+
+    OpenAI uses seed for best-effort deterministic sampling. This gateway validates
+    signed int64 integers but does not apply seed on the Completions route path,
+    so any provided ``seed`` fails closed. Omit remains valid.
+    Digit strings and whole-number floats (JS JSON) coerce before the support reject.
+    """
+    if "seed" not in body:
+        return None
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
+        return None
+    body["seed"] = seed
+    if seed < -(2**63) or seed > (2**63 - 1):
+        raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
+    raise RequestError(
+        400,
+        "invalid_seed",
+        "seed is not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``frequency_penalty`` — number in [-2, 2]."""
+    if "frequency_penalty" not in body:
+        return None
+    value = body.get("frequency_penalty")
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_frequency_penalty",
+        message="frequency_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
+        return None
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
+    body["frequency_penalty"] = number
+    return number
+
+def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``presence_penalty`` — number in [-2, 2]."""
+    if "presence_penalty" not in body:
+        return None
+    value = body.get("presence_penalty")
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_presence_penalty",
+        message="presence_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
+        return None
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
+    body["presence_penalty"] = number
+    return number
+
+def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``temperature`` — number in [0, 2]."""
+    if "temperature" not in body:
+        return None
+    temperature = body.get("temperature")
+    temperature = _coerce_optional_float(
+        temperature,
+        error_code="invalid_temperature",
+        message="temperature must be a number in [0, 2]",
+    )
+    if temperature is None:
+        return None
+    value = float(temperature)
+    if value < 0 or value > 2:
+        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    body["temperature"] = value
+    return value
+
+def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``top_p`` — number in (0, 1] (OpenAI nucleus sampling)."""
+    if "top_p" not in body:
+        return None
+    top_p = body.get("top_p")
+    top_p = _coerce_optional_float(
+        top_p,
+        error_code="invalid_top_p",
+        message="top_p must be a number in (0, 1]",
+    )
+    if top_p is None:
+        return None
+    value = float(top_p)
+    if value <= 0 or value > 1:
+        raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
+    body["top_p"] = value
+    return value
+
+def _validate_completions_model(body: dict[str, Any]) -> str:
+    """Validate or default the chat/completions model.
+
+    An omitted ``model`` selects the advertised gateway default so clients do
+    not have to know any deployment name. Explicit JSON null or a blank string
+    are client mistakes, not omissions, and still fail closed (400). Leading
+    and trailing whitespace is stripped and written back so tools/response_format
+    passthrough (``proxy_completion``) matches the same pool model id as the
+    orchestration path; form/JS SDKs often pad model names.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_chat_model(body: dict[str, Any]) -> str:
+    """Validate or default the Chat Completions model.
+
+    Chat exposes the advertised gateway deployment id as its omitted-model
+    default. Explicit JSON ``null`` is not omission and still fails closed so
+    callers cannot accidentally request the default while believing they named a
+    concrete deployment.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
+    """Validate legacy Completions ``max_tokens`` as a positive integer."""
+    if "max_tokens" not in body:
+        return None
+    max_tokens = body.get("max_tokens")
+    max_tokens = _coerce_optional_int(
+        max_tokens,
+        error_code="invalid_max_tokens",
+        message="max_tokens must be a positive integer",
+    )
+    if max_tokens is None:
+        return None
+    if max_tokens < 1:
+        raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
+    body["max_tokens"] = max_tokens
+    return max_tokens
+
+def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
+    """Validate Chat Completions ``max_completion_tokens`` as a positive integer.
+
+    OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
+    ``max_completion_tokens`` wins so clients get a single honest budget.
+    """
+    if "max_completion_tokens" not in body:
+        return None
+    max_completion_tokens = body.get("max_completion_tokens")
+    max_completion_tokens = _coerce_optional_int(
+        max_completion_tokens,
+        error_code="invalid_max_completion_tokens",
+        message="max_completion_tokens must be a positive integer",
+    )
+    if max_completion_tokens is None:
+        return None
+    if max_completion_tokens < 1:
+        raise RequestError(
+            400,
+            "invalid_max_completion_tokens",
+            "max_completion_tokens must be a positive integer",
+        )
+    body["max_completion_tokens"] = max_completion_tokens
+    return max_completion_tokens
+
+
+def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
+    """Responses ``max_output_tokens`` — OpenAI-native output budget (positive int).
+
+    Official Responses clients send ``max_output_tokens`` rather than chat-era
+    ``max_tokens``. Accept and type-check so the field is not opaque
+    ``unknown_fields``; value is left on the body for provider passthrough.
+    Normalize aliases with precedence: native, completion, then legacy tokens.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    output_token_limit = _coerce_optional_int(
+        body.get("max_output_tokens"),
+        error_code="invalid_max_output_tokens",
+        message="max_output_tokens must be a positive integer",
+    )
+    if output_token_limit is None:
+        output_token_limit = _validate_chat_max_completion_tokens(body)
+    if output_token_limit is None:
+        output_token_limit = _validate_completions_max_tokens(body)
+    if output_token_limit is None:
+        return None
+    body["max_output_tokens"] = output_token_limit
+    if output_token_limit < 1:
+        raise RequestError(
+            400,
+            "invalid_max_output_tokens",
+            "max_output_tokens must be a positive integer",
+        )
+    return output_token_limit
+
+
+
+def _validate_max_tool_calls(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str,
+) -> None:
+    """Reject ``max_tool_calls`` — no multi-step tool loop on this gateway.
+
+    OpenAI may cap tool-call rounds via ``max_tool_calls`` (Responses-native;
+    some chat SDKs also send it). This gateway proxies a single completion and
+    does not run a tool loop, so any provided value fails closed with a named
+    error rather than opaque ``unknown_fields``. Explicit JSON null, empty
+    / whitespace strings, and zero (int/float/digit or whole-float string
+    ``"0"`` / ``"0.0"``) are treat-as-omit (SDK optional defaults / no tool
+    rounds requested).
+    """
+    if "max_tool_calls" not in body:
+        return
+    value = body.get("max_tool_calls")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Zero is omit-equivalent (no tool-call rounds). Digit/"0"/0.0/"0.0" coerce first.
+    if type(value) is int and value == 0:
+        return
+    if isinstance(value, float) and value == 0.0:
+        return
+    if isinstance(value, str) and value.strip() == "0":
+        return
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_max_tool_calls",
+        message="max_tool_calls must be an integer",
+    )
+    if coerced is None or coerced == 0:
+        return
+    raise RequestError(
+        400,
+        "invalid_max_tool_calls",
+        f"max_tool_calls is not supported on {endpoint_path}",
+    )
+
+
+def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
+    """Responses ``max_tool_calls`` — named reject; null/empty omit."""
+    _validate_max_tool_calls(body, endpoint_path="/v1/responses")
+
+
+def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
+    """Legacy Completions ``logprobs`` — token logprobs are not supported.
+
+    This gateway always returns ``logprobs: null`` on text completions, so
+    boolean ``true`` and nonzero integer logprobs fail closed. ``false``, omit,
+    integer ``0``, and string ``false``/``0`` (JS form defaults) are
+    omit-equivalent no-ops.
+    """
+    if "logprobs" not in body:
+        return None
+    logprobs = body.get("logprobs")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if logprobs is None:
+        return None
+    # Integer 0 is historical OpenAI "no logprobs" — omit-equivalent.
+    if type(logprobs) is int and logprobs == 0:
+        return None
+    # Whole-float 0.0 (JS) and digit/float-string "0"/"0.0" are omit-equivalent.
+    if isinstance(logprobs, float) and logprobs == 0.0:
+        return None
+    if isinstance(logprobs, str) and logprobs.strip():
+        try:
+            as_zero = _coerce_optional_int(
+                logprobs,
+                error_code="invalid_logprobs",
+                message="logprobs must be false; token logprobs are not supported on /v1/completions",
+            )
+            if as_zero == 0:
+                return None
+        except RequestError:
+            pass  # fall through to bool coerce / fail-closed
+    coerced = _coerce_optional_bool(
+        logprobs,
+        error_code="invalid_logprobs",
+        message="logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+    if coerced is None or coerced is False:
+        return None if coerced is None else False
+    raise RequestError(
+        400,
+        "invalid_logprobs",
+        "logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+
+
+def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
+    """Reject non-zero ``top_logprobs`` on legacy Completions.
+
+    OpenAI Completions historically used integer ``logprobs`` (0–5); modern
+    chat uses boolean ``logprobs`` + ``top_logprobs``. This gateway never returns
+    token logprobs on /v1/completions, so non-zero ``top_logprobs`` fails closed
+    with ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
+    Explicit JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string ``"0"`` / ``"0.0"``) is treat-as-omit — digit coerce
+    then nonzero reject (parity with ``max_tool_calls``).
+    """
+    if "top_logprobs" not in body:
+        return
+    value = body.get("top_logprobs")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_top_logprobs",
+        message="top_logprobs must be an integer",
+    )
+    if coerced is None or coerced == 0:
+        return
+    raise RequestError(
+        400,
+        "invalid_top_logprobs",
+        "top_logprobs is not supported on /v1/completions",
+    )
+
+
+def _validate_completions_suffix(body: dict[str, Any]) -> str | None:
+    """Legacy Completions ``suffix`` — optional string; non-empty is not supported.
+
+    OpenAI appends ``suffix`` after the model completion. This gateway does not
+    implement that insertion, so a non-empty suffix fails closed. Empty string
+    and omit remain valid. Non-string values and oversized strings still fail.
+    """
+    if "suffix" not in body:
+        return None
+    suffix = body.get("suffix")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if suffix is None:
+        return None
+    if not isinstance(suffix, str):
+        raise RequestError(400, "invalid_suffix", "suffix must be a string")
+    # Empty/whitespace-only is treat-as-omit (SDK optional blank).
+    if not suffix.strip():
+        return None
+    if len(suffix) > 8_000:
+        raise RequestError(400, "invalid_suffix", "suffix must be at most 8000 characters")
+    raise RequestError(
+        400,
+        "invalid_suffix",
+        "non-empty suffix is not supported on /v1/completions",
+    )
+
+
+def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``best_of`` — positive integer, ``best_of >= n``, max 1.
+
+    OpenAI generates ``best_of`` candidates server-side and returns the top ``n``.
+    This gateway runs a single completion path, so ``best_of > 1`` fails closed
+    rather than silently returning one unranked candidate. ``best_of=1`` (and
+    omit) remain valid. Boolean ``True``/``False`` are rejected.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "best_of" not in body:
+        return None
+    best_of = _coerce_optional_int(
+        body.get("best_of"),
+        error_code="invalid_best_of",
+        message="best_of must be a positive integer",
+    )
+    if best_of is None:
+        return None
+    body["best_of"] = best_of
+    if best_of < 1:
+        raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
+    if best_of > 128:
+        raise RequestError(400, "invalid_best_of", "best_of must be at most 128")
+    if best_of > 1:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of greater than 1 is not supported on /v1/completions",
+        )
+    n = body.get("n", 1)
+    if n is None or (isinstance(n, str) and not str(n).strip()):
+        n = 1
+    else:
+        n = _coerce_optional_int(
+            n,
+            error_code="invalid_n",
+            message="n must be a positive integer",
+        )
+        if n is None:
+            n = 1
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if best_of < n:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of must be greater than or equal to n",
+        )
+    return best_of
+
+
+def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+
+    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
+    This gateway rejects Completions streaming, so a well-formed ``stream_options``
+    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when their value is null so clients cannot smuggle
+    unsupported flags past the allow-list via null serialization.
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None:
+        return None
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    allowed = {"include_usage", "include_obfuscation"}
+    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
+    if not opts:
+        return None
+    # Coerce string/0-1 bool forms before all-false omit checks.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
+    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
+    if set(opts) <= allowed and all(v is False for v in opts.values()):
+        return None
+    if body.get("stream") is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true",
+        )
+    return opts
+
+
+
+
+def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[str, Any] | None:
+    """Chat Completions ``stream_options`` — validate supported streaming flags.
+
+    Shape matches OpenAI (include_usage / include_obfuscation booleans). This
+    gateway's SSE route path emits a final usage chunk but does not apply stream
+    obfuscation, so only include_obfuscation=true fails closed.
+    Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when their value is null so clients cannot smuggle
+    unsupported flags past the allow-list via null serialization.
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None:
+        return None
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    allowed = {"include_usage", "include_obfuscation"}
+    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
+    if not opts:
+        return None
+    # Coerce string/0-1 bool forms before all-false omit and true reject.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
+    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
+    if set(opts) <= allowed and all(v is False for v in opts.values()):
+        return None
+    if stream is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true on /v1/chat/completions",
+        )
+    if opts.get("include_obfuscation") is True:
+        # SSE obfuscation is not applied by this gateway; fail closed.
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
+        )
+    return opts
+
+
+def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
+    unknown = sorted(set(body) - allowed)
+    if unknown:
+        raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_zdr_only(body: dict[str, Any]) -> bool:
+    """Validate the naruon request policy without treating it as provider input."""
+    value = body.get("zdr_only", False)
+    if type(value) is not bool:
+        raise RequestError(400, "invalid_zdr_only", "zdr_only must be a boolean")
+    return value
+
+
+
+def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Official Responses ``text`` — ``format`` shapes, omit-real optionals.
+
+    Official SDKs send ``text: {format: {type: text}}`` as the default
+    structured-output plane (OpenAI, 2024). Accept ``text`` / ``json_object``
+    / ``json_schema`` formats, pop JSON-null or blank ``description`` and
+    JSON-null ``strict`` so passthrough matches omit, and fail closed on
+    unknown keys. ``verbosity`` is not applied: JSON null / blank is popped;
+    any other value is ``invalid_text``. ``text`` and ``response_format``
+    cannot both be set — accepting the official default must not open a
+    dual-plane passthrough. Flat ``json_schema`` ``name`` matches
+    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only).
+    """
+    if "text" not in body:
+        return None
+    text = body.get("text")
+    # Explicit JSON null, empty object, or empty/whitespace string is omit.
+    if (
+        text is None
+        or (isinstance(text, dict) and not text)
+        or (isinstance(text, str) and not text.strip())
+    ):
+        return None
+    if not isinstance(text, dict):
+        raise RequestError(400, "invalid_text", "text must be an object")
+    unknown_text = sorted(set(text) - {"format", "verbosity"})
+    if unknown_text:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text accepts only format and verbosity",
+            {"fields": unknown_text},
+        )
+    if "verbosity" in text:
+        verbosity = text.get("verbosity")
+        if verbosity is None or (isinstance(verbosity, str) and not verbosity.strip()):
+            text.pop("verbosity")
+        elif isinstance(verbosity, str) and verbosity.strip().lower() in {
+            "low",
+            "medium",
+            "high",
+        }:
+            # Known OpenAI levels are default-length no-ops (no verbosity plane).
+            text["verbosity"] = verbosity.strip().lower()
+        else:
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.verbosity must be one of low, medium, high",
+            )
+    response_format = body.get("response_format")
+    response_format_present = not (
+        response_format is None
+        or (isinstance(response_format, dict) and not response_format)
+        or (isinstance(response_format, str) and not response_format.strip())
+    )
+    if "format" not in text:
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    fmt = text.get("format")
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
+        text.pop("format", None)
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    if not isinstance(fmt, dict):
+        raise RequestError(400, "invalid_text", "text.format must be an object")
+    if response_format_present:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text and response_format cannot both be set on /v1/responses; "
+            "use official text.format only",
+        )
+    fmt_type = fmt.get("type")
+    # Explicit JSON null or blank type alone is treat-as-omit (SDK optional default).
+    if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
+        remaining_fmt = {key: value for key, value in fmt.items() if key != "type"}
+        if not remaining_fmt:
+            text.pop("format", None)
+            if not text:
+                return None
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format is required when text is provided",
+            )
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.type must be one of text, json_object, json_schema",
+        )
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
+    if fmt_type not in ("text", "json_object", "json_schema"):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.type must be one of text, json_object, json_schema",
+        )
+    if fmt_type in ("text", "json_object"):
+        unknown_fmt = sorted(set(fmt) - {"type"})
+        if unknown_fmt:
+            raise RequestError(
+                400,
+                "invalid_text",
+                f"text.format with type {fmt_type} accepts only the type field",
+                {"fields": unknown_fmt},
+            )
+        return text
+    unknown_fmt = sorted(set(fmt) - {"type", "name", "schema", "description", "strict"})
+    if unknown_fmt:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format json_schema accepts only type, name, schema, description, and strict",
+            {"fields": unknown_fmt},
+        )
+    name = fmt.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must be a non-empty string",
+        )
+    # Strip incidental whitespace before length/charset (SDK pad).
+    name = name.strip()
+    fmt["name"] = name
+    # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+    # so buyers get invalid_text instead of a provider 400.
+    if len(name) > 64:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must be at most 64 characters",
+        )
+    if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must match [a-zA-Z0-9_-]",
+        )
+    schema_body = fmt.get("schema")
+    if not isinstance(schema_body, dict):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.schema must be an object",
+        )
+    if "description" in fmt:
+        description_value = fmt.get("description")
+        if description_value is None or (
+            isinstance(description_value, str) and not description_value.strip()
+        ):
+            fmt.pop("description")
+        elif not isinstance(description_value, str):
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format.description must be a string when provided",
+            )
+    if "strict" in fmt:
+        strict_value = fmt.get("strict")
+        if strict_value is None or (
+            isinstance(strict_value, str) and not strict_value.strip()
+        ):
+            fmt.pop("strict")
+        else:
+            coerced_strict = _coerce_optional_bool(
+                strict_value,
+                error_code="invalid_text",
+                message="text.format.strict must be a boolean when provided",
+            )
+            if coerced_strict is None:
+                fmt.pop("strict")
+            else:
+                fmt["strict"] = coerced_strict
+    return text
+
+
+def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
+    """Fail closed on OpenAI conversation-control fields this gateway does not apply.
+
+    ``previous_response_id``, ``conversation``, ``truncation``, and
+    ``include`` are real OpenAI Responses controls this gateway does not
+    apply. Accepting them as unknown fields yields opaque 400s; named
+    unsupported errors let buyers migrate cleanly. Explicit JSON null or
+    empty string for string fields is treat-as-omit (SDK optional default).
+    Empty include structures remain omit no-ops. Official ``text.format``
+    is validated by ``_validate_responses_text`` (OpenAI, 2024).
+    """
+    def _present_nonempty(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        return True
+
+    if "previous_response_id" in body and _present_nonempty(body.get("previous_response_id")):
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id is not supported on /v1/responses",
+        )
+    if "conversation" in body and _present_nonempty(body.get("conversation")):
+        raise RequestError(
+            400,
+            "invalid_conversation",
+            "conversation is not supported on /v1/responses",
+        )
+    if "truncation" in body and _present_nonempty(body.get("truncation")):
+        trunc = body.get("truncation")
+        # OpenAI truncation auto|disabled are honest no-ops here: this gateway
+        # has no multi-turn conversation window to truncate. Other values fail
+        # closed so clients never believe an unsupported policy applied.
+        if isinstance(trunc, str) and trunc.strip().lower() in {"auto", "disabled"}:
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation must be auto or disabled on /v1/responses "
+                "(or omit; multi-turn truncation is not applied)",
+            )
+    if "include" in body:
+        include = body.get("include")
+        # Explicit JSON null, empty/omit-only array, or empty/whitespace string.
+        if (
+            include is None
+            or (isinstance(include, list) and _is_omit_equivalent_list(include))
+            or (isinstance(include, str) and not include.strip())
+        ):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_include",
+                "include is not supported on /v1/responses",
+            )
+    _validate_responses_text(body)
+
+
+def _validate_responses_stream_options(body: dict[str, Any]) -> None:
+    """Responses ``stream_options`` — not supported (Responses streaming is off).
+
+    OpenAI pairs stream_options with stream=true. Virtual models can stream,
+    but this gateway does not implement usage aggregation or obfuscation flags;
+    fail closed on enabled flags rather than silently ignoring them. Explicit
+    JSON null (object or *allowed* flag values) is treat-as-omit. Unknown keys
+    fail closed even when null so clients cannot smuggle unsupported flags past
+    the allow-list via nulls.
+    """
+    if "stream_options" not in body:
+        return
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None or (isinstance(opts, dict) and not opts):
+        return
+    if isinstance(opts, dict):
+        allowed_flags = {"include_usage", "include_obfuscation"}
+        # Reject unknown keys before treating null flags as omit.
+        unknown = sorted(set(opts) - allowed_flags)
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_stream_options",
+                "stream_options contains unsupported fields",
+                {"fields": unknown},
+            )
+        # Null flag values alone are omit-equivalent (SDK optional defaults).
+        non_null = {key: value for key, value in opts.items() if value is not None}
+        if not non_null:
+            return
+        # All-false allowed flags are also omit-equivalent.
+        if set(non_null) <= allowed_flags and all(v is False for v in non_null.values()):
+            return
+    raise RequestError(
+        400,
+        "invalid_stream_options",
+        "stream_options flags are not supported on /v1/responses",
+    )
+
+
+def _validate_mode(mode: Any) -> str:
+    # Strip + casefold so " ROUTE " / "Conduct" match official aliases.
+    if isinstance(mode, str):
+        mode = mode.strip().lower()
+    if not isinstance(mode, str) or mode not in ALLOWED_MODES:
+        raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
+    return mode
+
+
+def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
+    """Validate the required trust-boundary fields for media/rerank passthrough."""
+    if "model" in body:
+        model = body["model"]
+        if not isinstance(model, str):
+            raise RequestError(400, "invalid_model", "model must be a string")
+        if not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        body["model"] = model.strip()
+    required_strings = {
+        "/v1/images/generations": ("prompt",),
+        "/v1/videos": ("prompt",),
+        "/v1/audio/speech": ("input", "voice"),
+        "/v1/rerank": ("query",),
+    }.get(path, ())
+    for required_field in required_strings:
+        if not isinstance(body.get(required_field), str) or not body[required_field].strip():
+            raise RequestError(
+                400,
+                f"invalid_{required_field}",
+                f"{required_field} must be a non-empty string",
+            )
+    if path == "/v1/audio/transcriptions":
+        audio = body.get("input_audio")
+        if not isinstance(audio, dict) or not all(
+            isinstance(audio.get(field), str) and audio[field] for field in ("data", "format")
+        ):
+            raise RequestError(400, "invalid_input_audio", "input_audio.data and input_audio.format are required")
+    if path == "/v1/rerank":
+        documents = body.get("documents")
+        if not isinstance(documents, list) or not documents:
+            raise RequestError(400, "invalid_documents", "documents must be a non-empty array")
+    if path == "/v1/audio/generations":
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise RequestError(400, "invalid_messages", "messages must be a non-empty array")
+
+
+
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> str:
+    """Fail closed when ``model_name`` is not served by any enabled agent.
+
+    OpenAI clients treat ``model`` as the deployment they paid for. Silently
+    answering with a different pool agent hides capacity/routing mismatches.
+    Virtual orchestrator-owned ids (:data:`TaskOrchestrator.GATEWAY_DEFAULT_MODEL`,
+    :data:`TaskOrchestrator.AUTO_MODEL`, :data:`TaskOrchestrator.FREE_MODEL`)
+    resolve through routing instead of an exact agent match — the gateway
+    default and auto behave identically (orchestrator-owned auto selection),
+    while the free id additionally requires a zero-cost agent. With a
+    ``required_capability`` the virtual ids resolve to a concrete capable agent
+    model because capability callers need a real deployment to forward to.
+    """
+    agents = [
+        agent
+        for agent in (getattr(orchestrator, "agents", None) or [])
+        if not getattr(agent, "disabled", False)
+    ]
+    zdr_allowed = getattr(orchestrator, "_zdr_agent_allowed", lambda agent: True)
+    if model_name in {
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    }:
+        if required_capability is None:
+            if model_name != TaskOrchestrator.FREE_MODEL:
+                if any(zdr_allowed(agent) for agent in agents):
+                    return model_name
+                raise RequestError(400, "invalid_model", "no enabled model is available")
+            if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
+                return model_name
+            raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
+        try:
+            capability_agents = orchestrator._capability_agents(required_capability)
+        except RuntimeError:
+            capability_agents = []
+        capability_agents = [agent for agent in capability_agents if zdr_allowed(agent)]
+        if model_name == TaskOrchestrator.FREE_MODEL:
+            # Deliberately the price-only ``_is_free_agent`` here, not the
+            # blind-general-chat ``_is_general_free_agent``: capability_agents
+            # is already scoped to required_capability, so a non-text
+            # ``input:<modality>`` tag (e.g. a transcription agent's
+            # ``input:audio``) is the expected shape for this exact route, not
+            # a surprise the caller needs protecting from.
+            capability_agents = [
+                agent
+                for agent in capability_agents
+                if orchestrator._is_free_agent(agent)
+            ]
+        if capability_agents:
+            return capability_agents[0].model
+        raise RequestError(
+            400,
+            "invalid_model",
+            f"no enabled {required_capability} model is available for {model_name}",
+        )
+    for agent in agents:
+        if getattr(agent, "disabled", False):
+            continue
+        if not zdr_allowed(agent):
+            continue
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
+        ):
+            return model_name
+    try:
+        group_name = canonical_group_name(model_name)
+    except (TypeError, ValueError):
+        group_name = ""
+    members = [
+        agent
+        for agent in agents
+        if group_name
+        and getattr(agent, "group_name", "") == group_name
+        and zdr_allowed(agent)
+        and (
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
+        )
+    ]
+    if members:
+        ranked_ids = orchestrator._group_router.ranked_member_ids([agent.id for agent in members])
+        by_id = {agent.id: agent for agent in members}
+        return by_id[ranked_ids[0]].model
+    raise RequestError(
+        400,
+        "invalid_model",
+        f"model {model_name!r} is not available in the agent pool",
+    )
+
+
+
+def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
+    """OpenAI multimodal content-parts array (text + image_url) for vision callers.
+
+    Parts are shape-checked and returned for provider passthrough. Unsupported
+    part types fail closed with a named error so clients never believe audio or
+    other modalities were processed. Empty/whitespace text and image URLs fail
+    closed; bare-string ``image_url`` is normalized to ``{"url": ...}``; optional
+    ``detail`` must be auto/low/high when present.
+    """
+    if not content:
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            "multipart content arrays must be non-empty",
+        )
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "message content part must be an object",
+            )
+        part_type = part.get("type")
+        # Strip + casefold so " TEXT " / "Image_Url" match official part types.
+        if isinstance(part_type, str):
+            part_type = part_type.strip().lower()
+            # Responses-style aliases used by some SDKs on chat histories.
+            if part_type in {"input_text", "output_text"}:
+                part_type = "text"
+            elif part_type == "input_image":
+                part_type = "image_url"
+            if part.get("type") != part_type:
+                part = {**part, "type": part_type}
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part requires a string text field",
+                )
+            if not text.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part text must be a non-empty string",
+                )
+            parts.append(part)
+        elif part_type == "image_url":
+            image_url = part.get("image_url")
+            # OpenAI SDKs occasionally send image_url as a bare URL string.
+            if isinstance(image_url, str):
+                if not image_url.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_message_content",
+                        "image_url content part requires a non-empty url string",
+                    )
+                image_url = {"url": image_url}
+                part = {**part, "image_url": image_url}
+            if not isinstance(image_url, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a string",
+                )
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a non-empty string",
+                )
+            if "detail" in image_url:
+                detail = image_url.get("detail")
+                # Explicit null / empty string: treat as omit (SDK optional default).
+                if detail is None or (isinstance(detail, str) and not detail.strip()):
+                    cleaned = {key: value for key, value in image_url.items() if key != "detail"}
+                    part = {**part, "image_url": cleaned}
+                else:
+                    if not isinstance(detail, str):
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be a string",
+                        )
+                    detail_normalized = detail.strip().lower()
+                    if detail_normalized not in {"auto", "low", "high"}:
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be one of auto, low, high",
+                        )
+                    if detail != detail_normalized:
+                        part = {
+                            **part,
+                            "image_url": {**image_url, "detail": detail_normalized},
+                        }
+            parts.append(part)
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "content part type must be text or image_url",
+            )
+    return parts
+
+
+def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
+    """Fail closed on chat message keys outside the OpenAI surface we honor.
+
+    Named ``unknown_message_fields`` (with the key list) beats silent strip on
+    the orchestration path or silent smuggle on tools passthrough.
+    """
+    unknown = sorted(set(message) - ALLOWED_MESSAGE_KEYS)
+    if unknown:
+        raise RequestError(
+            400,
+            "unknown_message_fields",
+            "message contains unsupported fields",
+            {"fields": unknown},
+        )
+
+
+def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
+    """Reject unknown message keys and legacy function role before passthrough."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        # Strip + casefold so "Function" / " FUNCTION " hit the migration reject.
+        if isinstance(role, str) and role.strip().lower() == "function":
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        _reject_unknown_message_keys(message)
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list) or not messages:
+        raise RequestError(400, "invalid_message", "messages must be a non-empty array")
+    validated: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            raise RequestError(400, "invalid_message", "each message must be an object")
+        role = message.get("role")
+        content = message.get("content")
+        # Form/JS SDKs sometimes send "User" / " Assistant " — casefold + strip.
+        if isinstance(role, str):
+            role = role.strip().lower()
+            message["role"] = role
+        if isinstance(role, str) and role == "developer":
+            # Newer OpenAI clients send developer in place of system. This
+            # gateway has no separate developer plane — alias to system so
+            # instructions still apply (parity with common OpenAI gateways).
+            role = "system"
+            message["role"] = "system"
+        if isinstance(role, str) and role == "function":
+            # Legacy Completions function-calling role; tool replaces it.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        # Named error for unsupported keys — never silent strip or passthrough smuggle.
+        _reject_unknown_message_keys(message)
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        # OpenAI assistant tool turns often send content:null with tool_calls; treat
+        # explicit JSON null as empty string on assistant/tool (SDK optional default).
+        if content is None and role in {"assistant", "tool"}:
+            content = ""
+        if isinstance(content, list):
+            # Vision/omni callers send OpenAI content-parts arrays. Shape-check and
+            # passthrough text+image_url; other part types fail closed.
+            content = _validate_message_content_parts(content)
+        elif not isinstance(content, str):
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        # User/system turns drive the prompt — empty string content is never applied.
+        # Multimodal arrays are non-empty after parts validation.
+        if role in {"user", "system"} and isinstance(content, str) and not content.strip():
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "user and system message content must be a non-empty string",
+            )
+        entry: dict[str, Any] = {"role": role, "content": content}
+        if role == "tool":
+            # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
+            tool_call_id = message.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool messages require a non-empty tool_call_id string",
+                )
+            # Strip incidental whitespace so form/JS SDKs that pad IDs still bind.
+            tool_call_id = tool_call_id.strip()
+            if len(tool_call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool_call_id must be at most 128 characters",
+                )
+            entry["tool_call_id"] = tool_call_id
+        if "name" in message:
+            # OpenAI optional participant name on system/user/assistant (not tool).
+            msg_name = message.get("name")
+            # Explicit JSON null or empty/whitespace string is treat-as-omit
+            # (SDK optional default / blank participant).
+            if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
+                pass
+            else:
+                if role == "tool":
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "name is not valid on tool role messages",
+                    )
+                if not isinstance(msg_name, str):
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be a non-empty string",
+                    )
+                # Strip incidental whitespace before length/charset (SDK pad).
+                msg_name = msg_name.strip()
+                if len(msg_name) > 64:
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be at most 64 characters",
+                    )
+                # OpenAI participant names: [a-zA-Z0-9_-]{1,64}.
+                # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+                if not msg_name.isascii() or not all(
+                    ch.isalnum() or ch in "_-" for ch in msg_name
+                ):
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must match [a-zA-Z0-9_-]",
+                    )
+                entry["name"] = msg_name
+        if "refusal" in message:
+            # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
+            # (this gateway does not surface or apply refusal content).
+            refusal = message.get("refusal")
+            if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
+                pass
+            elif role != "assistant":
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal is only valid on assistant messages",
+                )
+            elif not isinstance(refusal, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal must be a string",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "non-empty refusal is not supported on /v1/chat/completions",
+                )
+        if "annotations" in message:
+            # OpenAI message annotations — null/empty omit; non-empty fails closed.
+            annotations = message.get("annotations")
+            if annotations is None or (isinstance(annotations, list) and not annotations):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_annotations",
+                    "non-empty annotations are not supported on /v1/chat/completions",
+                )
+        if "audio" in message:
+            # OpenAI assistant audio payload — null/empty omit; non-empty fails closed
+            # (this text gateway has no speech plane on chat message history).
+            audio = message.get("audio")
+            if audio is None or (isinstance(audio, dict) and not audio):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_audio",
+                    "non-empty message audio is not supported on /v1/chat/completions",
+                )
+        if "function_call" in message:
+            # Legacy assistant function_call on messages — null/empty omit; non-empty
+            # fails closed (use tool_calls; body-level function_call is also rejected).
+            function_call = message.get("function_call")
+            if function_call is None or (isinstance(function_call, dict) and not function_call):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_function_call",
+                    "non-empty message function_call is not supported on /v1/chat/completions; "
+                    "use tool_calls instead",
+                )
+        if "weight" in message:
+            # OpenAI fine-tune style message weight (0 or 1). Explicit null is
+            # treat-as-omit. 0/1 (int/float/digit strings) are honest no-ops
+            # (no fine-tune plane here). Other values fail closed so clients
+            # never believe weighting applied.
+            weight = message.get("weight")
+            if weight is None or (isinstance(weight, str) and not weight.strip()):
+                pass
+            elif isinstance(weight, bool):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+            else:
+                coerced_weight = _coerce_optional_int(
+                    weight,
+                    error_code="invalid_message_weight",
+                    message="message weight must be 0 or 1",
+                )
+                if coerced_weight is not None and coerced_weight not in (0, 1):
+                    raise RequestError(
+                        400,
+                        "invalid_message_weight",
+                        "message weight must be 0 or 1",
+                    )
+        if "prefix" in message:
+            # OpenAI partial-assistant / predicted-outputs style prefix flag.
+            # null/false (and 0/"false"/"0.0") are honest no-ops; true fails
+            # closed (no prefix plane).
+            prefix = message.get("prefix")
+            if prefix is None or (isinstance(prefix, str) and not prefix.strip()):
+                pass
+            else:
+                coerced_prefix = _coerce_optional_bool(
+                    prefix,
+                    error_code="invalid_message_prefix",
+                    message="message prefix must be a boolean",
+                )
+                if coerced_prefix is True:
+                    raise RequestError(
+                        400,
+                        "invalid_message_prefix",
+                        "message prefix=true is not supported on /v1/chat/completions",
+                    )
+        validated.append(entry)
+    return validated
+
+
+def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
+    """Message-level ``audio`` / ``function_call`` — null/empty omit; else fail closed.
+
+    Runs before tools passthrough so multi-turn histories with SDK-default
+    null slots stay honest even when the body is proxied verbatim.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if "audio" in message:
+            audio = message.get("audio")
+            if audio is None or (isinstance(audio, dict) and not audio):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_audio",
+                    "non-empty message audio is not supported on /v1/chat/completions",
+                )
+        if "function_call" in message:
+            function_call = message.get("function_call")
+            if function_call is None or (isinstance(function_call, dict) and not function_call):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_function_call",
+                    "non-empty message function_call is not supported on /v1/chat/completions; "
+                    "use tool_calls instead",
+                )
+
+
+def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
+    """Fail closed on role=tool messages missing a usable tool_call_id.
+
+    Runs before tools passthrough so multi-turn tool results are shape-checked
+    even when the body is proxied verbatim to a single provider agent.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool messages require a non-empty tool_call_id string",
+            )
+        # Strip + write back so tools passthrough sees the canonical id.
+        tool_call_id = tool_call_id.strip()
+        if len(tool_call_id) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_call_id must be at most 128 characters",
+            )
+        message["tool_call_id"] = tool_call_id
+
+
+def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
+    """Fail-closed chat ``logprobs`` / ``top_logprobs`` before any proxy.
+
+    Chat route and tools passthrough do not return token logprobs. Explicit
+    JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string) on ``top_logprobs`` is treat-as-omit and popped so the
+    upstream payload matches an omitted field. ``logprobs=true`` and nonzero
+    ``top_logprobs`` stay named 400s even when ``tools`` would otherwise take
+    the passthrough return.
+    """
+    if "logprobs" not in body and "top_logprobs" not in body:
+        return
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if isinstance(lp, str) and not lp.strip():
+            lp = None
+        if lp is not None:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            elif coerced is True:
+                raise RequestError(
+                    400,
+                    "invalid_logprobs",
+                    "logprobs=true is not supported on /v1/chat/completions",
+                )
+            else:
+                body["logprobs"] = False
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            body.pop("top_logprobs", None)
+            return
+        # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+        coerced = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer",
+        )
+        if coerced is None or coerced == 0:
+            body.pop("top_logprobs", None)
+            return
+        raise RequestError(
+            400,
+            "invalid_top_logprobs",
+            "top_logprobs is not supported on /v1/chat/completions",
+        )
+
+
+def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
+    """OpenAI assistant ``tool_calls`` array shape on chat messages.
+
+    Each entry must be a function tool call with non-empty ``id``,
+    ``function.name``, and string ``function.arguments`` (JSON text).
+    Explicit JSON null or empty ``tool_calls`` arrays are treat-as-omit.
+    Validated before passthrough so multi-turn tool histories fail closed.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if "tool_calls" not in message:
+            continue
+        if message.get("role") != "assistant":
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls is only valid on assistant messages",
+            )
+        tool_calls = message.get("tool_calls")
+        # Explicit JSON null or empty array is treat-as-omit (SDK optional default /
+        # no-op history slot). Non-empty arrays are shape-checked below.
+        if tool_calls is None or (isinstance(tool_calls, list) and not tool_calls):
+            continue
+        if not isinstance(tool_calls, list):
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must be a non-empty array",
+            )
+        if len(tool_calls) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must contain at most 128 entries",
+            )
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry must be an object",
+                )
+            call_id = call.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a non-empty id string",
+                )
+            # Strip incidental whitespace; length after strip (SDK pad).
+            call_id = call_id.strip()
+            if len(call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls id must be at most 128 characters",
+                )
+            call["id"] = call_id
+            call_type = call.get("type")
+            # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+            if isinstance(call_type, str):
+                call_type = call_type.strip().lower()
+                call["type"] = call_type
+            if call_type != "function":
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry type must be function",
+                )
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a function object",
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be a non-empty string",
+                )
+            # Strip before length/charset so " lookup_item " is honest wire form.
+            name = name.strip()
+            if len(name) > 64:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be at most 64 characters",
+                )
+            # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+            # get invalid_message instead of a provider 400.
+            # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+            if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must match [a-zA-Z0-9_-]",
+                )
+            function["name"] = name
+            arguments = function.get("arguments")
+            # Explicit JSON null / missing is treat-as-omit → empty JSON-text.
+            # Write back so proxy_completion forwards a string, not JSON null.
+            if arguments is None:
+                function["arguments"] = ""
+                arguments = ""
+            # Some SDKs send already-parsed objects/arrays; serialize to JSON text
+            # so the OpenAI wire shape (string) is preserved on passthrough.
+            elif isinstance(arguments, (dict, list)):
+                function["arguments"] = json.dumps(
+                    arguments, separators=(",", ":"), ensure_ascii=False
+                )
+                arguments = function["arguments"]
+            if not isinstance(arguments, str):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.arguments must be a string",
+                )
+
+
+def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
+    """OpenAI ``metadata`` — object of string pairs, at most 16 entries.
+
+    Keys must be non-empty (no leading/trailing pad) and ≤64 characters; values
+    ≤512 characters. Explicit JSON null values are treat-as-omit for that key
+    and written back onto ``body`` so ``proxy_completion`` does not forward
+    non-string values. Scalar bool/int/float values coerce to strings (JS SDK
+    form encodings often send numbers); objects/arrays fail closed so clients
+    cannot store nested junk that cost or observability consumers would drop.
+    """
+    if "metadata" not in body:
+        return None
+    metadata = body.get("metadata")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if metadata is None:
+        body.pop("metadata", None)
+        return None
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(400, "invalid_metadata", "metadata must contain at most 16 entries")
+    validated: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            raise RequestError(400, "invalid_metadata", "metadata keys must be strings")
+        # Empty/whitespace keys are not omit-equivalent attribute names — fail
+        # closed so cost/observability consumers never index blank labels.
+        if not key.strip():
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata keys must be non-empty strings",
+            )
+        # Leading/trailing whitespace changes key identity vs strip(); reject so
+        # clients cannot smuggle padded labels past exact-key attribution joins.
+        if key != key.strip():
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata keys must not include leading or trailing whitespace",
+            )
+        if len(key) > 64:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
+        # Explicit JSON null value is treat-as-omit for that key (SDK optional).
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            # JSON bool → lowercase OpenAI-style string form.
+            value = "true" if value else "false"
+        elif type(value) is int:
+            value = str(value)
+        elif isinstance(value, float):
+            # Whole floats stringify compactly (1.0 → "1"); others use str().
+            if value.is_integer() and abs(value) <= 2**53:
+                value = str(int(value))
+            else:
+                value = str(value)
+        elif not isinstance(value, str):
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata values must be strings (or scalar bool/number)",
+            )
+        if len(value) > 512:
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata values must be at most 512 characters",
+            )
+        validated[key] = value
+    if not validated:
+        if any(value is None for value in metadata.values()):
+            body.pop("metadata", None)
+        return None
+    body["metadata"] = validated
+    return validated
+
+
+def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
+    if attribution is None:
+        return None
+    if not isinstance(attribution, dict):
+        raise RequestError(400, "invalid_attribution", "attribution must be an object")
+    allowed = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
+    unknown = sorted(set(attribution) - allowed)
+    if unknown:
+        raise RequestError(400, "invalid_attribution", "attribution contains unsupported dimensions", {"fields": unknown})
+    # Explicit JSON null or empty/whitespace values are treat-as-omit for each
+    # known dimension (SDK optional keys); non-empty values stringify.
+    cleaned: dict[str, Any] = {}
+    for key, value in attribution.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        cleaned[key] = str(value)
+    return cleaned or None
+
+
+def _validate_routing(
+    routing: Any, *, allow_endpoint: bool = False
+) -> dict[str, Any] | None:
+    """OpenAI-adjacent routing hints for sync vs batch channel selection.
+
+    Fail closed on shape so callers cannot smuggle non-boolean latency flags or
+    free-form priority values that RoutingPolicy would silently misread via
+    loose coercion (``bool(x)`` / ``str(x)``).
+    """
+    if routing is None:
+        return None
+    if not isinstance(routing, dict):
+        raise RequestError(400, "invalid_routing", "routing must be an object")
+    allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_endpoint:
+        allowed.add("endpoint")
+    unknown = sorted(set(routing) - allowed)
+    if unknown:
+        raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
+    channel = routing.get("channel")
+    # Explicit JSON null or empty/whitespace is treat-as-omit for optional keys.
+    if channel is None or (isinstance(channel, str) and not channel.strip()):
+        channel = None
+    elif not isinstance(channel, str) or channel.strip().lower() not in {"sync", "batch"}:
+        raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
+    else:
+        channel = channel.strip().lower()
+    latency_tolerant: bool | None = None
+    if "latency_tolerant" in routing:
+        # Null/empty omit; bool, int 0/1, and "true"/"false" strings coerce
+        # (SDK form/query parity with stream/store).
+        latency_tolerant = _coerce_optional_bool(
+            routing.get("latency_tolerant"),
+            error_code="invalid_routing",
+            message="routing.latency_tolerant must be a boolean",
+        )
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if priority is None or (isinstance(priority, str) and not priority.strip()):
+            pass  # omit
+        elif not isinstance(priority, str) or priority.strip().lower() not in {
+            "interactive",
+            "normal",
+            "bulk",
+        }:
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.priority must be one of interactive, normal, bulk",
+            )
+    # Rebuild without omitted null optional keys for honest passthrough shape.
+    cleaned: dict[str, Any] = {}
+    if channel is not None:
+        cleaned["channel"] = channel
+    if latency_tolerant is not None:
+        cleaned["latency_tolerant"] = latency_tolerant
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if isinstance(priority, str) and priority.strip():
+            cleaned["priority"] = priority.strip().lower()
+    if "endpoint" in routing:
+        endpoint = routing.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            )
+        try:
+            normalize_endpoint_selector(endpoint.strip())
+        except EndpointUnavailableError:
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            ) from None
+        cleaned["endpoint"] = endpoint.strip()
+    if "endpoint" in cleaned and (
+        cleaned.get("channel") == "batch"
+        or cleaned.get("latency_tolerant") is True
+    ):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.endpoint cannot be combined with deferred batch routing",
+        )
+    if "endpoint" in cleaned:
+        cleaned["channel"] = "sync"
+    return cleaned if cleaned else {}
+
+
+def _validate_batch_requests(
+    body: dict[str, Any], expose_trace: bool, *, zdr_only: bool
+) -> list[BatchRequest]:
+    raw_requests = body.get("requests")
+    if not isinstance(raw_requests, list) or not raw_requests:
+        raise RequestError(400, "invalid_request", "requests must be a non-empty array")
+    default_attribution = _validate_attribution(body.get("attribution")) or {}
+    default_model = body.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
+    if not isinstance(default_model, str) or not default_model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    default_model = default_model.strip()
+    batch: list[BatchRequest] = []
+    seen_custom_ids: set[str] = set()
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            raise RequestError(400, "invalid_request", "each batch request must be an object")
+        messages = _validate_messages(item.get("messages"))
+        attribution = _validate_attribution(item.get("attribution"))
+        merged = {**default_attribution, **(attribution or {})}
+        mode = _validate_mode(item.get("mode", "auto"))
+        model = item.get("model", default_model)
+        if not isinstance(model, str) or not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "model": model.strip(),
+            "attribution": merged,
+            "mode": mode,
+            "zdr_only": zdr_only,
+        }
+        # Caller-supplied custom_id: without it, results cannot be mapped
+        # back to requests on backends that do not preserve submission
+        # order (the OpenAI Batch contract explicitly does not), because
+        # the submit response never discloses the generated ids. Same
+        # bounds as the OpenAI Batch API's custom_id.
+        custom_id = item.get("custom_id")
+        if custom_id is not None:
+            if not isinstance(custom_id, str) or not custom_id.strip():
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be a non-empty string"
+                )
+            if len(custom_id) > 64:
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be at most 64 characters"
+                )
+            if custom_id in seen_custom_ids:
+                raise RequestError(
+                    400, "invalid_request", "custom_id values must be unique within a batch"
+                )
+            seen_custom_ids.add(custom_id)
+            kwargs["custom_id"] = custom_id
+        batch.append(BatchRequest(**kwargs))
+    return batch
+
+
+def _is_token_id_shaped(value: Any) -> bool:
+    """True for numeric token-id shapes (int / whole float), including negatives and bools.
+
+    Used to distinguish failed token sequences from string arrays so clients get a
+    named token-id error instead of a string-item error.
+    """
+    if isinstance(value, bool):
+        return True
+    if type(value) is int:
+        return True
+    if type(value) is float and value.is_integer():
+        return True
+    return False
+
+
+def _coerce_token_id(value: Any) -> int | None:
+    """Coerce one non-negative OpenAI token id, or None if not a valid token id.
+
+    Accepts bare ``int`` and whole floats (``1.0``) from JS/form SDKs. Bools,
+    negatives, and non-integral floats are not valid token ids.
+    """
+    if isinstance(value, bool):
+        return None
+    if type(value) is int:
+        return value if value >= 0 else None
+    if type(value) is float:
+        if value < 0 or not value.is_integer():
+            return None
+        return int(value)
+    return None
+
+
+def _coerce_embedding_token_sequence(value: Any) -> list[int] | None:
+    """Coerce a non-empty list of non-negative token ids, or None if not a sequence."""
+    if not isinstance(value, list) or not value:
+        return None
+    tokens: list[int] = []
+    for item in value:
+        token_id = _coerce_token_id(item)
+        if token_id is None:
+            return None
+        tokens.append(token_id)
+    return tokens
+
+
+def _is_embedding_token_sequence(value: Any) -> bool:
+    """True when value is a non-empty list of non-negative token ids (int/whole float)."""
+    return _coerce_embedding_token_sequence(value) is not None
+
+
+def _embedding_token_sequence_to_text(tokens: list[int]) -> str:
+    """Stable text surrogate for token-id inputs on string embedding/completion backends."""
+    return "\x1etokens:" + ",".join(str(token) for token in tokens)
+
+
+def _normalize_embedding_input_item(item: Any) -> str:
+    """Normalize one embeddings unit to a non-empty string for the backend."""
+    if isinstance(item, str):
+        if not item.strip():
+            raise RequestError(
+                400,
+                "invalid_input",
+                "each embedding input must be a non-empty string",
+            )
+        return item
+    coerced = _coerce_embedding_token_sequence(item)
+    if coerced is not None:
+        return _embedding_token_sequence_to_text(coerced)
+    raise RequestError(
+        400,
+        "invalid_input",
+        "each embedding input must be a string or array of non-negative token integers",
+    )
+
+
+def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
+    """Validate embeddings ``input``/``inputs`` for sync and batch paths.
+
+    Accepts OpenAI shapes:
+
+    - non-empty string
+    - non-empty array of non-empty strings
+    - non-empty array of non-negative token integers / whole floats (one embedding)
+    - non-empty array of token-integer arrays (batch)
+
+    Token arrays are re-encoded to a stable text surrogate for string embedding
+    backends. Blank string items fail closed.
+    """
+    raw = body.get("inputs")
+    if raw is None:
+        raw = body.get("input")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise RequestError(
+            400,
+            "invalid_input",
+            "input/inputs must be a non-empty string, string array, token array, "
+            "or array of token arrays",
+        )
+    # Single token sequence: [1, 2, 3] / [1.0, 2.0] → one embedding unit.
+    coerced_tokens = _coerce_embedding_token_sequence(raw)
+    if coerced_tokens is not None:
+        return [_embedding_token_sequence_to_text(coerced_tokens)]
+    # Batch of token sequences: [[1,2],[3]] — first element is a list.
+    if isinstance(raw[0], list):
+        batch_tokens: list[list[int]] = []
+        for item in raw:
+            coerced = _coerce_embedding_token_sequence(item)
+            if coerced is None:
+                raise RequestError(
+                    400,
+                    "invalid_input",
+                    "each embedding input must be a string or array of non-negative "
+                    "token integers",
+                )
+            batch_tokens.append(coerced)
+        return [_embedding_token_sequence_to_text(item) for item in batch_tokens]
+    # Apparent flat token sequence with invalid ids (negatives/bools/1.5).
+    if all(_is_token_id_shaped(item) for item in raw):
+        raise RequestError(
+            400,
+            "invalid_input",
+            "token-id inputs must be non-negative integers",
+        )
+    inputs: list[str] = []
+    for item in raw:
+        inputs.append(_normalize_embedding_input_item(item))
+    return inputs
+
+
+
+def _validate_chat_store(body: dict[str, Any]) -> bool | None:
+    """Chat Completions ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI can persist completions when ``store=true``. This gateway does not
+    implement that persistence surface, so ``store=true`` fails closed.
+    ``store=false`` and omit remain valid (explicit no-store is honest).
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/chat/completions",
+        )
+    return store
+
+
+
+
+def _validate_chat_sampling_and_control_fields(
+    body: dict[str, Any],
+    *,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Validate chat sampling knobs and fail-closed unsupported controls.
+
+    Must run before tools/response_format ``proxy_completion`` passthrough so
+    buyers never receive 200 when invalid or unsupported OpenAI controls would
+    only have been checked on the multi-agent route path.
+    """
+    sampling: dict[str, Any] = {
+        "temperature": None,
+        "top_p": None,
+        "max_tokens": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+    }
+    if "temperature" in body:
+        sampling["temperature"] = _validate_completions_temperature(body)
+    if "top_p" in body:
+        sampling["top_p"] = _validate_completions_top_p(body)
+    # OpenAI: max_completion_tokens takes precedence over max_tokens.
+    if "max_completion_tokens" in body:
+        sampling["max_tokens"] = _validate_chat_max_completion_tokens(body)
+    elif "max_tokens" in body:
+        sampling["max_tokens"] = _validate_completions_max_tokens(body)
+    if "presence_penalty" in body:
+        sampling["presence_penalty"] = _validate_completions_presence_penalty(body)
+    if "frequency_penalty" in body:
+        sampling["frequency_penalty"] = _validate_completions_frequency_penalty(body)
+    if "seed" in body:
+        # Type-check then fail closed: chat route does not apply seed.
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        seed_raw = body.get("seed")
+        if seed_raw is not None and not (
+            isinstance(seed_raw, str) and not seed_raw.strip()
+        ):
+            try:
+                _validate_completions_seed(body)
+            except RequestError as exc:
+                if exc.code == "invalid_seed" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_seed",
+                        "seed is not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_seed",
+                "seed is not supported on /v1/chat/completions",
+            )
+    if "logit_bias" in body:
+        # Empty {} is an honest no-op (shared Completions helper).
+        # Non-empty maps fail closed with a chat-path message.
+        try:
+            _validate_completions_logit_bias(body)
+        except RequestError as exc:
+            if (
+                exc.code == "invalid_logit_bias"
+                and "not supported" in exc.message
+            ):
+                raise RequestError(
+                    400,
+                    "invalid_logit_bias",
+                    "logit_bias is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "stop" in body:
+        # Explicit JSON null, empty/whitespace string, empty [], or
+        # all-whitespace array items is treat-as-omit (SDK optional default).
+        stop_val = body.get("stop")
+        if isinstance(stop_val, str) and not stop_val.strip():
+            stop_val = ""
+        if isinstance(stop_val, list):
+            stop_val = [
+                s for s in stop_val if not (isinstance(s, str) and not s.strip())
+            ]
+            if not stop_val:
+                stop_val = []
+        if stop_val is not None and stop_val != [] and stop_val != "":
+            try:
+                _validate_completions_stop(body)
+            except RequestError as exc:
+                # Completions helper fails closed with a Completions path message;
+                # re-surface for chat with the chat endpoint string.
+                if exc.code == "invalid_stop" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_stop",
+                        "stop sequences are not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_stop",
+                "stop sequences are not supported on /v1/chat/completions",
+            )
+    if "n" in body:
+        try:
+            _validate_completions_n(body)
+        except RequestError as exc:
+            if exc.code == "invalid_n" and "not supported" in exc.message:
+                raise RequestError(
+                    400,
+                    "invalid_n",
+                    "n greater than 1 is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "store" in body:
+        _validate_chat_store(body)
+    if "modalities" in body:
+        _validate_chat_modalities(body)
+    if "prediction" in body:
+        _validate_chat_prediction(body)
+    if "reasoning_effort" in body:
+        _validate_chat_reasoning_effort(body)
+    if "service_tier" in body:
+        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+    if "user" in body:
+        _validate_completions_user(body)
+    stream_options = _validate_chat_stream_options(body, stream) if "stream_options" in body else None
+    sampling["include_usage"] = bool(
+        stream_options and stream_options.get("include_usage") is True
+    )
+    return sampling
+
+
+def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
+    """Reject chat-era tool fields on legacy Completions with a migration path.
+
+    OpenAI Completions has no tools surface. Clients migrating from chat often
+    still send tools/tool_choice. Named unsupported errors beat opaque
+    unknown_fields for commercial honesty.
+
+    Honest no-ops (omit-equivalent SDK defaults):
+    - empty ``tools: []``
+    - empty ``functions: []``
+    - ``parallel_tool_calls=false`` / null
+    - ``tool_choice`` none/auto/empty-string/empty-object/null
+    - ``function_call`` none/auto/empty-string/null
+
+    Non-empty tools/functions, non-default tool_choice/function_call, or
+    ``parallel_tool_calls=true`` fail closed with a chat migration path.
+    """
+    tools = body.get("tools") if "tools" in body else None
+    # Empty array and explicit JSON null are omit-equivalent SDK defaults.
+    if tools is None or (isinstance(tools, list) and not tools):
+        tools_present = False
+    else:
+        tools_present = "tools" in body
+
+    functions = body.get("functions") if "functions" in body else None
+    if functions is None or (isinstance(functions, list) and not functions):
+        functions_present = False
+    else:
+        functions_present = "functions" in body
+
+    parallel = body.get("parallel_tool_calls") if "parallel_tool_calls" in body else None
+    if "parallel_tool_calls" in body:
+        parallel = _coerce_optional_bool(
+            parallel,
+            error_code="invalid_parallel_tool_calls",
+            message="parallel_tool_calls must be a boolean",
+        )
+    if parallel is False or parallel is None:
+        # false or omit-equivalent SDK defaults (no-ops).
+        parallel_present = False
+    else:
+        parallel_present = True
+
+    def _tool_control_present(key: str) -> bool:
+        if key not in body:
+            return False
+        value = body.get(key)
+        # null, empty string, empty object, none/auto (whitespace-padded) are omit-equivalent.
+        if value is None:
+            return False
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if not stripped or stripped in ("none", "auto"):
+                return False
+        if isinstance(value, dict) and not value:
+            return False
+        return True
+
+    if (
+        tools_present
+        or functions_present
+        or parallel_present
+        or _tool_control_present("tool_choice")
+        or _tool_control_present("function_call")
+    ):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools, tool_choice, functions, function_call, and parallel_tool_calls "
+            "are not supported on /v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_response_format_surface(body: dict[str, Any]) -> None:
+    """Reject response_format on legacy Completions with a migration path.
+
+    Structured outputs are a chat/Responses surface. Completions has no
+    response_format plane — fail closed so clients migrate to chat.
+    """
+    if "response_format" in body:
+        fmt = body.get("response_format")
+        # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+        if (
+            fmt is None
+            or (isinstance(fmt, dict) and not fmt)
+            or (isinstance(fmt, str) and not fmt.strip())
+        ):
+            return
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format is not supported on /v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
+    """Reject chat-era modalities/prediction/reasoning_effort on Completions.
+
+    Legacy Completions has no multi-modal output, Predicted Outputs, or o-series
+    reasoning_effort plane. Named unsupported errors beat opaque unknown_fields
+    so clients migrate to /v1/chat/completions.
+    Explicit JSON null, empty list/object, or empty/whitespace string is treat-as-omit.
+    """
+    for key in ("modalities", "prediction", "reasoning_effort"):
+        if key not in body:
+            continue
+        value = body.get(key)
+        # Explicit JSON null, empty list/object, nested-omit object, or empty string.
+        if value is None:
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, dict) and not _non_omit_object_entries(value):
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        # Text-only modalities ["text"] is an honest no-op on this text gateway
+        # (parity with chat Completions allowing modalities ["text"]).
+        # Strip + casefold so [" TEXT "] matches text-only.
+        if key == "modalities" and isinstance(value, list):
+            stripped_items = [
+                item.strip().lower() if isinstance(item, str) else item for item in value
+            ]
+            if stripped_items == ["text"]:
+                continue
+        # Known reasoning_effort levels are default-effort no-ops (no effort plane).
+        # Strip + casefold so " NONE " / " Medium " match (chat parity).
+        if (
+            key == "reasoning_effort"
+            and isinstance(value, str)
+            and value.strip().lower() in _OPENAI_REASONING_EFFORT_LEVELS
+        ):
+            body["reasoning_effort"] = value.strip().lower()
+            continue
+        raise RequestError(
+            400,
+            "invalid_chat_era_field",
+            "modalities, prediction, and reasoning_effort are not supported on "
+            "/v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_store(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI may persist completions when ``store=true``. This gateway has no
+    Completions persistence surface, so ``store=true`` fails closed rather than
+    silently ignoring a buyer-visible storage control. ``store=false``/omit stay valid.
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/completions",
+        )
+    return store
+
+
+def _validate_responses_store(body: dict[str, Any]) -> bool | None:
+    """Responses API ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI may persist Responses when ``store=true``. This gateway's Responses
+    path is a single-agent passthrough without a persistence plane, so
+    ``store=true`` fails closed rather than silently dropping a buyer-visible
+    storage control. ``store=false`` and omit remain valid.
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/responses",
+        )
+    return store
+
+
+
+
+# OpenAI o-series reasoning_effort levels. Without an effort plane this gateway
+# treats known levels as default-effort no-ops (parity with verbosity low/medium/high).
+_OPENAI_REASONING_EFFORT_LEVELS = frozenset(
+    {"none", "minimal", "low", "medium", "high"}
+)
+
+
+def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
+    """Chat Completions ``reasoning_effort`` — known levels are default-effort no-ops.
+
+    OpenAI o-series models accept ``reasoning_effort`` (none/minimal/low/medium/high).
+    This gateway never threads the knob into ``ModelClient`` on the orchestration
+    path. Known levels are accepted as default-effort no-ops (no effort plane) so
+    o-series SDK defaults (often ``medium``) do not 400; unknown values fail closed.
+    Explicit JSON null or empty/whitespace string is treat-as-omit.
+    """
+    if "reasoning_effort" not in body:
+        return
+    effort = body.get("reasoning_effort")
+    if effort is None:
+        return
+    if isinstance(effort, str):
+        # Strip + casefold so " NONE " / " Medium " match known levels.
+        stripped = effort.strip().lower()
+        if not stripped:
+            return
+        if stripped == "auto":
+            # ``auto`` is the orchestrator-owned default used by consumers such
+            # as LineageWeave; it is not an OpenAI provider wire value.
+            body.pop("reasoning_effort", None)
+            return
+        if stripped in _OPENAI_REASONING_EFFORT_LEVELS:
+            body["reasoning_effort"] = stripped
+            return
+    raise RequestError(
+        400,
+        "invalid_reasoning_effort",
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high "
+        "on /v1/chat/completions",
+    )
+
+
+
+
+
+
+def _non_omit_object_entries(value: dict[str, Any]) -> dict[str, Any]:
+    """Drop nested null / blank / empty-object entries (SDK optional defaults).
+
+    Parity with ``web_search_options`` nested omit: when every entry is an omit
+    equivalent, the parent object is treat-as-omit rather than a present value.
+    """
+    return {
+        key: item
+        for key, item in value.items()
+        if item is not None
+        and not (isinstance(item, str) and not item.strip())
+        and not (isinstance(item, dict) and not item)
+    }
+
+
+def _is_omit_equivalent_list(value: list[Any]) -> bool:
+    """True when list is empty or every item is null / blank string."""
+    if not value:
+        return True
+    return all(
+        item is None or (isinstance(item, str) and not item.strip()) for item in value
+    )
+
+
+def _responses_virtual_requires_provider_path(
+    input_value: Any, body: dict[str, Any]
+) -> bool:
+    """Keep file inputs and provider-only controls on the preserving path."""
+    def contains_file(value: Any) -> bool:
+        if isinstance(value, list):
+            return any(contains_file(item) for item in value)
+        if not isinstance(value, dict):
+            return False
+        return value.get("type") == "input_file" or any(
+            contains_file(item) for item in value.values()
+        )
+
+    if contains_file(input_value):
+        return True
+    if "stop" in body:
+        stop = body.get("stop")
+        if not (
+            stop is None
+            or (isinstance(stop, str) and not stop.strip())
+            or (isinstance(stop, list) and _is_omit_equivalent_list(stop))
+        ):
+            return True
+    if "seed" in body and body.get("seed") is not None:
+        return True
+    if "logit_bias" in body and body.get("logit_bias"):
+        return True
+    if body.get("logprobs") is True or body.get("top_logprobs") is not None:
+        return True
+    return False
+
+
+def _validate_chat_audio_web_search_surface(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/chat/completions",
+) -> None:
+    """Reject ``audio`` / ``web_search_options`` with named migration errors.
+
+    This text gateway has no speech synthesis plane and no web-search tool
+    harness on chat or Completions. Named unsupported errors beat opaque
+    ``unknown_fields`` so SDK clients can migrate deliberately.
+    Explicit JSON null, empty object, or nested-omit-only object is treat-as-omit
+    (SDK optional default).
+    """
+    if "audio" in body:
+        audio = body.get("audio")
+        # Explicit JSON null, empty object, or object of only nested omit
+        # values (voice/format null) is treat-as-omit (SDK optional default).
+        if audio is None or (
+            isinstance(audio, dict) and not _non_omit_object_entries(audio)
+        ):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_audio",
+                f"audio is not supported on {endpoint_path}",
+            )
+    if "web_search_options" in body:
+        web = body.get("web_search_options")
+        # Explicit JSON null, empty object, or nested-omit-only object.
+        if web is None or (
+            isinstance(web, dict) and not _non_omit_object_entries(web)
+        ):
+            pass
+        elif isinstance(web, dict):
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                f"web_search_options is not supported on {endpoint_path}",
+            )
+        else:
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                f"web_search_options is not supported on {endpoint_path}",
+            )
+
+
+
+def _validate_tool_resources(body: dict[str, Any], *, endpoint_path: str) -> None:
+    """Reject Assistants-style ``tool_resources`` with a named unsupported error.
+
+    OpenAI Assistants/Responses SDKs may send ``tool_resources`` (file_search,
+    code_interpreter bindings). This gateway has no tool-resource plane, so any
+    non-omit value fails closed. Nested null/blank/empty-object entries are omit.
+    """
+    if "tool_resources" not in body:
+        return
+    value = body.get("tool_resources")
+    # Explicit JSON null, empty object, or nested-omit-only object is treat-as-omit.
+    if value is None or (
+        isinstance(value, dict) and not _non_omit_object_entries(value)
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_tool_resources",
+        f"tool_resources is not supported on {endpoint_path}",
+    )
+
+
+def _validate_openai_sdk_control_fields(body: dict[str, Any], *, endpoint_path: str) -> None:
+    """Reject modern OpenAI SDK control fields not applied on this gateway.
+
+    ``prompt_cache_key``, ``safety_identifier``, ``verbosity``, and ``prompt_cache_retention`` appear in
+    recent OpenAI SDK clients. This gateway has no prompt-cache affinity plane,
+    no safety-identifier side channel, and no verbosity sampling control — named
+    unsupported errors beat opaque ``unknown_fields``.
+    """
+    def _sdk_control_present(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        return True
+
+    # Explicit JSON null or empty string is treat-as-omit (SDK optional default).
+    if "prompt_cache_key" in body and _sdk_control_present(body.get("prompt_cache_key")):
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_key",
+            f"prompt_cache_key is not supported on {endpoint_path}",
+        )
+    if "safety_identifier" in body and _sdk_control_present(body.get("safety_identifier")):
+        raise RequestError(
+            400,
+            "invalid_safety_identifier",
+            f"safety_identifier is not supported on {endpoint_path}",
+        )
+    if "verbosity" in body and _sdk_control_present(body.get("verbosity")):
+        verbosity = body.get("verbosity")
+        # Known OpenAI verbosity levels are default-length no-ops (no sampling plane).
+        if isinstance(verbosity, str) and verbosity.strip().lower() in {
+            "low",
+            "medium",
+            "high",
+        }:
+            body["verbosity"] = verbosity.strip().lower()
+        else:
+            raise RequestError(
+                400,
+                "invalid_verbosity",
+                "verbosity must be one of low, medium, high "
+                f"on {endpoint_path}",
+            )
+    if "prompt_cache_retention" in body and _sdk_control_present(body.get("prompt_cache_retention")):
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_retention",
+            f"prompt_cache_retention is not supported on {endpoint_path}",
+        )
+
+
+
+def _validate_chat_reasoning_object(body: dict[str, Any]) -> None:
+    """Reject Responses-style ``reasoning`` object on chat Completions.
+
+    OpenAI Responses accepts a ``reasoning`` object; chat Completions uses
+    ``reasoning_effort`` (already fail-closed). Clients that send ``reasoning``
+    on chat must get a named error, not opaque unknown_fields.
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    # Explicit JSON null, empty/nested-omit object, or empty/whitespace string.
+    if (
+        value is None
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning is not supported on /v1/chat/completions; use /v1/responses or omit",
+    )
+
+
+
+def _validate_openai_background(body: dict[str, Any], *, endpoint_path: str) -> bool | None:
+    """OpenAI ``background`` — ``false``/omit are honest no-ops; ``true`` fails closed.
+
+    OpenAI may run long jobs asynchronously when ``background=true``. This
+    gateway is request-scoped with no background job plane, so ``true`` fails
+    closed. ``false`` is a deliberate no-op (SDK defaults often send it).
+    """
+    if "background" not in body:
+        return None
+    value = _coerce_optional_bool(
+        body.get("background"),
+        error_code="invalid_background",
+        message="background must be a boolean",
+    )
+    if value is None:
+        return None
+    if value is True:
+        raise RequestError(
+            400,
+            "invalid_background",
+            f"background=true is not supported on {endpoint_path}",
+        )
+    return False
+
+
+
+def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "/v1/chat/completions") -> None:
+    """Reject OpenAI ``include`` outside Responses (where it is also unsupported).
+
+    Some SDKs send ``include`` on chat/Completions. Named error beats opaque
+    unknown_fields so clients know the surface is unsupported here.
+    Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+    """
+    if "include" not in body:
+        return
+    include = body.get("include")
+    # Explicit JSON null, empty/omit-only array, or empty/whitespace string.
+    if (
+        include is None
+        or (isinstance(include, list) and _is_omit_equivalent_list(include))
+        or (isinstance(include, str) and not include.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_include",
+        f"include is not supported on {endpoint_path}",
+    )
+
+
+def _validate_completions_reasoning_object(body: dict[str, Any]) -> None:
+    """Reject Responses-style ``reasoning`` object on legacy Completions.
+
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    if (
+        value is None
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning is not supported on /v1/completions; use /v1/responses or omit",
+    )
+
+
+def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
+    """Responses ``modalities`` — omit or ``["text"]`` only (text gateway)."""
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
+        return None
+    if not isinstance(modalities, list):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Empty array is omit-equivalent (SDK optional default).
+    if not modalities:
+        return None
+    if any(not isinstance(item, str) for item in modalities):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
+    if modalities != ["text"]:
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            'only modalities ["text"] is supported on /v1/responses',
+        )
+    body["modalities"] = modalities
+    return modalities
+
+
+def _validate_responses_prediction(body: dict[str, Any]) -> None:
+    """Responses ``prediction`` (Predicted Outputs) — not supported on this gateway.
+
+    Explicit JSON null, empty/nested-omit object, or empty/whitespace string is omit.
+    """
+    if "prediction" not in body:
+        return
+    value = body.get("prediction")
+    if (
+        value is None
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction is not supported on /v1/responses",
+    )
+
+
+def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
+    """Chat Completions ``modalities`` — omit or ``["text"]`` only.
+
+    OpenAI selects output types (text/audio) via modalities. This gateway is
+    text-only; non-text modalities fail closed so clients cannot silently
+    believe audio (or other) output was applied.
+    """
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
+        return None
+    if not isinstance(modalities, list):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Empty array is omit-equivalent (SDK optional default).
+    if not modalities:
+        return None
+    if any(not isinstance(item, str) for item in modalities):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
+    if modalities != ["text"]:
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            'only modalities ["text"] is supported on /v1/chat/completions',
+        )
+    body["modalities"] = modalities
+    return modalities
+
+
+def _validate_chat_prediction(body: dict[str, Any]) -> None:
+    """Chat Completions ``prediction`` (Predicted Outputs) — not supported.
+
+    OpenAI Predicted Outputs lets clients supply expected completion content for
+    latency wins. This gateway does not apply ``prediction`` on the multi-agent
+    route path, so any non-empty present value fails closed rather than silently
+    ignoring a buyer-visible optimization hint.
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    """
+    if "prediction" not in body:
+        return
+    value = body.get("prediction")
+    if (
+        value is None
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction is not supported on /v1/chat/completions",
+    )
+
+
+def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI chat ``response_format`` — object with type text/json_object/json_schema.
+
+    Shape is validated before passthrough so malformed payloads fail closed
+    rather than reaching a provider with an unusable format object.
+
+    OpenAI type-only forms are strict: ``text`` and ``json_object`` accept only
+    the ``type`` key. ``json_schema`` accepts only ``type`` and ``json_schema``.
+    Extra sibling keys fail closed so clients cannot smuggle unsupported fields
+    into a provider-shaped object that this gateway never interpreted.
+    Inside ``json_schema``, ``name`` must match ``[a-zA-Z0-9_-]{1,64}``
+    (ASCII only — ``str.isalnum()`` is not sufficient). Nested keys are
+    limited to ``name`` / ``schema`` / ``description`` / ``strict``;
+    JSON-null or blank ``description`` and JSON-null ``strict`` are popped
+    omit-real before passthrough (parity with Responses ``text.format``).
+    """
+    if "response_format" not in body:
+        return None
+    fmt = body.get("response_format")
+    # Explicit JSON null, empty object, or empty string is treat-as-omit
+    # (SDK optional default / stringified empty control).
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
+        return None
+    if not isinstance(fmt, dict):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format must be an object",
+        )
+    fmt_type = fmt.get("type")
+    # Explicit JSON null or blank type is treat-as-omit when no other payload
+    # remains (SDK optional default). Non-empty unknown types still fail closed.
+    if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
+        remaining = {key: value for key, value in fmt.items() if key != "type"}
+        if not remaining:
+            return None
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be one of text, json_object, json_schema",
+        )
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
+    if fmt_type not in ("text", "json_object", "json_schema"):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be one of text, json_object, json_schema",
+        )
+    if fmt_type in ("text", "json_object"):
+        # OpenAI: {"type": "json_object"} / {"type": "text"} — no siblings.
+        unknown = sorted(set(fmt) - {"type"})
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                f"response_format with type {fmt_type} accepts only the type field",
+                {"fields": unknown},
+            )
+        return fmt
+    if fmt_type == "json_schema":
+        unknown = sorted(set(fmt) - {"type", "json_schema"})
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format with type json_schema accepts only type and json_schema",
+                {"fields": unknown},
+            )
+        schema = fmt.get("json_schema")
+        if not isinstance(schema, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema must be an object when type is json_schema",
+            )
+        name = schema.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be a non-empty string",
+            )
+        # Strip incidental whitespace before length/charset (SDK pad).
+        name = name.strip()
+        schema["name"] = name
+        # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+        # so buyers get invalid_response_format instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+        if len(name) > 64:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be at most 64 characters",
+            )
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must match [a-zA-Z0-9_-]",
+            )
+        # Nested json_schema accepts only the official Structured Outputs keys.
+        # Unknown siblings fail closed so clients cannot smuggle unsupported
+        # fields into a provider-shaped object this gateway never interpreted.
+        unknown_schema = sorted(
+            set(schema) - {"name", "schema", "description", "strict"}
+        )
+        if unknown_schema:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema accepts only name, schema, "
+                "description, and strict",
+                {"fields": unknown_schema},
+            )
+        # OpenAI requires json_schema.schema as the actual JSON Schema object.
+        # Fail closed when missing or non-object so clients cannot silently
+        # believe structured-output enforcement applied without a schema body.
+        schema_body = schema.get("schema")
+        if not isinstance(schema_body, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.schema must be an object",
+            )
+        # Explicit JSON null / blank description is omit-equivalent: pop so
+        # passthrough matches omit (parity with Responses text.format).
+        if "description" in schema:
+            description_value = schema.get("description")
+            if description_value is None or (
+                isinstance(description_value, str) and not description_value.strip()
+            ):
+                schema.pop("description")
+            elif not isinstance(description_value, str):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.description must be a string "
+                    "when provided",
+                )
+        # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
+        # Bool, int 0/1, whole-float, and string true/false forms coerce.
+        if "strict" in schema:
+            strict_value = schema.get("strict")
+            if strict_value is None or (
+                isinstance(strict_value, str) and not strict_value.strip()
+            ):
+                schema.pop("strict")
+            else:
+                coerced_strict = _coerce_optional_bool(
+                    strict_value,
+                    error_code="invalid_response_format",
+                    message=(
+                        "response_format.json_schema.strict must be a boolean "
+                        "when provided"
+                    ),
+                )
+                if coerced_strict is None:
+                    schema.pop("strict")
+                else:
+                    schema["strict"] = coerced_strict
+    return fmt
+
+
+def _omit_null_tool_function_field(
+    function: dict[str, Any],
+    field_name: str,
+    *,
+    expected_types: tuple[type, ...],
+    error_message: str,
+) -> None:
+    """Drop a JSON-null optional ``tool.function`` field or fail-closed.
+
+    Official OpenAI SDKs serialize omitted optional fields as JSON ``null``.
+    Leaving those keys on the body is not omit-equivalent: ``proxy_completion``
+    forwards the request verbatim and several providers reject ``null``
+    ``parameters``, ``description``, or ``strict``. Pop the key in place so the
+    upstream payload matches an omitted field. Non-null values of the wrong
+    type stay ``invalid_tools``.
+    """
+    if field_name not in function:
+        return
+    value = function.get(field_name)
+    if value is None:
+        function.pop(field_name)
+        return
+    if not isinstance(value, expected_types):
+        raise RequestError(400, "invalid_tools", error_message)
+
+
+def _coerce_tool_function_strict(function: dict[str, Any], *, name_prefix: str) -> None:
+    """Null/empty omit; bool and form/JS 0/1/"true" forms coerce for ``strict``."""
+    if "strict" not in function:
+        return
+    strict_value = function.get("strict")
+    if strict_value is None or (isinstance(strict_value, str) and not strict_value.strip()):
+        function.pop("strict", None)
+        return
+    coerced_strict = _coerce_optional_bool(
+        strict_value,
+        error_code="invalid_tools",
+        message=f"{name_prefix}.strict must be a boolean when provided",
+    )
+    if coerced_strict is None:
+        function.pop("strict", None)
+    else:
+        function["strict"] = coerced_strict
+
+
+def _validate_tool_function_fields(
+    function: dict[str, Any],
+    *,
+    name_prefix: str,
+) -> None:
+    """Shared name/description/parameters/strict checks for chat or flat tools."""
+    unknown_fn = sorted(set(function) - {"name", "description", "parameters", "strict"})
+    if unknown_fn:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix} accepts only name, description, parameters, and strict",
+            {"fields": unknown_fn},
+        )
+    _coerce_tool_function_strict(function, name_prefix=name_prefix)
+    name = function.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must be a non-empty string",
+        )
+    name = name.strip()
+    if len(name) > 64:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must be at most 64 characters",
+        )
+    if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must match [a-zA-Z0-9_-]",
+        )
+    function["name"] = name
+    _omit_null_tool_function_field(
+        function,
+        "parameters",
+        expected_types=(dict,),
+        error_message=f"{name_prefix}.parameters must be an object",
+    )
+    _omit_null_tool_function_field(
+        function,
+        "description",
+        expected_types=(str,),
+        error_message=f"{name_prefix}.description must be a string when provided",
+    )
+
+
+def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """OpenAI chat/Responses ``tools`` — nested or flat function tool objects.
+
+    Empty array is omit-equivalent. Accepts:
+
+    - Chat nested: ``{"type":"function","function":{"name":...}}``
+    - Responses flat: ``{"type":"function","name":...,"parameters":...}``
+
+    Shape is preserved for passthrough (nested stays nested; flat stays flat).
+    Optional ``description`` / ``parameters`` / ``strict`` nulls are popped.
+    """
+    if "tools" not in body:
+        return None
+    tools = body.get("tools")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if tools is None:
+        return None
+    if not isinstance(tools, list):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools must be an array",
+        )
+    # Empty array: honest no-op (same as omitting tools).
+    if not tools:
+        return []
+    if len(tools) > 128:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools must contain at most 128 entries",
+        )
+    validated: list[dict[str, Any]] = []
+    for item in tools:
+        if not isinstance(item, dict):
+            raise RequestError(400, "invalid_tools", "each tool must be an object")
+        tool_type = item.get("type")
+        # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+        if isinstance(tool_type, str):
+            tool_type = tool_type.strip().lower()
+            item["type"] = tool_type
+        if tool_type != "function":
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool type must be function",
+            )
+        # Responses flat shape: name/parameters at top level (no nested function).
+        flat_keys = {"name", "description", "parameters", "strict"} & set(item)
+        if "function" in item and flat_keys:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool must use either nested function or flat name/parameters, not both",
+            )
+        if "function" in item:
+            # Chat nested shape: type + function only.
+            unknown_tool = sorted(set(item) - {"type", "function"})
+            if unknown_tool:
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each tool accepts only type and function fields",
+                    {"fields": unknown_tool},
+                )
+            function = item.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each tool.function must be an object",
+                )
+            _validate_tool_function_fields(function, name_prefix="each tool.function")
+        elif flat_keys or "name" in item:
+            # Official Responses flat function tool.
+            unknown_tool = sorted(
+                set(item) - {"type", "name", "description", "parameters", "strict"}
+            )
+            if unknown_tool:
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each flat function tool accepts only type, name, description, "
+                    "parameters, and strict",
+                    {"fields": unknown_tool},
+                )
+            # Validate name/description/parameters/strict without treating type as a
+            # function field (type stays on the tool object for passthrough).
+            function_fields = {
+                key: item[key]
+                for key in ("name", "description", "parameters", "strict")
+                if key in item
+            }
+            _validate_tool_function_fields(
+                function_fields, name_prefix="each tool"
+            )
+            # Write stripped/coerced fields back onto the flat tool object.
+            for key, value in function_fields.items():
+                item[key] = value
+            for key in ("name", "description", "parameters", "strict"):
+                if key not in function_fields and key in item:
+                    item.pop(key, None)
+        else:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function must be an object",
+            )
+        validated.append(item)
+    return validated
+
+
+def _tool_choice_declared_names(tools: Any) -> set[str]:
+    """Collect stripped tool names from nested or flat ``tools`` entries."""
+    tool_names: set[str] = set()
+    if not isinstance(tools, list):
+        return tool_names
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function")
+        if isinstance(fn, dict):
+            tool_name = fn.get("name")
+            if isinstance(tool_name, str):
+                tool_names.add(tool_name.strip())
+        # Responses flat function tools put name at the top level.
+        elif isinstance(item.get("name"), str):
+            tool_names.add(item["name"].strip())
+    return tool_names
+
+
+def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
+    """OpenAI chat/Responses ``tool_choice`` — none/auto/required or named function.
+
+    ``none`` / ``auto`` without tools remain honest no-ops. ``required`` demands
+    a non-empty ``tools`` array (parity with ``parallel_tool_calls=true``).
+
+    Named selection accepts both wire shapes (shape preserved for passthrough):
+
+    - Chat nested: ``{"type":"function","function":{"name":...}}``
+    - Responses flat: ``{"type":"function","name":...}``
+
+    Mixed nested+flat on one object fails closed. The resolved name must match
+    a tools entry so clients cannot force a tool the request did not declare.
+    """
+    if "tool_choice" not in body:
+        return None
+    choice = body.get("tool_choice")
+    # Explicit JSON null, empty object, or empty/whitespace string is
+    # treat-as-omit (SDK optional default / stringified empty control).
+    if (
+        choice is None
+        or (isinstance(choice, dict) and not choice)
+        or (isinstance(choice, str) and not choice.strip())
+    ):
+        return None
+    if isinstance(choice, str):
+        # Strip + casefold so " REQUIRED " / " Auto " match honest controls.
+        choice = choice.strip().lower()
+        if choice not in ("none", "auto", "required"):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice string must be one of none, auto, required",
+            )
+        # required forces at least one tool call — meaningless without tools.
+        # Fail closed (parity with parallel_tool_calls=true) so clients cannot
+        # believe tool use was mandated when no tools were declared.
+        if choice == "required":
+            tools = body.get("tools") if "tools" in body else None
+            if not isinstance(tools, list) or not tools:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice=required requires a non-empty tools array",
+                )
+        return choice
+    if isinstance(choice, dict):
+        has_function = "function" in choice
+        has_flat_name = "name" in choice
+        if has_function and has_flat_name:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice must use either nested function or flat name, not both",
+            )
+        if has_function:
+            # Chat nested: {type, function}; extra siblings fail closed.
+            unknown = sorted(set(choice) - {"type", "function"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object accepts only type and function fields",
+                    {"fields": unknown},
+                )
+        elif has_flat_name:
+            # Responses flat: {type, name}; extra siblings fail closed.
+            unknown = sorted(set(choice) - {"type", "name"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "flat tool_choice object accepts only type and name fields",
+                    {"fields": unknown},
+                )
+        else:
+            # type-only or other keys without a name source.
+            unknown = sorted(set(choice) - {"type", "function", "name"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object accepts only type and function fields, "
+                    "or type and name for the flat shape",
+                    {"fields": unknown},
+                )
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function must be an object with a name",
+            )
+        choice_type = choice.get("type")
+        # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+        if isinstance(choice_type, str):
+            choice_type = choice_type.strip().lower()
+            choice["type"] = choice_type
+        if choice_type != "function":
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object type must be function",
+            )
+        if has_function:
+            function = choice.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function must be an object with a name",
+                )
+            unknown_fn = sorted(set(function) - {"name"})
+            if unknown_fn:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function accepts only name",
+                    {"fields": unknown_fn},
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function.name must be a non-empty string",
+                )
+            # Strip so padded names match tools[].function.name after tools strip.
+            name = name.strip()
+            function["name"] = name
+            name_error = "tool_choice.function.name must match a tools entry"
+        else:
+            name = choice.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.name must be a non-empty string",
+                )
+            name = name.strip()
+            choice["name"] = name
+            name_error = "tool_choice.name must match a tools entry"
+        tool_names = _tool_choice_declared_names(body.get("tools"))
+        if name not in tool_names:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                name_error,
+            )
+        return choice
+    raise RequestError(
+        400,
+        "invalid_tool_choice",
+        "tool_choice must be a string or object",
+    )
+
+
+
+
+
+
+def _validate_responses_model(body: dict[str, Any]) -> str:
+    """Validate or default the Responses API model.
+
+    An omitted model selects ``orchestrator/auto`` for the orchestrated path.
+    Explicit JSON
+    null or empty/whitespace strings are client mistakes, not omissions, and
+    fail closed (400). Non-string values also fail closed. Strip + write back
+    so passthrough pool matching sees the same id as form/JS padded names.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.AUTO_MODEL
+        return TaskOrchestrator.AUTO_MODEL
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
+    """Responses API ``instructions`` — optional non-empty string ≤32000 chars.
+
+    OpenAI system-style instructions for the Responses surface. Explicit
+    JSON null or empty/whitespace strings are treat-as-omit and popped so
+    ``proxy_completion`` does not forward a blank system prompt. Non-strings
+    fail closed so clients cannot ship a silent no-op that looks like a
+    configured system prompt.
+    """
+    if "instructions" not in body:
+        return None
+    value = body.get("instructions")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        body.pop("instructions", None)
+        return None
+    if not isinstance(value, str):
+        raise RequestError(400, "invalid_instructions", "instructions must be a string")
+    if len(value) > 32_000:
+        raise RequestError(
+            400,
+            "invalid_instructions",
+            "instructions must be at most 32000 characters",
+        )
+    return value
+
+
+def _validate_responses_reasoning(body: dict[str, Any]) -> None:
+    """Responses API ``reasoning`` — known effort levels are default-effort no-ops.
+
+    OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
+    This gateway proxies Responses but does not interpret or enforce reasoning
+    controls. Known ``effort`` levels (none/minimal/low/medium/high) with blank
+    or omit ``summary`` are accepted as default-effort no-ops (chat
+    ``reasoning_effort`` parity). Explicit JSON null, empty object, or empty
+    string is treat-as-omit. Unknown effort/summary values fail closed.
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    if isinstance(value, dict):
+        # Known effort levels + null/blank summary are default-effort no-ops.
+        unknown = sorted(set(value) - {"effort", "summary"})
+        if not unknown:
+            effort = value.get("effort") if "effort" in value else None
+            summary = value.get("summary") if "summary" in value else None
+            effort_ok = (
+                "effort" not in value
+                or effort is None
+                or (
+                    isinstance(effort, str)
+                    and (
+                        not effort.strip()
+                        or effort.strip().lower() in _OPENAI_REASONING_EFFORT_LEVELS
+                    )
+                )
+            )
+            summary_ok = (
+                "summary" not in value
+                or summary is None
+                or (
+                    isinstance(summary, str)
+                    and (not summary.strip() or summary.strip().lower() in {"auto", "concise", "detailed"})
+                )
+            )
+            if effort_ok and summary_ok:
+                if isinstance(effort, str) and effort.strip():
+                    value["effort"] = effort.strip().lower()
+                if isinstance(summary, str) and summary.strip():
+                    value["summary"] = summary.strip().lower()
+                body["reasoning"] = value
+                return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning.effort or reasoning.summary is invalid "
+        "on /v1/responses",
+    )
+
+
+
+def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
+    """Batch embeddings ``endpoint`` — optional non-empty string alias ≤256 chars.
+
+    naruon and OpenAI-compatible clients may tag the upstream embeddings route
+    (e.g. ``/v1/embeddings``). Explicit JSON null or empty/whitespace string is
+    treat-as-omit (SDK optional default). Non-string values fail closed so the
+    gateway never records a blank endpoint alias as if a route was selected.
+    """
+    if "endpoint" not in body:
+        return None
+    value = body.get("endpoint")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise RequestError(
+            400,
+            "invalid_endpoint",
+            "endpoint must be a non-empty string on /v1/batch/embeddings",
+        )
+    if len(value) > 256:
+        raise RequestError(
+            400,
+            "invalid_endpoint",
+            "endpoint must be at most 256 characters",
+        )
+    return value
+
+
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
+
+    Strip + write back (parity with chat/Completions/Responses) so padded
+    form/JS model names bind to the pool id on every surface. Auto-selection
+    applies only when the caller omits ``model`` entirely; explicit JSON
+    ``null`` still fails closed instead of pretending the client omitted the
+    field.
+    """
+    if "model" not in body:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
+
+    model = body.get("model")
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
+    """OpenAI ``encoding_format`` — omit/null/empty, ``float``, or ``base64``.
+
+    ``float`` (default) returns numeric vectors; ``base64`` returns OpenAI-style
+    little-endian float32 base64 strings. Explicit JSON ``null`` or empty
+    whitespace string is treat-as-omit. Case-insensitive values are written back
+    lowercased.
+    """
+    if "encoding_format" not in body:
+        return None
+    value = body.get("encoding_format")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
+    # Strip incidental whitespace and casefold so " FLOAT " / "Base64" match.
+    value = value.strip().lower()
+    if value not in {"float", "base64"}:
+        raise RequestError(
+            400,
+            "invalid_encoding_format",
+            'encoding_format must be "float" or "base64"',
+        )
+    body["encoding_format"] = value
+    return value
+
+
+def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
+    """OpenAI ``dimensions`` — not applied; non-null values fail closed.
+
+    Explicit JSON ``null`` or empty/whitespace string is treat-as-omit. Digit
+    strings and whole floats coerce to int for type honesty, then still fail
+    closed so clients cannot believe reduced dimensionality was applied.
+    """
+    if "dimensions" not in body:
+        return
+    value = body.get("dimensions")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Coerce digit/float forms so type errors surface as invalid_dimensions with
+    # the same unsupported message (not a silent string-vs-int split).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_dimensions",
+        message="dimensions must be an integer",
+    )
+    if coerced is None or coerced == 0:
+        # Zero is omit-equivalent (no reduced-dimension request).
+        return
+    raise RequestError(
+        400,
+        "invalid_dimensions",
+        "dimensions is not supported on embeddings endpoints",
+    )
+
+
+def _encode_embedding_base64(vector: list[Any]) -> str:
+    """OpenAI base64 embedding: little-endian float32 binary, ASCII base64."""
+    floats = [float(x) for x in vector]
+    packed = struct.pack(f"<{len(floats)}f", *floats)
+    return base64.b64encode(packed).decode("ascii")
+
+
+def _openai_embeddings_response(
+    document: dict[str, Any],
+    *,
+    model: str,
+    encoding_format: str | None = None,
+) -> dict[str, Any]:
+    """Map batch document vectors to the OpenAI ``/v1/embeddings`` list shape."""
+    items = document.get("embeddings") or []
+    use_base64 = encoding_format == "base64"
+    data = []
+    for item in items:
+        vector = list(item.get("embedding") or [])
+        data.append(
+            {
+                "object": "embedding",
+                "index": int(item.get("index", 0)),
+                "embedding": _encode_embedding_base64(vector) if use_base64 else vector,
+            }
+        )
+    total_tokens = int(document.get("total_tokens") or 0)
+    return {
+        "object": "list",
+        "data": data,
+        "model": model or document.get("model") or TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        "usage": {
+            "prompt_tokens": total_tokens,
+            "total_tokens": total_tokens,
+        },
+    }
+
+
+def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
+    """Build ledger attribution from the explicit ``attribution`` field merged
+    with any attribution dimensions carried inside ``metadata``.
+
+    naruon sends full cost attribution (service, team, group, company, plus the
+    provider alias) inside ``metadata`` alongside observability-only keys
+    (source, organization_id, user_id). Only recognised dimension keys feed the
+    ledger; the rest are ignored here but still accepted.
+    """
+    attribution = _validate_attribution(body.get("attribution")) or {}
+    metadata = body.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_request", "metadata must be an object")
+    known = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
+    merged: dict[str, Any] = {}
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            if key in known and value not in (None, ""):
+                merged[key] = str(value)
+    # An explicit attribution field wins over metadata-derived dimensions.
+    merged.update(attribution)
+    return merged
+
+
+def _strip_trace(payload: Any) -> Any:
+    if isinstance(payload, list):
+        return [_strip_trace(item) for item in payload]
+    if isinstance(payload, dict):
+        return {key: _strip_trace(value) for key, value in payload.items() if key != "trace"}
+    return payload
+
+
+_INTERNAL_PAYLOAD_KEYS = frozenset({"owner_id", "principal_id"})
+
+
+def _strip_internal_fields(value: Any) -> Any:
+    """Drop gateway-owned metadata without rewriting nested provider output."""
+    if isinstance(value, dict):
+        public = {key: item for key, item in value.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+        if isinstance(public.get("items"), list):
+            public["items"] = [
+                {key: item for key, item in row.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+                if isinstance(row, dict)
+                else row
+                for row in public["items"]
+            ]
+        return public
+    return value
+
+
+def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
+    safe_payload = redact_value(payload)
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # The DEBUG response-body summary logs only an allowlisted metadata
+        # shape (has_error/model/choice_count/usage) via
+        # response_metadata_for_log -- never the payload itself. redact_value
+        # only pattern-matches a secret's in-string *value* shape, and even
+        # the additional redact_credential_shaped_keys pass only masks
+        # *credential*-shaped JSON keys; neither ever masks ordinary response
+        # text (choices[].message.content, tool-call arguments, an
+        # error.message that can reflect caller-supplied input), which is not
+        # a credential but can still carry PII or business-sensitive content
+        # (CWE-532). redact_credential_shaped_keys is applied on top of the
+        # allowlist anyway, defense-in-depth, in case a future allowlist
+        # field ever collides with a credential-shaped key name.
+        log_safe_payload = redact_credential_shaped_keys(response_metadata_for_log(safe_payload))
+        _LOGGER.debug(summarize_payload_for_log("response", log_safe_payload))
+    public_payload = _strip_internal_fields(safe_payload)
+    if include_trace:
+        return public_payload
+    return _strip_trace(public_payload)
+
+
+def _chat_usage_measurement_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add gateway usage provenance without rewriting provider chat content."""
+    normalized = dict(payload)
+    usage = normalized.get("usage")
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    completion_tokens = (
+        usage.get("completion_tokens") if isinstance(usage, dict) else None
+    )
+    measured = (
+        type(prompt_tokens) is int
+        and prompt_tokens >= 0
+        and type(completion_tokens) is int
+        and completion_tokens >= 0
+    )
+    if not measured:
+        normalized["usage"] = None
+    normalized["usage_measurement_status"] = (
+        "measured" if measured else "unavailable"
+    )
+    return normalized
+
+
+def _chat_response_sse_chunks(
+    payload: dict[str, Any],
+    *,
+    model: str,
+    include_usage: bool,
+) -> list[dict[str, Any]]:
+    """Frame a completed provider-shaped chat response as OpenAI SSE chunks."""
+    completion_id = payload.get("id")
+    if not isinstance(completion_id, str) or not completion_id:
+        completion_id = _new_chat_completion_id()
+    created = payload.get("created")
+    if type(created) is not int or created < 0:
+        created = int(time.time())
+    response_model = payload.get("model")
+    if not isinstance(response_model, str) or not response_model:
+        response_model = model
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": response_model,
+    }
+    choices = payload.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else {}
+    if not isinstance(choice, dict):
+        choice = {}
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        message = {}
+    chunks: list[dict[str, Any]] = [
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
+    ]
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": content}, "finish_reason": None}
+                ],
+            }
+        )
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool_call_index, tool_call in enumerate(tool_calls):
+            if isinstance(tool_call, dict):
+                tool_call_delta = dict(tool_call)
+                if type(tool_call_delta.get("index")) is not int:
+                    tool_call_delta["index"] = tool_call_index
+                chunks.append(
+                    {
+                        **base,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": [tool_call_delta]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = "tool_calls" if tool_calls else "stop"
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+    }
+    orchestration = payload.get("orchestration")
+    if isinstance(orchestration, dict):
+        final["orchestration"] = orchestration
+    chunks.append(final)
+    if include_usage:
+        # Every normal chunk must carry usage: null so a consumer that checks
+        # key presence (rather than dict.get()) sees the same OpenAI
+        # include_usage contract this framing's sibling, the live
+        # _stream_route_completion path, already honors — only the terminal
+        # choices-empty chunk below carries the real usage value.
+        for normal_chunk in chunks:
+            normal_chunk["usage"] = None
+        reported_usage = payload.get("usage")
+        prompt_tokens = (
+            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        completion_tokens = (
+            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        if (
+            type(prompt_tokens) is int
+            and prompt_tokens >= 0
+            and type(completion_tokens) is int
+            and completion_tokens >= 0
+        ):
+            usage = {**reported_usage, "usage_source": "reported"}
+            measurement_status = "measured"
+        else:
+            usage = None
+            measurement_status = "unavailable"
+        chunks.append(
+            {
+                **base,
+                "choices": [],
+                "usage": usage,
+                "usage_measurement_status": measurement_status,
+            }
+        )
+    return chunks
+
+
+def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, Any], int]:
+    """Build secret-free operator readiness without probing external providers."""
+    checks: dict[str, dict[str, Any]] = {}
+    try:
+        enabled_agents = len(orchestrator.agents)
+        checks["orchestration"] = {
+            "status": "ready" if enabled_agents else "not_ready",
+            "enabled_agent_count": enabled_agents,
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["orchestration"] = {"status": "not_ready"}
+
+    try:
+        checks["sync_routing"] = {
+            "status": "ready" if orchestrator.client is not None else "not_ready",
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["sync_routing"] = {"status": "not_ready"}
+
+    for check_name, backend_name in (
+        ("batch_routing", "batch_backend"),
+        ("embedding_batch", "embedding_batch_backend"),
+    ):
+        try:
+            backend = getattr(coordinator, backend_name)
+            # Backend identifiers may contain URLs, tenant names, or deployment
+            # secrets. Readiness exposes only a server-controlled status.
+            backend_id = getattr(backend, "name", None)
+            checks[check_name] = {
+                "status": "ready" if isinstance(backend_id, str) and backend_id else "degraded"
+            }
+        except Exception:  # noqa: BLE001 - optional outage is safe to report generically
+            checks[check_name] = {"status": "degraded"}
+
+    required = ("orchestration", "sync_routing")
+    required_ready = all(checks[name]["status"] == "ready" for name in required)
+    optional_degraded = any(
+        checks[name]["status"] == "degraded" for name in ("batch_routing", "embedding_batch")
+    )
+    status = "ready_with_degraded_optional_dependencies" if required_ready and optional_degraded else (
+        "ready" if required_ready else "not_ready"
+    )
+    return {"status": status, "service": "contextual-orchestrator", "checks": checks}, (
+        200 if required_ready else 503
+    )
+
+
+def responses_sse_body(response: dict[str, Any]) -> str:
+    """Frame a completed Responses object as a valid SSE response."""
+    sequence = 0
+    frames: list[str] = []
+
+    def emit(event_type: str, **values: Any) -> None:
+        nonlocal sequence
+        payload = {"type": event_type, "sequence_number": sequence, **values}
+        sequence += 1
+        frames.append(
+            f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        )
+
+    in_progress = {**response, "status": "in_progress", "output": []}
+    emit("response.created", response=in_progress)
+    for output_index, item in enumerate(response.get("output", [])):
+        if not isinstance(item, dict):
+            continue
+        item_in_progress = {**item, "status": "in_progress"}
+        emit("response.output_item.added", output_index=output_index, item=item_in_progress)
+        if item.get("type") == "message":
+            for content_index, part in enumerate(item.get("content", [])):
+                if not isinstance(part, dict):
+                    continue
+                part_in_progress = {**part, "text": ""}
+                emit(
+                    "response.content_part.added",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part_in_progress,
+                )
+                if part.get("type") == "output_text":
+                    emit(
+                        "response.output_text.delta",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        delta=part.get("text", ""),
+                    )
+                    emit(
+                        "response.output_text.done",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        text=part.get("text", ""),
+                    )
+                emit(
+                    "response.content_part.done",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part,
+                )
+        elif item.get("type") == "function_call":
+            arguments = str(item.get("arguments", "{}"))
+            emit(
+                "response.function_call_arguments.delta",
+                item_id=item.get("id"),
+                output_index=output_index,
+                delta=arguments,
+            )
+            emit(
+                "response.function_call_arguments.done",
+                item_id=item.get("id"),
+                output_index=output_index,
+                name=item.get("name", ""),
+                arguments=arguments,
+            )
+        emit("response.output_item.done", output_index=output_index, item=item)
+    emit("response.completed", response=response)
+    frames.append("data: [DONE]\n\n")
+    return "".join(frames)
+
+
+_REASONING_STAGE_SUMMARIES = {
+    "thinker": "Planning the approach.",
+    "worker": "Executing the selected approach.",
+    "verifier": "Checking the result for errors and unsupported claims.",
+    "synthesizer": "Preparing the final answer.",
+}
+
+
+def _orchestrated_response(
+    model: str,
+    result: dict[str, Any],
+    response_id: str,
+    created_at: int,
+    summaries: list[str],
+    *,
+    reasoning_id: str | None = None,
+    message_id: str | None = None,
+    reasoning_texts: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build the OpenAI Responses shape for an orchestrated plain-text result."""
+    reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
+    message_id = message_id or f"msg_{uuid.uuid4().hex}"
+    reasoning_item: dict[str, Any] = {
+        "id": reasoning_id,
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [{"type": "summary_text", "text": text} for text in summaries],
+    }
+    if reasoning_texts:
+        reasoning_item["content"] = [
+            {"type": "reasoning_text", "text": text} for text in reasoning_texts
+        ]
+    response = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "model": model,
+        "output": [
+            reasoning_item,
+            {
+                "id": message_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": result["answer"], "annotations": []}],
+            },
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": "auto"},
+        "store": False,
+        "temperature": None,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "truncation": "disabled",
+        "usage": result.get("usage"),
+        "metadata": {},
+    }
+    if result.get("usage_record_ids"):
+        response["usage_record_ids"] = result["usage_record_ids"]
+    if result.get("cost") is not None:
+        response["cost"] = result["cost"]
+    return response
+
+
+def build_server(
+    orchestrator: TaskOrchestrator,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    security: SecurityConfig | None = None,
+    clearfolio_url: str | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
+) -> ThreadingHTTPServer:
+    """Build, but do not start, the orchestration HTTP server.
+
+    ``coordinator`` is the cost-review + routing hub. When omitted a default
+    one is built around ``orchestrator`` with an in-memory KV config store, so
+    every completion is priced, recorded, and sync/batch routed.
+    """
+    security = security or SecurityConfig()
+    security.check_bind(host)
+    release_authority = verify_release_authority_snapshot(release_authority)
+    coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    video_jobs = VideoJobRegistry(coordinator.job_registry)
+    files = FileRegistry(coordinator.job_registry)
+    configure_telemetry(config=coordinator.config)
+    if clearfolio_url is not None:
+        parsed_viewer = urllib.parse.urlparse(clearfolio_url)
+        if parsed_viewer.scheme not in {"http", "https"} or not parsed_viewer.netloc:
+            raise ValueError("clearfolio_url must be an http(s) URL")
+        clearfolio_url = clearfolio_url.rstrip("/")
+
+    class Handler(BaseHTTPRequestHandler):
+        """Handle authenticated orchestration, administration, and health routes."""
+        _session_token = None
+        _trace_token = None
+
+        def _bind_session(self, session_id: str | None) -> None:
+            """Bind validated request correlation to this handler context."""
+            if session_id is None:
+                return
+            if self._session_token is not None:
+                reset_session_id(self._session_token)
+            self._session_token = set_session_id(session_id)
+
+        def _bind_trace(self) -> None:
+            """Replace, rather than stack, inbound trace context on this request."""
+            if self._trace_token is not None:
+                detach_trace_context(self._trace_token)
+            self._trace_token = attach_trace_context(self.headers)
+
+        def _reset_session(self) -> None:
+            """Release request correlation state before a keep-alive request."""
+            trace_token, self._trace_token = self._trace_token, None
+            if trace_token is not None:
+                detach_trace_context(trace_token)
+            session_token, self._session_token = self._session_token, None
+            if session_token is not None:
+                reset_session_id(session_token)
+
+        def finish(self) -> None:
+            """Finish the response and release request correlation state."""
+            try:
+                super().finish()
+            finally:
+                self._reset_session()
+
+        # Bound inactive request/header reads to the operator-configured abuse
+        # accounting window. StreamRequestHandler applies this to the socket;
+        # BaseHTTPRequestHandler then closes timed-out persistent connections.
+        timeout = float(security.rate_limit_window_seconds)
+
+        # HTTP/1.1 keep-alive: every response sets Content-Length, so connections
+        # are reusable while provider calls run. The HTTP/1.0 default forces a
+        # TCP handshake + TIME_WAIT socket per request -- k6 evidence
+        # (loadtests/k6_gateway_smoke.js): at 200 req/s the CLIENT exhausted
+        # local ephemeral ports ("dial: i/o timeout") long before server
+        # capacity was reached.
+        protocol_version = "HTTP/1.1"
+
+        # Response writers emit ``Connection: close`` by reading this flag, but
+        # stdlib only assigns it as an *instance* attribute during
+        # ``parse_request`` -- a handler invoked before any parsed request (or
+        # constructed directly for unit tests) would raise AttributeError.
+        # Declaring it here keeps the pre-parse default aligned with stdlib
+        # semantics: assume the connection closes until a request says keep-alive.
+        close_connection = True
+
+        def send_response(self, code: int, message: str | None = None) -> None:
+            """Capture the response status for the per-request log, then delegate to stdlib.
+
+            `_last_status` (read by `_log_request_summary`) used to be set
+            only by this class's own `_send`/`_send_text`/`_send_bytes`/
+            `_send_sse` writers. A response the framework generates itself --
+            e.g. `BaseHTTPRequestHandler`'s built-in 501 for an unsupported
+            HTTP method, or a `send_error` call from `parse_request()` on a
+            malformed request line -- calls `send_response` directly and
+            bypasses all of those writers, so the INFO summary logged
+            `status=-` even though a real status was already sent to the
+            client. `send_response` is stdlib's own single choke point every
+            response path (including its own `send_error`) already goes
+            through, so overriding it here captures the status for every
+            current and future response path uniformly, not just this
+            module's own writers.
+            """
+            self._last_status = code
+            super().send_response(code, message)
+
+        def parse_request(self) -> bool:
+            """Timestamp the moment real request data starts being handled.
+
+            ``BaseHTTPRequestHandler.handle_one_request`` blocks on
+            ``self.rfile.readline()`` *before* calling this method -- on a
+            keep-alive connection that read waits on the client's idle time
+            between requests, not on any processing this server does.
+            Recording ``_request_started`` here, at the top of
+            ``parse_request`` (immediately after that blocking read has
+            already returned real request bytes), keeps
+            ``_log_request_summary``'s ``latency_ms`` scoped to actual
+            request handling instead of also counting the client's think
+            time.
+            """
+            self._request_started = time.monotonic()
+            return super().parse_request()
+
+        def handle_one_request(self) -> None:
+            """Reset per-request state before parsing each persistent request.
+
+            Body-consumption tracking must restart per request so an unread
+            declared body still closes the connection, and correlation/trace
+            state must never leak across requests on a reused connection.
+
+            ``command``/``path`` are reset here too: stdlib's own
+            ``handle_one_request`` only assigns them when it actually parses a
+            request line, so on a keep-alive connection's *last* call --
+            triggered by the client closing the connection, where nothing is
+            read at all -- they would otherwise still hold the *previous*
+            request's values. Resetting them first lets
+            ``_log_request_summary``'s existing "nothing to report" guard
+            correctly recognize that no new request happened this call,
+            instead of logging the prior request a second time with a
+            statusless "phantom" entry.
+
+            ``_request_started`` is reset to ``None`` here too, ahead of the
+            blocking read: it is only ever set for real inside
+            ``parse_request`` above (once request data has actually
+            arrived), and a call that reads nothing at all (a closed
+            keep-alive connection) never reaches that point -- exactly the
+            case ``_log_request_summary``'s own guard already skips.
+
+            ``_response_headers_sent`` is reset to ``False`` here too: it is
+            the per-request marker ``_write_response`` reads to decide
+            whether a caught disconnect happened before or after the status
+            line/headers were actually flushed to the client (see
+            ``_write_response``'s docstring). Resetting it per request keeps
+            a prior request's successful delivery from leaking into this
+            one's disconnect classification on a reused keep-alive
+            connection.
+            """
+            self._request_body_consumed = False
+            self._last_status = None
+            self._response_headers_sent = False
+            self.command = None
+            self.path = None
+            self._request_started = None
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
+            # A request that declared a body it never delivered (unsupported
+            # method, rejected route) must not leave those bytes on a reusable
+            # connection for the stdlib to reparse as the next request.
+            if (
+                self._request_body_consumed is False
+                and hasattr(self, "headers")
+                and (
+                    self.headers.get("Content-Length") not in (None, "0")
+                    or self.headers.get("Transfer-Encoding")
+                )
+            ):
+                self.close_connection = True
+
+        def _log_request_summary(self, started: float | None) -> None:
+            """Emit one body-free INFO summary line per completed request.
+
+            Carries method, path, status, latency, and the bounded ADR 0122
+            correlation hash only -- never headers, a query string beyond the
+            raw path, or a request/response body. A connection that never
+            delivered any request bytes at all (the client simply closed a
+            reused keep-alive connection) has no method, no path, AND no
+            status, and is skipped -- there is nothing to report.
+
+            A request that *did* deliver bytes but whose request line
+            ``parse_request`` rejected as malformed (or that stdlib's
+            ``handle_one_request`` rejected outright as too long, before
+            ever calling our ``parse_request`` override) still gets a real
+            status sent to the client -- 400 or 414 -- via ``send_error``,
+            which flows through the ``send_response`` override above into
+            ``_last_status``, even though ``command``/``path`` stay unset
+            (stdlib's own ``parse_request`` explicitly resets ``self.command``
+            to ``None`` "in case of error on the first line" and never
+            reaches the later assignment that would set ``path``). Skipping
+            on method/path alone, as this used to, silently dropped that
+            entry even though a real response was sent. ``_last_status`` is
+            reset to ``None`` at the top of every ``handle_one_request`` call
+            and only ever (re)populated by ``send_response`` during this
+            call's own processing, so treating "some status was recorded"
+            as an equally valid reason to log -- not just "some
+            method/path was recorded" -- captures every request that
+            actually produced a response while still skipping a truly
+            byte-free keep-alive close.
+
+            ``started`` being ``None`` still means ``parse_request`` was
+            never entered (true of both the byte-free close above and the
+            too-long-request-line case, which stdlib rejects before ever
+            calling it); the ``or time.monotonic()`` fallback below keeps
+            that from ever raising on a future stdlib change.
+            """
+            if not _LOGGER.isEnabledFor(logging.INFO):
+                return
+            method = getattr(self, "command", None)
+            path = getattr(self, "path", None)
+            status = getattr(self, "_last_status", None)
+            if not method and not path and status is None:
+                return
+            _LOGGER.info(
+                "%s request_id=%s",
+                summarize_request_for_log(
+                    method=method or "-",
+                    path=path or "-",
+                    status=status,
+                    latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
+                    session_id_hash=session_id_hash(),
+                ),
+                current_request_id() or "-",
+            )
+
+        def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests after applying the route's authorization scope."""
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                if path == "/openapi.json":
+                    self._send(OPENAPI_SPEC)
+                    return
+                if path == "/healthz":
+                    # Unauthenticated process liveness; do not traverse runtime state.
+                    self._send({"status": "ok", "service": "contextual-orchestrator"})
+                    return
+                if path == "/readyz":
+                    self._authorize("admin")
+                    readiness, status = _readiness_payload(orchestrator, coordinator)
+                    self._send(readiness, status)
+                    return
+                if path in ("/", "/admin"):
+                    # The shell is public so an operator can establish a session;
+                    # all data and mutation routes remain admin-authorized.
+                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
+                    return
+                if path == "/v1/models" or path.startswith("/v1/models/"):
+                    # OpenAI model discovery is inference-scope (same bearer as chat).
+                    self._authorize("inference")
+                    if path == "/v1/models":
+                        self._send(orchestrator.list_openai_models())
+                        return
+                    raw_model_id = path[len("/v1/models/") :]
+                    if not raw_model_id or "/" in raw_model_id:
+                        raise RequestError(
+                            400,
+                            "invalid_model",
+                            "model id must be one URL-encoded path segment",
+                        )
+                    model_id = urllib.parse.unquote(raw_model_id)
+                    try:
+                        self._send(orchestrator.get_openai_model(model_id))
+                    except KeyError:
+                        self._send_error(404, "model_not_found", f"model {model_id!r} not found")
+                    return
+                if path == "/v1/files" or path.startswith("/v1/files/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    if path == "/v1/files":
+                        self._send({"object": "list", "data": files.list(principal_id)})
+                        return
+                    suffix = path[len("/v1/files/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_file_id = suffix[: -len("/content")] if content_request else suffix
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    selected = next(
+                        (
+                            (item, replica["provider_file_id"])
+                            for item in orchestrator.agents
+                            if (replica := replicas.get(item.id)) is not None
+                            and replica.get("agent_affinity_key") == file_agent_affinity_key(item)
+                        ),
+                        None,
+                    )
+                    if selected is None:
+                        raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
+                    agent, provider_file_id = selected
+                    if content_request:
+                        try:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
+                                    max_response_bytes=MAX_FILE_UPLOAD_BYTES,
+                                )
+                            )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code == 404:
+                                raise RequestError(
+                                    404, "file_not_found", "file content was not found"
+                                ) from exc
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "the file provider is unavailable",
+                            ) from exc
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(files.public_response(owner.document, owner))
+                    return
+                if path.startswith("/v1/batch/embeddings/"):
+                    # Embeddings batch polling is an inference-scope surface, so
+                    # it is authorized here before the admin gate below.
+                    self._authorize("inference")
+                    batch_id = path[len("/v1/batch/embeddings/"):]
+                    try:
+                        self._send(
+                            coordinator.embeddings_batch_document(
+                                batch_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
+                    except KeyError:
+                        self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
+                    return
+                if path.startswith("/v1/videos/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    suffix = path[len("/v1/videos/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_job_id = (
+                        suffix[: -len("/content")] if content_request else suffix
+                    )
+                    if not gateway_job_id or "/" in gateway_job_id:
+                        raise RequestError(
+                            400, "invalid_video_job", "video job id must be one path segment"
+                        )
+                    try:
+                        owner = video_jobs.owner(gateway_job_id, principal_id)
+                    except KeyError:
+                        self._send_error(
+                            404, "video_job_not_found", "video job was not found"
+                        )
+                        return
+                    agent = next(
+                        (
+                            candidate
+                            for candidate in orchestrator.candidates
+                            if candidate.id == owner.agent_id
+                        ),
+                        None,
+                    )
+                    if agent is None:
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
+                    if owner.agent_affinity_key != video_agent_affinity_key(agent):
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
+                    provider_path = f"videos/{urllib.parse.quote(owner.provider_job_id, safe='')}"
+                    try:
+                        if content_request:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent, f"{provider_path}/content",
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                            self._send_bytes(raw, content_type)
+                        else:
+                            result = self._run(
+                                lambda: orchestrator.client.proxy_get_json(
+                                    agent, provider_path,
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                            previous_usage = owner.provider_usage
+                            owner = video_jobs.observe_provider_result(owner, result)
+                            if previous_usage is None and owner.provider_usage is not None:
+                                coordinator.record_async_video_usage(
+                                    agent=agent, usage=owner.provider_usage,
+                                    gateway_job_id=owner.gateway_job_id,
+                                )
+                            self._send(video_jobs.public_response(result, owner))
+                    except urllib.error.HTTPError as exc:
+                        if exc.code == 404:
+                            raise RequestError(
+                                404,
+                                "video_job_not_found",
+                                "The video job is no longer available; submit a new video request.",
+                            ) from exc
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
+                    except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
+                    return
+                self._authorize("admin", purpose=self._admin_purpose(path))
+                if path == "/api/v1/cost_attribution_dimensions":
+                    self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
+                    return
+                if path == "/api/v1/cost_reports/rollup":
+                    dimension = (query.get("dimension") or ["model_name"])[0]
+                    start = self._parse_optional_int(query, "start")
+                    end = self._parse_optional_int(query, "end")
+                    try:
+                        self._send(coordinator.cost_report(dimension, start, end))
+                    except ValueError as exc:
+                        self._send_error(400, "invalid_dimension", str(exc))
+                    return
+                if path == "/api/v1/llm_usage_records":
+                    start = self._parse_optional_int(query, "start")
+                    end = self._parse_optional_int(query, "end")
+                    records = coordinator.ledger.records(start, end)
+                    page_number, page_size = self._parse_paging(query, default_size=50, max_size=500)
+                    window = records[(page_number - 1) * page_size : page_number * page_size]
+                    self._send({
+                        "items": window,
+                        "total_count": len(records),
+                        "page_number": page_number,
+                        "page_size": page_size,
+                    })
+                    return
+                if path.startswith("/api/v1/batch_routing_jobs/"):
+                    job_id = path.rsplit("/", 1)[-1]
+                    try:
+                        self._send(
+                            coordinator.poll_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
+                    except KeyError:
+                        self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
+                    return
+                if path == "/admin/state":
+                    state = orchestrator.admin_state(
+                        owner_id=security.principal_id(self.headers),
+                        role=getattr(self, "_authorized_role", None),
+                        purpose=getattr(self, "_authorized_purpose", None),
+                    )
+                    state["document_viewer"] = (
+                        {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
+                    )
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access()
+                        self._audit_trace_disclosure("/admin/state")
+                    self._send(_response_payload(state, security.expose_trace_by_default))
+                    return
+                if path == "/api/v1/agent_pools":
+                    page_number, page_size = self._parse_paging(query, default_size=20, max_size=100)
+                    items = orchestrator.list_agents(page_number=page_number, page_size=page_size)
+                    self._send({
+                        "items": items,
+                        "total_count": len(orchestrator.candidates),
+                        "page_number": page_number,
+                        "page_size": page_size,
+                    })
+                    return
+                if path == "/api/v1/model_groups":
+                    items = orchestrator.list_model_groups()
+                    self._send({"items": items, "total_count": len(items)})
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    try:
+                        self._send(orchestrator.get_model_group(urllib.parse.unquote(path.rsplit("/", 1)[-1])))
+                    except KeyError:
+                        self._send_error(404, "model_group_not_found", "model group not found")
+                    return
+                if path == "/api/v1/orchestration_policies/default_policy":
+                    self._send(orchestrator.admin_state()["policy"])
+                    return
+                if path == "/api/v1/provider_readiness/latest":
+                    raw_refresh = (query.get("refresh") or ["false"])[0].lower()
+                    if raw_refresh not in {"true", "false"}:
+                        raise ValueError("refresh must be true or false")
+                    self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
+                    return
+                if path == "/api/v1/analytics_snapshots/latest":
+                    self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
+                if path == "/api/v1/spend_analytics/latest":
+                    self._send(orchestrator.spend_analytics())
+                    return
+                if path == "/api/v1/sales_readiness/latest":
+                    self._send(orchestrator.sales_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_readiness/latest":
+                    self._send(orchestrator.commercial_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_evidence_manifests/latest":
+                    self._send(orchestrator.commercial_evidence_manifest_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_handoff_bundles/latest":
+                    self._send(orchestrator.commercial_handoff_bundle_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/buyer_evidence_manifests/latest":
+                    self._send(
+                        orchestrator.commercial_evidence_manifest_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_evidence_manifests/latest>; rel="successor-version"',
+                        },
+                    )
+                    return
+                if path == "/api/v1/buyer_handoff_bundles/latest":
+                    self._send(
+                        orchestrator.commercial_handoff_bundle_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_handoff_bundles/latest>; rel="successor-version"',
+                        },
+                    )
+                    return
+                if path == "/api/v1/saleability_decisions/latest":
+                    self._send(orchestrator.saleability_decision_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_evidence_exports/latest":
+                    self._send(orchestrator.commercial_evidence_export_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_acceptance_checks/latest":
+                    self._send(orchestrator.commercial_acceptance_check_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_release_candidates/latest":
+                    self._send(orchestrator.commercial_release_candidate_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_gap_registers/latest":
+                    self._send(orchestrator.commercial_gap_register_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_procurement_readiness/latest":
+                    self._send(orchestrator.commercial_procurement_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_contract_readiness/latest":
+                    self._send(orchestrator.commercial_contract_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_onboarding_readiness/latest":
+                    self._send(orchestrator.commercial_onboarding_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_operations_readiness/latest":
+                    self._send(orchestrator.commercial_operations_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_security_attestations/latest":
+                    self._send(orchestrator.commercial_security_attestation_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_value_readiness/latest":
+                    self._send(orchestrator.commercial_value_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_close_readiness/latest":
+                    self._send(orchestrator.commercial_close_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_go_to_market_readiness/latest":
+                    self._send(orchestrator.commercial_go_to_market_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_launch_readiness/latest":
+                    self._send(orchestrator.commercial_launch_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_completion_scorecards/latest":
+                    self._send(orchestrator.commercial_completion_scorecard_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
+                    ))
+                    return
+                if path == "/api/v1/commercial_buyer_acceptance_workflows/latest":
+                    self._send(orchestrator.commercial_buyer_acceptance_workflow_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_demo_scenarios/latest":
+                    self._send(orchestrator.commercial_demo_scenario_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_proposal_packets/latest":
+                    self._send(orchestrator.commercial_proposal_packet_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_purchase_approval_packets/latest":
+                    self._send(orchestrator.commercial_purchase_approval_packet_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_due_diligence_rooms/latest":
+                    self._send(orchestrator.commercial_due_diligence_room_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_investment_committee_memos/latest":
+                    self._send(orchestrator.commercial_investment_committee_memo_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/workflow_runs":
+                    page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
+                    owner_id = security.principal_id(self.headers)
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access()
+                        self._audit_trace_disclosure("/api/v1/workflow_runs")
+                    self._send(_response_payload({
+                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size, owner_id=owner_id),
+                        "total_count": orchestrator.count_workflow_runs(owner_id=owner_id),
+                        "page_number": page_number,
+                        "page_size": page_size,
+                    }, security.expose_trace_by_default))
+                    return
+                if path.startswith("/api/v1/workflow_runs/"):
+                    workflow_run_id = path.rsplit("/", 1)[-1]
+                    try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access()
+                        workflow_run = orchestrator.get_workflow_run(workflow_run_id, owner_id=security.principal_id(self.headers))
+                        if security.expose_trace_by_default:
+                            self._audit_trace_disclosure("/api/v1/workflow_runs/{workflow_run_id}")
+                        self._send(_response_payload(workflow_run, security.expose_trace_by_default))
+                        return
+                    except KeyError:
+                        self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
+                        return
+                if path.startswith("/api/v1/access_reports/"):
+                    workflow_run_id = path.rsplit("/", 1)[-1]
+                    try:
+                        self._authorize_trace_access()
+                        access_report = orchestrator.get_access_report(
+                            workflow_run_id,
+                            owner_id=security.principal_id(self.headers),
+                        )
+                        self._audit_trace_disclosure(
+                            "/api/v1/access_reports/{workflow_run_id}"
+                        )
+                        orchestrator.record_analytics_event(
+                            "access_report_viewed",
+                            {
+                                "endpoint_path": "/api/v1/access_reports/{workflow_run_id}",
+                                "workflow_run_id": workflow_run_id,
+                                "actor_scope": "admin",
+                                "status_code": 200,
+                            },
+                        )
+                        self._send(
+                            _response_payload(
+                                access_report,
+                                security.expose_trace_by_default,
+                            )
+                        )
+                        return
+                    except KeyError:
+                        self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
+                        return
+                if path.startswith("/api/v1/evaluation_runs/"):
+                    evaluation_run_id = path.rsplit("/", 1)[-1]
+                    try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access()
+                        evaluation_run = orchestrator.get_evaluation_run(evaluation_run_id, owner_id=security.principal_id(self.headers))
+                        if security.expose_trace_by_default:
+                            self._audit_trace_disclosure("/api/v1/evaluation_runs/{evaluation_run_id}")
+                        self._send(_response_payload(evaluation_run, security.expose_trace_by_default))
+                        return
+                    except KeyError:
+                        self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
+                    return
+                if path.startswith("/api/v1/agent_pools/"):
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
+                        agent_pool_id = segments[3]
+                        worker_agent_id = segments[-1]
+                        try:
+                            payload = orchestrator._agent_to_admin_payload(
+                                orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
+                            )
+                            payload["agent_pool_id"] = agent_pool_id
+                            self._send(payload)
+                            return
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
+                            return
+                    raise RequestError(
+                        400,
+                        "bad_path",
+                        "agent path must be /api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}",
+                    )
+                if path.startswith("/api/v1/locale_bundles/"):
+                    locale_code = path.rsplit("/", 1)[-1]
+                    bundle = ADMIN_TRANSLATIONS.get(locale_code)
+                    if not bundle:
+                        self._send_error(404, "locale_not_found", f"locale {locale_code} not found")
+                        return
+                    orchestrator.record_analytics_event(
+                        "locale_bundle_loaded",
+                        {
+                            "endpoint_path": "/api/v1/locale_bundles/{locale_code}",
+                            "locale_code": locale_code,
+                            "actor_scope": "admin",
+                            "status_code": 200,
+                        },
+                    )
+                    self._send({"locale_code": locale_code, "messages": bundle})
+                    return
+                self._send_error(404, "route_not_found", "not found")
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except (TypeError, ValueError) as exc:
+                self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
+            except Exception:
+                traceback.print_exc()
+                self._send_error(500, "internal_error", "internal server error")
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated agent-pool worker update."""
+            try:
+                self._authorize("admin", state_changing=True)
+                path = urllib.parse.urlparse(self.path).path
+                if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
+                        raise RequestError(400, "bad_path", "agent patch path missing worker agent")
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_AGENT_PATCH_KEYS)
+                    updated = orchestrator.patch_agent(segments[3], segments[-1], body)
+                    self._send(updated, 200)
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        orchestrator.get_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
+                    self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
+                    return
+                self._send_error(404, "route_not_found", "not found")
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except (ValueError, TypeError) as exc:
+                self._send_error(400, "invalid_request", str(exc))
+            except KeyError as exc:
+                self._send_error(404, "agent_not_found", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
+            except Exception:
+                traceback.print_exc()
+                self._send_error(500, "internal_error", "internal server error")
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            """Delete an authenticated agent-pool worker resource."""
+            try:
+                path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    security.validate_admin_session_origin(self.headers)
+                    session_id = security._extract_admin_session_cookie(self.headers)
+                    self._send(
+                        {"session_status": "cleared", "session_revoked": security.revoke_admin_session(session_id)},
+                        extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
+                    )
+                    return
+                if path.startswith("/v1/files/"):
+                    self._authorize("inference", state_changing=True)
+                    gateway_file_id = path[len("/v1/files/") :]
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    principal_id = security.principal_id(self.headers)
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    targets = [
+                        (agent, replica["provider_file_id"])
+                        for agent in orchestrator.agents
+                        if (replica := replicas.get(agent.id)) is not None
+                        and replica.get("agent_affinity_key") == file_agent_affinity_key(agent)
+                    ]
+                    if len(targets) != len(replicas):
+                        raise RequestError(503, "file_provider_unavailable", "not every file replica provider is available")
+                    remaining = dict(replicas)
+                    for agent, provider_file_id in targets:
+                        try:
+                            result = self._run(
+                                lambda agent=agent, provider_file_id=provider_file_id: orchestrator.client.proxy_delete_json(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}",
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code != 404:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise RequestError(
+                                    503,
+                                    "file_provider_unavailable",
+                                    "the file provider is unavailable",
+                                ) from exc
+                        else:
+                            if result.get("deleted") is not True:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise RequestError(502, "invalid_file_response", "file provider did not confirm deletion")
+                        remaining.pop(agent.id, None)
+                        if remaining:
+                            files.retain_replicas(gateway_file_id, principal_id, remaining)
+                    files.delete(gateway_file_id, principal_id)
+                    self._send({"id": gateway_file_id, "object": "file", "deleted": True})
+                    return
+                self._authorize("admin", state_changing=True)
+                if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
+                        raise RequestError(400, "bad_path", "agent delete path missing worker agent")
+                    self._send(orchestrator.remove_agent(segments[3], segments[-1]), 200)
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        deleted = orchestrator.delete_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
+                    self._send(deleted, 200)
+                    return
+                self._send_error(404, "route_not_found", "not found")
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except (ValueError, TypeError) as exc:
+                self._send_error(400, "invalid_request", str(exc))
+            except KeyError as exc:
+                self._send_error(404, "agent_not_found", str(exc))
+            except Exception:
+                traceback.print_exc()
+                self._send_error(500, "internal_error", "internal server error")
+
+        def do_POST(self) -> None:  # noqa: N802
+            """Dispatch authenticated completion, agent, and simulation writes."""
+            request_policy = None
+            endpoint_policy = None
+            try:
+                path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
+                    presented = body.get("token")
+                    if not isinstance(presented, str) or not presented.strip():
+                        presented = security._extract_bearer_token(self.headers)
+                    session_id = security.establish_admin_session(
+                        presented.strip() if isinstance(presented, str) else ""
+                    )
+                    self._send(
+                        {"session_status": "established"},
+                        extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
+                    )
+                    return
+                if path == "/v1/files":
+                    self._authorize("inference", state_changing=True)
+                    content_type = self.headers.get("content-type", "")
+                    if content_type.split(";", 1)[0].strip().lower() != "multipart/form-data" or "boundary=" not in content_type:
+                        raise RequestError(415, "unsupported_media_type", "content-type must be multipart/form-data with a boundary")
+                    try:
+                        body_size = _request_body_size(
+                            self.headers, MAX_FILE_UPLOAD_REQUEST_BYTES
+                        )
+                    except RequestError:
+                        self.close_connection = True
+                        raise
+                    if body_size == 0:
+                        raise RequestError(400, "invalid_file", "multipart upload body is empty")
+                    with tempfile.TemporaryFile() as upload:
+                        remaining = body_size
+                        while remaining:
+                            chunk = self.rfile.read(min(1024 * 1024, remaining))
+                            if not chunk:
+                                self.close_connection = True
+                                raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                            upload.write(chunk)
+                            remaining -= len(chunk)
+                        self._request_body_consumed = True
+                        purpose, filename, file_size = _multipart_upload_metadata(
+                            upload, content_type
+                        )
+                        if file_size > MAX_FILE_UPLOAD_BYTES:
+                            raise RequestError(
+                                413,
+                                "request_too_large",
+                                "files may not exceed 512 MB",
+                            )
+                        if purpose == "batch":
+                            if not filename.casefold().endswith(".jsonl"):
+                                raise RequestError(
+                                    400,
+                                    "invalid_file",
+                                    "batch files must use the .jsonl extension",
+                                )
+                            if file_size > MAX_BATCH_FILE_BYTES:
+                                raise RequestError(
+                                    413,
+                                    "request_too_large",
+                                    "batch files may not exceed 200 MB",
+                                )
+                        saw_failure = False
+                        every_failure_was_request_too_large = True
+                        replicas: list[tuple[dict[str, Any], str, str]] = []
+                        file_agents = [
+                            agent
+                            for agent in orchestrator.agents
+                            if "files" in agent.tags or "capability:files" in agent.tags
+                            if "files" not in agent.provider_exclusions
+                        ]
+                        # Upload to one provider by default. Replicating caller data
+                        # across providers requires a separate explicit contract.
+                        for agent in file_agents[:1]:
+                            upload.seek(0)
+                            try:
+                                provider_result = self._run(
+                                    lambda agent=agent: orchestrator.client.proxy_upload(
+                                        agent,
+                                        "files",
+                                        upload,
+                                        content_type=content_type,
+                                        content_length=body_size,
+                                        max_response_bytes=1024 * 1024,
+                                    )
+                                )
+                                replicas.append(
+                                    (
+                                        provider_result,
+                                        agent.id,
+                                        file_agent_affinity_key(agent),
+                                    )
+                                )
+                            except urllib.error.HTTPError as exc:
+                                saw_failure = True
+                                every_failure_was_request_too_large = (
+                                    every_failure_was_request_too_large
+                                    and exc.code == 413
+                                )
+                                continue
+                            except FileContractError:
+                                raise
+                            except Exception:
+                                saw_failure = True
+                                every_failure_was_request_too_large = False
+                                continue
+                        if replicas:
+                            response = files.register_replicas(
+                                replicas, security.principal_id(self.headers)
+                            )
+                            self._send(response, 201)
+                            return
+                    if saw_failure and every_failure_was_request_too_large:
+                        raise RequestError(413, "request_too_large", "request body exceeds every eligible provider limit")
+                    raise RequestError(503, "file_provider_unavailable", "no eligible file provider accepted the upload")
+                scope = (
+                    "admin"
+                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                    or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
+                    else "inference"
+                )
+                self._authorize(scope, state_changing=True)
+                large_inference_json = path in {
+                    "/v1/chat/completions",
+                    "/v1/responses",
+                    "/v1/images/generations",
+                    "/v1/videos",
+                } or path.startswith("/v1/audio/")
+                body = self._read_json(
+                    max_body_bytes=(
+                        min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
+                        if large_inference_json
+                        else security.max_body_bytes
+                    )
+                )
+                zdr_only = _validate_zdr_only(body)
+                request_policy = orchestrator.request_policy(zdr_only)
+                request_policy.__enter__()
+                if path in {"/v1/chat/completions", "/v1/responses"}:
+                    endpoint_routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    endpoint_policy = orchestrator.routing_endpoint_scope(
+                        endpoint_routing.get("endpoint") if endpoint_routing else None,
+                        body.get("model"),
+                        model_was_provided="model" in body,
+                    )
+                    try:
+                        endpoint_policy.__enter__()
+                    except EndpointUnavailableError as exc:
+                        endpoint_policy = None
+                        raise RequestError(
+                            400,
+                            "endpoint_unavailable",
+                            "routing.endpoint is unavailable",
+                        ) from exc
+                metadata_values = [
+                    value
+                    for key in ("metadata", "client_metadata")
+                    if isinstance((value := body.get(key)), dict)
+                ]
+                if "session_id" in body:
+                    normalized_session_id = session_id_from_metadata(
+                        {"session_id": body["session_id"]}
+                    )
+                    if normalized_session_id is None:
+                        raise RequestError(
+                            400,
+                            "invalid_session_id",
+                            "session_id must be a non-empty string of at most 128 characters",
+                        )
+                    metadata_values.append({"session_id": normalized_session_id})
+                request_session_id = session_id_from_request(self.headers, *metadata_values)
+                if request_session_id != current_session_id():
+                    self._bind_session(request_session_id)
+                cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
+                cache_partition = self._cache_partition()
+
+                if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
+                        raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
+                    _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
+                    try:
+                        created_agent = orchestrator.add_agent(segments[3], body)
+                    except KeyError as exc:
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_agent, 201)
+                    return
+                if path == "/api/v1/model_groups":
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_KEYS)
+                    group_name = body.get("group_name")
+                    try:
+                        orchestrator.get_model_group(group_name)
+                    except KeyError:
+                        pass
+                    else:
+                        raise RequestError(409, "model_group_exists", "A group with this name already exists. Select it, adjust its members, and save to update it.")
+                    try:
+                        created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
+                    except KeyError as exc:
+                        # Unknown members reference agents, so the canonical
+                        # not-found code matches the worker-agent surface (#831).
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_group, 201)
+                    return
+
+                capability_routes = {
+                    "/v1/images/generations": ("image", "images/generations", False),
+                    "/v1/videos": ("video", "videos", False),
+                    "/v1/audio/speech": ("speech", "audio/speech", True),
+                    "/v1/audio/transcriptions": ("transcription", "audio/transcriptions", False),
+                    "/v1/rerank": ("rerank", "rerank", False),
+                    "/v1/audio/generations": ("audio", "chat/completions", False),
+                }
+                if path in capability_routes:
+                    _validate_capability_request(path, body)
+                    capability, endpoint, binary = capability_routes[path]
+                    principal_id = security.principal_id(self.headers)
+
+                    def register_video_job(agent: ModelAgent, provider_result: dict[str, Any]) -> dict[str, Any]:
+                        response = video_jobs.register(
+                            provider_result,
+                            agent.id,
+                            principal_id,
+                            agent_affinity_key=video_agent_affinity_key(agent),
+                        )
+                        coordinator.record_async_video_usage(
+                            agent=agent,
+                            usage=provider_result.get("usage"),
+                            gateway_job_id=response["id"],
+                        )
+                        return response
+
+                    try:
+                        result = self._run(
+                            lambda: orchestrator.proxy_capability(
+                                body,
+                                capability=capability,
+                                endpoint=endpoint,
+                                binary=binary,
+                                selection_sink=(
+                                    register_video_job
+                                    if capability == "video"
+                                    else None
+                                ),
+                            )
+                        )
+                    except VideoJobContractError as exc:
+                        raise RequestError(
+                            502,
+                            "invalid_video_job_response",
+                            "The video provider did not return a trackable job; retry after checking provider status.",
+                        ) from exc
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except ProviderRequestTooLargeError as exc:
+                        raise RequestError(413, "request_too_large", str(exc)) from exc
+                    except RuntimeError as exc:
+                        raise RequestError(
+                            503,
+                            "capability_unavailable",
+                            f"no enabled {capability}-capable model group member is available",
+                        ) from exc
+                    if binary:
+                        raw, content_type = result
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(result)
+                    return
+
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions: prompt → route → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    _validate_completions_tools_surface(body)
+                    _validate_completions_response_format_surface(body)
+                    _validate_completions_chat_era_fields_surface(body)
+                    _validate_chat_audio_web_search_surface(
+                        body, endpoint_path="/v1/completions"
+                    )
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/completions")
+                    _validate_max_tool_calls(body, endpoint_path="/v1/completions")
+                    _validate_completions_reasoning_object(body)
+                    _validate_openai_background(body, endpoint_path="/v1/completions")
+                    _validate_chat_include_field(body, endpoint_path="/v1/completions")
+                    _validate_completions_stream(body)
+                    _validate_completions_stream_options(body)
+                    _validate_completions_best_of(body)
+                    _validate_completions_echo(body)
+                    _validate_completions_suffix(body)
+                    _validate_completions_logprobs(body)
+                    _validate_completions_top_logprobs(body)
+                    # OpenAI chat-era clients sometimes send max_completion_tokens
+                    # on Completions; prefer it over legacy max_tokens when both set.
+                    if "max_completion_tokens" in body:
+                        max_tokens = _validate_chat_max_completion_tokens(body)
+                    else:
+                        max_tokens = _validate_completions_max_tokens(body)
+                    model_name = _validate_chat_model(body)
+                    _require_pool_model(orchestrator, model_name)
+                    if "store" in body:
+                        _validate_completions_store(body)
+                    top_p = _validate_completions_top_p(body)
+                    temperature = _validate_completions_temperature(body)
+                    presence_penalty = _validate_completions_presence_penalty(body)
+                    frequency_penalty = _validate_completions_frequency_penalty(body)
+                    _validate_completions_seed(body)
+                    _validate_completions_stop(body)
+                    _validate_completions_n(body)
+                    end_user_id = _validate_completions_user(body)
+                    _validate_completions_logit_bias(body)
+                    _validate_service_tier(body, endpoint_path="/v1/completions")
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "prompt" not in body:
+                        raise RequestError(400, "invalid_prompt", "prompt is required")
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    attribution = dict(attribution or {})
+                    # OpenAI ``user`` → cost-ledger account when attribution.account is unset.
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    # Request model id → model_name dimension when unset (cost rollups).
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    # Endpoint product surface → service dimension when unset.
+                    if not attribution.get("service"):
+                        attribution["service"] = "completions_api"
+                    routing = _validate_routing(body.get("routing"))
+                    started_at = time.perf_counter()
+                    # Apply request sampling knobs to this request thread only.
+                    model_client = orchestrator.client
+                    with model_client.request_settings(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                    ):
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode="route",
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
+                            zdr_only=zdr_only,
+                        ))
+                    # Batch-channel Completions return a job handle (202), not a
+                    # text_completion body — match chat Completions honesty so
+                    # clients never receive a 500 on a valid batch routing hint.
+                    if isinstance(result, dict) and result.get("channel") == "batch":
+                        orchestrator.record_analytics_event(
+                            "text_completion_batched",
+                            {
+                                "endpoint_path": "/v1/completions",
+                                "actor_scope": "inference",
+                                "status_code": 202,
+                                "batch_job_id": result.get("job_id"),
+                                "batch_backend": result.get("backend"),
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(result, 202)
+                        return
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": "route",
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(text_completion_response(
+                        result, model=model_name, usage=result.get("usage"),
+                    ))
+                    return
+                if path == "/v1/chat/completions":
+                    _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_chat_audio_web_search_surface(body)
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/chat/completions")
+                    _validate_chat_reasoning_object(body)
+                    _validate_openai_background(body, endpoint_path="/v1/chat/completions")
+                    _validate_chat_include_field(body)
+                    _validate_max_tool_calls(body, endpoint_path="/v1/chat/completions")
+                    # functions/function_call: null or empty functions[] are omit no-ops
+                    # (SDK optional defaults); non-empty or any function_call fail closed.
+                    functions_raw = body.get("functions") if "functions" in body else None
+                    function_call_raw = body.get("function_call") if "function_call" in body else None
+                    functions_present = (
+                        "functions" in body
+                        and functions_raw is not None
+                        and not (isinstance(functions_raw, list) and not functions_raw)
+                    )
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops; any other function_call or non-empty functions
+                    # fail closed.
+                    function_call_present = (
+                        "function_call" in body
+                        and function_call_raw is not None
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip().lower() in ("none", "auto")
+                            )
+                        )
+                    )
+                    if functions_present or function_call_present:
+                        # OpenAI deprecated functions/function_call in favor of tools/tool_choice.
+                        # Fail closed with a migration message rather than silent passthrough of
+                        # a deprecated surface clients may still send from old SDKs.
+                        raise RequestError(
+                            400,
+                            "invalid_functions",
+                            "functions and function_call are not supported on /v1/chat/completions; "
+                            "use tools and tool_choice instead",
+                        )
+                    tools_list = body.get("tools") if isinstance(body.get("tools"), list) else None
+                    # tool_choice null is omit-equivalent; alone / empty tools: only "none" is a valid no-op.
+                    if (
+                        "tool_choice" in body
+                        and body.get("tool_choice") is not None
+                        and not tools_list
+                    ):
+                        tc = body.get("tool_choice")
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc_norm not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_tool_choice",
+                                "tool_choice requires tools on /v1/chat/completions",
+                            )
+                    # Shape-check tool results and message audio/function_call before
+                    # passthrough or orchestration (named errors, not silent drop).
+                    _validate_chat_message_known_fields(body)
+                    _validate_chat_tool_message_ids(body)
+                    _validate_chat_assistant_tool_calls(body)
+                    _validate_chat_message_audio_function_call(body)
+                    _validate_chat_logprobs_surface(body)
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "response_format" in body:
+                        _validate_chat_response_format(body)
+                    if "tools" in body:
+                        _validate_chat_tools(body)
+                    normalized_tool_choice = None
+                    if "tool_choice" in body:
+                        normalized_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_tool_choice
+                    if "parallel_tool_calls" in body:
+                        # Always type-check. With tools, true/false both valid for
+                        # provider passthrough; without tools, true fails closed.
+                        # Explicit JSON null is treat-as-omit (SDK optional default).
+                        ptc = body.get("parallel_tool_calls")
+                        ptc = _coerce_optional_bool(
+                            ptc,
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
+                        if ptc is not None:
+                            if ptc is True and not tools_list:
+                                raise RequestError(
+                                    400,
+                                    "invalid_parallel_tool_calls",
+                                    "parallel_tool_calls=true requires tools on /v1/chat/completions",
+                                )
+                            body["parallel_tool_calls"] = ptc
+                    # Strip+writeback model before tools/response_format passthrough so
+                    # proxy_completion pool match sees the same id as form/JS padded names.
+                    model_name = _validate_chat_model(body)
+                    _require_pool_model(orchestrator, model_name)
+                    # Coerce stream early so stream_options fail-closed matches route path
+                    # and tools/response_format passthrough cannot skip type checks.
+                    stream = body.get("stream", False)
+                    if stream is None or (isinstance(stream, str) and not stream.strip()):
+                        stream = False
+                    else:
+                        coerced_stream = _coerce_optional_bool(
+                            stream,
+                            error_code="invalid_request",
+                            message="stream must be a boolean",
+                        )
+                        stream = False if coerced_stream is None else coerced_stream
+                    body["stream"] = stream
+                    include_trace = self._validate_trace_request(body)
+                    explicit_trace = body.get("include_orchestration_trace") is True
+                    # Sampling + unsupported controls before passthrough (honesty parity
+                    # with the multi-agent route path).
+                    sampling = _validate_chat_sampling_and_control_fields(
+                        body, stream=bool(stream)
+                    )
+                    temperature = sampling["temperature"]
+                    top_p = sampling["top_p"]
+                    max_tokens = sampling["max_tokens"]
+                    presence_penalty = sampling["presence_penalty"]
+                    frequency_penalty = sampling["frequency_penalty"]
+                    include_usage = sampling["include_usage"]
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    if tools_list:
+                        deferred_tool_request = routing and (
+                            coordinator.policy.decide(
+                                RoutingHints.from_mapping(routing)
+                            ).channel
+                            == "batch"
+                        )
+                        if deferred_tool_request:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "tool calls require synchronous routing",
+                            )
+                        routing = {**(routing or {}), "channel": "sync"}
+                    # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
+                    # defaults) — do not force single-agent passthrough for null-only keys.
+                    # Virtual selectors stay on Fugu route / TRINITY-Conductor
+                    # conduct. Tools are a worker payload, not a reason to leave
+                    # the control plane. Concrete model ids may still passthrough
+                    # for debug pins.
+                    virtual_selector = model_name in {
+                        orchestrator.GATEWAY_DEFAULT_MODEL,
+                        orchestrator.AUTO_MODEL,
+                        orchestrator.FREE_MODEL,
+                    }
+                    named_tool_passthrough = bool(tools_list) and not virtual_selector
+                    if body.get("response_format") or named_tool_passthrough:
+                        trace_audited = False
+                        tool_loop = named_tool_passthrough
+                        # Single-agent tool passthrough (tool_loop) always makes one
+                        # non-streaming upstream call (orchestrator.proxy_completion
+                        # forces upstream["stream"] = False) and returns the provider's
+                        # raw JSON body verbatim as response_payload — the same object
+                        # the non-streaming reply below already sends today.
+                        # ModelClient.proxy_send does not require or synthesize a
+                        # "usage" key, so a provider may still omit it.
+                        # _chat_response_sse_chunks (below) already frames that payload
+                        # into a correctly-shaped terminal SSE chunk alongside tool_call
+                        # deltas. Provider usage is measured when valid and explicitly
+                        # unavailable otherwise; chat framing/tools are not reconstructed.
+                        # response_format-only structured passthrough (conduct mode)
+                        # is different: its usage comes from a multi-step workflow's
+                        # cost ledger, which may be unmeasured, so it keeps failing
+                        # closed when workflow-level usage is unavailable.
+                        if stream and include_usage and not tool_loop:
+                            raise RequestError(
+                                400,
+                                "invalid_stream_options",
+                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
+                            )
+                        if (
+                            tool_loop
+                            and "include_orchestration_trace" in body
+                            and type(body["include_orchestration_trace"]) is not bool
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_include_orchestration_trace",
+                                "include_orchestration_trace must be a boolean",
+                            )
+                        if (
+                            tool_loop
+                            and body.get("include_orchestration_trace") is True
+                        ):
+                            if security.bearer_verifier is None:
+                                raise RequestError(
+                                    400,
+                                    "trace_unavailable",
+                                    "orchestration trace is unavailable for single-agent tool passthrough",
+                                )
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
+                            )
+                        include_trace = False if tool_loop else include_trace
+                        if include_trace:
+                            if security.bearer_verifier is not None:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use chat without tools or response_format",
+                                )
+                            self._authorize_trace_access()
+                        started_at = time.perf_counter()
+                        if tool_loop:
+                            proxied = self._run(
+                                lambda: orchestrator.proxy_completion(
+                                    body,
+                                    endpoint="chat/completions",
+                                    single_agent=True,
+                                )
+                            )
+                        else:
+                            structured_messages = _validate_messages(body.get("messages"))
+                            structured_routing = routing
+                            if structured_routing and coordinator.policy.decide(
+                                RoutingHints.from_mapping(structured_routing)
+                            ).channel == "batch":
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "batch routing is not supported for structured chat responses",
+                                )
+                            structured_attribution = dict(
+                                _validate_attribution(body.get("attribution")) or {}
+                            )
+                            end_user_id = _validate_completions_user(body)
+                            if end_user_id is not None and not structured_attribution.get("account"):
+                                structured_attribution["account"] = end_user_id
+                            structured_attribution.setdefault("model_name", body["model"])
+                            structured_attribution.setdefault("service", "chat_completions_api")
+                            with orchestrator.client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                                tools=tools_list or None,
+                                tool_choice=body.get("tool_choice"),
+                                parallel_tool_calls=body.get("parallel_tool_calls"),
+                            ):
+                                proxied = self._run(
+                                    lambda: coordinator.complete(
+                                        structured_messages,
+                                        mode="conduct",
+                                        attribution=structured_attribution,
+                                        hints=structured_routing,
+                                        model_name=body["model"],
+                                        provider_request=body,
+                                        zdr_only=zdr_only,
+                                    )
+                                )
+                        if include_trace and not tool_loop:
+                            lineage = proxied.get("orchestration")
+                            workflow_run_id = (
+                                lineage.get("workflow_run_id")
+                                if isinstance(lineage, dict)
+                                else None
+                            )
+                            if not isinstance(workflow_run_id, str):
+                                raise RuntimeError(
+                                    "structured completion omitted workflow lineage"
+                                )
+                            workflow = orchestrator.get_workflow_run(workflow_run_id)
+                            lineage["trace"] = workflow["trace"]
+                            self._audit_trace_disclosure("/v1/chat/completions")
+                            trace_audited = True
+                        orchestrator.record_analytics_event(
+                            (
+                                "chat_completion_passthrough"
+                                if tool_loop
+                                else "chat_completion_conducted"
+                            ),
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        if include_trace and not trace_audited:
+                            self._audit_trace_disclosure("/v1/chat/completions")
+                        response_payload = (
+                            _chat_usage_measurement_payload(proxied)
+                            if tool_loop
+                            else _response_payload(proxied, include_trace)
+                        )
+                        if stream:
+                            self._send_sse(
+                                sse_stream_body(
+                                    _chat_response_sse_chunks(
+                                        response_payload,
+                                        model=model_name,
+                                        include_usage=include_usage,
+                                    )
+                                )
+                            )
+                        else:
+                            self._send(response_payload)
+                        return
+                    messages = _validate_messages(body.get("messages"))
+                    mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    # Tools on a virtual selector stay on route/conduct so
+                    # _invoke can re-select a worker before any SSE byte is
+                    # committed. True stream_route is the no-tools Fugu path.
+                    route_stream = bool(
+                        stream
+                        and not tools_list
+                        and orchestrator.would_route(messages, mode, model_name)
+                    )
+                    if route_stream:
+                        if explicit_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use Responses streaming",
+                            )
+                        include_trace = False
+                    elif include_trace:
+                        self._authorize_trace_access()
+                    # stream + stream_options already coerced/validated before passthrough.
+                    attribution = _validate_attribution(body.get("attribution"))
+                    # Require model — silent default to contextual-orchestrator hid
+                    # which deployment the caller selected on the chat Completions path.
+                    # The pool was validated before the structured/passthrough
+                    # branch so every chat shape shares the same client-error contract.
+                    attribution = dict(attribution or {})
+                    # OpenAI chat ``user`` → account when unset.
+                    # Same fail-closed rules as Completions: present key must be a
+                    # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
+                    end_user_id = _validate_completions_user(body)
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "chat_completions_api"
+                    # sampling/controls already validated before passthrough branch.
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    started_at = time.perf_counter()
+                    model_client = orchestrator.client
+                    request_settings = {
+                        "max_output_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "presence_penalty": presence_penalty,
+                        "frequency_penalty": frequency_penalty,
+                    }
+                    if tools_list:
+                        request_settings["tools"] = tools_list
+                        if normalized_tool_choice is not None:
+                            request_settings["tool_choice"] = normalized_tool_choice
+                        if body.get("parallel_tool_calls") is not None:
+                            request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
+                    with model_client.request_settings(**request_settings):
+                        if route_stream:
+                            self._stream_route_completion(
+                                orchestrator,
+                                security,
+                                messages,
+                                model_name,
+                                include_usage=include_usage,
+                            )
+                            orchestrator.record_analytics_event(
+                                "chat_completion_requested",
+                                {
+                                    "endpoint_path": "/v1/chat/completions",
+                                    "actor_scope": "inference",
+                                    "status_code": 200,
+                                    "run_mode": "route",
+                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                    "response_streamed": True,
+                                },
+                            )
+                            return
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode=mode,
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass or bool(tools_list),
+                            cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
+                            zdr_only=zdr_only,
+                        ))
+                    # Latency-tolerant requests get dispatched to the batch backend.
+                    if result.get("channel") == "batch":
+                        orchestrator.record_analytics_event(
+                            "chat_completion_batched",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 202,
+                                "batch_job_id": result["job_id"],
+                                "batch_backend": result["backend"],
+                            },
+                        )
+                        self._send(result, 202)
+                        return
+                    if include_trace:
+                        self._audit_trace_disclosure("/v1/chat/completions")
+                    orchestrator.record_analytics_event(
+                        "chat_completion_requested",
+                        {
+                            "endpoint_path": "/v1/chat/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": result["mode"],
+                            "workflow_run_id": result["workflow_run_id"],
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            "response_streamed": stream,
+                        },
+                    )
+                    if stream:
+                        chunks = chat_completion_chunks(
+                            result,
+                            model=model_name,
+                            include_trace=include_trace,
+                            include_usage=include_usage,
+                        )
+                        self._send_sse(sse_stream_body(chunks))
+                        return
+                    self._send(chat_completion_response(
+                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                    ))
+                    return
+                if path == "/v1/embeddings":
+                    # OpenAI sync embeddings: input → vectors as list object.
+                    # Reuses the embedding batch backend (local path completes
+                    # synchronously) and frames an OpenAI-shaped response so
+                    # SDKs that call /v1/embeddings work without the batch path.
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    model_was_omitted = "model" not in body
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
+                    # Same pool honesty as chat/Completions: do not silently serve
+                    # a different embedding deployment than the client requested.
+                    embedding_agents = orchestrator._capability_agents(
+                        "embedding",
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
+                    encoding_format = _validate_embeddings_encoding_format(body)
+                    _validate_embeddings_dimensions(body)
+                    end_user_id = _validate_completions_user(body)
+                    if "routing" in body:
+                        routing = _validate_routing(body.get("routing"))
+                        # Sync embeddings has no batch channel job plane.
+                        if routing and routing.get("channel") == "batch":
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.channel=batch is not supported on /v1/embeddings; use /v1/batch/embeddings",
+                            )
+                        if routing and routing.get("latency_tolerant") is True:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.latency_tolerant=true is not supported on /v1/embeddings; use /v1/batch/embeddings",
+                            )
+                    if "metadata" in body and not isinstance(body.get("metadata"), dict):
+                        # OpenAI-shaped string metadata is preferred for this
+                        # surface; non-objects fail closed before attribution merge.
+                        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+                    if "metadata" in body:
+                        # When all values are strings, enforce OpenAI ≤16 pairs;
+                        # naruon-style attribution-in-metadata still uses
+                        # _embeddings_attribution below for known dimensions.
+                        meta = body.get("metadata") or {}
+                        if meta and all(isinstance(v, str) for v in meta.values()):
+                            _validate_openai_metadata(body)
+                    if "input" not in body and "inputs" not in body:
+                        # OpenAI only documents ``input``; accept nothing else.
+                        raise RequestError(400, "invalid_input", "input is required on /v1/embeddings")
+                    # Prefer OpenAI ``input``; do not accept ``inputs`` on this path
+                    # (batch endpoint owns ``inputs``) so clients get a clear split.
+                    if "inputs" in body and "input" not in body:
+                        raise RequestError(
+                            400,
+                            "invalid_input",
+                            "use input on /v1/embeddings; inputs is only for /v1/batch/embeddings",
+                        )
+                    inputs = _validate_embeddings_inputs({"input": body.get("input")})
+                    attribution = _embeddings_attribution(body)
+                    attribution = dict(attribution or {})
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "embeddings_api"
+                    started_at = time.perf_counter()
+                    configured_timeout = orchestrator.client.timeout
+                    embedding_deadline = (
+                        None
+                        if configured_timeout is None
+                        else time.monotonic() + float(configured_timeout)
+                    )
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        remaining_timeout = (
+                            None
+                            if embedding_deadline is None
+                            else embedding_deadline - time.monotonic()
+                        )
+                        if remaining_timeout is not None and remaining_timeout <= 0:
+                            break
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent, wait_timeout=remaining_timeout: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                                zdr_only=zdr_only,
+                                agent_id=agent.id,
+                                wait_timeout=wait_timeout,
+                                owner_id=security.principal_id(self.headers),
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                            break
+                        last_embedding_error = RuntimeError(
+                            f"embedding member ended with {document.get('status', 'unknown')}"
+                        )
+                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        document = None
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
+                    if document.get("status") != "completed" or document.get("embeddings") is None:
+                        # Async backends return a job handle; fail closed on the
+                        # sync OpenAI path rather than inventing vectors.
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "sync /v1/embeddings is unavailable for this backend; use /v1/batch/embeddings",
+                        )
+                    orchestrator.record_analytics_event(
+                        "embeddings_requested",
+                        {
+                            "endpoint_path": "/v1/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "input_count": len(inputs),
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(
+                        _openai_embeddings_response(
+                            document,
+                            # Devin follow-up: an omitted model can resolve to a
+                            # different (cheaper or failed-over) member than the
+                            # pre-failover, price-blind ``model_name`` validation
+                            # picked, so report the completed document's own
+                            # served model instead — it already carries the
+                            # actually-used agent's model (see
+                            # ``embeddings_batch_document``). An explicit model
+                            # (a concrete pool model or a group alias) still
+                            # reports exactly what the client asked for.
+                            model=document.get("model") if model_was_omitted else model_name,
+                            encoding_format=encoding_format,
+                        )
+                    )
+                    return
+                if path == "/v1/batch/embeddings":
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    model_was_omitted = "model" not in body
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
+                    embedding_agents = orchestrator._capability_agents(
+                        "embedding",
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
+                    _validate_embeddings_encoding_format(body)
+                    _validate_embeddings_dimensions(body)
+                    # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
+                    end_user_id = _validate_completions_user(body)
+                    if "routing" in body:
+                        _validate_routing(body.get("routing"))
+                    attribution = _embeddings_attribution(body)
+                    attribution = dict(attribution or {})
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "embeddings_batch_api"
+                    submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    endpoint_alias = _validate_batch_embeddings_endpoint(body)
+                    if endpoint_alias is not None:
+                        submit_metadata["endpoint_alias"] = endpoint_alias
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata=submit_metadata,
+                                zdr_only=zdr_only,
+                                agent_id=agent.id,
+                                owner_id=security.principal_id(self.headers),
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                        break
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
+                    is_complete = document.get("status") == "completed"
+                    orchestrator.record_analytics_event(
+                        "embeddings_batch_created",
+                        {
+                            "endpoint_path": "/v1/batch/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200 if is_complete else 202,
+                            "batch_id": document.get("batch_id"),
+                            "batch_backend": document.get("backend"),
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(document, 200 if is_complete else 202)
+                    return
+                if path == "/api/v1/batch_routing_jobs":
+                    _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
+                    batch_requests = _validate_batch_requests(
+                        body,
+                        security.expose_trace_by_default,
+                        zdr_only=zdr_only,
+                    )
+                    metadata = {"actor_scope": "inference"}
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    orchestrator.record_analytics_event(
+                        "batch_routing_job_created",
+                        {
+                            "endpoint_path": "/api/v1/batch_routing_jobs",
+                            "actor_scope": "inference",
+                            "status_code": 201,
+                            "batch_job_id": job.job_id,
+                            "batch_backend": job.backend,
+                            "request_count": job.request_count,
+                        },
+                    )
+                    self._send({
+                        "job_id": job.job_id,
+                        "backend": job.backend,
+                        "status": job.status,
+                        "request_count": job.request_count,
+                    }, 201)
+                    return
+                if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
+                    job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
+                    self._authorize_trace_access()
+                    try:
+                        retrieved = self._run(
+                            lambda: coordinator.retrieve_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
+                    except KeyError:
+                        self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
+                        return
+                    self._audit_trace_disclosure("/api/v1/batch_routing_jobs/{job_id}/results")
+                    self._send(_response_payload(retrieved, include_trace=True))
+                    return
+                if path == "/v1/responses":
+                    # The Responses API has no chat-completions verifier equivalent,
+                    # so every request is proxied to one agent verbatim.
+                    _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    # Fail-closed shape checks before passthrough so buyers never
+                    # get a 200 after shipping invalid OpenAI-shaped metadata/input.
+                    model_name = _validate_responses_model(body)
+                    _validate_responses_conversation_controls(body)
+                    if "store" in body:
+                        _validate_responses_store(body)
+                    # OpenAI ``user`` end-user id — same fail-closed shape as chat/Completions.
+                    if "user" in body:
+                        _validate_completions_user(body)
+                    if "service_tier" in body:
+                        _validate_service_tier(body, endpoint_path="/v1/responses")
+                    if "stream_options" in body:
+                        _validate_responses_stream_options(body)
+                    # Sampling knobs: type/range fail-closed before provider passthrough.
+                    if "temperature" in body:
+                        _validate_completions_temperature(body)
+                    if "top_p" in body:
+                        _validate_completions_top_p(body)
+                    if "presence_penalty" in body:
+                        _validate_completions_presence_penalty(body)
+                    if "frequency_penalty" in body:
+                        _validate_completions_frequency_penalty(body)
+                    if "n" in body:
+                        _validate_responses_n(body)
+                    if "seed" in body:
+                        _validate_responses_seed(body)
+                    if "stop" in body:
+                        _validate_responses_stop(body)
+                    if "logit_bias" in body:
+                        _validate_responses_logit_bias(body)
+                    if "logprobs" in body or "top_logprobs" in body:
+                        _validate_responses_logprobs(body)
+                    if "max_tokens" in body:
+                        _validate_completions_max_tokens(body)
+                    if "max_completion_tokens" in body:
+                        _validate_chat_max_completion_tokens(body)
+                    _validate_responses_max_output_tokens(body)
+                    if "max_tool_calls" in body:
+                        _validate_responses_max_tool_calls(body)
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
+                    _validate_tool_resources(body, endpoint_path="/v1/responses")
+                    _validate_openai_background(body, endpoint_path="/v1/responses")
+                    if "parallel_tool_calls" in body:
+                        _validate_responses_parallel_tool_calls(body)
+                    # Tools surface: same OpenAI function-tool shape as chat; fail closed.
+                    functions_raw = body.get("functions") if "functions" in body else None
+                    function_call_raw = body.get("function_call") if "function_call" in body else None
+                    functions_present = (
+                        "functions" in body
+                        and functions_raw is not None
+                        and not (isinstance(functions_raw, list) and not functions_raw)
+                    )
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops.
+                    function_call_present = (
+                        "function_call" in body
+                        and function_call_raw is not None
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip().lower() in ("none", "auto")
+                            )
+                        )
+                    )
+                    if functions_present or function_call_present:
+                        raise RequestError(
+                            400,
+                            "invalid_functions",
+                            "functions and function_call are not supported on /v1/responses; "
+                            "use tools and tool_choice instead",
+                        )
+                    tools_list = body.get("tools") if isinstance(body.get("tools"), list) else None
+                    # tool_choice null is omit-equivalent; alone / empty tools: only "none" is a valid no-op.
+                    if (
+                        "tool_choice" in body
+                        and body.get("tool_choice") is not None
+                        and not tools_list
+                    ):
+                        tc = body.get("tool_choice")
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc_norm not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_tool_choice",
+                                "tool_choice requires tools on /v1/responses",
+                            )
+                    if "tools" in body:
+                        _validate_chat_tools(body)
+                    if "tool_choice" in body:
+                        normalized_responses_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_responses_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_responses_tool_choice
+                    if "response_format" in body:
+                        _validate_chat_response_format(body)
+                    if "modalities" in body:
+                        _validate_responses_modalities(body)
+                    if "prediction" in body:
+                        _validate_responses_prediction(body)
+                    if "reasoning_effort" in body and body.get("reasoning_effort") is not None:
+                        raise RequestError(
+                            400,
+                            "invalid_reasoning_effort",
+                            "reasoning_effort is not supported on /v1/responses",
+                        )
+                    if "reasoning" in body:
+                        _validate_responses_reasoning(body)
+                    if "instructions" in body:
+                        _validate_responses_instructions(body)
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "routing" in body:
+                        routing = _validate_routing(
+                            body.get("routing"), allow_endpoint=True
+                        )
+                        # Responses passthrough has no batch channel plane yet.
+                        if routing and routing.get("channel") == "batch":
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.channel=batch is not supported on /v1/responses",
+                            )
+                        if routing and routing.get("latency_tolerant") is True:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.latency_tolerant=true is not supported on /v1/responses",
+                            )
+                    if "input" not in body:
+                        raise RequestError(400, "invalid_input", "input is required on /v1/responses")
+                    input_value = body.get("input")
+                    if not isinstance(input_value, (str, list)) or (
+                        isinstance(input_value, str) and not input_value.strip()
+                    ) or (isinstance(input_value, list) and len(input_value) == 0):
+                        raise RequestError(
+                            400,
+                            "invalid_input",
+                            "input must be a non-empty string or non-empty array on /v1/responses",
+                        )
+                    try:
+                        body, file_replicas = files.bind_request(
+                            body, security.principal_id(self.headers)
+                        )
+                    except FileProviderUnavailableError as exc:
+                        raise RequestError(
+                            503, "file_provider_unavailable", str(exc)
+                        ) from exc
+                    except FileContractError as exc:
+                        raise RequestError(404, "file_not_found", str(exc)) from exc
+                    if file_replicas:
+                        valid_agents: set[str] | None = None
+                        provider_ids: dict[str, dict[str, str]] = {}
+                        for gateway_id, replicas in file_replicas.items():
+                            valid = {
+                                agent.id: replica["provider_file_id"]
+                                for agent in orchestrator.agents
+                                if (replica := replicas.get(agent.id)) is not None
+                                and replica.get("agent_affinity_key")
+                                == file_agent_affinity_key(agent)
+                            }
+                            provider_ids[gateway_id] = valid
+                            valid_agents = set(valid) if valid_agents is None else valid_agents & set(valid)
+                        if not valid_agents:
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "no common referenced file provider is available",
+                            )
+                        body["_file_replicas"] = provider_ids
+                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
+                    # stream=true is not implemented for Responses passthrough.
+                    # String/0-1 forms coerce via shared bool helper (parity with chat).
+                    stream = False
+                    if "stream" in body:
+                        stream = bool(_coerce_optional_bool(
+                            body.get("stream"),
+                            error_code="invalid_stream",
+                            message="stream must be a boolean",
+                        ))
+                        if stream and model_name not in {
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
+                        }:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
+                            )
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    }:
+                        _require_pool_model(orchestrator, model_name)
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    } and stream:
+                        if _responses_virtual_requires_provider_path(input_value, body):
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "file inputs and provider-only controls require non-streamed Responses execution",
+                            )
+                        if body.get("tools"):
+                            raise RequestError(
+                                400,
+                                "invalid_tools",
+                                "tools are not supported for streamed orchestrated Responses requests",
+                            )
+                        response_format = body.get("response_format")
+                        text_format = (body.get("text") or {}).get("format") if isinstance(
+                            body.get("text"), dict
+                        ) else None
+                        if any(
+                            isinstance(value, dict)
+                            and value.get("type") in {"json_object", "json_schema"}
+                            for value in (response_format, text_format)
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_response_format",
+                                "structured output is not supported for streamed orchestrated Responses requests",
+                            )
+                        messages = _responses_to_chat_payload(body)["messages"]
+                        started_at = time.perf_counter()
+                        stream_succeeded = self._stream_orchestrated_response(
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            coordinator=coordinator,
+                            attribution=responses_attribution,
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200 if stream_succeeded else 500,
+                                "transport_status_code": 200,
+                                "response_status": "completed" if stream_succeeded else "failed",
+                                "model_name": model_name,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": stream,
+                            },
+                        )
+                        return
+                    if (
+                        model_name in {
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
+                        }
+                        and not body.get("tools")
+                        and not body.get("response_format")
+                        and not (
+                            isinstance(body.get("text"), dict)
+                            and body["text"].get("format")
+                        )
+                        and not _responses_virtual_requires_provider_path(input_value, body)
+                    ):
+                        messages = _responses_to_chat_payload(body)["messages"]
+                        responses_attribution = dict(
+                            _validate_attribution(body.get("attribution")) or {}
+                        )
+                        responses_user_id = _validate_completions_user(body)
+                        if responses_user_id is not None and not responses_attribution.get("account"):
+                            responses_attribution["account"] = responses_user_id
+                        responses_attribution.setdefault("model_name", body["model"])
+                        responses_attribution.setdefault("service", "responses_api")
+                        responses_routing = dict(
+                            _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            ) or {}
+                        )
+                        # Responses has no batch job envelope on this path;
+                        # force the coordinator's synchronous contract even
+                        # when a priority or token threshold would select batch.
+                        responses_routing["channel"] = "sync"
+                        response_max_tokens = next(
+                            (
+                                body.get(key)
+                                for key in (
+                                    "max_output_tokens",
+                                    "max_completion_tokens",
+                                    "max_tokens",
+                                )
+                                if body.get(key) is not None
+                            ),
+                            None,
+                        )
+                        started_at = time.perf_counter()
+                        with orchestrator.client.request_settings(
+                            max_output_tokens=response_max_tokens,
+                            temperature=body.get("temperature"),
+                            top_p=body.get("top_p"),
+                            presence_penalty=body.get("presence_penalty"),
+                            frequency_penalty=body.get("frequency_penalty"),
+                        ):
+                            result = self._run(
+                                lambda: coordinator.complete(
+                                    messages,
+                                    mode="auto",
+                                    attribution=responses_attribution,
+                                    hints=responses_routing,
+                                    model_name=model_name,
+                                    cache_bypass=cache_bypass,
+                                    cache_partition=cache_partition,
+                                    zdr_only=zdr_only,
+                                )
+                            )
+                        summaries = [
+                            _REASONING_STAGE_SUMMARIES.get(
+                                step.get("role"), "Processing the request."
+                            )
+                            for step in result.get("trace", [])
+                        ]
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "transport_status_code": 200,
+                                "response_status": "completed",
+                                "model_name": model_name,
+                                "duration_ms": round(
+                                    (time.perf_counter() - started_at) * 1000, 2
+                                ),
+                                "response_streamed": False,
+                            },
+                        )
+                        self._send(
+                            _orchestrated_response(
+                                model_name,
+                                result,
+                                f"resp_{uuid.uuid4().hex}",
+                                int(time.time()),
+                                summaries,
+                            )
+                        )
+                        return
+                    started_at = time.perf_counter()
+                    tool_loop = bool(body.get("tools"))
+                    responses_messages = _responses_to_chat_payload(body)["messages"]
+                    response_max_tokens = next(
+                        (
+                            body.get(key)
+                            for key in (
+                                "max_output_tokens",
+                                "max_completion_tokens",
+                                "max_tokens",
+                            )
+                            if body.get(key) is not None
+                        ),
+                        None,
+                    )
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=response_max_tokens,
+                        temperature=body.get("temperature"),
+                        top_p=body.get("top_p"),
+                        presence_penalty=body.get("presence_penalty"),
+                        frequency_penalty=body.get("frequency_penalty"),
+                        tools=tools_list or None,
+                        tool_choice=body.get("tool_choice"),
+                        parallel_tool_calls=body.get("parallel_tool_calls"),
+                    ):
+                        proxied = self._run(
+                            lambda: coordinator.complete(
+                                responses_messages,
+                                mode="conduct",
+                                attribution=responses_attribution,
+                                hints=_validate_routing(
+                                    body.get("routing"), allow_endpoint=True
+                                ),
+                                model_name=body["model"],
+                                provider_request=body,
+                                provider_endpoint="responses",
+                                zdr_only=zdr_only,
+                            )
+                        )
+                    orchestrator.record_analytics_event(
+                        (
+                            "responses_tools_conducted"
+                            if tool_loop
+                            else "responses_conducted"
+                        ),
+                        {
+                            "endpoint_path": "/v1/responses",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(_response_payload(proxied, include_trace=False))
+                    return
+
+                if path == "/admin/simulate":
+                    _reject_unknown_keys(body, ALLOWED_SIMULATE_KEYS)
+                    prompt = body.get("prompt", "")
+                    if not isinstance(prompt, str):
+                        raise RequestError(400, "invalid_request", "prompt must be a string")
+                    mode = _validate_mode(body.get("mode", "auto"))
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access()
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/admin/simulate")
+                    self._send(_response_payload(result, include_trace))
+                    return
+                if path == "/api/v1/workflow_runs":
+                    _reject_unknown_keys(body, ALLOWED_WORKFLOW_KEYS)
+                    prompt = body.get("prompt_text", "")
+                    if not isinstance(prompt, str) or not prompt:
+                        raise RequestError(400, "invalid_request", "prompt_text is required")
+                    mode = _validate_mode(body.get("run_mode", "auto"))
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access()
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/api/v1/workflow_runs")
+                    self._send(_response_payload(result, include_trace), 201)
+                    return
+                if path == "/api/v1/evaluation_runs":
+                    _reject_unknown_keys(body, ALLOWED_EVALUATION_KEYS)
+                    prompts = body.get("prompts")
+                    if prompts is None and "prompt_text" in body:
+                        prompts = [body["prompt_text"]]
+                    if not isinstance(prompts, list) or not prompts:
+                        raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
+                    mode = _validate_mode(body.get("run_mode", "auto"))
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access()
+                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/api/v1/evaluation_runs")
+                    self._send(_response_payload(evaluation_run, include_trace), 201)
+                    return
+                self._send_error(404, "route_not_found", "not found")
+            except json.JSONDecodeError:
+                self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except ToolFallbackStoppedError as exc:
+                self._send_error(
+                    TOOL_FALLBACK_STOPPED_STATUS,
+                    TOOL_FALLBACK_STOPPED_CODE,
+                    TOOL_FALLBACK_STOPPED_MESSAGE,
+                    _tool_fallback_error_detail(exc),
+                )
+            except ProviderRequestTooLargeError as exc:
+                self._send_error(413, "request_too_large", str(exc))
+            except BudgetExceededError as exc:
+                self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except BatchModelSelectionError:
+                self._send_error(
+                    503,
+                    "batch_model_unavailable",
+                    "no eligible model-group member is available for this batch request",
+                )
+            except BatchDownloadError as exc:
+                self._send_error(
+                    502,
+                    "batch_download_failed",
+                    f"batch result download failed for job {exc.job_id}",
+                    {"job_id": exc.job_id, "reason": exc.reason},
+                )
+            except ProviderResponseError as exc:
+                self._send_error(
+                    502,
+                    "invalid_structured_output",
+                    "The selected model could not satisfy the requested response schema.",
+                    getattr(exc, "detail", None),
+                )
+            except FileContractError:
+                self._send_error(
+                    502,
+                    "invalid_file_response",
+                    "The file provider did not return a trackable file resource.",
+                )
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except (TypeError, ValueError) as exc:
+                self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
+            except Exception:
+                traceback.print_exc()
+                self._send_error(500, "internal_error", "internal server error")
+            finally:
+                if endpoint_policy is not None:
+                    endpoint_policy.__exit__(None, None, None)
+                if request_policy is not None:
+                    request_policy.__exit__(None, None, None)
+
+        @staticmethod
+        def _admin_purpose(path: str) -> str:
+            """Select the least-privileged purpose for an admin GET route."""
+            if (
+                path == "/admin/state"
+                or path == "/api/v1/workflow_runs"
+                or path.startswith("/api/v1/workflow_runs/")
+                or path.startswith("/api/v1/access_reports/")
+                or path.startswith("/api/v1/evaluation_runs/")
+            ):
+                return "audit_replay"
+            return "operator_read"
+
+        def _authorize(
+            self,
+            scope: str,
+            *,
+            purpose: str | None = None,
+            state_changing: bool = False,
+        ) -> None:
+            """Authorize the request and audit denials or sensitive replay access.
+
+            Combines the opaque-session/bearer validation with route-owned
+            purposes: denials and sensitive ``audit_replay`` access are recorded
+            (durable for replays), and browser-driven state-changing admin
+            requests must pass the same-origin check.
+            """
+            self._bind_trace()
+            self._bind_session(session_id_from_headers(self.headers))
+            effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
+            try:
+                security.check_rate_limit(self.client_address[0])
+                effective_purpose = security.authorize(
+                    self.headers, scope, self.client_address[0], purpose=purpose
+                )
+                if state_changing and scope == "admin":
+                    security.validate_admin_session_origin(self.headers)
+            except RequestError as exc:
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=False,
+                        reason=exc.code,
+                    )
+                except Exception:
+                    pass
+                raise
+            if effective_purpose == "audit_replay":
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=True,
+                        reason="authorized",
+                        durable=True,
+                    )
+                except Exception as exc:
+                    raise RequestError(
+                        503,
+                        "authorization_audit_unavailable",
+                        "authorization audit unavailable",
+                    ) from exc
+            self._authorized_role = scope
+            self._authorized_purpose = effective_purpose
+
+        def _cache_partition(self) -> str:
+            """Return a non-secret cache partition for the authenticated principal.
+
+            Bearer-authenticated callers partition by their bearer token.
+            Browser admin sessions authenticate without a bearer header, so an
+            active opaque session id partitions those requests instead — the
+            session id is random per login, so cross-session cache reuse stays
+            impossible while cookie-authenticated operators still get hits
+            within their own session.
+            """
+            raw = self.headers.get("authorization", "")
+            token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+            if not token:
+                session_id = security._extract_admin_session_cookie(self.headers)
+                if session_id and security._admin_session_is_active(session_id):
+                    return hashlib.sha256(f"admin-session:{session_id}".encode("utf-8")).hexdigest()
+                raise RequestError(401, "unauthorized", "bearer token is required")
+            return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+        def _authorize_trace_access(self) -> None:
+            """Authorize trace-purpose access before protected work begins."""
+            self._authorize("trace")
+
+        def _audit_trace_disclosure(self, endpoint_path: str) -> None:
+            """Durably record a trace disclosure immediately before release."""
+            try:
+                orchestrator._append_audit_event(  # noqa: SLF001 - server owns the release gate
+                    "orchestration_trace_access_granted",
+                    {
+                        "endpoint_path": endpoint_path,
+                        "purpose": "trace.read",
+                        "actor_scope": "trace",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - release no trace if audit is unavailable
+                raise RequestError(
+                    503,
+                    "trace_audit_unavailable",
+                    "trace access audit is unavailable",
+                ) from exc
+
+        def _validate_trace_request(self, body: dict[str, Any]) -> bool:
+            """Validate whether the caller requested trace disclosure."""
+            if "include_orchestration_trace" not in body:
+                include_trace = security.expose_trace_by_default
+            elif type(body["include_orchestration_trace"]) is not bool:
+                raise RequestError(
+                    400,
+                    "invalid_include_orchestration_trace",
+                    "include_orchestration_trace must be a boolean",
+                )
+            else:
+                include_trace = body["include_orchestration_trace"]
+            return include_trace
+
+        def _run(self, callback: Any) -> dict[str, Any]:
+            security.acquire_run_slot()
+            try:
+                return callback()
+            finally:
+                security.release_run_slot()
+
+        def _parse_positive_int(self, raw: str | None, field_name: str, default: int, max_value: int | None = None) -> int:
+            value = default if raw is None else int(raw)
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+            if max_value is not None and value > max_value:
+                raise ValueError(f"{field_name} must be <= {max_value}")
+            return value
+
+        def _parse_paging(
+            self,
+            query: dict[str, list[str]],
+            default_size: int = 10,
+            max_size: int = 100,
+        ) -> tuple[int, int]:
+            page_number = self._parse_positive_int((query.get("page_number") or [None])[0], "page_number", 1)
+            page_size = self._parse_positive_int((query.get("page_size") or [None])[0], "page_size", default_size, max_size)
+            return page_number, page_size
+
+        def _parse_optional_int(self, query: dict[str, list[str]], field_name: str) -> int | None:
+            raw = (query.get(field_name) or [None])[0]
+            if raw is None or raw == "":
+                return None
+            return int(raw)
+
+        def _read_json(self, *, max_body_bytes: int | None = None) -> dict[str, Any]:
+            if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+                raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
+            try:
+                body_size = _request_body_size(
+                    self.headers,
+                    security.max_body_bytes if max_body_bytes is None else max_body_bytes,
+                )
+            except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
+                self.close_connection = True
+                raise
+            raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
+            self._request_body_consumed = True
+            return _coerce_json(raw) if raw else {}
+
+        def log_message(self, format: str, *args: object) -> None:
+            """Suppress default request logging to keep service output structured."""
+            return
+
+        def _send_error(
+            self,
+            status: int,
+            code: str,
+            message: str,
+            detail: dict[str, Any] | None = None,
+        ) -> None:
+            request_id = current_request_id() or uuid.uuid4().hex
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, request_id
+            )
+            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
+
+        def _write_response(self, writer: Callable[[], None]) -> bool:
+            """Run a response-writing callback, swallowing a dead-peer disconnect.
+
+            A client that gave up waiting (e.g. on a slow orchestration run)
+            closes its end of the socket before this thread finishes writing.
+            The write then raises BrokenPipeError/ConnectionError/OSError --
+            there is nothing left to deliver, so this is not a server error.
+            Without this guard, that exception propagates out of do_POST's
+            try block into its own `except Exception: self._send_error(...)`
+            handler, which calls back into a send method on the same closed
+            socket and raises again -- uncaught this time, crashing the
+            request-handling thread (visible as a second, unhandled
+            BrokenPipeError in server logs after the first).
+
+            A caught disconnect can strike in two different places, and only
+            one of them means the client received nothing:
+
+            * Before the status line/headers were flushed (``end_headers()``
+              itself raises, or an earlier ``send_response``/``send_header``
+              call does). The client has no real response at all.
+            * After ``end_headers()`` already completed -- a later body
+              write in the same call, or a later ``_write_sse`` frame on an
+              SSE stream ``_begin_sse`` already opened successfully. The
+              client DID receive the real status line and headers; only the
+              body (or a later chunk of it) was cut short.
+
+            Every ``_send*``/``_begin_sse`` writer sets
+            ``self._response_headers_sent = True`` immediately after its own
+            ``end_headers()`` call returns, so that flag -- reset to
+            ``False`` once per request by ``handle_one_request`` -- tells
+            this shared choke point which of the two cases just happened,
+            without each writer needing its own disconnect-handling logic.
+            """
+            # A rejection can happen before _read_json (authentication, rate
+            # limiting, or media type). Reusing that HTTP/1.1 connection would
+            # parse the unread body as the next request. Close instead of
+            # attempting to drain attacker-controlled bytes at an error path.
+            if not getattr(self, "_request_body_consumed", True):
+                content_lengths = self.headers.get_all("content-length", [])
+                if any(value.strip() != "0" for value in content_lengths) or self.headers.get_all(
+                    "transfer-encoding", []
+                ):
+                    self.close_connection = True
+            try:
+                writer()
+                return True
+            except (BrokenPipeError, ConnectionError, OSError):
+                _LOGGER.debug("client_disconnected")
+                # `_send*`/`_begin_sse` writers record their *intended*
+                # status in `self._last_status` before calling this method
+                # (and `send_response`'s override above does the same for
+                # whatever status the writer itself sends) -- but a dead
+                # peer before headers were ever flushed means that status
+                # was never actually delivered. Left uncorrected in that
+                # case, `_log_request_summary` reads `_last_status` straight
+                # into the per-request INFO summary, falsely reporting a
+                # completed 200/4xx/5xx response for a request whose write
+                # failed before anything reached the client. Clear it back
+                # to the same `None` this module already uses for "a
+                # response was never sent" ONLY then -- a disconnect that
+                # struck after `_response_headers_sent` was already set
+                # means the client genuinely received that status, so
+                # clearing it here would instead falsely report "no status"
+                # for a request that was, in fact, answered.
+                # `hasattr`/`getattr` guard against tests that call this
+                # method directly against a bare `object()` stand-in for
+                # `self`, which has no instance `__dict__` to assign into.
+                if hasattr(self, "_last_status") and not getattr(self, "_response_headers_sent", False):
+                    self._last_status = None
+                return False
+
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            *,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
+            self._last_status = status
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "application/json; charset=utf-8")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                for name, value in (extra_headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                # Marks that the status line/headers were actually flushed
+                # to the client -- see `_write_response`'s docstring. Must
+                # be set only after `end_headers()` returns without raising,
+                # and only before the body write that might still fail.
+                self._response_headers_sent = True
+                self.wfile.write(raw)
+
+            self._write_response(_write)
+
+        def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
+            self._last_status = status
+            raw = payload.encode("utf-8")
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self._response_headers_sent = True  # see _write_response
+                self.wfile.write(raw)
+
+            self._write_response(_write)
+
+        def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self._last_status = status
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(payload)))
+                self._send_security_headers()
+                self.end_headers()
+                self._response_headers_sent = True  # see _write_response
+                self.wfile.write(payload)
+
+            self._write_response(_write)
+
+        def _send_sse(self, body: str, status: int = 200) -> None:
+            self._last_status = status
+            raw = body.encode("utf-8")
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self._response_headers_sent = True  # see _write_response
+                self.wfile.write(raw)
+
+            self._write_response(_write)
+
+        def _begin_sse(self) -> bool:
+            # Incremental SSE: no content-length; the connection close delimits the body.
+            self._last_status = 200
+            self.close_connection = True
+
+            def _write() -> None:
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self._send_security_headers()
+                self.end_headers()
+                self._response_headers_sent = True  # see _write_response
+
+            return self._write_response(_write)
+
+        def _write_sse(self, frame: str) -> bool:
+            """Write one SSE frame; relies on a prior successful `_begin_sse`.
+
+            Never touches `self._response_headers_sent` itself: a caller
+            only ever reaches this after `_begin_sse` already returned
+            `True`, so that flag is already set from the initial headers
+            flush. If a *later* frame's write fails here, `_write_response`
+            correctly sees the flag still set and preserves the 200 that was
+            genuinely already delivered, instead of erasing it.
+            """
+
+            def _write() -> None:
+                self.wfile.write(frame.encode("utf-8"))
+                self.wfile.flush()
+
+            return self._write_response(_write)
+
+        def _stream_orchestrated_response(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            coordinator: Any = None,
+            attribution: dict[str, Any] | None = None,
+        ) -> bool:
+            """Stream Fugu/TRINITY/Conductor work as Responses reasoning events."""
+            response_id = f"resp_{uuid.uuid4().hex}"
+            reasoning_id = f"rs_{uuid.uuid4().hex}"
+            message_id = f"msg_{uuid.uuid4().hex}"
+            created_at = int(time.time())
+            sequence = 0
+            summaries: list[str] = []
+            reasoning_texts: list[str] = []
+            open_parts: dict[str, list[tuple[int, str]]] = {}
+
+            def emit(event_type: str, **values: Any) -> None:
+                nonlocal sequence
+                payload = {"type": event_type, "sequence_number": sequence, **values}
+                sequence += 1
+                if not self._write_sse(
+                    f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                ):
+                    raise ConnectionAbortedError("Responses stream disconnected")
+
+            def progress(role: str, status: str, output: str = "") -> None:
+                text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
+                if status == "started":
+                    index = len(summaries)
+                    summaries.append(text)
+                    open_parts.setdefault(role, []).append((index, text))
+                    emit(
+                        "response.reasoning_summary_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_summary_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        delta=text,
+                    )
+                    return
+                if open_parts.get(role):
+                    index, summary_text = open_parts[role].pop(0)
+                    if not open_parts[role]:
+                        del open_parts[role]
+                    emit(
+                        "response.reasoning_summary_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        text=summary_text,
+                    )
+                    emit(
+                        "response.reasoning_summary_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": summary_text},
+                    )
+                # Paper-role process output (TRINITY thinker/worker/verifier,
+                # Conductor step work) is Responses reasoning_text, not the
+                # final message. The synthesizer answer stays output_text.
+                if status == "completed" and output and role != "synthesizer":
+                    content_index = len(reasoning_texts)
+                    reasoning_texts.append(output)
+                    emit(
+                        "response.content_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        delta=output,
+                    )
+                    emit(
+                        "response.reasoning_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        text=output,
+                    )
+                    emit(
+                        "response.content_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": output},
+                    )
+
+            security.acquire_run_slot()
+            try:
+                if not self._begin_sse():
+                    return False
+                created_response = _orchestrated_response(
+                    model_name,
+                    {"answer": ""},
+                    response_id,
+                    created_at,
+                    [],
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                )
+                created_response.update(status="in_progress", output=[])
+                emit(
+                    "response.created",
+                    response=created_response,
+                )
+                reasoning_item = {
+                    "id": reasoning_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "summary": [],
+                }
+                emit("response.output_item.added", output_index=0, item=reasoning_item)
+                try:
+                    if orchestrator.would_route(messages, "auto", model_name):
+                        progress("worker", "started")
+                        workflow_run_id = f"run_{uuid.uuid4().hex}"
+                        parts = list(
+                            orchestrator.stream_route(
+                                messages,
+                                workflow_run_id=workflow_run_id,
+                                model_name=model_name,
+                            )
+                        )
+                        progress("worker", "completed")
+                        result = (
+                            orchestrator.get_workflow_run(workflow_run_id)
+                            if coordinator is not None
+                            else {"answer": "".join(parts)}
+                        )
+                    else:
+                        conduct_kwargs = {"model_name": model_name, "progress": progress}
+                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                        result = orchestrator.conduct(messages, **conduct_kwargs)
+                except ConnectionAbortedError:
+                    raise
+                except ProviderUpstreamError as exc:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": _error_payload(
+                            exc.error_code,
+                            _provider_upstream_message(exc),
+                            {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
+                        )["error"],
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
+                except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": {
+                            "code": "server_error",
+                            "message": "Orchestration failed before a final answer was produced.",
+                        },
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
+                if coordinator is not None:
+                    try:
+                        stream_usage = coordinator.record_stream_usage(
+                            result=result,
+                            attribution=attribution,
+                            model_name=model_name,
+                        )
+                    except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        failed = {
+                            **created_response,
+                            "status": "failed",
+                            "error": {
+                                "code": "usage_recording_failed",
+                                "message": "Usage evidence could not be recorded for this response.",
+                            },
+                        }
+                        emit("response.failed", response=failed)
+                        self._write_sse("data: [DONE]\n\n")
+                        return False
+                    result = {**result, **stream_usage}
+                reasoning_done = {
+                    **reasoning_item,
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": text} for text in summaries],
+                    "content": [
+                        {"type": "reasoning_text", "text": text}
+                        for text in reasoning_texts
+                    ],
+                }
+                emit("response.output_item.done", output_index=0, item=reasoning_done)
+                message_item = {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                }
+                emit("response.output_item.added", output_index=1, item=message_item)
+                part = {"type": "output_text", "text": "", "annotations": []}
+                emit(
+                    "response.content_part.added",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=part,
+                )
+                answer = result["answer"]
+                emit(
+                    "response.output_text.delta",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    delta=answer,
+                )
+                done_part = {**part, "text": answer}
+                emit(
+                    "response.output_text.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    text=answer,
+                )
+                emit(
+                    "response.content_part.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=done_part,
+                )
+                emit(
+                    "response.output_item.done",
+                    output_index=1,
+                    item={**message_item, "status": "completed", "content": [done_part]},
+                )
+                completed = _orchestrated_response(
+                    model_name,
+                    result,
+                    response_id,
+                    created_at,
+                    summaries,
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                    reasoning_texts=reasoning_texts,
+                )
+                emit("response.completed", response=completed)
+                self._write_sse("data: [DONE]\n\n")
+                return True
+            except ConnectionAbortedError:
+                return False
+            finally:
+                security.release_run_slot()
+
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            include_usage: bool = False,
+        ) -> None:
+            """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
+            run_id = f"run_{uuid.uuid4().hex}"
+            completion_id = _new_chat_completion_id()
+            created = int(time.time())
+            stream_usage: dict[str, Any] | None = None
+
+            def capture_usage(usage: dict[str, Any] | None) -> None:
+                nonlocal stream_usage
+                stream_usage = usage
+
+            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+                payload = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [
+                        {"index": 0, "delta": delta, "finish_reason": finish}
+                    ],
+                }
+                if include_usage:
+                    payload["usage"] = None
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            def usage_frame(usage: dict[str, Any]) -> str:
+                payload = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [],
+                    "usage": usage,
+                }
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            security.acquire_run_slot()
+            try:
+                if not self._begin_sse() or not self._write_sse(
+                    frame({"role": "assistant"})
+                ):
+                    return
+                try:
+                    stream_kwargs: dict[str, Any] = {
+                        "workflow_run_id": run_id,
+                        "model_name": model_name,
+                    }
+                    if include_usage:
+                        stream_kwargs.update(
+                            {"include_usage": True, "usage_callback": capture_usage}
+                        )
+                    for delta in orchestrator.stream_route(messages, **stream_kwargs):
+                        if not self._write_sse(frame({"content": delta})):
+                            return
+                    if not self._write_sse(frame({}, finish="stop")):
+                        return
+                    if (
+                        include_usage
+                        and isinstance(stream_usage, dict)
+                        and not self._write_sse(usage_frame(stream_usage))
+                    ):
+                        return
+                except ToolFallbackStoppedError as exc:
+                    detail = {
+                        **_tool_fallback_error_detail(exc),
+                        "request_id": current_request_id() or uuid.uuid4().hex,
+                    }
+                    payload = _error_payload(
+                        TOOL_FALLBACK_STOPPED_CODE,
+                        TOOL_FALLBACK_STOPPED_MESSAGE,
+                        detail,
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except ProviderUpstreamError as exc:
+                    payload = _error_payload(
+                        exc.error_code,
+                        _provider_upstream_message(exc),
+                        {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
+
+        def _send_security_headers(self) -> None:
+            if getattr(self, "close_connection", False):
+                self.send_header("connection", "close")
+            self.send_header("x-content-type-options", "nosniff")
+            self.send_header("referrer-policy", "no-referrer")
+            self.send_header("cache-control", "no-store")
+            self.send_header("x-frame-options", "DENY")
+
+    server = ResponsiveThreadingHTTPServer((host, port), Handler)
+    server.embedding_batch_backend = coordinator.embedding_batch_backend
+    server.embedding_backend_closer = coordinator.close_embedding_backends
+    return server
+
+
+def serve(
+    orchestrator: TaskOrchestrator,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    security: SecurityConfig | None = None,
+    clearfolio_url: str | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
+) -> None:
+    """Serve the API with an optional persisted release-authority snapshot."""
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        coordinator=coordinator,
+        release_authority=release_authority,
+    )
+    print(f"listening on http://{host}:{port}")
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

@@ -1,0 +1,239 @@
+**Exploration: NativeExactTokenCounter count_messages**
+
+Found 34 symbols across 2 files.
+
+**Blast radius — what depends on these (update/verify before editing)**
+
+- `count_messages` (contextual_orchestrator/token_counting.py:103) — 1 caller; tests: `tests/test_token_counting_boundaries.py`
+- `count_messages` (contextual_orchestrator/token_counting.py:76) — 4 callers in `contextual_orchestrator/cost_router.py`; tests: `tests/test_token_counting_boundaries.py`
+- `NativeExactTokenCounter` (contextual_orchestrator/token_counting.py:81) — 7 callers in `contextual_orchestrator/__init__.py`, `contextual_orchestrator/token_counting.py`; tests: `tests/test_token_counting_boundaries.py`, `tests/test_token_counting_strategies.py`
+
+**Source Code**
+
+> The code below is the **verbatim, current on-disk source** of these files — re-read from disk on this call and line-numbered, byte-for-byte identical to what the Read tool returns. It is NOT a summary, outline, or stale cache. Treat each block as a Read you have already performed: do not Read a file shown here.
+
+**`contextual_orchestrator/token_counting.py`** — TokenCountUnavailable(instantiates), count_text(method), _validated_count(calls), count_messages(method), __init__(method), _build_counter(calls), +16 more
+
+```python
+41	        ...
+42	
+43	
+44	class TokenCountUnavailable(RuntimeError):
+45	    """An authoritative tokenizer or provider count is unavailable."""
+46	
+47	
+48	def _validated_count(value: Any) -> int:
+49	    """Normalize a tokenizer count and reject invalid numeric evidence."""
+50	    if isinstance(value, bool):
+51	        raise TokenCountUnavailable("the tokenizer returned an invalid count")
+52	    try:
+53	        count = operator.index(value)
+54	    except TypeError as exc:
+55	        raise TokenCountUnavailable("the tokenizer returned an invalid count") from exc
+56	    if count < 0:
+57	        raise TokenCountUnavailable("the tokenizer returned an invalid count")
+58	    return count
+59	
+60	
+61	class PgTiktokenAdapter:
+62	    """Adapter delegating raw-text counts to ``pg_llm_batch.TokenCounter``."""
+63	
+64	    def __init__(self, pg_counter: Any) -> None:
+65	        self._counter = pg_counter
+66	
+67	    def count_text(self, text: str, model: str = "") -> int:
+68	        """Count raw text through the configured PostgreSQL tokenizer."""
+69	        try:
+70	            return _validated_count(self._counter.count_tokens(text, model))
+71	        except TokenCountUnavailable:
+72	            raise
+73	        except Exception as exc:  # noqa: BLE001 - external tokenizer boundary.
+74	            raise TokenCountUnavailable("the PostgreSQL tokenizer is unavailable") from exc
+75	
+76	    def count_messages(self, messages: list[dict], model: str = "") -> int:
+77	        """Reject chat prompts whose provider framing is unreconstructible."""
+78	        raise TokenCountUnavailable("provider chat framing is unavailable")
+79	
+80	
+81	class NativeExactTokenCounter:
+82	    """Dispatch exact raw-text counts for explicitly mapped model identifiers."""
+83	
+84	    def __init__(self, native_module: Any) -> None:
+85	        self._native_module = native_module
+86	
+87	    def count_text(self, text: str, model: str = "") -> int:
+88	        """Count raw text for a declared model or fail closed."""
+89	        if model in _CL100K_MODELS:
+90	            function_name = "count_cl100k"
+91	        elif model in _O200K_MODELS:
+92	            function_name = "count_o200k"
+93	        else:
+94	            raise TokenCountUnavailable(
+95	                f"no authoritative tokenizer is declared for {model!r}"
+96	            )
+97	        try:
+98	            function = getattr(self._native_module, function_name)
+99	            return _validated_count(function(text))
+100	        except Exception as exc:  # noqa: BLE001 - optional native boundary.
+101	            raise TokenCountUnavailable("the native tokenizer is unavailable") from exc
+102	
+103	    def count_messages(self, messages: list[dict], model: str = "") -> int:
+104	        """Reject chat prompts whose framing/tools cannot be counted as raw text."""
+105	        raise TokenCountUnavailable("provider chat framing is unavailable")
+106	
+107	    def pack_text(self, text: str, model: str, max_tokens: int) -> list[tuple[str, int]]:
+108	        """Split one declared cl100k input at exact native token boundaries."""
+109	        if model not in _CL100K_EMBEDDING_MODELS:
+110	            raise TokenCountUnavailable(f"no authoritative tokenizer is declared for {model!r}")
+111	        try:
+112	            parts, _shards = self._native_module.pack_cl100k(
+113	                [text], max_tokens, 1, max_tokens
+114	            )
+115	            return [(part.text, _validated_count(part.token_count)) for part in parts]
+116	        except Exception as exc:  # noqa: BLE001 - optional native boundary.
+117	            raise TokenCountUnavailable("the native cl100k packer is unavailable") from exc
+118	
+119	
+120	# Compatibility name retained for embedding callers; behavior remains exact.
+121	NativeCl100kTokenCounter = NativeExactTokenCounter
+122	
+123	
+124	class UnavailableTokenCounter:
+125	    """Represent absence of an authoritative tokenizer."""
+126	
+127	    def count_text(self, text: str, model: str = "") -> int:
+128	        """Fail closed instead of fabricating a raw-text token count."""
+129	        raise TokenCountUnavailable(f"no authoritative tokenizer is available for {model!r}")
+130	
+131	    def count_messages(self, messages: list[dict], model: str = "") -> int:
+132	        """Fail closed instead of fabricating a chat prompt count."""
+133	        raise TokenCountUnavailable("provider chat framing is unavailable")
+134	
+135	
+136	UnavailableEmbeddingTokenCounter = UnavailableTokenCounter
+137	
+138	
+139	def _native_token_counter() -> NativeExactTokenCounter | None:
+140	    """Load the optional extension without making startup depend on it."""
+141	    try:
+142	        module = importlib.import_module("contextual_orchestrator._token_packer")
+143	    except Exception:  # noqa: BLE001 - incompatible wheel equals absence.
+144	        return None
+145	    functions = ("count_cl100k", "count_o200k", "pack_cl100k")
+146	    if not all(callable(getattr(module, name, None)) for name in functions):
+147	        return None
+148	    return NativeExactTokenCounter(module)
+149	
+150	
+151	def _build_counter(postgres_dsn: Optional[str], config: Any) -> Any:
+152	    """Build the configured authoritative counter or unavailable seam."""
+153	    if postgres_dsn:
+154	        try:  # pragma: no cover - needs Postgres + pg_tiktoken extension
+155	            from pg_llm_batch import TokenCounter as PgTokenCounter  # type: ignore
+156	
+157	            return PgTiktokenAdapter(PgTokenCounter(postgres_dsn, config=config))
+158	        except Exception:  # pragma: no cover - optional authoritative boundary
+159	            pass
+160	    return _native_token_counter() or UnavailableTokenCounter()
+161	
+162	
+163	def build_embedding_token_counter(
+164	    postgres_dsn: Optional[str] = None,
+165	    *,
+166	    config: Any = None,
+167	) -> PgTiktokenAdapter | NativeExactTokenCounter | UnavailableTokenCounter:
+168	    """Return an authoritative embedding counter or explicit unavailable seam."""
+169	    return _build_counter(postgres_dsn, config)
+170	
+171	
+172	def build_token_counter(
+173	    postgres_dsn: Optional[str] = None,
+174	    *,
+175	    config: Any = None,
+176	) -> PgTiktokenAdapter | NativeExactTokenCounter | UnavailableTokenCounter:
+177	    """Return an authoritative raw-text counter or explicit unavailable seam."""
+178	    return _build_counter(postgres_dsn, config)
+179	
+```
+
+**`contextual_orchestrator/cost_router.py`** — calls(calls), instantiates(instantiates), _run_embedding_shard(method), embed(calls), TokenCountUnavailable(instantiates), submit_batch(method), +2 more
+
+```python
+211	        provider = agent.provider_name or _provider_from_base_url(agent.base_url)
+212	        return provider or "unknown", agent.model or fallback_model
+213	
+214	    def _run_embedding_shard(
+215	        self, agent: Any, requests: List[EmbeddingBatchRequest]
+216	    ) -> tuple[List[List[float]], int]:
+217	        texts = [request.input_text for request in requests]
+218	        if all(request.token_count > 0 or not request.input_text for request in requests):
+219	            return self.orchestrator.client.embed(agent, texts), sum(
+220	                request.token_count for request in requests
+221	            )
+222	        vectors, provider_tokens = self.orchestrator.client.embed_with_usage(agent, texts)
+223	        if provider_tokens is None:
+224	            raise TokenCountUnavailable(
+225	                "provider embedding response omitted authoritative usage"
+226	            )
+227	        return vectors, provider_tokens
+228	
+229	    def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
+230	        client = getattr(self.orchestrator, "client", None)
+
+... (gap) ...
+
+978	    # ------------------------------------------------------------------
+979	    # Batch lifecycle
+980	    # ------------------------------------------------------------------
+981	    def submit_batch(
+982	        self,
+983	        requests: List[BatchRequest],
+984	        metadata: Optional[Dict[str, Any]] = None,
+985	        owner_id: Optional[str] = None,
+986	    ) -> BatchJob:
+987	        """Submit a batch, resolve its targets, and bind its authenticated owner."""
+988	        try:
+989	            prepared_requests = [self._resolve_batch_request(request) for request in requests]
+990	        except ValueError as exc:
+991	            raise InvalidBatchModelError(str(exc)) from exc
+992	        except RuntimeError as exc:
+993	            raise BatchModelSelectionError(
+994	                "no eligible model-group member is available for this batch request"
+995	            ) from exc
+996	        prompt_token_estimates: dict[str, int] = {}
+997	        for request in prepared_requests:
+998	            try:
+999	                count = self.token_counter.count_messages(
+1000	                    request.messages, request.model
+1001	                )
+1002	                if isinstance(count, int) and count >= 0:
+1003	                    prompt_token_estimates[request.custom_id] = count
+1004	            except Exception:
+1005	                pass
+1006	        job = self.batch_backend.submit(prepared_requests, metadata=metadata)
+1007	        job.owner_id = owner_id
+1008	        job.prompt_token_estimates = prompt_token_estimates
+1009	        self._batch_jobs[job.job_id] = job
+1010	        return job
+1011	
+1012	    def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
+1013	        """Resolve only ZDR batch requests through the caller-provided model pool."""
+
+... (gap) ...
+
+1582	            max_chars=max_chars,
+1583	        )
+1584	
+1585	    def _count_embedding_tokens(self, text: str, model: str) -> int:
+1586	        """Count embedding tokens authoritatively or propagate unavailability."""
+1587	        value = int(self.embedding_token_counter.count_text(text, model))
+1588	        if text and value <= 0:
+1589	            raise RuntimeError("an authoritative tokenizer returned a non-positive count")
+1590	        return max(0, value)
+1591	
+1592	    def embeddings_batch_document(
+1593	        self, batch_id: str, *, owner_id: Optional[str] = None
+```
+
+
+> Some file sections were trimmed for size. For a specific symbol you still need, run another `codegraph_explore` (or `codegraph_node`) with its exact name — line-numbered source, cheaper and more complete than Read.
