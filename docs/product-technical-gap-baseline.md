@@ -1,5 +1,43 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Virtual-selector ambiguous-timeout failover (#1166, #1045)
+
+Noema review's org CI calls `POST /v1/chat/completions` with the virtual
+model `orchestrator/free`. Sidecar log evidence from run 34754423834 attempt
+2 (PR #1166) showed one `provider_attempt_failed ... TimeoutError` on
+`nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`, followed by
+`circuit_failure` and `request_failed status=502 code=provider_connection_error`
+-- while three other free-pool candidates admitted by the same preflight
+(`nvidia_nim_sub_deepseek_ai_deepseek_v4_pro_0813`,
+`nvidia_nim_meta_llama_3_2_11b_vision_instruct`,
+`nvidia_nim_sub_meta_llama_3_2_11b_vision_instruct`) were never called. The
+`_is_ambiguous_passthrough_transport_failure` fail-closed rule introduced for
+#1045 (Strix run 33993155419) correctly classifies a timeout's outcome as
+unknown for *the candidate it happened to*, but `TaskOrchestrator.
+proxy_completion`'s passthrough candidate loop applied that same fail-closed
+decision to the whole *request* even when the request used a virtual
+selector (no model / `orchestrator/auto` / `orchestrator/free`) with other
+ready, ranked candidates still available -- contradicting
+`_orchestrated_provider_completion`'s own documented behavior that virtual
+selectors advance across retryable transport failures (502/429/timeout).
+
+The fix threads a `virtual_model` flag (mirroring the existing
+`requested_model in {None, GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}`
+check already used earlier in the same method) through the candidate loop's
+ambiguous-transport-failure branch: the failing candidate is always recorded
+as a breaker observation, but a virtual selector now `continue`s to the next
+ranked candidate instead of raising immediately, while an explicit concrete
+model (which never reaches this multi-candidate loop at all -- it resolves
+to one agent and calls it once) keeps its unchanged single-shot, fail-closed
+behavior. Exhausting every candidate under a virtual selector still raises
+the same classified `502 provider_connection_error`
+(`classify_provider_failure`) as before. `tests/test_passthrough_provider_failover.py`
+adds explicit-model, `None`/`AUTO_MODEL`, `FREE_MODEL`, and
+all-candidates-exhausted coverage; the passthrough path records no
+per-attempt usage today, so no new usage-honesty subsystem was added -- the
+skipped-over candidate's unknown outcome is captured only via the breaker
+observation, not a fabricated zero-cost usage row.
+
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
 PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP

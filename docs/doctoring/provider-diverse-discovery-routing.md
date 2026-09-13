@@ -20,9 +20,20 @@ claim to reproduce the learning systems in the cited work.
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
 attempt: RFC 9110 section 9.2.2 does not permit blind automatic replay of a
-non-idempotent request, so ambiguous timeout and connection outcomes fail
-closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
-DNS failure can advance without changing an explicitly requested concrete model.
+non-idempotent request, so an ambiguous timeout or connection outcome is
+always recorded as a failure of that candidate. Whether the *request* may
+then move on depends on who chose the candidate. An explicit concrete model
+was pinned by the caller, so there is nothing safe to substitute it with and
+the request still fails closed without replay. A virtual selector
+(none/`AUTO_MODEL`/`FREE_MODEL`/gateway default) means the caller delegated
+candidate selection to the gateway, so the gateway also owns failover across
+that ambiguous attempt and advances to the next ranked, provider-diverse
+candidate instead of failing the whole request over one candidate's timeout
+(PR #1166, fixing a regression where three ready free-pool candidates went
+uncalled after one timeout; see `#1045` for why the candidate itself is
+still never replayed). A rejected 429/5xx, stale 404/410 candidate, or
+temporary pre-request DNS failure can advance the same way without changing
+an explicitly requested concrete model.
 
 ## PR #1004 mixed-failure classification follow-up
 

@@ -1291,21 +1291,142 @@ def test_only_temporary_dns_failures_advance(
             )
 
 
-def test_ambiguous_timeout_is_not_replayed() -> None:
-    """A timeout may follow provider acceptance, so passthrough fails closed.
+def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
+    """An explicit concrete model still fails closed after exactly one call.
 
-    Failing closed means no replay on another candidate. It does not mean the
-    bare ``TimeoutError`` escapes: that left the HTTP handler answering
-    ``500 internal_error`` and the breaker never hearing about the stalled
-    candidate (Strix run 33993155419, ContextualWisdomLab/.github#1812, #1045).
-    The caller now receives the classified ``502 provider_connection_error``
-    and the candidate is a breaker observation.
+    A timeout may follow provider acceptance, so the caller-named provider is
+    never replayed on another candidate -- there is nothing safe to
+    substitute an explicitly requested model with (#1045). An explicit model
+    never enters the multi-candidate failover loop at all (it resolves
+    straight to that one agent and calls it once), so today's behavior is the
+    bare exception propagating with no breaker classification -- this test
+    pins that pre-existing, unchanged shape down so a future change to the
+    virtual-selector loop (below) cannot accidentally start replaying
+    explicit models too.
     """
     failure = TimeoutError("provider outcome unknown")
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
             "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(TimeoutError):
+        orchestrator.proxy_completion(
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        )
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [None, TaskOrchestrator.AUTO_MODEL],
+    ids=["default_model", "auto_model"],
+)
+def test_ambiguous_timeout_on_virtual_selector_advances_to_next_candidate(
+    model: str | None,
+) -> None:
+    """A virtual selector may advance past one candidate's ambiguous timeout.
+
+    The caller delegated candidate selection to the gateway (it never named a
+    specific provider), so the gateway also owns failover across a timeout
+    whose outcome is unknown -- consistent with
+    ``_orchestrated_provider_completion``'s documented advance across
+    retryable transport failures. Three ready free-pool candidates going
+    uncalled after one timeout was the production defect (Strix run
+    34754423834 attempt 2, PR #1166); this reproduces the two-candidate case.
+    The failed candidate is still recorded as a breaker observation.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    body: dict[str, Any] = {"messages": [{"role": "user", "content": "x"}]}
+    if model is not None:
+        body["model"] = model
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert "primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_free_model_advances_to_next_free_candidate() -> None:
+    """``FREE_MODEL`` (not just ``AUTO_MODEL``) advances past an ambiguous timeout.
+
+    AGENTS.md requires recovery tests to exercise ``FREE_MODEL`` with
+    admitted free candidates, since the free selector has its own eligibility
+    filter (``cost:free`` tags) distinct from the general ``AUTO_MODEL`` pool.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "free_primary_agent": failure,
+            "free_fallback_agent": {"model": "free-fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    )
+
+    assert result["model"] == "free-fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "free_primary_agent",
+        "free_fallback_agent",
+    ]
+    assert "free_primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_virtual_selector_exhausts_to_classified_502() -> None:
+    """When every candidate times out, the request still fails classified 502.
+
+    Every ranked, provider-diverse candidate is called exactly once and
+    recorded in the breaker; the final error is the same shape
+    (``classify_provider_failure``'s ``502 provider_connection_error``) the
+    single-candidate case always produced.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": TimeoutError("provider outcome unknown"),
         }
     )
     orchestrator = _build(client)
@@ -1317,9 +1438,14 @@ def test_ambiguous_timeout_is_not_replayed() -> None:
     assert caught.value.error_code == "provider_connection_error"
     assert caught.value.retryable is True
     assert caught.value.transport == "passthrough"
+    assert caught.value.agent_id == "fallback_agent"
     assert caught.value.__cause__ is None
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
     assert "primary_agent" in orchestrator._circuit
+    assert "fallback_agent" in orchestrator._circuit
 
 
 def test_virtual_effort_profile_selects_a_supported_provider() -> None:
@@ -1580,7 +1706,13 @@ def _wrapped_url_error(cause: OSError) -> urllib.error.URLError:
     ids=["read-timeout", "reset", "incomplete-read", "remote-disconnected", "connect-timeout"],
 )
 def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseException) -> None:
-    """Every ambiguous transport failure fails closed the same way: classified, recorded, not replayed."""
+    """Every ambiguous transport failure on a virtual selector is recorded and advances.
+
+    ``"contextual-orchestrator"`` (``GATEWAY_DEFAULT_MODEL``) is a virtual
+    selector, so the request advances past the failed candidate to the next
+    ranked one instead of failing closed -- the failed candidate is still a
+    recorded, classified breaker observation either way.
+    """
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1589,18 +1721,19 @@ def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseExc
     )
     orchestrator = _build(client)
 
-    with pytest.raises(ProviderUpstreamError) as caught:
-        orchestrator.proxy_completion(
-            {
-                "model": "contextual-orchestrator",
-                "messages": [{"role": "user", "content": "use the tool"}],
-                "tools": [{"type": "function", "function": {"name": "inspect"}}],
-            }
-        )
+    result = orchestrator.proxy_completion(
+        {
+            "model": "contextual-orchestrator",
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
 
-    assert caught.value.client_status == 502
-    assert caught.value.error_code == "provider_connection_error"
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
     assert "primary_agent" in orchestrator._circuit
     assert _is_ambiguous_passthrough_transport_failure(failure)
 
@@ -1615,7 +1748,11 @@ def test_ambiguous_transport_predicate_excludes_status_and_dns_failures() -> Non
 
 
 def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
-    """A grouped candidate's ambiguous failure reaches its group's stability record too."""
+    """A grouped candidate's ambiguous failure reaches its group's stability record too.
+
+    The default model is a virtual selector, so the request also advances to
+    the next ranked candidate rather than failing the whole request closed.
+    """
     client = SequencedProxyClient(
         {
             "primary_agent": TimeoutError("read timed out"),
@@ -1627,11 +1764,14 @@ def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
         replace(agent, group_name="provider-group") for agent in orchestrator.agents
     ]
 
-    with pytest.raises(ProviderUpstreamError):
-        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    result = orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert result["model"] == "fallback-model"
     assert orchestrator._group_router.member_observation_count("primary_agent") == 1
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
 
 
 def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:

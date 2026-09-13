@@ -1706,15 +1706,32 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     """Recognize a transport failure whose provider outcome is unknown.
 
     A read or connect timeout, a reset or truncated connection, or a URL-level
-    failure that carries no HTTP status may follow provider acceptance, so a
-    passthrough request must fail closed on it and never be replayed on
-    another candidate (``test_ambiguous_timeout_is_not_replayed``). It is
-    still a failure *of this candidate*: the breaker must learn it and the
+    failure that carries no HTTP status may follow provider acceptance. It is
+    always a failure *of this candidate*: the breaker must learn it and the
     caller must receive the classified ``502 provider_connection_error`` that
     ``classify_provider_failure`` already defines for these types -- not the
     bare exception, which the HTTP handler could only answer with
     ``500 internal_error`` (Strix run 33993155419: 83 such responses, ~90 s
     apart, the same never-recorded first-ranked route every time; #1045).
+
+    Whether the *request* may then move on to another candidate depends on
+    who chose this one:
+
+    * An explicit concrete model was named by the caller, so there is no
+      other candidate it is safe to substitute -- the request fails closed
+      on this single attempt and is never replayed
+      (``test_ambiguous_timeout_is_not_replayed``).
+    * A virtual selector (``None``/``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``/
+      ``FREE_MODEL``) means the caller delegated candidate selection to the
+      gateway, so the gateway also owns failover across this ambiguous
+      attempt -- consistent with ``_orchestrated_provider_completion``,
+      whose docstring already states that virtual selectors advance across
+      retryable transport failures (502/429/timeout). Fixed by #1166 (Strix
+      run 34754423834 attempt 2): three ready free-pool candidates went
+      uncalled after one candidate's read timeout, even though the caller
+      (a virtual ``orchestrator/free`` request) never pinned a single
+      provider.
+
     A URLError around a DNS failure is not ambiguous (nothing was sent) and
     keeps its existing handling.
     """
@@ -4606,6 +4623,20 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
+        # Every request reaching this candidate loop already satisfied the
+        # virtual-selector check above (None/GATEWAY_DEFAULT_MODEL/AUTO_MODEL/
+        # FREE_MODEL): an explicit concrete model returns earlier through the
+        # single-shot branch and never reaches this failover loop. Compute the
+        # flag explicitly (rather than relying on that control-flow fact)
+        # because it is what the ambiguous-transport-failure branch below
+        # keys its replay decision on -- see
+        # ``_is_ambiguous_passthrough_transport_failure``.
+        virtual_model = requested_model in (
+            None,
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        )
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
@@ -4638,12 +4669,36 @@ class TaskOrchestrator:
                             transport="passthrough",
                         ) from None
                     if _is_ambiguous_passthrough_transport_failure(exc):
-                        # Fail closed without replay (the outcome is unknown),
-                        # but as a recorded failure of this candidate and as a
-                        # classified upstream error -- see the predicate.
+                        # This candidate's own outcome is unknown (the timeout
+                        # or reset may follow provider acceptance), so it is
+                        # always recorded as a failure -- the breaker learns
+                        # it either way. What differs is whether the *request*
+                        # may move on:
+                        #
+                        # * Virtual selector (None/GATEWAY_DEFAULT_MODEL/
+                        #   AUTO_MODEL/FREE_MODEL): the caller delegated
+                        #   candidate selection to the gateway, so the
+                        #   gateway owns failover the same way
+                        #   ``_orchestrated_provider_completion`` advances a
+                        #   virtual selector across retryable transport
+                        #   failures (502/429/timeout) -- continue to the
+                        #   next ranked candidate instead of failing the
+                        #   whole request on one ambiguous attempt when other
+                        #   ready candidates exist (Strix run 34754423834
+                        #   attempt 2, PR #1166: three ready free-pool
+                        #   candidates went uncalled after one timeout).
+                        # * Explicit concrete model: the caller named exactly
+                        #   this provider and there is nothing safe to
+                        #   substitute it with, so the request still fails
+                        #   closed without replay, exactly as before #1045
+                        #   intended (``test_ambiguous_timeout_is_not_replayed``).
                         self._record_failure(candidate.id)
                         if candidate.group_name:
                             self._group_router.observe_failure(candidate.id)
+                        if virtual_model:
+                            last_failure = (exc, candidate)
+                            every_failure_was_request_too_large = False
+                            continue
                         raise classify_provider_failure(
                             exc,
                             agent_id=candidate.id,
