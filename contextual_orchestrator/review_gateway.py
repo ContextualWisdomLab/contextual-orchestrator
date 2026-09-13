@@ -38,6 +38,7 @@ REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
     "OPENCODE_ZEN_API_KEY",
+    "EXPERIENTAL_LABS_API_KEY",
 )
 """Provider-account sources authorized to contribute to ``orchestrator/free``.
 

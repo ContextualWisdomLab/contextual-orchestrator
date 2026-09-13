@@ -464,6 +464,14 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         fallback_task_filters=("text-generation",),
         capabilities=("chat",),
     ),
+    ProviderModelSource(
+        provider_name="experiential_labs",
+        credential_name="EXPERIENTAL_LABS_API_KEY",
+        list_url="https://api.experientiallabs.ai/v1/models",
+        chat_base_url="https://api.experientiallabs.ai/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
+    ),
 )
 
 @dataclass(frozen=True)
@@ -1653,12 +1661,10 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
 def _apply_discovered_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Apply model-level ZDR evidence to matching rows from every provider.
+    """Apply OpenRouter ZDR evidence only to its own provider rows.
 
-    Providers may expose the same canonical model id as OpenRouter while using
-    a different upstream endpoint. Exact canonical ids are the only portable
-    identity; suffix matching would transfer privacy evidence to an unrelated
-    model that merely shares a display name.
+    Model identity does not establish another endpoint's retention policy.
+    Other providers retain their independently supplied privacy evidence.
     """
     if not zdr_model_ids:
         return discovered
@@ -1673,6 +1679,8 @@ def _apply_discovered_model_evidence(
             model,
             zdr_capable=not model.evidence_only and matches(model.model_id),
         )
+        if model.provider_name == "openrouter"
+        else model
         for model in discovered
     ]
 
@@ -1952,7 +1960,7 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
-        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is True or discovered.zdr_capable) else ()),
+        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is not False and (discovered.supports_zero_data_retention is True or discovered.zdr_capable)) else ()),
         *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
         *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
         *(("privacy:training_only",) if discovered.supports_no_training is False else ()),
@@ -2176,10 +2184,13 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
+    # Promotional zero prices do not prevent Experiential paid waterfall overflow.
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if model.provider_name != "experiential_labs"
+        and is_routable_discovered_model(model)
+        and not _requires_non_text_input(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates
