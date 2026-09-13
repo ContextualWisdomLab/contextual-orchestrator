@@ -4658,6 +4658,56 @@ class TaskOrchestrator:
             "items": items,
         }
 
+    # Fields safe to disclose to an inference-scoped caller (issue #926): no
+    # credential/key names, base URLs, admin audit fields, or raw error
+    # bodies -- only what a CI liveness check needs to tell candidates apart.
+    _INFERENCE_READINESS_ITEM_FIELDS = (
+        "agent_id",
+        "model",
+        "provider_name",
+        "status",
+        "failure_code",
+        "latency_ms",
+        "rate_limited_until",
+        "earliest_ready_seconds",
+    )
+
+    def inference_readiness_report(
+        self,
+        *,
+        refresh: bool = False,
+        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Reuse :meth:`provider_readiness_report` but return an inference-safe subset.
+
+        Built for a minimal-privilege CI/review-sidecar caller (issue #926):
+        the same per-candidate ``status``/``failure_code``/``latency_ms``
+        diagnostics as the admin-scoped report, with every operator-only
+        field (the ``provider`` key is renamed ``provider_name`` here; there
+        is no separate probe implementation to keep in sync) stripped via an
+        explicit allowlist. Concurrency/serialization for ``refresh`` is
+        inherited from :meth:`provider_readiness_report`'s own lock; no
+        second rate limit is layered on top.
+        """
+        full = self.provider_readiness_report(refresh=refresh, timeout=timeout)
+        items: list[dict[str, Any]] = []
+        for item in full["items"]:
+            allowed = {"provider_name" if key == "provider" else key: value for key, value in item.items()}
+            items.append({
+                key: allowed[key]
+                for key in self._INFERENCE_READINESS_ITEM_FIELDS
+                if key in allowed
+            })
+        return {
+            "status": full["status"],
+            "probe": full["probe"],
+            "timeout_seconds": full["timeout_seconds"],
+            "checked_at": full["checked_at"],
+            "ready_count": full["ready_agent_count"],
+            "probed_count": full["agent_count"],
+            "items": items,
+        }
+
     def _reload_state(self) -> None:
         for observation in self._store.load("psychometric_observation"):
             self._psychometric_router.observe_context_id(
