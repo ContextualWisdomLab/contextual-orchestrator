@@ -20,9 +20,25 @@ claim to reproduce the learning systems in the cited work.
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
 attempt: RFC 9110 section 9.2.2 does not permit blind automatic replay of a
-non-idempotent request, so ambiguous timeout and connection outcomes fail
-closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
-DNS failure can advance without changing an explicitly requested concrete model.
+non-idempotent request, so an ambiguous timeout or connection outcome is
+always recorded as a failure of that candidate. Whether the *request* may
+then move on depends on who chose the candidate and whether replaying it can
+double-bill. An explicit concrete model was pinned by the caller, so there is
+nothing safe to substitute it with and the request still fails closed
+without replay -- as does a *priced* virtual selector (none/`AUTO_MODEL`/
+gateway default), because its candidates may carry real cost and a replay
+could double-bill (PR #1053: non-retryable `502 provider_outcome_unknown`).
+`FREE_MODEL` is the sole exception: its candidates are admitted only on
+explicit zero-cost evidence, so a replay there can never double-bill, and the
+gateway (which the caller delegated candidate selection to) advances to the
+next ranked, provider-diverse free candidate instead of failing the whole
+request over one candidate's timeout (PR #1166, fixing a regression where
+three ready free-pool candidates went uncalled after one timeout; see
+`#1045` for why the candidate itself is still never replayed). Advancing a
+priced virtual selector across an ambiguous timeout would need its own ADR
+and is deliberately not done. A rejected 429/5xx, stale 404/410 candidate, or
+temporary pre-request DNS failure can still advance for any virtual selector
+without changing an explicitly requested concrete model.
 
 ## PR #1004 mixed-failure classification follow-up
 

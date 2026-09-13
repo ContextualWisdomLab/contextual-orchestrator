@@ -1775,15 +1775,38 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
 def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     """Recognize a transport failure whose provider outcome is unknown.
 
-    A read or connect timeout, a reset or truncated connection, or a URL-level
     failure that carries no HTTP status may follow provider acceptance, so a
-    passthrough request must fail closed on it and never be replayed on
-    another candidate (``test_ambiguous_timeout_is_not_replayed``). It is
-    still a failure *of this candidate*: the breaker must learn it and the
-    caller must receive a non-retryable ``502 provider_outcome_unknown`` -- not
-    the bare exception, which the HTTP handler could only answer with
+    passthrough request must fail closed on it by default and never be
+    replayed on another candidate (``test_ambiguous_timeout_is_not_replayed``).
+    It is always a failure *of this candidate*: the breaker must learn it and
+    the caller must receive a non-retryable ``502 provider_outcome_unknown``
+    -- not the bare exception, which the HTTP handler could only answer with
     ``500 internal_error`` (Strix run 33993155419: 83 such responses, ~90 s
     apart, the same never-recorded first-ranked route every time; #1045).
+
+    Whether the *request* may then move on to another candidate depends on
+    who chose this one, and on whether replaying it can double-bill:
+
+    * An explicit concrete model was named by the caller, so there is no
+      other candidate it is safe to substitute -- the request fails closed
+      on this single attempt and is never replayed
+      (``test_ambiguous_timeout_on_explicit_model_is_not_replayed``).
+    * A priced virtual selector (``None``/``GATEWAY_DEFAULT_MODEL``/
+      ``AUTO_MODEL``) delegates candidate selection to the gateway, but its
+      candidates may carry real cost, so an unknown-outcome timeout still
+      fails closed rather than risk a paid double-send (PR #1053). Advancing
+      such a request across ambiguous transport failures would need its own
+      ADR and is deliberately not done here.
+    * ``FREE_MODEL`` (``orchestrator/free``) is the one exception: its
+      candidates are admitted solely on explicit zero-cost evidence, so a
+      replay can never double-bill -- the gateway owns failover across this
+      ambiguous attempt the same way ``_orchestrated_provider_completion``
+      advances a virtual selector across retryable transport failures
+      (502/429/timeout). Evidence: PR #1166 noema-review run 34754423834
+      attempt 2: three ready free-pool candidates went uncalled after one
+      candidate's read timeout, even though the caller (a virtual
+      ``orchestrator/free`` request) never pinned a single provider.
+
     A URLError around a DNS failure is not ambiguous (nothing was sent) and
     keeps its existing handling.
     """
@@ -4945,6 +4968,15 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
+        # Every request reaching this candidate loop already satisfied the
+        # virtual-selector check above (None/GATEWAY_DEFAULT_MODEL/AUTO_MODEL/
+        # FREE_MODEL): an explicit concrete model returns earlier through the
+        # single-shot branch and never reaches this failover loop. The
+        # ambiguous-transport-failure branch below compares
+        # ``requested_model`` directly against ``self.FREE_MODEL`` rather than
+        # this broader virtual-selector set, because only ``FREE_MODEL``
+        # candidates are admitted on explicit zero-cost evidence -- see
+        # ``_is_ambiguous_passthrough_transport_failure``.
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
@@ -4970,11 +5002,31 @@ class TaskOrchestrator:
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
                     if _is_ambiguous_passthrough_transport_failure(exc):
-                        # The transport cannot prove whether the provider accepted
-                        # the request. Record the unhealthy route, but never replay.
+                        # This candidate's own outcome is unknown (the timeout
+                        # or reset may follow provider acceptance), so it is
+                        # always recorded as a failure -- the breaker learns
+                        # it either way. What differs is whether the
+                        # *request* may move on: only ``FREE_MODEL``
+                        # candidates are admitted on explicit zero-cost
+                        # evidence, so replaying past one is the sole case
+                        # where a replay cannot double-bill (PR #1053's
+                        # concern) -- continue to the next ranked candidate
+                        # instead of failing the whole request on one
+                        # ambiguous attempt when other ready free candidates
+                        # exist (noema-review run 34754423834 attempt 2, PR
+                        # #1166: three ready free-pool candidates went
+                        # uncalled after one timeout). Every other virtual
+                        # selector (None/GATEWAY_DEFAULT_MODEL/AUTO_MODEL) and
+                        # every explicit model may carry real cost, so they
+                        # keep #1053's fail-closed, non-retryable outcome-
+                        # unknown error instead.
                         self._record_failure(candidate.id)
                         if candidate.group_name:
                             self._group_router.observe_failure(candidate.id)
+                        if requested_model == self.FREE_MODEL:
+                            last_failure = (exc, candidate)
+                            every_failure_was_request_too_large = False
+                            continue
                         raise ProviderUpstreamError(
                             agent_id=candidate.id,
                             model=candidate.model,
@@ -5016,6 +5068,21 @@ class TaskOrchestrator:
             ) from None
         if last_failure is not None:
             last_error, failed_candidate = last_failure
+            if _is_ambiguous_passthrough_transport_failure(last_error):
+                # Every remaining FREE_MODEL candidate was exhausted after
+                # advancing past ambiguous transport failures (see above);
+                # the last one's outcome is still unknown, so it keeps the
+                # non-retryable outcome-unknown shape rather than
+                # ``classify_provider_failure``'s retryable classification.
+                raise ProviderUpstreamError(
+                    agent_id=failed_candidate.id,
+                    model=failed_candidate.model,
+                    error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                    message="the provider request outcome is unknown; automatic replay is unsafe",
+                    client_status=502,
+                    retryable=False,
+                    transport="passthrough",
+                ) from None
             raise classify_provider_failure(
                 last_error,
                 agent_id=failed_candidate.id,

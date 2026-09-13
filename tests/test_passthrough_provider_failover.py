@@ -1325,6 +1325,149 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
     assert "primary_agent" in orchestrator._circuit
 
 
+def test_ambiguous_timeout_on_explicit_model_is_not_replayed() -> None:
+    """An explicit concrete model still fails closed after exactly one call.
+
+    A timeout may follow provider acceptance, so the caller-named provider is
+    never replayed on another candidate -- there is nothing safe to
+    substitute an explicitly requested model with (#1045). An explicit model
+    never enters the multi-candidate failover loop at all (it resolves
+    straight to that one agent and calls it once); it shares PR #1053's
+    outcome-unknown, non-retryable error shape with the virtual-selector path.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        )
+
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.client_status == 502
+    assert caught.value.retryable is False
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_free_model_advances_to_next_free_candidate() -> None:
+    """``FREE_MODEL`` (not just ``AUTO_MODEL``) advances past an ambiguous timeout.
+
+    AGENTS.md requires recovery tests to exercise ``FREE_MODEL`` with
+    admitted free candidates, since the free selector has its own eligibility
+    filter (``cost:free`` tags) distinct from the general ``AUTO_MODEL`` pool.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "free_primary_agent": failure,
+            "free_fallback_agent": {"model": "free-fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    )
+
+    assert result["model"] == "free-fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "free_primary_agent",
+        "free_fallback_agent",
+    ]
+    assert "free_primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_free_model_exhausts_to_outcome_unknown() -> None:
+    """When every ``FREE_MODEL`` candidate times out, the request still fails closed.
+
+    Advancing past an ambiguous transport failure is safe only because
+    ``FREE_MODEL`` candidates are admitted on explicit zero-cost evidence
+    (see ``_is_ambiguous_passthrough_transport_failure``); once every
+    candidate is exhausted the last one's outcome is still unknown, so the
+    request surfaces the same non-retryable ``provider_outcome_unknown``
+    shape PR #1053 defined -- never ``classify_provider_failure``'s
+    retryable classification. Every ranked candidate is called exactly once
+    and recorded in the breaker.
+    """
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "free_primary_agent": failure,
+            "free_fallback_agent": TimeoutError("provider outcome unknown"),
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        )
+
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.client_status == 502
+    assert caught.value.retryable is False
+    assert caught.value.transport == "passthrough"
+    assert caught.value.agent_id == "free_fallback_agent"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "free_primary_agent",
+        "free_fallback_agent",
+    ]
+    assert "free_primary_agent" in orchestrator._circuit
+    assert "free_fallback_agent" in orchestrator._circuit
+
+
 @pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
 def test_wrapped_admission_timeout_does_not_authorize_replay(wrapper_type) -> None:
     """Only the direct pre-send exception carries the local admission proof."""

@@ -1,5 +1,52 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Virtual-selector ambiguous-timeout failover, narrowed to `FREE_MODEL` (#1166, #1045, #1053)
+
+Noema review's org CI calls `POST /v1/chat/completions` with the virtual
+model `orchestrator/free`. Sidecar log evidence from run 34754423834 attempt
+2 (PR #1166) showed one `provider_attempt_failed ... TimeoutError` on
+`nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`, followed by
+`circuit_failure` and a failed request -- while three other free-pool
+candidates admitted by the same preflight
+(`nvidia_nim_sub_deepseek_ai_deepseek_v4_pro_0813`,
+`nvidia_nim_meta_llama_3_2_11b_vision_instruct`,
+`nvidia_nim_sub_meta_llama_3_2_11b_vision_instruct`) were never called. The
+`_is_ambiguous_passthrough_transport_failure` fail-closed rule introduced for
+#1045 (Strix run 33993155419) correctly classifies a timeout's outcome as
+unknown for *the candidate it happened to*, but `TaskOrchestrator.
+proxy_completion`'s passthrough candidate loop applied that same fail-closed
+decision to the whole *request* even when other ready, ranked candidates were
+still available.
+
+This entry originally proposed advancing every virtual selector (no model /
+`orchestrator/auto` / `orchestrator/free`) past an ambiguous timeout. Merging
+origin/main's PR #1053 forced a narrower reconciliation: #1053 raises a
+non-retryable `provider_outcome_unknown` `ProviderUpstreamError` for an
+ambiguous transport failure specifically *because* replaying an accepted
+request onto another candidate can double-bill a priced provider. That
+concern does not apply to `orchestrator/free`: its candidates are admitted
+solely on explicit zero-cost evidence (`cost:free` tags), so a replay there
+can never double-bill. The reconciled candidate loop therefore compares
+`requested_model` directly against `self.FREE_MODEL` (not the broader
+virtual-selector set) in the ambiguous-transport-failure branch: the failing
+candidate is always recorded as a breaker observation, and only a
+`FREE_MODEL` request `continue`s to the next ranked candidate instead of
+raising immediately. `None`/`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL` (priced
+virtual selectors) and every explicit concrete model keep #1053's fail-closed,
+non-retryable `provider_outcome_unknown` behavior; advancing a priced virtual
+selector across an ambiguous timeout would need its own ADR and is
+deliberately not done here. Exhausting every `FREE_MODEL` candidate still
+raises the same non-retryable `provider_outcome_unknown` for the last
+candidate tried, not `classify_provider_failure`'s retryable classification.
+`tests/test_passthrough_provider_failover.py` keeps #1053's parametrized
+never-replay test, adjusts the explicit-model test to #1053's error shape,
+and adds `FREE_MODEL`-advance and all-free-candidates-exhausted coverage; the
+`None`/`AUTO_MODEL`-advance test from the original proposal was deleted as
+contradicting the reconciled, narrower rule. The passthrough path records no
+per-attempt usage today, so no new usage-honesty subsystem was added -- the
+skipped-over `FREE_MODEL` candidate's unknown outcome is captured only via
+the breaker observation, not a fabricated zero-cost usage row.
+
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
