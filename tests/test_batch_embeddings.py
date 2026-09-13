@@ -206,6 +206,7 @@ def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -266,6 +267,7 @@ def test_http_embeddings_demote_a_failed_cheapest_member(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -344,6 +346,7 @@ def test_http_embeddings_omitted_model_reports_the_actually_served_model(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
@@ -439,6 +442,7 @@ def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
             assert expected in values, f"dimension {dimension} not attributed to {expected}"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_batch_embeddings_accepts_openai_style_input_field() -> None:
@@ -457,6 +461,7 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_agent() -> None:
@@ -493,6 +498,7 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
         assert body["model"] == "zdr-embedding"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_pending_batch_preserves_resolved_model_identity() -> None:
@@ -545,6 +551,7 @@ def test_http_queued_embedding_admission_declares_owned_poll_and_retention() -> 
         assert document["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_empty_batch_preserves_resolved_model_identity() -> None:

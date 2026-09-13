@@ -76,7 +76,8 @@ def _post(port: int, model: str) -> tuple[int, dict[str, Any]]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_virtual_selector_accepts_exact_ids_and_rejects_aliases() -> None:
@@ -104,6 +105,7 @@ def test_virtual_selector_accepts_exact_ids_and_rejects_aliases() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     # Exact id, and the same id with surrounding whitespace, stay on the route path.
     assert observed[TaskOrchestrator.FREE_MODEL] == (200, "route"), observed
