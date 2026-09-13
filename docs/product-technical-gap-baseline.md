@@ -2805,3 +2805,38 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+### GAP RESOLVED — 2026-09-13: context-window overflow surfaced as a hard 400 instead of a request-size rejection
+
+**Gap**: consumers (`gyeot`, `scopeweave`, and the OpenCode/Noema/Strix review
+pipeline being migrated onto this gateway) hit a plain `400` whenever a
+prompt exceeded the selected model's context window. `_is_request_too_large_error`
+already treated `413` and the oversized-tool-description `400` as
+capability-mismatch, request-size rejections eligible for failover to the
+next capability-matched agent and health-neutral for the rejecting
+provider/member — but a context-length-exceeded `400` fell through to the
+generic hard-failure path, even though the same prompt commonly fits the
+next agent's larger context window.
+
+**Fix**: added `_is_context_length_exceeded_error(error)` next to
+`_is_oversized_tool_description_error` and `_is_single_tool_call_limit_error`
+in `contextual_orchestrator/orchestrator.py`, OR'd into
+`_is_request_too_large_error`'s `HTTPError` branch. Recognizes, only at
+status `400`: (1) OpenAI's structured `error.code == "context_length_exceeded"`;
+(2) the message-text signal observed on OpenAI/vLLM/OpenRouter/NVIDIA NIM —
+casefolded message containing `"maximum context length"`, or both
+`"context length"` and `"tokens"`; (3) the Anthropic-compatible-proxy signal —
+`error.type == "invalid_request_error"` with a message containing
+`"prompt is too long"`. No numeric caps or truncation added; other status
+codes are left untouched.
+
+**Evidence**: `tests/test_passthrough_provider_failover.py::test_is_request_too_large_error_recognizes_context_length_exceeded`
+(parametrized over the three recognized shapes plus a generic 400 and a
+500 carrying the same message, both expected `False`) and
+`tests/test_passthrough_provider_failover.py::test_context_length_exceeded_fails_over_without_penalizing_provider_health`
+(first agent's OpenAI-shaped `context_length_exceeded` 400 fails over to
+the next eligible agent; `orchestrator._circuit` shows no penalty recorded
+against the first agent). Full suite:
+`python -m pytest tests/test_passthrough_provider_failover.py tests/test_provider_error_taxonomy.py tests/test_provider_reliability.py -q`
+— 131 passed. `python -m interrogate -v contextual_orchestrator/orchestrator.py`
+stays at 100% docstring coverage.

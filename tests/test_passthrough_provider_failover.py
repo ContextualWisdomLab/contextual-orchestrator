@@ -23,6 +23,7 @@ from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
     _is_ambiguous_passthrough_transport_failure,
+    _is_request_too_large_error,
     _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -1646,3 +1647,107 @@ def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
             except ValueError as outer:
                 error = outer
     assert _is_ambiguous_passthrough_transport_failure(error) is False
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (
+            400,
+            {"error": {"code": "context_length_exceeded", "message": "nope"}},
+            True,
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "message": (
+                        "This model's maximum context length is 8192 tokens. "
+                        "However, you requested 9001 tokens ..."
+                    )
+                }
+            },
+            True,
+        ),
+        (
+            400,
+            {"error": "context length 8192 exceeded: 9001 tokens requested"},
+            True,
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 9001 tokens > 8192 maximum",
+                }
+            },
+            True,
+        ),
+        (
+            400,
+            {"error": {"type": "invalid_request_error", "message": "missing required field 'model'"}},
+            False,
+        ),
+        (
+            500,
+            {
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "This model's maximum context length is 8192 tokens.",
+                }
+            },
+            False,
+        ),
+    ],
+    ids=[
+        "openai_structured_code",
+        "maximum_context_length_message",
+        "context_length_and_tokens_string_body",
+        "anthropic_prompt_too_long",
+        "generic_400_unrelated_message",
+        "same_message_wrong_status",
+    ],
+)
+def test_is_request_too_large_error_recognizes_context_length_exceeded(
+    status: int, body: dict[str, Any], expected: bool
+) -> None:
+    """Context-window overflow is a request-size rejection like 413, only at status 400."""
+    assert _is_request_too_large_error(_http_error(status, body)) is expected
+
+
+def test_context_length_exceeded_fails_over_without_penalizing_provider_health() -> None:
+    """A context-window overflow fails over to the next agent and is health-neutral.
+
+    Mirrors ``test_explicit_grouped_model_413_does_not_degrade_provider_health``:
+    consumers (noema, opencode) must not see this as a hard 400, and the
+    rejecting agent's stability record must not be debited for a prompt that
+    simply did not fit its context window.
+    """
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "context_length_exceeded",
+                "message": (
+                    "This model's maximum context length is 8192 tokens. "
+                    "However, you requested 9001 tokens ..."
+                ),
+            }
+        },
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x" * 40000}]}
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert orchestrator._circuit.get("primary_agent") in (None, {"failures": 0.0, "opened_at": 0.0})
