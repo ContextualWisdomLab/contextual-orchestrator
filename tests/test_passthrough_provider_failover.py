@@ -1748,7 +1748,7 @@ def _context_window_body(char_count: int, *, model: str = "contextual-orchestrat
     """Build a virtual-selector chat body whose prompt is ``char_count`` characters."""
     return {
         "model": model,
-        "messages": [{"role": "user", "content": "x" * char_count}],
+        "messages": [{"role": "user", "content": ("ab " * (char_count // 3 + 1))[:char_count]}],
     }
 
 

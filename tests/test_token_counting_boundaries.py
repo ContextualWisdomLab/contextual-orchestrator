@@ -130,7 +130,7 @@ def test_estimate_lower_bound_tokens_is_conservative_and_zero_for_empty() -> Non
     long = "hi" * 100
     assert estimate_lower_bound_tokens(short) <= estimate_lower_bound_tokens(long)
     # len(text) // 7, per the documented divisor.
-    assert estimate_lower_bound_tokens("x" * 700) == 100
+    assert estimate_lower_bound_tokens("word " * 140) == 100
 
 
 def test_prompt_token_lower_bound_labels_exact_when_native_tokenizer_available(
@@ -158,7 +158,7 @@ def test_prompt_token_lower_bound_labels_exact_when_native_tokenizer_available(
 def test_prompt_token_lower_bound_falls_back_to_estimate_when_unavailable() -> None:
     """An unmapped model with no authoritative tokenizer falls back to the heuristic."""
     counter = UnavailableTokenCounter()
-    text = "x" * 700
+    text = "word " * 140
 
     count, source = prompt_token_lower_bound(text, "some-unmapped-model", counter)
 
@@ -191,3 +191,18 @@ def test_estimate_lower_bound_never_exceeds_a_real_native_exact_count(
     except TokenCountUnavailable:
         pytest.skip(f"no native tokenizer is available in this environment for {label!r}")
     assert estimate_lower_bound_tokens(sample) <= exact
+
+
+def test_estimate_lower_bound_collapses_repeated_character_runs() -> None:
+    """Whitespace and rule runs must not inflate the bound above a real count.
+
+    Native tokenizers fold long runs of one character into a few multi-character
+    tokens, so a raw ``len // 7`` over-counts them; the estimator collapses each
+    run to two characters first.
+    """
+    from contextual_orchestrator.token_counting import estimate_lower_bound_tokens
+
+    assert estimate_lower_bound_tokens(" " * 1000) == 0
+    assert estimate_lower_bound_tokens("-" * 400) == 0
+    indented = ("        return value\n") * 40
+    assert estimate_lower_bound_tokens(indented) <= len(indented.replace("        ", "  ")) // 7

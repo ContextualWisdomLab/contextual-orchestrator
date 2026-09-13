@@ -9,6 +9,8 @@ unavailable rather than estimated.
 
 from __future__ import annotations
 
+import re
+
 import importlib
 import operator
 from typing import Any, Optional, Protocol
@@ -194,6 +196,9 @@ def build_token_counter(
 _LOWER_BOUND_CHARS_PER_TOKEN = 7
 
 
+_REPEATED_CHARACTER_RUN = re.compile(r"(.)\1{2,}", re.DOTALL)
+
+
 def estimate_lower_bound_tokens(text: str) -> int:
     """Conservative, non-overestimating token-count lower bound for raw text.
 
@@ -206,7 +211,14 @@ def estimate_lower_bound_tokens(text: str) -> int:
     """
     if not text:
         return 0
-    return len(text) // _LOWER_BOUND_CHARS_PER_TOKEN
+    # Runs of one repeated character (indentation spaces, "-----" rules,
+    # "=====" banners) tokenize into a handful of multi-character tokens, so a
+    # raw character count would *over*estimate them and break the lower-bound
+    # guarantee. Collapse every run to at most two characters before dividing;
+    # for ordinary prose and code this changes little, for run-heavy text it
+    # only makes the bound looser, never larger than the true count.
+    collapsed = _REPEATED_CHARACTER_RUN.sub(lambda m: m.group(1) * 2, text)
+    return len(collapsed) // _LOWER_BOUND_CHARS_PER_TOKEN
 
 
 def prompt_token_lower_bound(text: str, model: str, token_counter: Any) -> tuple[int, str]:
