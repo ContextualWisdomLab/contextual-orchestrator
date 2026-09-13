@@ -975,6 +975,36 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     )
 
 
+# Positive discovery evidence that a model accepts only one tool call per turn;
+# emitted by ``model_discovery.discovery_tool_call_tags`` and round-tripped by the
+# provider catalog store. Its absence says nothing (ADR-0035 capability tags are
+# positive declarations only), so selection never infers a limit from a missing tag.
+SINGLE_TOOL_CALL_EVIDENCE_TAG = "tool_call:single"
+
+
+def _request_requires_parallel_tool_calls(body: Mapping[str, Any]) -> bool:
+    """Return whether a chat body needs a model that accepts several tool calls at once.
+
+    The only provider evidence behind ``tool_call:single`` is the discovery
+    probe (``model_discovery.probe_discovered_model_tool_call_capability``): a
+    request carrying several tools with ``parallel_tool_calls: true`` was
+    rejected with the single-call 400 that ``_is_single_tool_call_limit_error``
+    recognizes. This predicate therefore matches that shape and nothing wider:
+    two or more tools without an explicit opt-out (the OpenAI default allows
+    parallel calls), or an explicit ``parallel_tool_calls: true`` even with one
+    tool. A single tool without the flag, or any request with
+    ``parallel_tool_calls: false``, is not known to be rejected and stays on
+    the existing failover path rather than being excluded on a guess.
+    """
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return False
+    parallel_tool_calls = body.get("parallel_tool_calls")
+    if parallel_tool_calls is False:
+        return False
+    return parallel_tool_calls is True or len(tools) > 1
+
+
 def _is_single_tool_call_limit_error(error: urllib.error.HTTPError) -> bool:
     """Recognize a model that rejects a request making more than one tool call.
 
@@ -4562,7 +4592,8 @@ class TaskOrchestrator:
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+                if self._is_general_free_agent(candidate, chat_body=body)
+                and self._zdr_agent_allowed(candidate)
             }
             if requested_model == self.FREE_MODEL
             else (
@@ -4946,7 +4977,8 @@ class TaskOrchestrator:
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+                if self._is_general_free_agent(candidate, chat_body=chat_body)
+                and self._zdr_agent_allowed(candidate)
             }
             if free_only
             else (
@@ -7896,8 +7928,18 @@ class TaskOrchestrator:
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
 
-    def _is_general_free_agent(self, agent: ModelAgent) -> bool:
+    def _is_general_free_agent(
+        self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
+    ) -> bool:
         """Return true only for zero-priced models fit for *blind* free serving.
+
+        When the caller passes the inbound ``chat_body``, an agent carrying the
+        positive ``tool_call:single`` discovery evidence is also withheld from
+        a request whose shape that evidence proved rejected (see
+        :func:`_request_requires_parallel_tool_calls`, issue #940). The
+        passthrough 400 failover in :func:`_is_single_tool_call_limit_error`
+        stays as the safety net for shapes no evidence covers; this check only
+        avoids a provider round-trip the catalog already knows will fail.
 
         Zero price alone does not certify fitness for the general-purpose
         ``orchestrator/free`` chat pool: that pool serves every role and
@@ -7914,7 +7956,15 @@ class TaskOrchestrator:
         pool store that was written before this exclusion existed, or one
         activated by a pool-construction path this repository adds later.
         """
-        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
+        if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
+            return False
+        if (
+            chat_body is not None
+            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
+            and _request_requires_parallel_tool_calls(chat_body)
+        ):
+            return False
+        return True
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
