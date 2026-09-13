@@ -93,6 +93,20 @@ discovery. Provider docs were re-checked against live public sources on
 | Configured gateway model info | Existing LiteLLM-style `model/info` merge in `model_discovery.py` | Accept only explicit completion-ceiling fields (`max_output_tokens` / `max_completion_tokens`) and explicit context-window fields (`context_window` / `context_length`) when every deployment for one logical model agrees. | Treating ambiguous `max_tokens` or `max_input_tokens` as an output ceiling. |
 | Runtime enforcement | Existing stdlib `ModelClient` request assembly | Clamp only provider-bound outgoing token-budget fields when an agent carries a known `max_output_tokens`; otherwise preserve caller and client defaults. | New provider SDKs, tokenizer packages, or substituting `context_window` when the output ceiling is unknown. |
 
+## Per-model latency and right-censored completion measurement (2026-09-07)
+
+**Problem area.** ADR 0127 defines descriptive per-provider/model latency inference. It does not authorize automatic timeout selection.
+
+| Candidate | Decision | Evidence and deliberately skipped custom work |
+|---|---|---|
+| Rust standard-library ordering plus `statrs` 0.19.1 Binomial CDF/SF | Candidate for uncensored empirical quantiles and exact Binomial/order-statistic index bounds; no dependency is selected until deterministic conformance fixtures pass. Use integer-index search over CDF/SF, not the generic inverse-CDF helper whose documentation warns about rounding and floating-point accuracy. | [`statrs::distribution::Binomial`](https://docs.rs/statrs/0.19.1/statrs/distribution/struct.Binomial.html) exposes discrete CDF/SF. [David and Nagaraja (2003)](https://doi.org/10.1002/0471722162) supplies the order-statistic basis. Skip a hand-written probability distribution and skip `ndarray-stats`: array infrastructure does not own the required uncertainty contract. |
+| `survival` 1.3.0 and `oxicuda-survival` | Evaluate for Kaplan–Meier only. Neither public API reference establishes the required Brookmeyer–Crowley quantile-interval contract, so no survival dependency is selected and implementation remains blocked pending license, maintenance, security, and executable conformance review. | [`survival::surv_analysis`](https://docs.rs/survival/1.3.0/survival/surv_analysis/index.html) documents Kaplan–Meier fitting and confidence output; [`oxicuda-survival`](https://docs.rs/oxicuda-survival/latest/oxicuda_survival/) documents nonparametric survival analysis. [Brookmeyer and Crowley (1982)](https://www.jstor.org/stable/2530286) is the method authority. Skip custom Kaplan–Meier and Brookmeyer–Crowley code until the bounded-core decision, fixtures, and removal condition are reviewed. |
+| `stats-ci` 0.1.1 | Rejected for this contract. | Its [crate documentation](https://docs.rs/stats-ci/0.1.1/stats_ci/) describes Wilson-score quantile intervals and calls the crate somewhat unstable; that is not the exact Binomial/order-statistic construction selected by ADR 0127. |
+
+**Selected approach.** No new implementation dependency is selected. Keep ADR 0127 Proposed and fail closed: report no derived estimate when its assumptions or requested estimand are not identifiable, and keep `suggested_timeout_seconds=null` without a separately reviewed decision model.
+
+**Research artifact and redistribution boundary.** The evidence record uses publisher, DOI, JSTOR, and crate API links with method summaries. It does not vendor paywalled papers or the copyrighted *Order Statistics* book because redistribution rights have not been established.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
