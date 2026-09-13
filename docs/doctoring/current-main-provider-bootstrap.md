@@ -138,14 +138,21 @@ Unknown pricing stays unknown. Experiential's public catalog retention verdict
 is evidence about routed lanes, not enforcement: its organization require-ZDR
 setting controls actual routing. This adapter does not invent a request header
 or promote catalog retention to a guaranteed ZDR route. Private-review admission
-requires verified provider-specific privacy evidence. OpenRouter discovery
+requires verified privacy evidence for the exact model, deployment and account.
+Experiential models can be ZDR-capable, non-ZDR or unknown within the same
+provider. `/v1/models` does not declare retention. The management catalog
+verdicts `zdr_all_rungs`, `zdr_enforceable` and `not_zdr` describe platform-funded
+lanes; they do not prove the organization policy or cover arbitrary BYOK and
+waterfall overrides. A Secret or one model attestation cannot authorize another
+model. The local require-ZDR policy excludes non-ZDR and unknown model evidence;
+its regression test does not verify remote organization enforcement. OpenRouter discovery
 attestation now applies only to OpenRouter rows; matching model identifiers at
 other providers cannot grant ZDR status. Independently supplied provider privacy
 evidence is preserved. This repairs the cross-provider finding from PR #971,
 but does not verify Experiential organization settings or free-route entitlement.
 Provider support alone does not establish that a consumer's hosted review now passes.
 
-References (retrieved September 12, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
+References (retrieved September 12–13, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
 [API reference](https://platform.experientiallabs.ai/docs/reference), and
 [Models](https://platform.experientiallabs.ai/docs/models).
 
