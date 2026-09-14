@@ -6574,3 +6574,57 @@ issue #1016 row 1 (separate PR), and the SSE wire frames themselves still omit
 `orchestration.route` per-token (only the persisted/queried workflow-run trace
 carries it) — no caller currently reads it from the streaming wire response,
 so this was left out of scope rather than silently assumed equivalent.
+### Sqlite connection lifecycle warnings — test hygiene, not a product defect — 2026-09-14
+
+Issue #1168's residual `ResourceWarning: unclosed database in <sqlite3.Connection ...>`
+warnings (56 of 2044 total on `767e67fb`, `python -m pytest tests -q -W default
+--ignore=tests/fuzz`) were root-caused by opening `-W error::ResourceWarning` on
+each named file in isolation. `_AgentPoolStore` (`contextual_orchestrator/orchestrator.py:3511`)
+already opens and closes a short-lived connection at every one of its five call
+sites via `try`/`finally`; `_StateStore` (`orchestrator.py:4168`) already exposes
+`close()` for its long-lived `self._conn`, and `TaskOrchestrator.close()`
+(`orchestrator.py:4556`) already calls into both owned stores. No product code
+was leaking. The leaks were entirely test-owned:
+
+- `with sqlite3.connect(path) as connection:` in `tests/test_model_timeout_policy.py`
+  (14 sites) and `tests/test_agent_pool_db.py` (13 sites) — the sqlite3 connection
+  context manager only commits/rolls back the open transaction on exit, it does
+  not close the connection, so every one of these leaked.
+- Bare `connection = sqlite3.connect(...)` with no `close()` at all in
+  `tests/test_metering.py` (7 sites) and `tests/test_cost_ledger_boundaries.py`
+  (1 site, not in the original 56/6-file count but the same defect).
+- `TaskOrchestrator([...], state_db=...)` constructed twice and never closed in
+  `tests/test_structured_output_distinct_fallback.py` — the owning `_StateStore`
+  connection could only be closed by the orchestrator's own `close()`, which the
+  test never called.
+
+`ResourceWarning` fires lazily at garbage collection, so pytest's per-test
+attribution (e.g. the KPI evidence's "line ~3880 in `_save_in_transaction`", or
+this fix's own residual runs attributing warnings to `test_healthz_is_unauthenticated_and_ok`)
+names whatever test happened to be running when the GC swept the leaked
+connection, not the test that created it — a red herring worth recording so it
+is not re-chased.
+
+Fix: closed every leaking connection deterministically — `contextlib.closing(...)`
+wrapping the `with ... as` sites (preserving the original transaction semantics
+via a second `with connection:` inside), `try`/`finally` around the bare
+`sqlite3.connect()` sites, and `orchestrator.close()` (`try`/`finally`) around
+both `TaskOrchestrator(state_db=...)` instances in the structured-output-fallback
+test. No production code changed.
+
+`tests/test_cost_ledger.py` was explicitly left untouched: it is covered by the
+separate `test/cost-ledger-sqlite-close-1168` branch (PR #1173), which is **not**
+merged into this branch's `origin/main` base (`1af542bb`, post-#1030/#1177/#1180 restack) despite being widely
+believed already landed — `git merge-base --is-ancestor dc8f4d81 HEAD` returns
+false on this base. Its ~20 unclosed-database warnings remain on this branch
+until that PR merges.
+
+Before: `python -m pytest tests -q -W default --ignore=tests/fuzz` → 2044
+warnings, 56 `ResourceWarning: unclosed database`. After (this fix alone, on
+top of the same unmerged `test_cost_ledger.py`): 2008 warnings, 20 remaining
+`unclosed database` warnings — all attributable to the still-unmerged
+`test_cost_ledger.py` fix. Once PR #1173 merges, the count drops to 0. Full
+suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
+2.54.0-pin tests and the `mcp.Client` privacy test), unchanged by this change.
+`python -m interrogate -v contextual_orchestrator/` remains 100% (no production
+code touched).
