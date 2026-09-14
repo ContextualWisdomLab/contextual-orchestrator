@@ -15,7 +15,9 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
+from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.privacy_policy_analysis import (
+    _call_analyzer,
     _render_policy_document_with_camoufox,
     _wardnet_browser_proxy,
     analyze_discovered_privacy_policies,
@@ -371,3 +373,51 @@ def test_analysis_preserves_provider_truth_and_requires_complete_consensus() -> 
 
     assert enriched[1].supports_no_training is False
     assert enriched[2].supports_no_training is None
+
+
+def _analyzer_response(policy_url: str) -> dict:
+    assessments = {
+        "assessments": [
+            {
+                "source_url": policy_url,
+                "zero_data_retention_available": True,
+                "no_training": True,
+                "no_prompt_retention": None,
+                "evidence_quote": "Inputs are not used for training.",
+            }
+        ]
+    }
+    return {
+        "choices": [{"message": {"content": json.dumps(assessments)}, "finish_reason": "stop"}]
+    }
+
+
+def test_analyzer_sends_selected_model_published_output_ceiling() -> None:
+    policy_url = "https://provider.example/privacy"
+    candidate = _model("openrouter", "zdr-analyzer", zdr=True)
+    candidate = replace(candidate, max_output_tokens=12345)
+    captured: dict = {}
+
+    def fake_send(_agent, _endpoint, payload):
+        captured["payload"] = payload
+        return _analyzer_response(policy_url)
+
+    with patch.object(ModelClient, "proxy_send_once", side_effect=fake_send):
+        _call_analyzer(candidate, {policy_url: "Inputs are not used for training."}, ModelClient())
+
+    assert captured["payload"]["max_tokens"] == 12345
+
+
+def test_analyzer_omits_cap_when_model_ceiling_unknown() -> None:
+    policy_url = "https://provider.example/privacy"
+    candidate = _model("openrouter", "zdr-analyzer", zdr=True)
+    captured: dict = {}
+
+    def fake_send(_agent, _endpoint, payload):
+        captured["payload"] = payload
+        return _analyzer_response(policy_url)
+
+    with patch.object(ModelClient, "proxy_send_once", side_effect=fake_send):
+        _call_analyzer(candidate, {policy_url: "Inputs are not used for training."}, ModelClient())
+
+    assert "max_tokens" not in captured["payload"]

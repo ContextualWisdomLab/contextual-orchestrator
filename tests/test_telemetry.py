@@ -384,17 +384,232 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
     handler.path = "/v1/chat/completions"
-    monkeypatch.setattr(handler, "_send", lambda *_args, **_kwargs: None)
+    captured_send = MagicMock()
+    monkeypatch.setattr(handler, "_send", captured_send)
     token = set_session_id("session-secret")
     try:
         with caplog.at_level("WARNING"):
-            handler._send_error(401, "unauthorized", "not authorized")
+            handler._send_error(
+                401, "unauthorized", "not authorized",
+                {"request_id": "untrusted\nlog-injection", "reason": "private-detail"},
+            )
     finally:
         reset_session_id(token)
         server.server_close()
 
     assert "request_failed" in caplog.text
+    response_payload = captured_send.call_args.args[0]
+    response_request_id = response_payload["error"]["detail"]["request_id"]
+    warning_messages = [
+        record.getMessage() for record in caplog.records
+        if record.name == "contextual_orchestrator.server"
+        and record.getMessage().startswith("request_failed ")
+    ]
+    assert warning_messages == [
+        f"request_failed status=401 code=unauthorized request_id={response_request_id}"
+    ]
+    assert response_request_id != "untrusted\nlog-injection"
+    assert len(response_request_id) == 32
+    assert all(character in "0123456789abcdef" for character in response_request_id)
+    assert response_payload["error"]["detail"]["reason"] == "private-detail"
+    assert "untrusted" not in caplog.text
+    assert "private-detail" not in caplog.text
     assert "session-secret" not in caplog.text
+
+
+def test_http_error_ids_correlate_over_real_connections(caplog):
+    """Separate HTTP errors carry distinct IDs matching their server warnings."""
+    import http.client
+    import threading
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    request_ids = []
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            for _request_index in range(2):
+                connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+                try:
+                    connection.request("GET", "/v1/models")
+                    response = connection.getresponse()
+                    assert response.status == 401
+                    payload = json.loads(response.read())
+                    request_id = payload["error"]["detail"]["request_id"]
+                    request_ids.append(request_id)
+                    expected_message = (
+                        f"request_failed status=401 code={payload['error']['code']} "
+                        f"request_id={request_id}"
+                    )
+                    assert expected_message in [record.getMessage() for record in caplog.records]
+                finally:
+                    connection.close()
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+    assert len(set(request_ids)) == 2
+
+
+def test_provider_diagnostic_events_preserve_request_identity(caplog):
+    """Every retry outcome keeps trusted identity before untrusted error text."""
+    agent = ModelAgent("diagnostic_agent", "mock-model")
+    failure = RuntimeError("controlled error")
+    with caplog.at_level("DEBUG"), telemetry_module.request_identity() as request_id:
+        orchestrator_module._log_provider_attempt(agent, 0, 1)
+        orchestrator_module._log_provider_attempt_failed(agent, 0, failure, False)
+        orchestrator_module._log_provider_backoff(agent, 0, 0.0)
+        orchestrator_module._log_provider_exhausted(agent, 2, failure)
+        orchestrator_module._log_provider_no_retry_budget(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_one_shot_call_failed(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_rejected_permanent(agent, 1, failure)
+    messages = [row.getMessage() for row in caplog.records if row.name == orchestrator_module.__name__]
+    assert len(messages) == 7
+    assert all(f"request_id={request_id}" in message for message in messages)
+    assert f"request_id={request_id} error_message=" in messages[1]
+
+
+def test_request_identity_restores_context_across_threads_and_failure():
+    """Copied work inherits identity; reused workers and failed scopes do not leak it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    assert telemetry_module.current_request_id() is None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with telemetry_module.request_identity() as outer_id:
+            assert executor.submit(copy_context().run, telemetry_module.current_request_id).result() == outer_id
+            assert executor.submit(telemetry_module.current_request_id).result() is None
+            with pytest.raises(RuntimeError):
+                with telemetry_module.request_identity() as inner_id:
+                    assert inner_id != outer_id
+                    raise RuntimeError("controlled failure")
+            assert telemetry_module.current_request_id() == outer_id
+        assert telemetry_module.current_request_id() is None
+        assert executor.submit(telemetry_module.current_request_id).result() is None
+
+
+def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
+    """Same-session HTTP requests need distinct identities before provider failure."""
+    import http.client
+    import threading
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    model_agent = ModelAgent("correlation_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        raise RuntimeError("controlled provider failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="test-correlation-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+    request_ids = []
+    first_socket = None
+    try:
+        with caplog.at_level("DEBUG"):
+            for request_index in range(2):
+                first_record = len(caplog.records)
+                connection.request("POST", "/v1/chat/completions", json.dumps({
+                    "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+                }), {
+                    "Content-Type": "application/json", "Authorization": "Bearer test-correlation-token",
+                    "X-LineageWeave-Session-Id": "shared-private-session",
+                })
+                if first_socket is None:
+                    first_socket = connection.sock
+                    assert first_socket is not None
+                else:
+                    assert connection.sock is first_socket
+                response = connection.getresponse()
+                assert response.status >= 400
+                assert not response.will_close
+                response_body = json.loads(response.read())
+                request_id = response_body["error"]["detail"]["request_id"]
+                request_ids.append(request_id)
+                attempt_logs = [record.getMessage() for record in caplog.records[first_record:]
+                                if record.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+                assert len(attempt_logs) == 2, (request_index, attempt_logs)
+                assert all(f"request_id={request_id}" in message for message in attempt_logs)
+        assert len(set(request_ids)) == 2
+        assert "shared-private-session" not in "\n".join(attempt_logs)
+    finally:
+        connection.close()
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
+
+
+def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
+    """Overlapping same-session requests keep their own provider/error identities."""
+    import http.client
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    rendezvous = threading.Barrier(2, timeout=10)
+    overlapping_threads = set()
+    overlap_lock = threading.Lock()
+    model_agent = ModelAgent("parallel_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        rendezvous.wait()
+        with overlap_lock:
+            overlapping_threads.add(threading.get_ident())
+        raise RuntimeError("controlled overlapping failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="parallel-test-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def send_request():
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer parallel-test-token",
+                 "X-LineageWeave-Session-Id": "same-private-session"})
+            response = connection.getresponse()
+            assert response.status == 502
+            return json.loads(response.read())["error"]["detail"]["request_id"]
+        finally:
+            connection.close()
+
+    try:
+        with caplog.at_level("DEBUG"), ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(send_request) for _ in range(2)]
+            request_ids = [future.result(timeout=20) for future in futures]
+        assert len(overlapping_threads) == 2
+        assert len(set(request_ids)) == 2
+        provider_logs = [row.getMessage() for row in caplog.records
+                         if row.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+        assert len(provider_logs) == 4
+        for request_id in request_ids:
+            matching = [message for message in provider_logs if f"request_id={request_id}" in message]
+            assert len(matching) == 2
+            assert sum(message.startswith("provider_attempt ") for message in matching) == 1
+        assert "same-private-session" not in "\n".join(provider_logs)
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
 
 
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
@@ -581,6 +796,11 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
     assert "method=GET" in caplog.text
     assert "path=/healthz" in caplog.text
     assert "status=200" in caplog.text
+    import re
+    summary_lines = [row.getMessage() for row in caplog.records
+                     if row.getMessage().startswith("http_request ")]
+    assert len(summary_lines) == 1
+    assert re.search(r" request_id=[0-9a-f]{32}$", summary_lines[0])
 
 
 def test_per_request_info_summary_never_includes_query_string(caplog):

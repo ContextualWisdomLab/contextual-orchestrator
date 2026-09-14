@@ -346,18 +346,17 @@ def _call_analyzer(
             for source_url, text in documents.items()
         ],
     }
-    response = client.proxy_send_once(
-        agent,
-        "chat/completions",
-        {
-            "model": agent.model,
-            "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
-            "temperature": 0,
-            "max_tokens": 1600,
-            "response_format": _POLICY_SCHEMA,
-            "stream": False,
-        },
-    )
+    payload: dict[str, Any] = {
+        "model": agent.model,
+        "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        "temperature": 0,
+        "response_format": _POLICY_SCHEMA,
+        "stream": False,
+    }
+    output_cap = client.effective_max_output_tokens(agent)
+    if output_cap is not None:
+        payload["max_tokens"] = output_cap
+    response = client.proxy_send_once(agent, "chat/completions", payload)
     return json.loads(ModelClient._response_content(agent, response))
 
 

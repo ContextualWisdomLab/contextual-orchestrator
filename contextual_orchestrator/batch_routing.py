@@ -1111,8 +1111,8 @@ class ProviderEmbeddingBatchBackend:
                 self._errors[job_id] = error
             self._states[job_id] = status
 
-    def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
-        """Wait within the caller's explicit deadline for a terminal state."""
+    def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
+        """Wait for a terminal state, bounded only when the caller sets a deadline."""
         event = self._terminal_events.get(job.job_id)
         if event is not None:
             event.wait(timeout=timeout)
