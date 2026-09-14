@@ -13,10 +13,12 @@ from contextual_orchestrator.token_counting import (
     MessageCountResult,
     NativeExactTokenCounter,
     PgTiktokenAdapter,
+    SharedContextBudget,
     TokenCountUnavailable,
     UnavailableTokenCounter,
     build_token_counter,
     describe_message_count,
+    shared_context_output_budget,
 )
 
 
@@ -219,3 +221,96 @@ def test_factory_is_unavailable_when_backends_fail(monkeypatch: pytest.MonkeyPat
     assert isinstance(counter, UnavailableTokenCounter)
     with pytest.raises(TokenCountUnavailable):
         counter.count_text("hello", "gpt-4")
+
+
+class _Agent:
+    """Minimal duck-typed stand-in for ModelAgent's fields the budget reads."""
+
+    def __init__(self, *, model="gpt-4o-2024-08-06", context_window=None, max_output_tokens=None):
+        self.model = model
+        self.context_window = context_window
+        self.max_output_tokens = max_output_tokens
+
+
+_MESSAGES = [{"role": "user", "content": "hello there"}]
+# tokens_per_message(3) + role(1) + content(2) + reply_priming(3) = 9.
+_EXACT_PROMPT_TOKENS = 9
+
+
+def test_shared_context_output_budget_is_none_without_a_counter() -> None:
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    assert (
+        shared_context_output_budget(agent, _MESSAGES, None, counter=None) is None
+    )
+
+
+def test_shared_context_output_budget_is_none_when_context_window_is_unknown() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=None, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+@pytest.mark.parametrize("invalid_window", [0, -1, 3.5, "20"])
+def test_shared_context_output_budget_is_none_for_an_invalid_context_window(invalid_window) -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=invalid_window, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_max_output_tokens_is_unknown() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=None)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_the_model_is_out_of_scope() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(model="mock-planner", context_window=20, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_tools_make_the_count_unavailable() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    assert (
+        shared_context_output_budget(
+            agent, _MESSAGES, None, counter=counter, tools=[{"type": "function"}]
+        )
+        is None
+    )
+
+
+def test_shared_context_output_budget_computes_remaining_and_ceiling_from_exact_evidence() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, None, counter=counter)
+    assert budget == SharedContextBudget(
+        context_window=20,
+        prompt_tokens=_EXACT_PROMPT_TOKENS,
+        remaining=20 - _EXACT_PROMPT_TOKENS,
+        output_ceiling=min(50, 20 - _EXACT_PROMPT_TOKENS),
+        requested_output_tokens=None,
+        exceeds_remaining=False,
+    )
+    assert budget.as_evidence() == {
+        "context_window": 20,
+        "prompt_tokens": _EXACT_PROMPT_TOKENS,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+
+
+def test_shared_context_output_budget_flags_an_explicit_request_over_remaining() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, 15, counter=counter)
+    assert budget.remaining == 11
+    assert budget.exceeds_remaining is True
+
+
+def test_shared_context_output_budget_flags_remaining_below_one_even_without_a_request() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=5, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, None, counter=counter)
+    assert budget.remaining == 5 - _EXACT_PROMPT_TOKENS
+    assert budget.exceeds_remaining is True

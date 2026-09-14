@@ -3019,3 +3019,57 @@ new and touched tests pass (`tests/test_token_counting_boundaries.py`,
 `tests/` run is green apart from the pre-existing, unrelated local-only
 `openai` SDK 2.54.0-pin and `mcp.Client` failures already tracked elsewhere in
 this document.
+
+### Shared-context output budgeting — second half of #1157
+
+Building on the counting-provenance registry above, `token_counting.py`
+gained `shared_context_output_budget(agent, messages, requested_output_tokens,
+*, counter, tools=None)`. It returns a `SharedContextBudget` decision (never
+an estimate) only when every input is authoritative: `agent.context_window`
+is a known positive int, `agent.max_output_tokens` is known, and
+`describe_message_count` returns an exact, registry-verified count for
+`messages`/`agent.model` (no tools, no non-text fields, an in-scope model).
+Any other case — unknown context window, unknown output ceiling, or a count
+unavailable because of tools/modality/an out-of-scope model — returns `None`
+so callers leave existing behavior untouched; per operating rule 9.1, no
+fixed ratio or hidden shrinkage is ever substituted. When a decision is
+returned, `remaining = context_window - prompt_tokens` (the exact count
+already folds in the model's reply-priming tokens per the OpenAI Cookbook
+framing, so they are not subtracted twice) and `output_ceiling =
+min(max_output_tokens, remaining)`.
+
+`ModelClient.chat()` applies this decision at the exact site the existing
+catalog output-ceiling clamp already ran (`effective_max_output_tokens`,
+before the provider HTTP call): with no explicit caller/client output budget,
+it now sends `min(max_output_tokens, remaining)` instead of the bare catalog
+ceiling; when the caller's own explicit budget exceeds `remaining`, or
+`remaining < 1` regardless of an explicit budget, it raises the existing
+`ProviderRequestTooLargeError` (413, `request_too_large`) naming
+`context_window`, `prompt_tokens`, and the requested budget — never a silent
+clamp or truncation. `ModelClient` gained an optional `token_counter`
+constructor argument (the default `TaskOrchestrator` wires its own counter
+into its default client only; a caller-supplied client keeps whichever
+counter it already has) and `take_shared_context_budget()`, mirroring the
+existing `take_usage()` thread-local seam. The served
+`/v1/chat/completions` response gained an optional `shared_context_budget`
+evidence object (`context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`) next to `prompt_count_source`, read and cleared by
+`server._take_shared_context_budget()`, and omitted when no decision was
+made.
+
+Scope left out of this step, by design: only the non-streaming
+`ModelClient.chat()` send path is wired. The streaming (`_stream_send`) and
+local-proxy/passthrough send paths still apply only the pre-existing plain
+`_clamp_agent_token_budget` clamp against `agent.max_output_tokens`, with no
+shared-context accounting — a natural follow-up once this path is proven.
+Tool-schema, multimodal, `instructions`, and prior-response token accounting
+remain unavailable inputs (per the registry gap above), so requests carrying
+them still fall back to the pre-existing plain clamp with no `#1157` evidence
+attached; #1157 is not closed by this change. Local evidence only: the new
+and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run is green apart from the same
+pre-existing, unrelated local-only `openai` SDK 2.54.0-pin and `mcp.Client`
+failures tracked elsewhere in this document.

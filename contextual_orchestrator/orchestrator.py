@@ -90,7 +90,11 @@ from .reasoning_effort_profile import (
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import TokenCountUnavailable, build_token_counter
+from .token_counting import (
+    TokenCountUnavailable,
+    build_token_counter,
+    shared_context_output_budget,
+)
 
 
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
@@ -1928,8 +1932,13 @@ class ModelClient:
         ca_bundle: str | None = None,
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
+        token_counter: Any = None,
     ) -> None:
         self.timeout = timeout
+        # Optional authoritative counter for the shared-context output-budget
+        # decision (see ``token_counting.shared_context_output_budget``).
+        # ``None`` means no decision is ever made here, not an estimate.
+        self.token_counter = token_counter
         if max_output_tokens is not None and (
             type(max_output_tokens) is not int or max_output_tokens <= 0
         ):
@@ -2013,6 +2022,17 @@ class ModelClient:
         extras = getattr(self._local, "assistant_message", None)
         self._local.assistant_message = None
         return extras if isinstance(extras, dict) else None
+
+    def take_shared_context_budget(self) -> dict[str, Any] | None:
+        """Return and clear the most recent chat() call's shared-context budget evidence.
+
+        ``None`` unless the most recent ``chat()`` on this thread made an
+        authoritative :func:`token_counting.shared_context_output_budget`
+        decision (see that function for exactly which inputs must be known).
+        """
+        evidence = getattr(self._local, "shared_context_budget", None)
+        self._local.shared_context_budget = None
+        return evidence if isinstance(evidence, dict) else None
 
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
@@ -2179,6 +2199,7 @@ class ModelClient:
             raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         self._local.assistant_message = None
+        self._local.shared_context_budget = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
         effective_temperature = settings["temperature"] if temperature is None else temperature
@@ -2206,16 +2227,55 @@ class ModelClient:
             "temperature": effective_temperature,
             "stream": False,
         }
+        tools = settings.get("tools")
         output_cap = self.effective_max_output_tokens(agent)
         if output_cap is not None:
             payload["max_tokens"] = output_cap
+        # Shared-context output budget (issue #1157, part 2): only when the
+        # agent's context window, its output ceiling, and an exact,
+        # provenance-bound prompt count are all authoritative. An explicit
+        # caller/client output budget wins over the catalog ceiling above
+        # (as it already does via effective_max_output_tokens), so it is
+        # checked against remaining shared-context capacity here rather than
+        # silently clamped; no caller budget means the catalog ceiling is
+        # what gets bounded down to the remaining capacity.
+        scoped_output_tokens = getattr(self._local, "request_settings", {}).get(
+            "max_output_tokens"
+        )
+        explicit_output_tokens = (
+            scoped_output_tokens if scoped_output_tokens is not None else self.max_output_tokens
+        )
+        shared_budget = shared_context_output_budget(
+            agent,
+            messages,
+            explicit_output_tokens,
+            counter=self.token_counter,
+            tools=tools,
+        )
+        if shared_budget is not None:
+            if shared_budget.exceeds_remaining:
+                requested = (
+                    explicit_output_tokens
+                    if explicit_output_tokens is not None
+                    else shared_budget.output_ceiling
+                )
+                raise ProviderRequestTooLargeError(
+                    "prompt does not leave room for the requested output within the "
+                    f"model's shared context window: context_window={shared_budget.context_window}, "
+                    f"prompt_tokens={shared_budget.prompt_tokens}, requested_output_tokens={requested}",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    transport="chat",
+                )
+            if explicit_output_tokens is None:
+                payload["max_tokens"] = shared_budget.output_ceiling
+            self._local.shared_context_budget = shared_budget.as_evidence()
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
             payload["presence_penalty"] = effective_presence
         if effective_frequency is not None:  # pragma: no cover
             payload["frequency_penalty"] = effective_frequency
-        tools = settings.get("tools")
         if tools:
             payload["tools"] = tools
         if "tool_choice" in settings:
@@ -4480,8 +4540,11 @@ class TaskOrchestrator:
         # Strict structured verdict parser seam; tests may substitute it, and
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
-        self.client = client or ModelClient()
         self.token_counter = token_counter or build_token_counter()
+        # A caller-supplied client keeps whatever counter it was built with;
+        # only the default client is wired to this orchestrator's counter so
+        # the shared-context output-budget decision has evidence to work from.
+        self.client = client or ModelClient(token_counter=self.token_counter)
         # The cost coordinator installs this optional sink. Direct orchestrator
         # callers still retain audit evidence without inventing price or usage.
         self._race_usage_sink: Callable[[str, Any], None] | None = None
@@ -16999,6 +17062,7 @@ def chat_completion_response(
     include_trace: bool = False,
     usage: dict[str, int] | None = None,
     prompt_count_source: str | None = None,
+    shared_context_budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:  # pragma: no cover
     """Wrap orchestration output in an OpenAI-compatible chat completion response.
 
@@ -17006,7 +17070,11 @@ def chat_completion_response(
     ``prompt_count_source`` records provenance (e.g. ``"provenance_exact"``)
     only when an authoritative prompt-message token count was obtained for
     this exact served request/route revision; it is omitted rather than
-    fabricated when no such count exists.
+    fabricated when no such count exists. ``shared_context_budget`` records
+    the ``token_counting.shared_context_output_budget`` evidence
+    (``context_window``/``prompt_tokens``/``output_ceiling``/``source``) for
+    the agent that actually served this request, next to
+    ``prompt_count_source``; it is omitted when no such decision was made.
     """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -17044,6 +17112,8 @@ def chat_completion_response(
     }
     if prompt_count_source is not None:
         response["prompt_count_source"] = prompt_count_source
+    if shared_context_budget is not None:
+        response["shared_context_budget"] = shared_context_budget
     return response
 
 

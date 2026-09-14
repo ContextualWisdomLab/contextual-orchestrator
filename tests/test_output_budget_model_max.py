@@ -14,7 +14,8 @@ import pytest
 
 from contextual_orchestrator import ModelAgent
 from contextual_orchestrator import orchestrator as orchestrator_module
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, ProviderRequestTooLargeError
+from contextual_orchestrator.token_counting import NativeExactTokenCounter
 
 
 def _remote_agent(**overrides) -> ModelAgent:
@@ -37,7 +38,7 @@ def _patched_credentials():
     )
 
 
-def _sent_chat_payload(client: ModelClient, agent: ModelAgent) -> dict:
+def _sent_chat_payload(client: ModelClient, agent: ModelAgent, messages=None) -> dict:
     captured: dict = {}
 
     def fake_send(_agent, payload, _destination=None, **_kwargs):
@@ -47,7 +48,7 @@ def _sent_chat_payload(client: ModelClient, agent: ModelAgent) -> dict:
     with patch.object(client, "_validate_provider", return_value=None), _patched_credentials(), patch.object(
         client, "_send_with_retry", side_effect=fake_send
     ):
-        client.chat(agent, [{"role": "user", "content": "hi"}])
+        client.chat(agent, messages or [{"role": "user", "content": "hi"}])
     return captured["payload"]
 
 
@@ -205,3 +206,94 @@ def test_local_proxy_omits_cap_when_nothing_known() -> None:
     ):
         client.proxy_send(agent, "chat/completions", {"model": agent.model})
     assert "max_tokens" not in captured["payload"]
+
+
+_VERIFIED_MODEL = "gpt-4o-2024-08-06"
+
+
+def _word_count_native_module():
+    """A deterministic stand-in for the optional native tokenizer extension."""
+    return type(
+        "_StubNativeModule",
+        (),
+        {
+            "count_cl100k": staticmethod(lambda text: len(text.split())),
+            "count_o200k": staticmethod(lambda text: len(text.split())),
+            "pack_cl100k": staticmethod(lambda *_args: ([], [])),
+        },
+    )()
+
+
+def _stub_native_token_counter() -> NativeExactTokenCounter:
+    return NativeExactTokenCounter(_word_count_native_module())
+
+
+def test_shared_context_budget_sent_when_no_caller_budget_and_all_inputs_known() -> None:
+    """One message: 3 (tokens_per_message) + role(1) + content(2) + priming(3) = 9."""
+    client = ModelClient(token_counter=_stub_native_token_counter())
+    agent = _remote_agent(model=_VERIFIED_MODEL, max_output_tokens=50, context_window=20)
+    payload = _sent_chat_payload(
+        client, agent, messages=[{"role": "user", "content": "hello there"}]
+    )
+    # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11.
+    assert payload["max_tokens"] == 11
+    assert client.take_shared_context_budget() == {
+        "context_window": 20,
+        "prompt_tokens": 9,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+
+
+def test_shared_context_budget_rejects_explicit_caller_budget_over_remaining() -> None:
+    client = ModelClient(token_counter=_stub_native_token_counter())
+    agent = _remote_agent(model=_VERIFIED_MODEL, max_output_tokens=50, context_window=20)
+    with patch.object(client, "_validate_provider", return_value=None), _patched_credentials(), patch.object(
+        client, "_send_with_retry"
+    ) as fake_send:
+        with client.request_settings(max_output_tokens=15):  # remaining is 11
+            with pytest.raises(ProviderRequestTooLargeError) as excinfo:
+                client.chat(agent, [{"role": "user", "content": "hello there"}])
+    fake_send.assert_not_called()
+    message = str(excinfo.value)
+    assert "context_window=20" in message
+    assert "prompt_tokens=9" in message
+    assert "requested_output_tokens=15" in message
+    assert client.take_shared_context_budget() is None
+
+
+def test_shared_context_budget_absent_when_context_window_is_unknown() -> None:
+    client = ModelClient(token_counter=_stub_native_token_counter())
+    agent = _remote_agent(model=_VERIFIED_MODEL, max_output_tokens=50)
+    payload = _sent_chat_payload(
+        client, agent, messages=[{"role": "user", "content": "hello there"}]
+    )
+    assert payload["max_tokens"] == 50
+    assert client.take_shared_context_budget() is None
+
+
+def test_shared_context_budget_absent_when_message_count_is_unavailable_for_tools() -> None:
+    client = ModelClient(token_counter=_stub_native_token_counter())
+    agent = _remote_agent(model=_VERIFIED_MODEL, max_output_tokens=50, context_window=20)
+    with patch.object(client, "_validate_provider", return_value=None), _patched_credentials(), patch.object(
+        client, "_send_with_retry"
+    ) as fake_send:
+        with client.request_settings(tools=[{"type": "function", "function": {"name": "noop"}}]):
+            client.chat(agent, [{"role": "user", "content": "hello there"}])
+    assert fake_send.call_args[0][1]["max_tokens"] == 50
+    assert client.take_shared_context_budget() is None
+
+
+def test_shared_context_budget_rejects_when_remaining_is_below_one() -> None:
+    client = ModelClient(token_counter=_stub_native_token_counter())
+    agent = _remote_agent(model=_VERIFIED_MODEL, max_output_tokens=50, context_window=5)
+    with patch.object(client, "_validate_provider", return_value=None), _patched_credentials(), patch.object(
+        client, "_send_with_retry"
+    ) as fake_send:
+        with pytest.raises(ProviderRequestTooLargeError) as excinfo:
+            client.chat(agent, [{"role": "user", "content": "hello there"}])
+    fake_send.assert_not_called()
+    message = str(excinfo.value)
+    assert "context_window=5" in message
+    assert "prompt_tokens=9" in message
+    assert client.take_shared_context_budget() is None

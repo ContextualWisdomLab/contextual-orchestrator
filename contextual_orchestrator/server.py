@@ -5140,6 +5140,21 @@ def _prompt_count_source(
     return result.count_source
 
 
+def _take_shared_context_budget(orchestrator: "TaskOrchestrator") -> dict[str, Any] | None:
+    """Return this request's shared-context output-budget evidence, or ``None``.
+
+    Reads and clears the ``ModelClient``-thread-local evidence the most
+    recent ``chat()`` call recorded (see
+    ``token_counting.shared_context_output_budget``): present only when the
+    served agent's context window, its output ceiling, and an exact prompt
+    count were all authoritative for this exact request.
+    """
+    take = getattr(orchestrator.client, "take_shared_context_budget", None)
+    if take is None:
+        return None
+    return take()
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -7317,6 +7332,7 @@ def build_server(
                         include_trace=include_trace,
                         usage=result.get("usage"),
                         prompt_count_source=_prompt_count_source(orchestrator, messages, model_name),
+                        shared_context_budget=_take_shared_context_budget(orchestrator),
                     ))
                     return
                 if path == "/v1/embeddings":

@@ -409,3 +409,97 @@ def describe_message_count(
     if describe is None:
         raise TokenCountUnavailable("provider chat framing is unavailable")
     return describe(messages, model, tools=tools)
+
+
+@dataclass(frozen=True)
+class SharedContextBudget:
+    """An honest shared-context output-budget decision (issue #1157, part 2).
+
+    Every field traces to authoritative evidence only: ``prompt_tokens`` is an
+    exact, provenance-bound count (see :func:`describe_message_count`), and
+    ``context_window``/the model's published output ceiling come from the
+    agent's own catalog metadata. ``remaining`` is the shared-context capacity
+    left for output after the exact prompt (the model's reply-priming tokens
+    are already folded into ``prompt_tokens`` by the counting contract, so
+    they are not subtracted again here). ``output_ceiling`` is
+    ``min(model_max_output_tokens, remaining)`` -- the value to send when the
+    caller supplied no explicit output budget. ``exceeds_remaining`` is set
+    when the shared context cannot honor the requested output size at all
+    (``remaining < 1``) or the caller's own explicit ``requested_output_tokens``
+    is larger than ``remaining``; callers must surface an explicit error in
+    that case rather than silently truncating.
+    """
+
+    context_window: int
+    prompt_tokens: int
+    remaining: int
+    output_ceiling: int
+    requested_output_tokens: int | None
+    exceeds_remaining: bool
+    source: str = "exact"
+
+    def as_evidence(self) -> dict[str, Any]:
+        """Return the response-facing evidence shape (see ``prompt_count_source``)."""
+        return {
+            "context_window": self.context_window,
+            "prompt_tokens": self.prompt_tokens,
+            "output_ceiling": self.output_ceiling,
+            "source": self.source,
+        }
+
+
+def shared_context_output_budget(
+    agent: Any,
+    messages: list[Mapping[str, Any]],
+    requested_output_tokens: int | None,
+    *,
+    counter: Any,
+    tools: Any = None,
+) -> SharedContextBudget | None:
+    """Return a shared-context output-budget decision, or ``None`` when honest.
+
+    A decision is returned only when every input is authoritative: the
+    agent's ``context_window`` is a known positive int, its
+    ``max_output_tokens`` is known, and :func:`describe_message_count` returns
+    an exact, registry-verified count for ``messages``/``agent.model`` (no
+    tools, no non-text fields, an in-scope model). Any other case -- an
+    unknown context window, an unknown output ceiling, or a count that is
+    unavailable because of tools, modality, or an out-of-scope model --
+    returns ``None`` so the caller leaves its existing behavior untouched
+    rather than inventing an estimate or a fixed ratio.
+
+    When a decision is returned, ``remaining = context_window -
+    prompt_tokens`` (the exact count already includes reply-priming tokens,
+    so they are not subtracted twice) and ``output_ceiling =
+    min(max_output_tokens, remaining)``. ``exceeds_remaining`` is ``True``
+    when ``remaining < 1`` (the shared context has no room left for any
+    output at all) or when the caller's own ``requested_output_tokens``
+    exceeds ``remaining`` -- both cases the caller must turn into an explicit
+    error instead of a silent clamp.
+    """
+    if counter is None:
+        return None
+    context_window = getattr(agent, "context_window", None)
+    if type(context_window) is not int or context_window <= 0:
+        return None
+    max_output_tokens = getattr(agent, "max_output_tokens", None)
+    if type(max_output_tokens) is not int or max_output_tokens <= 0:
+        return None
+    model = getattr(agent, "model", "")
+    try:
+        result = describe_message_count(counter, messages, model, tools=tools)
+    except TokenCountUnavailable:
+        return None
+    remaining = context_window - result.token_count
+    output_ceiling = min(max_output_tokens, remaining)
+    exceeds_remaining = remaining < 1 or (
+        requested_output_tokens is not None and requested_output_tokens > remaining
+    )
+    return SharedContextBudget(
+        context_window=context_window,
+        prompt_tokens=result.token_count,
+        remaining=remaining,
+        output_ceiling=output_ceiling,
+        requested_output_tokens=requested_output_tokens,
+        exceeds_remaining=exceeds_remaining,
+    )

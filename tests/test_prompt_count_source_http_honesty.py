@@ -20,7 +20,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _take_shared_context_budget,
+    build_server,
+)
 from contextual_orchestrator.token_counting import NativeExactTokenCounter  # noqa: E402
 
 _TEST_AUTH_TOKEN = "prompt_count_source_http_honesty_token"  # noqa: S105
@@ -152,3 +156,39 @@ def test_prompt_count_source_absent_when_a_message_carries_a_non_text_content_pa
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_shared_context_budget_reads_and_clears_client_evidence() -> None:
+    """``_take_shared_context_budget`` is a thin, honest read/clear seam.
+
+    The real evidence is produced by ``ModelClient.chat()`` (see
+    ``test_output_budget_model_max.py`` for the full decision matrix); this
+    only proves the server-response wiring reads whatever the client last
+    recorded and clears it, and degrades to ``None`` for a client without the
+    method at all (e.g. a caller-supplied client that predates this feature).
+    """
+
+    class _ClientWithEvidence:
+        def __init__(self, evidence):
+            self._evidence = evidence
+
+        def take_shared_context_budget(self):
+            evidence, self._evidence = self._evidence, None
+            return evidence
+
+    evidence = {
+        "context_window": 20,
+        "prompt_tokens": 9,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+    client = _ClientWithEvidence(evidence)
+    orchestrator = type("_Orchestrator", (), {"client": client})()
+    assert _take_shared_context_budget(orchestrator) == evidence
+    # Consumed exactly once, like take_usage().
+    assert _take_shared_context_budget(orchestrator) is None
+
+
+def test_shared_context_budget_is_none_for_a_client_without_the_method() -> None:
+    orchestrator = type("_Orchestrator", (), {"client": object()})()
+    assert _take_shared_context_budget(orchestrator) is None
