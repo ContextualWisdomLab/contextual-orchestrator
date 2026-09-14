@@ -2772,6 +2772,43 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
+        self._local.shared_context_budget = None
+        # Shared-context output budget (issue #1157, part 2 follow-up): same
+        # decision as ModelClient.chat(), applied at the same site the plain
+        # catalog clamp already runs, before any provider bytes are sent for
+        # this attempt. See chat() for the full contract.
+        scoped_output_tokens = getattr(self._local, "request_settings", {}).get(
+            "max_output_tokens"
+        )
+        explicit_output_tokens = (
+            scoped_output_tokens if scoped_output_tokens is not None else self.max_output_tokens
+        )
+        shared_budget = shared_context_output_budget(
+            agent,
+            payload.get("messages"),
+            explicit_output_tokens,
+            counter=self.token_counter,
+            tools=payload.get("tools"),
+        )
+        if shared_budget is not None:
+            if shared_budget.exceeds_remaining:
+                requested = (
+                    explicit_output_tokens
+                    if explicit_output_tokens is not None
+                    else shared_budget.output_ceiling
+                )
+                raise ProviderRequestTooLargeError(
+                    "prompt does not leave room for the requested output within the "
+                    f"model's shared context window: context_window={shared_budget.context_window}, "
+                    f"prompt_tokens={shared_budget.prompt_tokens}, requested_output_tokens={requested}",
+                    agent_id=agent.id,
+                    model=agent.model,
+                    transport="stream",
+                )
+            if explicit_output_tokens is None:
+                payload = dict(payload)
+                payload["max_tokens"] = shared_budget.output_ceiling
+            self._local.shared_context_budget = shared_budget.as_evidence()
         payload = self._clamp_agent_token_budget(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
@@ -2910,6 +2947,7 @@ class ModelClient:
         operation_kind: str = "request",
     ) -> dict[str, Any]:
         """Apply the shared passthrough contract with a selectable retry policy."""
+        self._local.shared_context_budget = None
         normalized_endpoint = endpoint.strip("/")
         if normalized_endpoint.startswith("v1/"):
             normalized_endpoint = normalized_endpoint[3:]
@@ -2949,12 +2987,54 @@ class ModelClient:
             trace_name,
             trace_attributes,
         ):
+            if normalized_endpoint == "chat/completions":
+                # Shared-context output budget (issue #1157, part 2 follow-up):
+                # the caller-shaped passthrough body is checked at the exact
+                # point the plain catalog clamp already ran, before any local
+                # provider default is injected below -- so a caller's own
+                # explicit `max_tokens` (or its absence) is read honestly,
+                # never confused with the gateway's own local-provider
+                # default. `shared_context_output_budget` already fails
+                # closed (returns None) for any messages shape
+                # `describe_message_count` cannot account for -- tools, a
+                # non-text content part, the Responses `input` shape, or an
+                # out-of-scope model -- so no decision is forced when the
+                # passthrough body is not exact chat-message accounting.
+                explicit_output_tokens = payload.get("max_tokens")
+                shared_budget = shared_context_output_budget(
+                    agent,
+                    payload.get("messages"),
+                    explicit_output_tokens,
+                    counter=self.token_counter,
+                    tools=payload.get("tools"),
+                )
+                if shared_budget is not None:
+                    if shared_budget.exceeds_remaining:
+                        requested = (
+                            explicit_output_tokens
+                            if explicit_output_tokens is not None
+                            else shared_budget.output_ceiling
+                        )
+                        raise ProviderRequestTooLargeError(
+                            "prompt does not leave room for the requested output within the "
+                            f"model's shared context window: context_window={shared_budget.context_window}, "
+                            f"prompt_tokens={shared_budget.prompt_tokens}, requested_output_tokens={requested}",
+                            agent_id=agent.id,
+                            model=agent.model,
+                            transport="passthrough",
+                        )
+                    payload = dict(payload)
+                    if explicit_output_tokens is None:
+                        payload["max_tokens"] = shared_budget.output_ceiling
+                    self._local.shared_context_budget = shared_budget.as_evidence()
             if (
                 normalized_endpoint == "chat/completions"
                 and _is_local_provider_url(agent.base_url)
             ):
                 # Preserve caller ownership while supplying the configured cap
                 # that local OpenAI-compatible servers require when SDKs omit it.
+                # setdefault is a no-op when the shared-context decision above
+                # already set max_tokens to the remaining-capacity ceiling.
                 payload = dict(payload)
                 local_cap = self.effective_max_output_tokens(agent)
                 if local_cap is not None:

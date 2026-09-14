@@ -3073,3 +3073,71 @@ and touched tests pass (`tests/test_token_counting_boundaries.py`,
 reports 100%, and the full `tests/` run is green apart from the same
 pre-existing, unrelated local-only `openai` SDK 2.54.0-pin and `mcp.Client`
 failures tracked elsewhere in this document.
+
+### Streaming and passthrough shared-context output budgeting — closes the above follow-up
+
+The streaming/local-proxy gap left above is now closed. `ModelClient._stream_send`
+applies the identical `shared_context_output_budget` decision at the exact
+site its own plain `_clamp_agent_token_budget` clamp already ran (using the
+same "explicit" seam as `chat()` — the request-scoped or client-level
+`max_output_tokens`, never whatever catalog default `stream_chat()` already
+wrote into `payload["max_tokens"]` before calling `_stream_send`) — before
+any provider bytes are sent for that attempt. `ModelClient._proxy_send`
+(behind `proxy_send`/`proxy_send_once`/`probe_structured_chat`, the transport
+under the server's single-agent tool-loop passthrough) applies the same
+decision for the `chat/completions` endpoint, reading the caller's own
+`max_tokens` from the untouched passthrough body *before* the existing
+local-provider default-cap injection runs in the same method, so a
+gateway-injected local default is never misread as the caller's own explicit
+budget. In both cases: no explicit budget and all inputs authoritative sends
+`min(max_output_tokens, remaining)`; an explicit budget over `remaining`, or
+`remaining < 1` regardless of an explicit budget, raises the existing
+`ProviderRequestTooLargeError` naming `context_window`, `prompt_tokens`, and
+the requested budget — never a silent clamp. `shared_context_output_budget`
+already returns `None` for any shape `describe_message_count` cannot account
+for (a Responses-shaped `input` body, `tools`, non-text content, an
+out-of-scope model), so passthrough callers get no decision — not a forced
+estimate — whenever the caller-shaped body isn't exact chat-message
+accounting; this is the smallest-diff outcome the follow-up required, not an
+extension of the registry's own scope.
+
+The true streaming `/v1/chat/completions` route
+(`server._stream_route_completion`) already flushes SSE response headers and
+writes its first (`role: assistant`) frame before ever driving the provider
+call, so a rejection on this path necessarily surfaces *after* headers are
+committed rather than as a pre-request HTTP error. No new error-frame plumbing
+was needed for this: `ProviderRequestTooLargeError` is already a
+`ProviderUpstreamError`, and `_stream_route_completion`'s existing
+`except ProviderUpstreamError` handler already turns any such upstream
+rejection into a terminal SSE error frame carrying the same
+`context_window=`/`prompt_tokens=`/`requested_output_tokens=` evidence in its
+message. Live evidence: the terminal success ("stop") frame now also carries
+the same `shared_context_budget` object as the non-streaming response (same
+field name, same shape — `context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`), attached only when `ModelClient.take_shared_context_budget()`
+returns one (reusing `server._take_shared_context_budget()` verbatim,
+matching this repo's existing pattern of attaching `prompt_count_source`-style
+evidence next to a terminal chunk rather than inventing a second shape), and
+omitted otherwise.
+
+Left out, and why: the `responses`-endpoint conversion branch inside
+`_proxy_send` (used only for local/`opencode_go` providers) is unchanged —
+its payload is already a Responses-shaped `input` body, which
+`describe_message_count` cannot account for, so wiring it in would only ever
+compute `None` there; the batch-upload send path (`_batch_run`) is a separate
+async transport (job upload/poll, not a live per-request send) and stays on
+the plain catalog clamp; embeddings (`_send_raw` called from
+`embed_with_usage`) never carry chat messages and are untouched. The
+passthrough response body itself is deliberately left with no
+`shared_context_budget` field: this transport's own module contract is that
+"the full provider response shape... survives verbatim" for tool-loop
+callers, so adding an extra top-level key there would violate that contract;
+only the outbound request-shaping decision (send/clamp/reject) applies to
+passthrough, not response evidence. Local evidence only: the new and touched
+tests pass (`tests/test_true_streaming.py`, `tests/test_output_budget_model_max.py`,
+`tests/test_token_counting_boundaries.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run (3723 passed, 2 skipped) is green
+apart from the same five pre-existing, unrelated local-only `openai` SDK
+2.54.0-pin and `mcp.Client` failures tracked elsewhere in this document.

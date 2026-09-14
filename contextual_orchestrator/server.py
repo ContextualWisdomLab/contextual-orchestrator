@@ -8802,7 +8802,12 @@ def build_server(
                 nonlocal stream_usage
                 stream_usage = usage
 
-            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            def frame(
+                delta: dict[str, Any],
+                finish: str | None = None,
+                *,
+                shared_context_budget: dict[str, Any] | None = None,
+            ) -> str:
                 payload = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -8814,6 +8819,13 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if shared_context_budget is not None:
+                    # Same shape/field name as the non-streaming response's
+                    # top-level `shared_context_budget` (see
+                    # chat_completion_response / _take_shared_context_budget):
+                    # present only when this run's served agent made an
+                    # authoritative shared-context output-budget decision.
+                    payload["shared_context_budget"] = shared_context_budget
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:
@@ -8845,7 +8857,13 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    if not self._write_sse(
+                        frame(
+                            {},
+                            finish="stop",
+                            shared_context_budget=_take_shared_context_budget(orchestrator),
+                        )
+                    ):
                         return
                     if (
                         include_usage
