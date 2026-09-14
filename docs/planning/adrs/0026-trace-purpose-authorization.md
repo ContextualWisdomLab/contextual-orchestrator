@@ -63,3 +63,27 @@ Assurance and Security (IAS 2007)*. IEEE. https://doi.org/10.1109/IAS.2007.29
 
 The purpose-based model supports treating trace access as a separate policy
 input rather than granting it implicitly from the inference role.
+
+## Implementation note (2026-09-14)
+
+Issue #117 acceptance item 9 found that `SecurityConfig.authorize` did not
+actually implement the split-mode fail-closed behavior this ADR describes:
+without a `bearer_verifier`, a bare single `auth_token` satisfied the `trace`
+scope unconditionally, regardless of whether split `admin_token`/
+`inference_token` credentials were also configured. `authorize()` now adds an
+explicit `trace_token` credential and resolves scope `trace` in three modes:
+a configured `trace_token` is the only credential that authorizes `trace`;
+single-token mode (no `admin_token`, `inference_token`, or `trace_token`)
+keeps the documented local escape hatch on `auth_token`; split admin/inference
+mode without a `trace_token` fails closed with `401`, matching this ADR's
+"split static admin/inference mode ... fails closed for the trace purpose"
+statement. `admin_token` and `inference_token` never satisfy `trace`. The CLI
+wires `--trace-token`/`--trace-token-key` exactly like `--inference-token`
+(KV credential name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN`). The `--production`/
+`--allow-public-bind` gating is unchanged: it already requires split
+admin/inference credentials and rejects identical values, and does not
+separately require a `trace_token`, since every trace-bearing HTTP route
+already gates on the caller's base admin/inference scope in addition to the
+separate `trace` scope over the same bearer — split mode without a
+`trace_token` is therefore already structurally fail-closed for trace.
+Acceptance item 6 (tenant/resource binding) remains open.

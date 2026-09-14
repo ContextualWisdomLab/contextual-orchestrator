@@ -54,6 +54,7 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_TRACE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN"
 
 def _log_level(value: str) -> str:
     """Parse a case-insensitive stdlib logging level name for an argparse option."""
@@ -957,12 +958,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
     parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
     parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
+    parser.add_argument("--trace-token", default="",
+                        help="Explicit local-development trace token; prefer a KV token name. "
+                             "Required in split admin/inference mode to authorize the trace "
+                             "purpose (ADR 0026); without it, trace responses fail closed.")
     parser.add_argument("--auth-token-key", default=None,
                         help="KV credential name for the single server bearer token.")
     parser.add_argument("--admin-token-key", default=None,
                         help="KV credential name for the admin bearer token.")
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
+    parser.add_argument("--trace-token-key", default=None,
+                        help="KV credential name for the trace bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--production",
@@ -1150,6 +1157,12 @@ def main(argv: list[str] | None = None) -> None:
                 if split_requested
                 else ""
             )
+            trace_requested = bool(args.trace_token or args.trace_token_key)
+            trace_token = (
+                _resolve_auth_token(args.trace_token, args.trace_token_key or DEFAULT_TRACE_CREDENTIAL_NAME)
+                if trace_requested
+                else ""
+            )
         except ValueError as exc:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
@@ -1171,6 +1184,7 @@ def main(argv: list[str] | None = None) -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                trace_token=trace_token,
                 max_body_bytes=args.max_body_bytes,
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
