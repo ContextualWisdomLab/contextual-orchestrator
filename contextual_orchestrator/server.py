@@ -57,6 +57,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .token_counting import TokenCountUnavailable, describe_message_count
 from .provider_errors import PROVIDER_OUTCOME_UNKNOWN_CODE, ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
@@ -5119,6 +5120,26 @@ def _strip_internal_fields(value: Any) -> Any:
     return value
 
 
+def _prompt_count_source(
+    orchestrator: "TaskOrchestrator", messages: list[dict[str, Any]], model_name: str
+) -> str | None:
+    """Return this request's prompt-count provenance, or ``None`` when unavailable.
+
+    Binds an authoritative message-token count to the exact served
+    request/model without touching candidate selection: it only asks the
+    already-resolved gateway ``token_counter`` whether ``messages``/``model_name``
+    fall inside a verified counting-provenance scope (see
+    ``token_counting.COUNTING_PROVENANCE_REGISTRY``). An unsupported field
+    (tools, non-text content, an out-of-scope model, ...) is explicit
+    unavailability, never a fabricated estimate.
+    """
+    try:
+        result = describe_message_count(orchestrator.token_counter, messages, model_name)
+    except TokenCountUnavailable:
+        return None
+    return result.count_source
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -7291,7 +7312,11 @@ def build_server(
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
-                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                        result,
+                        model=model_name,
+                        include_trace=include_trace,
+                        usage=result.get("usage"),
+                        prompt_count_source=_prompt_count_source(orchestrator, messages, model_name),
                     ))
                     return
                 if path == "/v1/embeddings":

@@ -8,11 +8,15 @@ import types
 import pytest
 
 from contextual_orchestrator.token_counting import (
+    COUNTING_PROVENANCE_REGISTRY,
+    FRAMING_SOURCE_UNVERIFIED,
+    MessageCountResult,
     NativeExactTokenCounter,
     PgTiktokenAdapter,
     TokenCountUnavailable,
     UnavailableTokenCounter,
     build_token_counter,
+    describe_message_count,
 )
 
 
@@ -106,6 +110,102 @@ def test_native_counter_does_not_flatten_multimodal_chat_prompts() -> None:
 
     with pytest.raises(TokenCountUnavailable, match="chat framing"):
         counter.count_messages(messages, "gpt-4o")
+
+
+def _stub_native_counter() -> NativeExactTokenCounter:
+    """A NativeExactTokenCounter over a deterministic stub encoder for behavior tests."""
+    module = types.SimpleNamespace(
+        count_cl100k=lambda text: len(text.split()),
+        count_o200k=lambda text: len(text.split()),
+        pack_cl100k=lambda *_args: ([], []),
+    )
+    return NativeExactTokenCounter(module)
+
+
+def test_registry_entries_carry_a_source_and_scope() -> None:
+    assert COUNTING_PROVENANCE_REGISTRY, "registry must not be empty"
+    for model, entry in COUNTING_PROVENANCE_REGISTRY.items():
+        assert entry.framing_source != FRAMING_SOURCE_UNVERIFIED
+        assert entry.framing_source_url.startswith("https://")
+        assert model in entry.framing_scope
+        assert entry.tokenizer in {"cl100k", "o200k"}
+        assert entry.supported_fields
+        assert entry.unsupported_fields
+
+
+def test_verified_family_counts_exactly_with_real_native_tokenizer() -> None:
+    counter = build_token_counter()
+    if not isinstance(counter, NativeExactTokenCounter):
+        pytest.skip("native tokenizer extension is not installed locally")
+    model = "gpt-4o-2024-08-06"
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Say hi.", "name": "alice"},
+    ]
+    result = counter.describe_messages(messages, model)
+    assert isinstance(result, MessageCountResult)
+    assert result.token_count > 0
+    assert result.tokenizer == "o200k"
+    assert result.count_source == "provenance_exact"
+    assert result.framing_source == COUNTING_PROVENANCE_REGISTRY[model].framing_source
+    assert result.token_count == counter.count_messages(messages, model)
+
+
+def test_supported_fields_count_exactly_with_stub_encoder() -> None:
+    counter = _stub_native_counter()
+    model = "gpt-4o-2024-08-06"
+    messages = [{"role": "user", "content": "one two three"}]
+    result = counter.describe_messages(messages, model)
+    entry = COUNTING_PROVENANCE_REGISTRY[model]
+    # tokens_per_message + role("user" -> 1 word) + content("one two three" -> 3 words)
+    # + reply priming, with the deterministic word-count stub encoder.
+    expected = entry.tokens_per_message + 1 + 3 + entry.reply_priming_tokens
+    assert result.token_count == expected
+    assert describe_message_count(counter, messages, model).token_count == expected
+
+
+def test_tools_field_raises_unavailable_naming_tools() -> None:
+    counter = _stub_native_counter()
+    messages = [{"role": "user", "content": "hello"}]
+    with pytest.raises(TokenCountUnavailable, match="tools"):
+        counter.describe_messages(messages, "gpt-4o-2024-08-06", tools=[{"type": "function"}])
+
+
+def test_unsupported_message_field_raises_naming_the_field() -> None:
+    counter = _stub_native_counter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "type": "function"}],
+        }
+    ]
+    with pytest.raises(TokenCountUnavailable, match="tool_calls"):
+        counter.count_messages(messages, "gpt-4o-2024-08-06")
+
+
+def test_non_text_content_part_raises_naming_content() -> None:
+    counter = _stub_native_counter()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+        }
+    ]
+    with pytest.raises(TokenCountUnavailable, match="content"):
+        counter.count_messages(messages, "gpt-4o-2024-08-06")
+
+
+def test_model_outside_scope_raises_unavailable() -> None:
+    counter = _stub_native_counter()
+    messages = [{"role": "user", "content": "hello"}]
+    with pytest.raises(TokenCountUnavailable, match="outside the verified"):
+        counter.describe_messages(messages, "gpt-4o")
+
+
+def test_describe_message_count_is_unavailable_for_counters_without_describe_messages() -> None:
+    with pytest.raises(TokenCountUnavailable):
+        describe_message_count(UnavailableTokenCounter(), [{"role": "user", "content": "hi"}], "gpt-4o-2024-08-06")
 
 
 def test_factory_is_unavailable_when_backends_fail(monkeypatch: pytest.MonkeyPatch) -> None:

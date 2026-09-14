@@ -162,3 +162,15 @@ browsing already ships in this repository today gated behind **Wardnet**
 "Wardnet policy-document boundary" sections of `docs/kv-credentials.md`), not
 `quarantine-sandbox-runtime`. ADR 0123 records this as an open reconciliation
 question rather than silently picking one.
+
+## Message-count provenance registry (2026-09-14, issue #1157)
+
+Issue #1157 requires provider/model-specific counting provenance instead of a
+raw-text heuristic pretending to be message accounting. The question
+researched: is there an official, citable per-message chat-framing token
+formula, and for exactly which models does its publisher say it applies?
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| OpenAI chat-framing formula | [OpenAI Cookbook: "How to count tokens with tiktoken"](https://cookbook.openai.com/examples/how_to_count_tokens_with_tiktoken) (redirects to `developers.openai.com/cookbook/...`), fetched live 2026-09-14. Its `num_tokens_from_messages` function declares `tokens_per_message = 3`, `tokens_per_name = 1`, and a `+= 3` reply-priming term for an exact `model in {...}` membership check against `gpt-3.5-turbo-0125`, `gpt-4-0314`, `gpt-4-32k-0314`, `gpt-4-0613`, `gpt-4-32k-0613`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06`; every other model name falls through to a same-function warning ("may update over time") or `NotImplementedError`, and the page itself calls the result "an estimate, not a timeless guarantee." | Added `CountingProvenance` entries in `contextual_orchestrator/token_counting.py` scoped to exactly those seven dated identifiers, each carrying `tokenizer`, `framing_source`, `framing_source_url`, `framing_read_date`, `framing_scope`, `supported_fields` (`role`/`content`/`name`, string-valued only), and `unsupported_fields` (tools, tool/function calls, non-text content parts, instructions, prior response/conversation references). `NativeExactTokenCounter.describe_messages`/`count_messages` return an exact count only inside this scope; every other model or field raises `TokenCountUnavailable` naming the field. | A per-provider "reasonable estimate" table for the hedged family aliases (bare `gpt-4o`, `gpt-4`, `gpt-3.5-turbo`, ...) the source itself says may drift — that is exactly the heuristic-framing-constant pattern operating rules 3.1/9.1 prohibit. Also skipped: any accounting for `tools`, multimodal content parts, or Responses-API prior-response/conversation references, since no verified official source for their token cost is cited yet (tracked as remaining unavailable, not estimated). |
+| Provenance shape | Existing `TokenCountUnavailable` fail-closed seam in `token_counting.py`; no new dependency | Added `describe_message_count()` as the least-invasive parallel API returning a `MessageCountResult` (`token_count`, `tokenizer`, `framing_source`, `count_source`) alongside the existing plain-`int` `count_messages()`, rather than changing `count_messages`'s return type or the `TokenCountingStrategy` protocol. | A new counting-strategy class hierarchy, or a breaking change to `count_text`/`count_messages` call sites already relying on an `int` return. |

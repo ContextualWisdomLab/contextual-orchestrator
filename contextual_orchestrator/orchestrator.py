@@ -16998,10 +16998,15 @@ def chat_completion_response(
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
     usage: dict[str, int] | None = None,
+    prompt_count_source: str | None = None,
 ) -> dict[str, Any]:  # pragma: no cover
     """Wrap orchestration output in an OpenAI-compatible chat completion response.
 
     ``usage`` carries measured token counts. Absence remains explicit and null.
+    ``prompt_count_source`` records provenance (e.g. ``"provenance_exact"``)
+    only when an authoritative prompt-message token count was obtained for
+    this exact served request/route revision; it is omitted rather than
+    fabricated when no such count exists.
     """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -17021,7 +17026,7 @@ def chat_completion_response(
         if not result.get("answer"):
             message["content"] = None
     finish_reason = result.get("finish_reason") or ("tool_calls" if tool_calls else "stop")
-    return {
+    response: dict[str, Any] = {
         "id": _new_chat_completion_id(),
         "object": "chat.completion",
         "created": int(time.time()),
@@ -17037,6 +17042,9 @@ def chat_completion_response(
         "usage_measurement_status": "measured" if usage is not None else "unavailable",
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
+    if prompt_count_source is not None:
+        response["prompt_count_source"] = prompt_count_source
+    return response
 
 
 def text_completion_response(

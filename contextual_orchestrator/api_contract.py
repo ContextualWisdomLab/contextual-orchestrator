@@ -74,6 +74,16 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
+                    "prompt_count_source": {
+                        "type": "string",
+                        "enum": ["provenance_exact"],
+                        "description": (
+                            "Present only when an authoritative prompt-message "
+                            "token count was obtained for this exact served "
+                            "request from token_counting.COUNTING_PROVENANCE_"
+                            "REGISTRY; omitted (never fabricated) otherwise."
+                        ),
+                    },
                     "orchestration": {"type": "object"},
                 },
             },

@@ -2973,3 +2973,49 @@ Local `0b949aa2` adds bounded numeric status to the existing common failed-
 attempt log without reading provider text or bodies (89 related tests pass,
 15.28 seconds). Full verification and release of this diagnostic addition
 remain pending; provider availability itself is not repaired by better logs.
+
+### Message-count provenance registry — 2026-09-14
+
+Issue #1157 (shared-context accounting) required provider/model-specific
+counting provenance instead of a raw-text heuristic standing in for message
+accounting. #927 explicitly left prompt sizing for future work and #1151 is
+the separate common-output-ceiling concern; neither is reopened here. PR
+#1178 (`feat/context-window-candidate-filter`, not merged) added a raw-text
+*lower bound* for selection-time candidate filtering — deliberately a lower
+bound, not message accounting, and left untouched by this change.
+
+`contextual_orchestrator/token_counting.py` gained
+`COUNTING_PROVENANCE_REGISTRY`, keyed by exact model identifier, each entry
+citing an official source (currently the OpenAI Cookbook's "How to count
+tokens with tiktoken", fetched live 2026-09-14) and scoped to exactly the
+model identifiers that source states the framing constants apply to —
+`gpt-3.5-turbo-0125`, `gpt-4-0314`, `gpt-4-32k-0314`, `gpt-4-0613`,
+`gpt-4-32k-0613`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06`. Bare family
+aliases (`gpt-4o`, `gpt-4`, ...) are deliberately excluded: the source itself
+calls its formula for those "an estimate, not a timeless guarantee," and
+registering them would reintroduce exactly the heuristic framing constant
+operating rules 3.1/9.1 prohibit. `NativeExactTokenCounter.describe_messages`
+/`count_messages` return an exact, provenance-bound count only inside that
+scope; a `tools` payload, a non-text content part, or any other field outside
+`role`/`content`/`name` raises `TokenCountUnavailable` naming the field, and a
+model outside the scope raises the same way. Tools, image/audio content,
+`instructions`, and prior Responses-API `response_id`/conversation references
+remain explicitly unavailable — no accounting for them is invented.
+
+The served `/v1/chat/completions` response gained an optional
+`prompt_count_source` field, set only when
+`contextual_orchestrator/server.py::_prompt_count_source` obtains a count for
+the exact served request/model from this registry, and omitted otherwise; it
+sits next to the existing `usage`/`usage_measurement_status` pair without
+touching the candidate-selection surfaces PR #1177/#1178/#1179 are changing.
+
+Remaining gap: tool-schema, multimodal, `instructions`, and prior-response
+token accounting have no verified official source yet, so #1157's shared-
+context budgeting (using the count against a model's valid output ceiling and
+remaining input/output context) is not implemented by this change — it is a
+provenance-registry foundation, not a closing fix. Local evidence only: the
+new and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`), and the full
+`tests/` run is green apart from the pre-existing, unrelated local-only
+`openai` SDK 2.54.0-pin and `mcp.Client` failures already tracked elsewhere in
+this document.
