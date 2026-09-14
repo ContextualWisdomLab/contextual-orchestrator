@@ -367,8 +367,10 @@ def test_budgeted_evaluation_transport_failures_are_fail_closed() -> None:
         ((200, b"[]"), nb.BenchmarkContractError),
     ):
         client = client_for(result)
-        with pytest.raises(expected_error):
+        with pytest.raises(expected_error) as captured_error:
             client.proxy_send_once(agent, "responses", {})
+        if isinstance(captured_error.value, urllib.error.HTTPError):
+            captured_error.value.close()
 
 
 def test_structured_judge_uses_transport_and_both_request_limits() -> None:
@@ -1289,6 +1291,34 @@ def _task(task_id: str = "sample_task", expected: str = "zebra") -> dict:
         "scorer": {"name": "substring_match", "version": "1"},
         "expected": {"substring": expected},
     }
+
+
+@pytest.mark.parametrize("cleanup_error", [None, OSError, RuntimeError])
+def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_error, monkeypatch):
+    """A consumed error closes without replacing its declared failure outcome."""
+    response_error = urllib.error.HTTPError(
+        FAKE_ENDPOINT, 503, "down", {}, io.BytesIO(b"unavailable")
+    )
+    original_close = response_error.close
+
+    def close_response():
+        original_close()
+        if cleanup_error is not None:
+            raise cleanup_error("cleanup failed")
+
+    def fail_response():
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", close_response)
+    try:
+        outcome = nb.run_policy_cell(
+            "route_once", _task(), fail_response, {}, None, nb._deterministic_timer()
+        )
+        assert outcome["outcome_reason"] == "provider_http_error:503"
+        assert outcome["task_score"] is None
+        assert response_error.closed
+    finally:
+        original_close()
 
 
 def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
