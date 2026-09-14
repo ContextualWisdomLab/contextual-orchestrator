@@ -1,5 +1,28 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-14 reference-cases terminology cleanup (#1015)
+
+The operator Evaluation surface labeled its dataset class "Golden prompts",
+which #1015 identified as a buyer-visible terminology defect: #1014 and
+fast-mlsirm #1727 introduced generated, provisional, adjudicated,
+adjudicated-but-not-validated, challenged, sampled, and validated-anchor
+dataset states, and "golden" wrongly claimed a single, uniform authority
+level across all of them. `contextual_orchestrator/admin.py`'s `en`/`ko`
+translation bundles rename the `golden_prompts` key to `reference_cases`
+("Reference cases" / "참조 평가 사례"), and the Datasets view's mock row and
+renderer follow the same key so the rendered copy tracks the translation.
+Locale-key parity between `en` and `ko` is preserved and covered by
+`tests/test_admin_contract.py::test_reference_cases_terminology_replaces_golden_prompts`,
+which also asserts no locale still renders "golden"/"골든" wording. No
+external API, transport, database, or export field in this repository used
+the name `golden_prompts`, so no compatibility alias was required. This is
+presentation-only: provider routing, generation, scoring, adjudication,
+validation evidence, and anchor promotion are unchanged. The richer
+vocabulary #1015 recommends (`Validated anchors`, `Provisional`,
+`Adjudication required`, `No fixed anchors`, etc.) is not yet surfaced
+anywhere in the admin UI and remains an open gap for the #1014 dynamic-
+evaluation work to wire up.
+
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
