@@ -457,11 +457,12 @@ def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_pat
     workflow = _workflow_text()
     expected_json = _expected_push_checks_json(workflow)
     expected_names = json.loads(expected_json)
-    present = {"Full unit and contract suite", "CodeQL analysis"}
-    missing_names = [name for name in expected_names if name not in present]
+    assert len(expected_names) >= 2
+    present = set(expected_names[:-1])
+    missing_names = [expected_names[-1]]
 
     partial = _check_runs_response(
-        [_check_run("Full unit and contract suite", job=1), _check_run("CodeQL analysis", job=2)]
+        [_check_run(name, job=index) for index, name in enumerate(sorted(present), start=1)]
     )
     result = _run_checks_gate_script(tmp_path, partial, expected_json)
 
@@ -469,6 +470,8 @@ def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_pat
     assert f"{len(missing_names)} expected push-triggered check(s)" in result.stderr
     for name in missing_names:
         assert name in result.stderr
+    for name in present:
+        assert name not in result.stderr
 
 
 def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: Path) -> None:
