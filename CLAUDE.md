@@ -163,6 +163,11 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Export validation
 
+For late telemetry logs, close test clients on every path and finish test-owned
+handlers inside the log capture scope. Production daemon behavior is unchanged.
+See the completion investigation in `docs/doctoring/provider_request_correlation.md`
+for the event-controlled reproduction and remaining acceptance limits.
+
 Export validation must distinguish transaction completion from connection
 closure and test-body passes from process exit. Reproduction, inherited warning
 owners, native build commands, and unverified acceptance boundaries are recorded
