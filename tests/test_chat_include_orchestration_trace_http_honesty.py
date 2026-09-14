@@ -175,6 +175,71 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
     )
 
 
+def _server_with_split_tokens(*, trace_token: str = "") -> tuple:
+    orchestrator = build()
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(
+            admin_token="split_admin_token",
+            inference_token=_TEST_INFERENCE_TOKEN,
+            trace_token=trace_token,
+            expose_trace_by_default=False,
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, server.server_address[1]
+
+
+def test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_token() -> None:
+    """A plain inference token never gets trace in split mode; provisioning a
+    matching trace_token for that credential (the ADR 0026 migration path
+    for a caller meant to see traces) does. /v1/chat/completions gates the
+    request on both the base "inference" scope and the separate "trace"
+    scope over the same bearer, so the accepted side needs trace_token
+    provisioned to equal the credential presented -- distinct static
+    trace_token/inference_token values leave chat's trace flag unreachable
+    without a bearer_verifier, which is covered by the raw authorize() tests
+    in tests/test_security_hardening.py.
+    """
+    denied_server, denied_thread, denied_port = _server_with_split_tokens()
+    try:
+        denied_status, denied_body = _post(
+            denied_port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace denied without trace_token"}],
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_INFERENCE_TOKEN,
+        )
+    finally:
+        denied_server.shutdown()
+        denied_thread.join(timeout=5)
+    assert denied_status == 401
+    assert denied_body["error"]["code"] == "unauthorized"
+
+    accepted_server, accepted_thread, accepted_port = _server_with_split_tokens(
+        trace_token=_TEST_INFERENCE_TOKEN
+    )
+    try:
+        accepted_status, accepted_body = _post(
+            accepted_port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace accepted with trace_token"}],
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_INFERENCE_TOKEN,
+        )
+    finally:
+        accepted_server.shutdown()
+        accepted_thread.join(timeout=5)
+    assert accepted_status == 200
+    assert "orchestration" in accepted_body
+
+
 def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
     server, thread, port = _server()
     try:
