@@ -91,11 +91,17 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   skips a currently cooled-down candidate for every caller by default, falling
   back to the full list only when every candidate is limited. The
   wait-then-retry/honest-429 decision is one shared method,
-  `TaskOrchestrator._await_rate_limit_recovery`: across two or more
-  candidates (a "storm" implies a pool of alternatives -- a single
-  pinned/named candidate keeps its pre-existing immediate classified-error
-  contract) it waits out the earliest cooldown -- one bounded wait, never a
-  busy-loop -- when it fits the request's administrator-owned
+  `TaskOrchestrator._await_rate_limit_recovery`: the discriminator is not
+  candidate count but whether the caller delegated model selection at all --
+  a virtual/gateway-selected model (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/
+  `FREE_MODEL`, or none) waits out the earliest cooldown even with only one
+  currently eligible candidate (a single-route free pool wiped to one
+  candidate by a 429 is real production evidence, not a hypothetical --
+  noema-review run 34772771262 on contextual-orchestrator#1177,
+  `ContextualWisdomLab/.github#2148`), while an explicit concrete model id
+  keeps its pre-existing immediate classified-error contract unconditionally.
+  Waiting is one bounded wait, never a busy-loop, applied when it fits the
+  request's administrator-owned
   `model_timeout_seconds` deadline or the `rate_limit_wait_seconds`
   caller-contract default, or raises an honest `429`/`provider_rate_limited`
   with a `Retry-After` header (never a `502` connection-failure

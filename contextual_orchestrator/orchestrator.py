@@ -4865,6 +4865,20 @@ class TaskOrchestrator:
             response_messages = _responses_to_chat_payload(body).get("messages", [])
             prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
+        # Selector nature for the rate-limit-storm admission decision below
+        # (see _await_rate_limit_recovery): a virtual/gateway-selected model
+        # name may wait out a storm even with a single eligible candidate;
+        # an explicit concrete model id must keep failing fast. The explicit
+        # single-candidate branch this same condition already gates further
+        # below returns before ever reaching the failover loop, so the loop
+        # itself always runs with virtual_selector True in practice -- this
+        # variable makes that fact explicit rather than re-derived silently.
+        virtual_selector = requested_model in {
+            None,
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         # When the client names a model, resolve a pool agent that actually serves
         # that model id (never silently rewrite to an unrelated agent.model --
         # a commercial honesty failure for OpenAI SDK passthrough tools/Responses
@@ -4938,12 +4952,7 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        if requested_model not in (
-            None,
-            self.GATEWAY_DEFAULT_MODEL,
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
-        ):
+        if not virtual_selector:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
@@ -5163,7 +5172,10 @@ class TaskOrchestrator:
             # candidate attempted this round failed for an unrelated reason
             # -- so fall through to normal failure reporting below.
             if not self._await_rate_limit_recovery(
-                candidates, deadline=wait_deadline, transport="passthrough"
+                candidates,
+                deadline=wait_deadline,
+                transport="passthrough",
+                virtual_selector=virtual_selector,
             ):
                 break
         if last_failure is not None and every_failure_was_request_too_large:
@@ -7608,6 +7620,15 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
+        # Selector nature threaded to _invoke_with_rate_limit_recovery: a
+        # virtual/gateway-selected model name may wait out a rate-limit
+        # storm even with a single eligible candidate; an explicit concrete
+        # model id must keep failing fast (see _await_rate_limit_recovery).
+        virtual_selector = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         requested = self._requested_agent(model_name)
         ranked_pool: list[ModelAgent] = (
             [requested] if requested is not None else []
@@ -7645,6 +7666,7 @@ class TaskOrchestrator:
                     text=text,
                     role="worker",
                     allowed_agent_ids=allowed_agent_ids,
+                    virtual_selector=virtual_selector,
                 )
             )
             extras = getattr(self, "_last_assistant_message", None)
@@ -7812,6 +7834,16 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
+        # Selector nature threaded to _invoke_with_rate_limit_recovery for
+        # every step: a virtual/gateway-selected model name may wait out a
+        # rate-limit storm even with a single eligible candidate; an
+        # explicit concrete model id must keep failing fast (see
+        # _await_rate_limit_recovery). Mirrors route_once's identical set.
+        virtual_selector = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
@@ -7917,6 +7949,7 @@ class TaskOrchestrator:
                     free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
+                virtual_selector=virtual_selector,
             )
             extras = self._last_assistant_message
             self._last_assistant_message = None
@@ -9637,6 +9670,7 @@ class TaskOrchestrator:
         *,
         deadline: float,
         transport: str = "passthrough",
+        virtual_selector: bool,
     ) -> bool:
         """Wait out a rate-limit storm across ``candidates``, or fail honestly.
 
@@ -9646,15 +9680,42 @@ class TaskOrchestrator:
         route_once/conduct) funnels through this one method instead of each
         re-deriving the earliest-ready/budget decision.
 
-        Returns ``False`` immediately when ``candidates`` has fewer than two
-        members, or when none of them is currently rate-limited -- there is
-        no pool to wait out a *storm* across (a "storm" implies coordinated
-        failure over multiple alternatives), so the caller's own (unrelated)
-        failure handling applies and a single pinned/named candidate keeps
-        its existing immediate classified-error contract exactly as before
-        this feature existed -- the client already sees ``retryable=true``
-        and can retry on its own with no server-side latency added. With two
-        or more candidates, computes the earliest known cooldown among the
+        The discriminator for whether there is anything to wait out is
+        **not** the candidate count -- it is whether the caller delegated
+        model selection to the gateway at all. ``virtual_selector`` carries
+        that: ``True`` when the request named a virtual/gateway-selected
+        model (``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``/``FREE_MODEL``, or no
+        model at all), ``False`` when the caller pinned one concrete model
+        id. An explicit concrete model (``virtual_selector=False``) returns
+        ``False`` immediately regardless of candidate count -- a single
+        pinned/named candidate keeps its pre-existing immediate
+        classified-error contract exactly as before this feature existed;
+        the client already sees ``retryable=true`` and can retry on its own
+        with no server-side latency added.
+        :func:`~contextual_orchestrator.provider_errors` /
+        ``tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error``
+        pins exactly this shape (one named concrete model, always 429, no
+        headers) and hangs past its client-side read timeout if this path
+        waits, so it must stay fast.
+
+        A virtual selector (``virtual_selector=True``) waits even when only
+        ONE candidate is currently eligible: production evidence
+        (noema-review run 34772771262 on contextual-orchestrator#1177,
+        preflight ``ready_count: 1``, failing after 562s with a 429 from
+        ``google/gemma-4-31b-it:free``; ``ContextualWisdomLab/.github#2148``,
+        which documents the private-target ZDR pool as three OpenRouter
+        ``:free`` routes on one account, so a single 429 can wipe the pool
+        down to one or zero eligible routes) shows a single-eligible-
+        candidate virtual pool is a real, common shape in production, not a
+        hypothetical -- the previous ``len(candidates) < 2`` guard treated
+        that shape identically to "nothing to wait for" and failed the
+        request immediately, which is the exact failure this feature exists
+        to remove.
+
+        Also returns ``False`` when none of ``candidates`` is currently
+        rate-limited -- there is no cooldown to wait out regardless of
+        selector kind, so the caller's own (unrelated) failure handling
+        applies. Otherwise, computes the earliest known cooldown among the
         currently rate-limited members and:
 
         * waits for it (one bounded, non-busy ``time.sleep``-backed call)
@@ -9667,7 +9728,7 @@ class TaskOrchestrator:
           (429, ``Retry-After``) instead of letting the caller fail as a
           generic connection error or opaque exhaustion.
         """
-        if len(candidates) < 2:
+        if not virtual_selector:
             return False
         now = time.monotonic()
         cooling = [
@@ -9705,6 +9766,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        virtual_selector: bool,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
 
@@ -9718,6 +9780,15 @@ class TaskOrchestrator:
         passthrough failover loop. A mixed failure set (some candidate is not
         rate-limited) re-raises exactly as :meth:`_invoke` would have,
         unchanged.
+
+        ``virtual_selector`` is the caller's own already-computed selector
+        nature (route_once/conduct: ``model_name in {GATEWAY_DEFAULT_MODEL,
+        AUTO_MODEL, FREE_MODEL}``), threaded straight through to
+        :meth:`_await_rate_limit_recovery` -- see its docstring for why the
+        wait admission decision turns on selector kind, not candidate count.
+        An explicit concrete model always re-raises immediately below,
+        regardless of how many failover candidates exist, preserving
+        ``_invoke``'s pre-existing exhaustion contract for a pinned model.
         """
         wait_deadline: float | None = None
         while True:
@@ -9751,23 +9822,25 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if (
-                    len(candidates) < 2
-                    or any(
-                        self._rate_limit_remaining(candidate.id) is None
-                        for candidate in candidates
-                    )
+                if not virtual_selector or any(
+                    self._rate_limit_remaining(candidate.id) is None
+                    for candidate in candidates
                 ):
-                    # Not a universal multi-candidate storm: a single pinned
-                    # candidate with no failover pool, or some eligible
-                    # candidate that is not rate-limited -- a genuine,
+                    # Not a genuine storm to wait out: either the caller
+                    # pinned one explicit concrete model (fail fast,
+                    # unchanged pre-existing contract -- see
+                    # _await_rate_limit_recovery's docstring), or some
+                    # eligible candidate is not rate-limited -- a genuine,
                     # unrelated exhaustion/failure. Preserve _invoke's own
                     # exhaustion contract exactly.
                     raise
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
                 if not self._await_rate_limit_recovery(
-                    candidates, deadline=wait_deadline, transport="chat"
+                    candidates,
+                    deadline=wait_deadline,
+                    transport="chat",
+                    virtual_selector=virtual_selector,
                 ):
                     # Defensive: _await_rate_limit_recovery agreed there was
                     # nothing to wait for after all. Never loop without

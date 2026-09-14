@@ -463,6 +463,26 @@ def _free_route_agents() -> list[ModelAgent]:
     ]
 
 
+def _single_free_agent() -> list[ModelAgent]:
+    """A pool with exactly ONE eligible candidate -- a single-route free pool.
+
+    Evidence this shape is real, not hypothetical: noema-review run
+    34772771262 on contextual-orchestrator#1177 reported preflight
+    ``ready_count: 1``; ContextualWisdomLab/.github#2148 records the
+    private-target ZDR pool as three OpenRouter ``:free`` routes on one
+    account, so a single 429 can wipe it down to exactly one eligible route.
+    """
+    return [
+        ModelAgent(
+            "solo_free_agent",
+            "solo-free-model",
+            priority=10,
+            provider_name="solo",
+            tags=("cost:free", "reasoning", "coding"),
+        ),
+    ]
+
+
 def _post_chat_completion(port: int, payload: dict[str, Any], token: str):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
     try:
@@ -707,4 +727,106 @@ def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
     assert synthesizer_step["output"] == "synthesizer output"
     assert chat_outcomes.calls.count("primary_agent") == 5
     assert chat_outcomes.calls.count("fallback_agent") == 1
+    orchestrator.close()
+
+
+# --------------------------------------------------------------------------
+# Explicit-vs-virtual selector, not candidate count: a virtual selector must
+# wait even with exactly ONE eligible candidate; an explicit concrete model
+# must still fail fast regardless of candidate count.
+# --------------------------------------------------------------------------
+
+
+def test_virtual_selector_single_candidate_storm_waits_and_serves() -> None:
+    """FREE_MODEL with exactly one eligible candidate still waits out a storm.
+
+    Regression coverage for the defect fixed in this entry:
+    ``_await_rate_limit_recovery`` used to open with
+    ``if len(candidates) < 2: return False``, so a single-eligible-candidate
+    virtual pool (the shape noema-review run 34772771262 hit on
+    contextual-orchestrator#1177, preflight ``ready_count: 1``) failed
+    immediately instead of waiting out the storm. Uses the codebase's
+    injectable ``_rate_limit_sleep`` seam so the assumed-cooldown wait is
+    fake, not a real multi-second sleep.
+    """
+    orchestrator = TaskOrchestrator(
+        _single_free_agent(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    slept: list[float] = []
+    orchestrator._rate_limit_sleep = slept.append
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "solo_free_agent": [
+                _rate_limited_upstream_error(1.0),
+                "served after wait",
+            ],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "served after wait"
+    assert chat_outcomes.calls.count("solo_free_agent") == 2
+    assert slept == [pytest.approx(1.0, abs=0.5)]
+    orchestrator.close()
+
+
+def test_virtual_selector_single_candidate_storm_without_budget_raises_honest_429() -> None:
+    """Same single-candidate virtual case with no wait budget: honest 429, not a generic failure."""
+    orchestrator = TaskOrchestrator(
+        _single_free_agent(), tool_retry_attempts=0, rate_limit_wait_seconds=0.0
+    )
+    orchestrator._rate_limit_sleep = lambda seconds: pytest.fail(
+        "must not sleep when the budget cannot cover the cooldown"
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {"solo_free_agent": [_rate_limited_upstream_error(9.0)]}
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert excinfo.value.error_code == PROVIDER_RATE_LIMITED_CODE
+    assert excinfo.value.client_status == 429
+    assert excinfo.value.retryable is True
+    assert excinfo.value.extra_detail["retry_after_seconds"] == pytest.approx(9.0, abs=0.5)
+    orchestrator.close()
+
+
+def test_explicit_concrete_model_single_candidate_storm_fails_fast_without_waiting() -> None:
+    """An explicit concrete model with one always-429 candidate fails fast, unchanged.
+
+    This is the pre-existing contract
+    ``tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error``
+    pins: a pinned model must never wait out an assumed cooldown, regardless
+    of the (irrelevant, now that selector kind is the discriminator)
+    candidate count.
+    """
+    orchestrator = TaskOrchestrator(
+        _single_free_agent(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    orchestrator._rate_limit_sleep = lambda seconds: pytest.fail(
+        "must not sleep for an explicit concrete model -- fail fast unchanged"
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {"solo_free_agent": [_rate_limited_upstream_error(1.0)]}
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name="solo-free-model",
+        )
+
+    assert excinfo.value.provider_status == 429
+    assert chat_outcomes.calls.count("solo_free_agent") == 1
     orchestrator.close()

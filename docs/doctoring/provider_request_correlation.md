@@ -193,13 +193,19 @@ inherent quota-recovery semantics, and extending the assumption to it made
 several pre-existing exhaustion tests loop through repeated assumed waits
 before finally raising the wrong (storm) error identity for what was actually
 a permanent, unrelated failure -- concrete regression evidence, not a
-guess. Also added: `_await_rate_limit_recovery` only ever waits when there
-are two or more candidates to fail over across (a "storm" implies a pool of
-alternatives); a single pinned/named candidate with no failover pool keeps
-its pre-existing immediate classified-error contract unchanged -- confirmed
-against `tests/test_provider_error_taxonomy.py`'s single-candidate
-`rate_limit_exceeded` contract, which this same-shaped defect (before this
-guard existed) made hang past its 5s client timeout.
+guess. Also added: `_await_rate_limit_recovery` waits only for a virtual/
+gateway-selected model (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/`FREE_MODEL`, or
+none) -- confirmed against `tests/test_provider_error_taxonomy.py`'s
+single-candidate, explicit-concrete-model `rate_limit_exceeded` contract,
+which this same-shaped defect (before this guard existed) made hang past its
+5s client timeout. An earlier version of this guard keyed off candidate
+count instead (fewer than two candidates meant "nothing to wait for"), but
+that misclassified a virtual selector's pool wiped down to exactly one
+eligible candidate by a 429 -- a real, common production shape, corrected in
+the "explicit-vs-virtual selector" follow-up below -- identically to a
+genuinely pinned concrete model, and failed the request immediately instead
+of waiting. The discriminator is now whether the caller delegated selection
+at all, not how many candidates happen to remain.
 
 Tests added to `tests/test_rate_limit_aware_admission.py`: a
 no-Retry-After/no-header 429 storm across two candidates still waits the
@@ -213,3 +219,39 @@ pre-existing tests in `tests/test_passthrough_provider_failover.py`
 purely incidentally (to represent "some transient failover-eligible
 failure", not to test rate-limiting itself) and were switched to 500 to keep
 that intent isolated from this feature.
+
+### Follow-up: explicit-vs-virtual selector, not candidate count (2026-09-14)
+
+The "two or more candidates" guard above was itself a defect, not just a
+narrow scope choice: `_await_rate_limit_recovery` opened with
+`if len(candidates) < 2: return False`, so a pool with exactly one eligible
+candidate never waited out a storm -- it failed immediately, which is the
+behavior this whole feature exists to remove. Production evidence this case
+is real and common: noema-review run 34772771262 (sidecar pin `767e67fb`) on
+contextual-orchestrator#1177 reported preflight `ready_count: 1`, and the
+review call then failed after 562s with `HTTP Error 429` served by
+`google/gemma-4-31b-it:free`; `ContextualWisdomLab/.github#2148` records that
+the private-target ZDR pool is three OpenRouter `:free` routes on a single
+account, so one 429 wipes the whole pool down to at most one eligible route.
+
+The guard existed for a good reason that had to be preserved:
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+pins one named concrete model that always answers 429 with no headers; under
+an assumed-cooldown-always-waits path that request hangs past its
+client-side read timeout. The correct discriminator was never the candidate
+count -- it is whether the caller delegated selection at all: an explicit
+concrete model must fail fast with the honest 429 (unchanged), while a
+virtual selector (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/`FREE_MODEL`, or no
+model) must wait even when only one candidate remains.
+
+Fixed: `_await_rate_limit_recovery` gained a keyword-only `virtual_selector`
+parameter that both `proxy_completion`'s passthrough loop and
+`_invoke_with_rate_limit_recovery` (in turn threaded from `route_once`'s and
+`conduct`'s own `model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL,
+FREE_MODEL}` check) compute once and pass through, replacing the
+`len(candidates) < 2` guard. Tests added to
+`tests/test_rate_limit_aware_admission.py` cover a virtual selector with
+exactly one eligible candidate that 429s with `Retry-After: 1` then succeeds
+on retry (waits once, served), the same shape with no budget (honest 429),
+and an explicit concrete model with a single always-429 candidate (fails
+fast, no wait).

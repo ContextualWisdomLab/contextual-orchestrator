@@ -31,7 +31,24 @@ feature did not exist; every cooldown surface labels itself
 `cooldown_source: "provider"` or `"assumed"` accordingly, and a provider-stated
 cooldown is never shortened or relabeled by a later assumed one. This
 assumption applies to 429 only (a 503 with no header keeps requiring a real
-provider-stated duration) and only across two or more candidates (a single
-pinned/named candidate keeps its pre-existing immediate classified-error
-contract unchanged) -- both scoped narrowly after concrete pre-existing-test
+provider-stated duration) -- scoped narrowly after concrete pre-existing-test
 regression evidence, not by design intent alone.
+
+The wait admission decision no longer turns on candidate count. An earlier
+version of this guard returned immediately whenever fewer than two
+candidates were eligible, which misclassified a virtual selector's pool
+wiped down to exactly one eligible candidate by a 429 -- a real production
+shape (noema-review run 34772771262 on `contextual-orchestrator#1177`,
+preflight `ready_count: 1`, failing after 562s; `ContextualWisdomLab/.github#2148`
+documents a three-route OpenRouter `:free` ZDR pool that a single 429 can
+wipe to one route) -- identically to a genuinely pinned concrete model, and
+failed the request immediately instead of waiting. The discriminator is now
+whether the caller delegated model selection at all:
+`_await_rate_limit_recovery` and `_invoke_with_rate_limit_recovery` take a
+`virtual_selector` flag (computed once by each caller from the same
+`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/`FREE_MODEL` constants used elsewhere in
+the file); a virtual selector waits out a storm even with a single eligible
+candidate, while an explicit concrete model id keeps failing fast
+unconditionally, regardless of how many failover candidates exist --
+preserving the `tests/test_provider_error_taxonomy.py` single-candidate,
+no-header 429 contract that must never wait.
