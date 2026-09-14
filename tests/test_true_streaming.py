@@ -12,7 +12,10 @@ import json
 from pathlib import Path
 import sys
 import threading
+import types
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -55,6 +58,8 @@ class _FakeSSEProvider:
 
     def __exit__(self, *exc: object) -> None:
         self._server.shutdown()
+        self._server.server_close()
+        self._thread.join()
 
     @property
     def base_url(self) -> str:
@@ -92,6 +97,8 @@ class _CapturingSSEProvider:
     def __exit__(self, *exc: object) -> None:
         del exc
         self._server.shutdown()
+        self._server.server_close()
+        self._thread.join()
 
     @property
     def base_url(self) -> str:
@@ -258,6 +265,7 @@ def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
             second = post()
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     first_frames = [frame for frame in first.split("\n\n") if frame]
@@ -297,6 +305,57 @@ def test_stream_send_records_response_model_and_finish_reason(monkeypatch) -> No
 
     assert captured[-1]["gen_ai.response.model"] == "served-model"
     assert captured[-1]["gen_ai.response.finish_reasons"] == ["stop"]
+
+
+def test_stream_send_enforces_one_deadline_across_chunks(monkeypatch) -> None:
+    """A finite model policy bounds the whole stream, not only connection setup."""
+    socket_timeouts: list[float] = []
+
+    class Response:
+        fp = types.SimpleNamespace(
+            raw=types.SimpleNamespace(
+                _sock=types.SimpleNamespace(settimeout=socket_timeouts.append)
+            )
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            del exc
+
+        def __iter__(self):
+            return iter([_delta("first").encode(), _delta("too late").encode()])
+
+    client = ModelClient()
+    opened_with: list[float | None] = []
+
+    def open_provider(request, destination, agent, timeout=None):
+        del request, destination, agent
+        opened_with.append(timeout)
+        return Response()
+
+    monotonic_values = iter([8.0, 9.0, 9.5, 10.0])
+    monkeypatch.setattr(client, "_open_model_provider", open_provider)
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+    agent = ModelAgent("worker_agent", "gpt-x", base_url="https://provider.example/v1")
+
+    iterator = client._stream_send(
+        agent,
+        {"model": agent.model, "stream": True},
+        deadline=10.0,
+    )
+    assert next(iterator) == "first"
+    with pytest.raises(ProviderUpstreamError) as caught:
+        next(iterator)
+
+    assert opened_with == [pytest.approx(1.0)]
+    assert socket_timeouts == [pytest.approx(0.5)]
+    assert caught.value.error_code == "model_timeout"
+    assert caught.value.retryable is False
 
 
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
@@ -345,6 +404,7 @@ def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
             raise AssertionError("a failed stream must raise a package-owned error")
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_stream_chat_mock_yields_chunks() -> None:
@@ -489,6 +549,7 @@ def test_http_route_stream_pipes_live_deltas() -> None:
         _, ref = post({"model": "m-model", "messages": [{"role": "user", "content": "stream this"}], "mode": "route"})
     finally:
         server.shutdown()
+        server.server_close()
 
     assert content_type.startswith("text/event-stream")
     assert sse.endswith("data: [DONE]\n\n")

@@ -55,9 +55,10 @@ def _body_http_error(code: int, payload: dict) -> urllib.error.HTTPError:
 
 
 def test_reclassification_preserves_failure_and_updates_boundary_transport() -> None:
-    original = classify_provider_failure(
-        _http_error(404), agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
-    )
+    with _http_error(404) as response_error:
+        original = classify_provider_failure(
+            response_error, agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
+        )
     classified = classify_provider_failure(
         original,
         agent_id="synthetic-agent",
@@ -72,24 +73,28 @@ def test_reclassification_preserves_failure_and_updates_boundary_transport() -> 
 
 def test_safe_message_prefers_nested_provider_error_fields() -> None:
     """``error.message`` / ``error.code`` / top-level fields are the only pass-through."""
-    nested = safe_provider_message(_body_http_error(400, {"error": {"message": "max_tokens too large"}}))
+    with _body_http_error(400, {"error": {"message": "max_tokens too large"}}) as response_error:
+        nested = safe_provider_message(response_error)
     assert nested == "max_tokens too large"
-    coded = safe_provider_message(_body_http_error(400, {"error": {"code": "context_length_exceeded"}}))
+    with _body_http_error(400, {"error": {"code": "context_length_exceeded"}}) as response_error:
+        coded = safe_provider_message(response_error)
     assert coded == "context_length_exceeded"
-    plain_string = safe_provider_message(_body_http_error(400, {"error": "invalid api key"}))
+    with _body_http_error(400, {"error": "invalid api key"}) as response_error:
+        plain_string = safe_provider_message(response_error)
     assert plain_string is None
-    top_level = safe_provider_message(_body_http_error(429, {"message": "rate limit reached"}))
+    with _body_http_error(429, {"message": "rate limit reached"}) as response_error:
+        top_level = safe_provider_message(response_error)
     assert top_level == "rate limit reached"
-    detail = safe_provider_message(_body_http_error(422, {"detail": "validation failed"}))
+    with _body_http_error(422, {"detail": "validation failed"}) as response_error:
+        detail = safe_provider_message(response_error)
     assert detail == "validation failed"
 
 
 def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> None:
     """Schema field names are useful; field values and request bodies remain private."""
     actionable = "'messages' must contain the word 'json' to use json_object"
-    assert safe_provider_message(
-        _body_http_error(400, {"error": {"message": actionable}})
-    ) == "messages must mention json when response_format is json_object"
+    with _body_http_error(400, {"error": {"message": actionable}}) as response_error:
+        assert safe_provider_message(response_error) == "messages must mention json when response_format is json_object"
     for diagnostic in (
         "messages=[{'role':'user','content':'customer secret'}]",
         '"messages": [{"role":"user","content":"customer secret"}]',
@@ -97,22 +102,21 @@ def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> 
         "prompt=customer secret",
         "input: customer secret",
     ):
-        assert safe_provider_message(
-            _body_http_error(400, {"error": {"message": diagnostic}})
-        ) is None
+        with _body_http_error(400, {"error": {"message": diagnostic}}) as response_error:
+            assert safe_provider_message(response_error) is None
 
-    assert safe_provider_message(
-        _body_http_error(
-            400,
-            {"error": {"message": "messages rejected; customer-private-text"}},
-        )
-    ) is None
+    with _body_http_error(
+        400, {"error": {"message": "messages rejected; customer-private-text"}}
+    ) as response_error:
+        assert safe_provider_message(response_error) is None
 
 
 def test_safe_message_hides_unparseable_bodies_and_urls() -> None:
     """Non-JSON bodies return None so URLs/reasons never leak through fallback text."""
-    assert safe_provider_message(_http_error(500, b"upstream-secret http://10.0.0.9/internal")) is None
-    assert safe_provider_message(_http_error(502)) is None
+    with _http_error(500, b"upstream-secret http://10.0.0.9/internal") as response_error:
+        assert safe_provider_message(response_error) is None
+    with _http_error(502) as response_error:
+        assert safe_provider_message(response_error) is None
 
 
 def test_safe_message_reads_only_a_bounded_provider_body() -> None:
@@ -129,8 +133,9 @@ def test_safe_message_reads_only_a_bounded_provider_body() -> None:
     error = urllib.error.HTTPError(
         "https://provider.example/chat/completions", 500, "error", None, body
     )
-    assert safe_provider_message(error) is None
-    assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
+    with error:
+        assert safe_provider_message(error) is None
+        assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
 
 
 def test_transient_classification_survives_a_stalled_error_body_read() -> None:
@@ -154,27 +159,29 @@ def test_transient_classification_survives_a_stalled_error_body_read() -> None:
         "https://provider.example/v1/models", 500, "error", None, StallingBody(b"")
     )
 
-    assert is_transient_error(error) is True
-    assert safe_provider_message(error) is None
+    with error:
+        assert is_transient_error(error) is True
+        assert safe_provider_message(error) is None
 
 
 def test_safe_message_reuses_body_after_retryability_inspection() -> None:
     """Tool-stop and caller-safe classification share one bounded body read."""
     error = _body_http_error(401, {"error": {"message": "invalid credential"}})
 
-    assert is_transient_error(error) is False
-    assert safe_provider_message(error) == "invalid credential"
+    with error:
+        assert is_transient_error(error) is False
+        assert safe_provider_message(error) == "invalid credential"
 
 
 def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
     """Control characters cannot smuggle log or header content; length is bounded."""
-    long = safe_provider_message(
-        _body_http_error(400, {"error": {"message": "x" * 500}})
-    )
+    with _body_http_error(400, {"error": {"message": "x" * 500}}) as response_error:
+        long = safe_provider_message(response_error)
     assert long is not None
     assert len(long) == MAX_SAFE_MESSAGE_CHARS
     raw = "line1\nline2\ttabbed\x00nul\x7fdel\x85next"
-    collapsed = safe_provider_message(_body_http_error(400, {"error": {"message": raw}}))
+    with _body_http_error(400, {"error": {"message": raw}}) as response_error:
+        collapsed = safe_provider_message(response_error)
     assert collapsed is not None
     assert all(control not in collapsed for control in ("\n", "\x00", "\x7f", "\x85"))
     assert "\t" in collapsed  # tab is preserved for readability
@@ -210,7 +217,8 @@ def test_classification_maps_every_upstream_status_to_openai_surface() -> None:
     }
     for status, surface in expected.items():
         assert PROVIDER_STATUS_SURFACES[status] == surface, f"status {status}"
-        classified = classify_provider_failure(_http_error(status), agent_id="a", model="m")
+        with _http_error(status) as response_error:
+            classified = classify_provider_failure(response_error, agent_id="a", model="m")
         assert isinstance(classified, ProviderUpstreamError)
         assert classified.client_status == surface[0], f"status {status}"
         assert classified.error_code == surface[1], f"status {status}"
@@ -253,7 +261,8 @@ def test_classification_handles_network_tls_and_unknown_causes() -> None:
     handshake = ssl.SSLError("handshake eof")
     assert classify_provider_failure(handshake, agent_id="a", model="m").retryable
 
-    unmapped = classify_provider_failure(_http_error(418), agent_id="a", model="m")
+    with _http_error(418) as response_error:
+        unmapped = classify_provider_failure(response_error, agent_id="a", model="m")
     assert unmapped.error_code == "api_error"
     assert not unmapped.retryable
 
@@ -316,6 +325,7 @@ def test_binary_passthrough_classifies_provider_transport_failure() -> None:
             assert raised.client_status == 503
             assert raised.provider_status == 503
             assert raised.transport == "passthrough"
+            assert upstream.closed, "binary transport must close its classified HTTP response"
         else:  # pragma: no cover
             raise AssertionError("binary provider failure must be classified")
 
@@ -376,9 +386,10 @@ def test_batch_raw_rejects_oversized_provider_body() -> None:
 
 def test_detail_and_transport_are_preserved_for_callers() -> None:
     """The structured detail names agent/model/status/retryability/transport."""
-    classified = classify_provider_failure(
-        _http_error(429), agent_id="worker_agent", model="gpt-x", transport="passthrough"
-    )
+    with _http_error(429) as response_error:
+        classified = classify_provider_failure(
+            response_error, agent_id="worker_agent", model="gpt-x", transport="passthrough"
+        )
     assert classified.detail == {
         "agent_id": "worker_agent",
         "model": "gpt-x",
@@ -430,13 +441,17 @@ def test_passthrough_retry_layer_surfaces_model_not_found_without_retry() -> Non
     """A 404 on passthrough fails immediately as model_not_found."""
     client = _StatusFailureClient(404)
     agent = ModelAgent("proxy_agent", "missing-model", base_url="https://provider.example/v1")
-    with patch.object(client, "_validate_provider", lambda unused: None):
+    upstream = _http_error(404)
+    with patch.object(client, "_validate_provider", lambda unused: None), patch.object(
+        client, "_send_raw", side_effect=upstream
+    ) as send_raw:
         try:
             client._send_raw_with_retry(agent, "responses", {})
         except ProviderUpstreamError as exc:
             assert exc.error_code == "model_not_found"
             assert exc.transport == "passthrough"
-            assert client.attempts == 1  # caller errors are never retried
+            assert send_raw.call_count == 1  # caller errors are never retried
+            assert upstream.closed, "raw transport must close its classified HTTP response"
         else:  # pragma: no cover
             raise AssertionError("classified failure must propagate")
 
@@ -450,7 +465,8 @@ def test_invoke_preserves_final_classified_failure_across_candidates() -> None:
     """
 
     def _rate_limited(agent: ModelAgent) -> ProviderUpstreamError:
-        return classify_provider_failure(_http_error(429), agent_id=agent.id, model=agent.model)
+        with _http_error(429) as response_error:
+            return classify_provider_failure(response_error, agent_id=agent.id, model=agent.model)
 
     class RateLimited(ModelClient):
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
@@ -483,9 +499,10 @@ def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> 
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
             self.calls.append(agent.id)
             if agent.id == "primary_worker":
-                raise classify_provider_failure(
-                    _http_error(401), agent_id=agent.id, model=agent.model
-                )
+                with _http_error(401) as response_error:
+                    raise classify_provider_failure(
+                        response_error, agent_id=agent.id, model=agent.model
+                    )
             return "backup answer"
 
     client = AuthThenBackup()
@@ -510,7 +527,8 @@ class _UpstreamDown(ModelClient):
     """Chat client whose provider always answers 429, classified as the real layer does."""
 
     def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
-        raise classify_provider_failure(_http_error(429), agent_id=agent.id, model=agent.model)
+        with _http_error(429) as response_error:
+            raise classify_provider_failure(response_error, agent_id=agent.id, model=agent.model)
 
 
 def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
@@ -524,7 +542,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
@@ -545,6 +564,7 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 429
     error = body["error"]
@@ -588,9 +608,9 @@ def test_safe_message_discards_sensitive_provider_diagnostics() -> None:
         "token=abc123456789012345",
     )
     for diagnostic in diagnostics:
-        error = _body_http_error(400, {"error": {"message": diagnostic}})
-        assert safe_provider_message(error) is None
-        classified = classify_provider_failure(error, agent_id="a", model="m")
+        with _body_http_error(400, {"error": {"message": diagnostic}}) as error:
+            assert safe_provider_message(error) is None
+            classified = classify_provider_failure(error, agent_id="a", model="m")
         assert diagnostic not in str(classified)
         assert str(classified) == "provider rejected the request with HTTP 400"
 
