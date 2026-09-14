@@ -8,6 +8,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import inspect
 import ipaddress
 import json
 import logging
@@ -8797,10 +8798,34 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_shared_context_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
+
+            def capture_shared_context_budget(
+                budget: dict[str, Any] | None,
+            ) -> None:
+                nonlocal stream_shared_context_budget
+                stream_shared_context_budget = budget
+
+            # Duck-typed like the rest of this module's optional-capability
+            # checks (e.g. `hasattr(self.client, "take_usage")`): a minimal
+            # test double's `stream_route` may not accept this parameter, so
+            # only pass it when the real signature (or a **kwargs catch-all)
+            # supports it.
+            try:
+                stream_route_params = inspect.signature(orchestrator.stream_route).parameters
+            except (TypeError, ValueError):
+                stream_route_params = {}
+            supports_shared_context_budget_callback = (
+                "shared_context_budget_callback" in stream_route_params
+                or any(
+                    param.kind is inspect.Parameter.VAR_KEYWORD
+                    for param in stream_route_params.values()
+                )
+            )
 
             def frame(
                 delta: dict[str, Any],
@@ -8854,14 +8879,30 @@ def build_server(
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
+                    if supports_shared_context_budget_callback:
+                        stream_kwargs["shared_context_budget_callback"] = (
+                            capture_shared_context_budget
+                        )
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
+                    # The served request's evidence is captured above, inside
+                    # stream_route, before its post-stream real-time judge
+                    # call re-enters ModelClient and can overwrite the
+                    # thread-local accessor (issue #1157 follow-up ordering
+                    # hazard). Only fall back to the post-hoc thread-local
+                    # read for a minimal test double whose stream_route does
+                    # not support the callback.
+                    terminal_shared_context_budget = (
+                        stream_shared_context_budget
+                        if supports_shared_context_budget_callback
+                        else _take_shared_context_budget(orchestrator)
+                    )
                     if not self._write_sse(
                         frame(
                             {},
                             finish="stop",
-                            shared_context_budget=_take_shared_context_budget(orchestrator),
+                            shared_context_budget=terminal_shared_context_budget,
                         )
                     ):
                         return

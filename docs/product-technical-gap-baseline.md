@@ -3141,3 +3141,57 @@ tests pass (`tests/test_true_streaming.py`, `tests/test_output_budget_model_max.
 reports 100%, and the full `tests/` run (3723 passed, 2 skipped) is green
 apart from the same five pre-existing, unrelated local-only `openai` SDK
 2.54.0-pin and `mcp.Client` failures tracked elsewhere in this document.
+
+### Streaming terminal-frame shared-context evidence ordering hazard — fixed
+
+Review of the streaming follow-up above found an ordering hazard it did not
+account for: `TaskOrchestrator.stream_route`'s post-stream real-time judge
+(`policy.realtime_judge`, on by default; see its "Real-time judging after the
+stream" comment) issues its own provider call on the same thread — through
+`_model_judge_verification` -> `_FastMLSIJudgeAdapter.complete()` ->
+`ModelClient.chat()` — and `chat()` unconditionally clears, and can
+repopulate with *its own* evidence, the thread-local shared-context-budget
+accessor at entry. `server._stream_route_completion` read that accessor via
+`server._take_shared_context_budget()` only after `stream_route` had already
+returned, i.e. after the judge's own call had run and potentially overwritten
+it — so the terminal SSE frame could carry the judge's `shared_context_budget`
+evidence, or none at all, instead of the served request's. This is the same
+dishonest-evidence failure mode this document's honest-metrics principle
+forbids, just on the streaming success path rather than the accounting
+surfaces this document otherwise tracks.
+
+Fixed by capturing the served request's evidence *inside* `stream_route`,
+immediately next to the pre-existing `take_usage()` call and before the judge
+runs, following the exact pattern already proven for usage: a new optional
+`shared_context_budget_callback` parameter (mirroring `usage_callback`'s
+shape) hands the caller the evidence at that point. `server
+._stream_route_completion` now passes this callback — guarded by an
+`inspect.signature`-based duck-typing check so a minimal test double whose
+`stream_route` does not accept the parameter still works, falling back to the
+old post-hoc `_take_shared_context_budget()` read only in that case — and
+uses the captured value for the terminal frame. The non-streaming response
+path's `_take_shared_context_budget()` call is unchanged: it already reads
+before any judge call runs and was never affected by this hazard.
+
+`prompt_count_source` was audited for the identical hazard and confirmed
+safe, not just assumed so: `server._prompt_count_source(orchestrator,
+messages, model_name)` derives its answer purely from the request's own
+`messages`/`model_name` via the counting-provenance registry, never from any
+`ModelClient` thread-local state, and — unlike `shared_context_budget` — it
+is not even emitted on the streaming path today, so there is nothing on that
+path for a second call to clobber.
+
+New regression coverage:
+`tests/test_true_streaming.py::test_http_route_stream_terminal_frame_survives_realtime_judge_second_call`
+installs a working (not neutralized) fast-mlsirm judge whose `.judge()` makes
+a real second provider call through the adapter, and asserts the terminal
+frame still carries the served request's `shared_context_budget`
+(`prompt_tokens`/`output_ceiling`), not the judge's. Verified to fail against
+the pre-fix code — the terminal frame carried the judge's own
+`prompt_tokens`/`output_ceiling` instead of the served request's — before the
+fix landed. Local evidence: `tests/test_true_streaming.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`,
+`tests/test_token_counting_boundaries.py`, `tests/test_api_contract.py`, and
+`tests/test_self_check.py` all pass, and `python -m interrogate -v
+contextual_orchestrator/` reports 100%.

@@ -6321,6 +6321,7 @@ class TaskOrchestrator:
         owner_id: str | None = None,
         include_usage: bool = False,
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
+        shared_context_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
         """Stream Fugu-route content deltas, then persist the run.
 
@@ -6436,6 +6437,21 @@ class TaskOrchestrator:
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
             usage_callback(usage)
+        # Captured here -- immediately next to take_usage() and before the
+        # real-time judge call below -- for the same reason usage is: the
+        # judge issues its own provider call on this thread (fast-mlsirm's
+        # adapter re-enters ModelClient.chat()), which unconditionally resets
+        # and can repopulate the thread-local shared-context evidence before
+        # a post-hoc reader would get to it. Reading post-judge would hand
+        # the caller the JUDGE's evidence (or none) instead of this served
+        # request's (issue #1157 follow-up ordering hazard).
+        if shared_context_budget_callback is not None:
+            take_shared_context_budget = getattr(
+                self.client, "take_shared_context_budget", None
+            )
+            shared_context_budget_callback(
+                take_shared_context_budget() if take_shared_context_budget is not None else None
+            )
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         self._record_success(agent.id)
