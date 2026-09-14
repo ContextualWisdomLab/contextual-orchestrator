@@ -194,3 +194,25 @@ Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof
 boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
+
+## Pushing to an open PR while required checks are backlogged
+
+Batch follow-up commits and push once when the required checks are not
+draining. Every push to an open pull request cancels that branch's in-flight
+runs, and while the verdict queue is backed up an intermediate head cannot
+merge anyway, so the cancelled runner time is taken from work that *could*
+have merged.
+
+This is measured, not assumed. On 2026-09-14T19:12Z, 50 of this repository's
+last 100 completed workflow runs were cancelled, and 27 of those 50 belonged
+to one open (non-draft) pull request whose head moved four times in about
+three hours while no verdict could be issued.
+
+Drafts are already handled: `.github/workflows/security.yml` gates its jobs on
+`github.event.pull_request.draft == false`, so a draft head that moves
+repeatedly does not consume the gate. This rule covers the other half — an
+open, review-ready pull request iterating faster than the queue drains.
+
+Push immediately, without batching, when the change is a fix for a failing
+required check, a conflict resolution that unblocks a merge, or anything a
+reviewer is actively waiting on.
