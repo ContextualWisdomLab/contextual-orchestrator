@@ -6383,7 +6383,7 @@ class TaskOrchestrator:
         if isinstance(usage, dict):
             trace_step["usage"] = usage
         trace_step["selection_design"] = self._selection_design_receipt(
-            ranked_pool, [agent], agent
+            candidates, [agent], agent
         )
         record = self._with_execution_snapshot(
             {
