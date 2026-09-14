@@ -1,5 +1,18 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Trace HTTP fixture successor — Proposed
+
+Candidate `e88562187b7ab3bf681b306ab98d2ca821ae82ed`, based on #1140
+`38c0603a`, repairs client error-body and listener ownership in the trace HTTP
+tests without changing production authorization or routing. Targeted strict
+checks pass (31 trace cases; 126 related cases), and the full default suite
+passes 3670 tests with 2 skipped. Full strict remains RED: 1173 failed,
+2494 passed, 2 skipped, 13 errors. All process exits were observed.
+This closes a test-validation gap, not an observed customer accuracy or latency
+gap. Required review, full strict remediation and protected delivery remain.
+Ownership, RED evidence, independent review and exact-head logs are in the
+[HTTP resource runbook](doctoring/http_test_resource_lifecycle.md#trace-http-fixture-successor-2026-09-13).
+
 ## 2026-09-13 Response lifecycle repair candidate
 
 Final frozen validation candidate `345ee6b2` passed 275 focused strict tests and
