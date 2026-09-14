@@ -123,3 +123,44 @@ if __name__ == "__main__":  # pragma: no cover
     test_conductor_contract_uses_access_lists_to_control_context()
     test_adr_records_include_verified_paper_and_standard_references()
     print("ok")
+
+
+def test_generated_plan_bound_comes_from_policy() -> None:
+    """The generated-plan step bound is one policy value, not a paper constant.
+
+    ``OrchestrationPolicy.max_workflow_steps`` (default 6, a product decision
+    recorded next to the field) must drive both the planner prompt and the
+    plan parser, and must not be the Fugu-Ultra report's training-time
+    "up to 5 steps" (arXiv:2606.21228 S3.2.3) copied into this layer.
+    """
+    import json
+    from dataclasses import replace
+
+    from contextual_orchestrator.orchestrator import OrchestrationPolicy
+
+    assert OrchestrationPolicy().max_workflow_steps == 6
+
+    client = RecordingClient()
+    orchestrator = build(client)
+    orchestrator.policy = replace(orchestrator.policy, max_workflow_steps=3)
+
+    steps = [
+        {"id": index, "role": role, "agent_id": agent_id, "subtask": f"step {index}", "access": []}
+        for index, (role, agent_id) in enumerate(
+            [("thinker", "planner_agent"), ("worker", "builder_agent"), ("verifier", "reviewer_agent"), ("synthesizer", "planner_agent")]
+        )
+    ]
+    try:
+        orchestrator._parse_workflow_plan(json.dumps({"steps": steps}))
+    except ValueError as exc:
+        assert "2..3 steps" in str(exc)
+    else:
+        raise AssertionError("a four-step plan must be rejected under a three-step policy")
+
+    try:
+        orchestrator._plan_generated("summarize the release notes")
+    except Exception:  # noqa: BLE001 - the mock planner answer is not a plan; only the prompt matters here
+        pass
+    planner_messages = client.calls[0][1]
+    system_prompt = next(message["content"] for message in planner_messages if message["role"] == "system")
+    assert "2 to 3 steps" in system_prompt
