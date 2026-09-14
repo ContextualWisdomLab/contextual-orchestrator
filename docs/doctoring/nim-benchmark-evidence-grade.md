@@ -1,5 +1,57 @@
 # Evidence-grade NVIDIA NIM benchmark: engineering decision record
 
+## Current-parent restack, 2026-09-13 — Proposed
+
+Normal merge `708fbb19733f1829ca3baddab68e4c0fdbcbe7a5` preserves #1090
+`5e952933d4dd97057ba76b70ea17983314a4babe` and #1074
+`2157d702c4609cc51829d7423911cadf26cf83d0`. Fetch and ls-remote confirmed
+both branch heads before integration. No competing local branch checkout or
+active subagent writer was found. The only conflict was this stack's Gap
+baseline: both sections were retained line for line, adding 20 lines with no
+removed lines. Bootstrap source, its tests and workflow remain byte-identical
+to the previous #1090 head.
+
+PR metadata reported historical base `9f5d0ce2`; a clean merge-tree against
+that base did not establish readiness against the actual target `2157d702`.
+The inherited parent intentionally removes the IRT-Router PDF in `84a60523`
+and preserves its citation/link and unresolved embedded-rights explanation.
+This restack retains that existing decision; it does not introduce a new
+content deletion or restore the removed copy. Git history retains the file.
+
+Using the shared Python 3.14 interpreter from the primary checkout, run
+`-m pytest` on `tests/test_nim_benchmark.py`,
+`tests/test_nim_benchmark_release_acceptance.py`,
+`tests/test_nim_benchmark_workflow_contract.py`, `tests/test_paper_contracts.py`
+and `tests/test_reasoning_effort_profile.py` with `-q -W error`.
+At merge `708fbb19`, this completed with **235 passed, 3 failed in 9.66s**,
+exit 1; log `/tmp/co-bootstrap-restack-708fbb19.log`.
+
+Two benchmark cases report HTTPError 500/503 cleanup warnings. Both fail
+independently on parent `2157d702` (2 failed, 1.36s, exit 1;
+`/tmp/co-bootstrap-parent-resource-2157d702.log`). The reported profile
+validation case passes alone on `708fbb19` (1 passed, 0.68s, exit 0;
+`/tmp/co-bootstrap-effort-isolated-708fbb19.log`), supporting delayed cleanup
+attribution rather than proving a profile defect. No warnings are suppressed.
+Resource ownership repair remains open; these probes do not establish every
+failure's cause. No full suite, hosted acceptance, approval, release or
+customer KPI improvement follows. Later documentation heads must not relabel
+these tests as executed at that later revision.
+
+An additional read-only probe at documentation head
+`2f24036317b7ff326523d63263c60b7f7bf92584` retains a BytesIO-backed
+HTTPError 503, passes it through `run_policy_cell`, and checks closure before
+the probe's fallback cleanup. The returned classification is
+`provider_http_error:503` and the raw score remains null, but `error.closed`
+is false: the closure assertion fails, exit 1. Thus this consumer defect is
+directly observed, not merely inferred from garbage-collection warnings.
+Reproduce from the checkout with the shared interpreter:
+`-c 'import runpy; runpy.run_path("/tmp/co-nim-response-ownership-probe.py", run_name="__main__")'`.
+The standalone probe and log `/tmp/co-nim-response-ownership-2f240363.log`
+are local audit artifacts, not portable committed tests or customer data.
+Repair must close only consumed HTTP errors while retaining the original
+failure outcome if cleanup itself fails; propagated errors keep caller
+ownership. No such source repair is included in this restack.
+
 ## Decision
 
 The NVIDIA NIM benchmark is an optional, provider-neutral evaluation adapter.
@@ -210,6 +262,38 @@ The corrected related run passes **165 tests in 36.22 seconds**, exit zero.
 Current-head full/hosted verification, independent review and protected release
 remain separate gates. This corrects report provenance and cohort isolation;
 it does not establish probability sampling, model accuracy or faster decisions.
+
+### Declared paired-bootstrap coverage (2026-09-07, proposed)
+
+The previous paired comparison used a hidden 2,000-resample 95% percentile
+interval and a hard-coded policy subset (`conduct_bounded` versus `route_once`,
+optional cheapest versus `route_once`, and hindsight pairs when a unique
+winner existed). Those choices were not reconstructible as operator
+declarations. Report version 4 requires `bootstrap_resample_count`,
+`confidence_level`, and `comparison_pairs` in provenance. The method name is
+`paired_bootstrap_percentile`. A coverage that cannot be represented with the
+resample count fails closed. CLI and workflow flags carry the same
+declarations; 2,000 and 0.95 in those files are run choices, not code
+defaults. Hindsight identity remains a measurement field; comparing against it
+requires an explicit pair.
+
+Efron (1979) grounds resampling observed task units. Efron and Tibshirani
+(1993) ground the percentile interval and treat *B* as Monte Carlo precision.
+This slice does not add a statistical dependency or change production
+route/conduct defaults. Token and workflow-depth budgets remain later work.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Compare as Paired comparison
+    participant Interval as Percentile interval
+    participant Report as Schema 4 report
+    Operator->>Compare: Policy pairs, resample count, coverage, seed
+    Compare->>Compare: Fail closed on missing or invalid declarations
+    Compare->>Interval: Shared locked-task differences
+    Interval->>Report: Mean difference and declared-coverage interval
+    Note over Operator,Report: Unobserved pairs are omitted; production gates still apply
+```
 
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
 
@@ -460,6 +544,9 @@ of Standards and Technology. https://doi.org/10.6028/NIST.AI.600-1
 Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
 models while reducing cost and improving performance. *arXiv*.
 https://doi.org/10.48550/arXiv.2305.05176
+
+Efron, B., & Tibshirani, R. J. (1993). *An introduction to the bootstrap*.
+Chapman & Hall. https://doi.org/10.1201/9780429246593
 
 Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
 *The Annals of Statistics, 7*(1), 1–26.

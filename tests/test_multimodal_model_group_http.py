@@ -628,6 +628,31 @@ def test_ungrouped_capability_routes_record_measured_outcomes() -> None:
     assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
 
 
+@pytest.mark.parametrize("with_selection_sink", (False, True))
+def test_capability_success_clears_prior_circuit_failures(
+    with_selection_sink: bool,
+) -> None:
+    """A recovered capability provider must not remain circuit-open for chat."""
+    agent = ModelAgent("image_member", "provider/image", tags=("image",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator._record_failure(agent.id)
+    orchestrator._record_failure(agent.id)
+
+    result = orchestrator.proxy_capability(
+        {"prompt": "diagram"},
+        capability="image",
+        endpoint="images/generations",
+        selection_sink=(
+            (lambda _agent, value: {"selected": value})
+            if with_selection_sink
+            else None
+        ),
+    )
+
+    assert result
+    assert agent.id not in orchestrator._circuit
+
+
 def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
     server = build_server(
         TaskOrchestrator([ModelAgent("text_member", "provider/text", tags=("text",))]),

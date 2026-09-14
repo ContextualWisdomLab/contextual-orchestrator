@@ -72,6 +72,9 @@ jobs:
             --task-manifest examples/nim_task_manifest.json \
             --output-dir benchmark_artifacts \
             --max-total-requests "$MAX_REQUESTS" \
+            --bootstrap-resample-count 2000 \
+            --confidence-level 0.95 \
+            --comparison-pair conduct_bounded,route_once \
             --git-sha "$PROVENANCE_GIT_SHA" \
             --workflow-run-id "$PROVENANCE_RUN_ID"
 
@@ -138,6 +141,9 @@ jobs:
             --task-manifest examples/nim_task_manifest.json \
             --output-dir benchmark_artifacts \
             --max-total-requests "$MAX_REQUESTS" \
+            --bootstrap-resample-count 2000 \
+            --confidence-level 0.95 \
+            --comparison-pair conduct_bounded,route_once \
             --git-sha "$PROVENANCE_GIT_SHA" \
             --workflow-run-id "$PROVENANCE_RUN_ID"
 

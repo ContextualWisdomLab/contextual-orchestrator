@@ -26,6 +26,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
 EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
 FAKE_ENDPOINT = "https://nim.example.test/v1"
+DECLARED_RUN_KWARGS = {
+    "resample_count": 2000,
+    "confidence_level": 0.95,
+    "comparison_pairs": (("conduct_bounded", "route_once"),),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +110,7 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(
             git_sha="a" * 40,
             workflow_run_id="123",
             transport=_unexpected_transport,
+            **DECLARED_RUN_KWARGS,
         )
 
 
@@ -128,6 +134,7 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="b" * 40,
             workflow_run_id="124",
             transport=_unexpected_transport,
+            **DECLARED_RUN_KWARGS,
         )
 
     expired_path = _write_json(
@@ -146,6 +153,7 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="c" * 40,
             workflow_run_id="125",
             transport=_unexpected_transport,
+            **DECLARED_RUN_KWARGS,
         )
 
 
@@ -282,6 +290,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             max_total_requests=1923,
             max_eval_models=7,
             transport=transport,
+            **DECLARED_RUN_KWARGS,
         )
 
     assert calls == [("GET", "/v1/models")]
@@ -327,6 +336,7 @@ def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -
         max_total_requests=24,
         max_eval_models=1,
         transport=transport,
+        **DECLARED_RUN_KWARGS,
     )
 
     assert report["request_budget"]["max_total_requests"] == 24
@@ -361,6 +371,7 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
         str(tmp_path),
         max_total_requests=600,
         max_eval_models=2,
+        **DECLARED_RUN_KWARGS,
     )
     evaluation = report["evaluation"]
 
@@ -747,4 +758,5 @@ def test_live_run_requires_provenance_before_transport(tmp_path: Path) -> None:
             None,
             str(tmp_path),
             transport=_unexpected_transport,
+            **DECLARED_RUN_KWARGS,
         )

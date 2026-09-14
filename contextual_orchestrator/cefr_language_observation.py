@@ -265,8 +265,10 @@ class TaskOrchestratorCefrGateway:
                 "response_format": response_format,
                 "stream": False,
                 "temperature": self.orchestrator.client.temperature,
-                "max_tokens": self.orchestrator.client.max_output_tokens,
             }
+            output_cap = self.orchestrator.client.effective_max_output_tokens(agent)
+            if output_cap is not None:
+                payload["max_tokens"] = output_cap
             endpoint = "chat/completions"
         elif api_surface == "responses":
             payload = {
@@ -275,8 +277,10 @@ class TaskOrchestratorCefrGateway:
                 "text": {"format": _responses_format(response_format)},
                 "stream": False,
                 "temperature": self.orchestrator.client.temperature,
-                "max_output_tokens": self.orchestrator.client.max_output_tokens,
             }
+            output_cap = self.orchestrator.client.effective_max_output_tokens(agent)
+            if output_cap is not None:
+                payload["max_output_tokens"] = output_cap
             endpoint = "responses"
         else:
             raise CefrObservationError("unsupported_api_surface", "unsupported API surface")

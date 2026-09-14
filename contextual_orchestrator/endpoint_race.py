@@ -79,7 +79,7 @@ def race_first_valid(
     attempts: list[EndpointAttempt[T]],
     *,
     validate: Callable[[T], bool],
-    deadline_seconds: float,
+    deadline_seconds: float | None,
     max_concurrency: int,
     on_attempt_complete: Callable[[str, T | None, BaseException | None], None] | None = None,
 ) -> RaceOutcome[T]:
@@ -94,7 +94,7 @@ def race_first_valid(
         raise ValueError("immediate_race requires concurrency capacity of at least two")
     if max_concurrency < len(attempts):
         raise ValueError("immediate_race capacity must cover every declared endpoint")
-    if deadline_seconds <= 0:
+    if deadline_seconds is not None and deadline_seconds <= 0:
         raise ValueError("deadline_seconds must be positive")
     contract = attempts[0].contract
     if any(attempt.contract != contract for attempt in attempts[1:]):
@@ -128,8 +128,12 @@ def race_first_valid(
     last_error: BaseException | None = None
     try:
         while pending:
-            remaining = deadline_seconds - (time.monotonic() - started)
-            if remaining <= 0:
+            remaining = (
+                None
+                if deadline_seconds is None
+                else deadline_seconds - (time.monotonic() - started)
+            )
+            if remaining is not None and remaining <= 0:
                 raise TimeoutError("equivalent endpoint race exceeded its deadline")
             done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
             if not done:

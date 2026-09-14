@@ -74,6 +74,36 @@ def test_fast_invalid_completion_does_not_suppress_valid_result() -> None:
     assert outcome.winner_endpoint_id == "valid_endpoint"
 
 
+def test_five_field_text_race_attempt_preserves_usage_audit() -> None:
+    """Tool-call race attempts expose usage in the five-field outcome shape."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("text_endpoint", "provider/model", tags=("text",))]
+    )
+
+    orchestrator._record_endpoint_attempt(
+        "text_endpoint",
+        (
+            "",
+            "text_endpoint",
+            "provider/model",
+            {"prompt_tokens": 5, "completion_tokens": 2},
+            {"tool_calls": [{"id": "call_1"}]},
+        ),
+        None,
+        capability="text",
+    )
+
+    event = orchestrator.list_recent_audit_events()[-1]
+    assert event["event_type"] == "equivalent_endpoint_attempt_completed"
+    assert event["event_detail"]["usage"] == {
+        "prompt_tokens": 5,
+        "completion_tokens": 2,
+    }
+    assert event["event_detail"]["duplicate_cost_evidence"] == (
+        "provider_reported_usage"
+    )
+
+
 def test_non_equivalent_policy_fails_closed_before_any_call() -> None:
     called: list[str] = []
     with pytest.raises(ValueError, match="cannot be proven"):

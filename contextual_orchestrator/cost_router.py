@@ -59,6 +59,7 @@ _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
+_DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0
 _BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
@@ -191,12 +192,7 @@ class CostRoutingCoordinator:
             self._race_usage_context.reset(token)
         race_usage = []
         for endpoint_id, value in context["pending_usage"]:
-            if isinstance(value, tuple) and len(value) == 3:
-                usage = value[2]
-            elif isinstance(value, dict):
-                usage = value.get("usage")
-            else:
-                usage = None
+            usage = self._race_result_usage(value)
             counts = self._provider_usage(usage)
             if counts is not None:
                 race_usage.append({
@@ -232,7 +228,10 @@ class CostRoutingCoordinator:
 
     def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
         client = getattr(self.orchestrator, "client", None)
-        client_timeout = float(getattr(client, "timeout", 0))
+        configured_timeout = getattr(client, "timeout", None)
+        client_timeout = (
+            float(configured_timeout) if configured_timeout is not None else 0.0
+        )
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,
@@ -240,7 +239,11 @@ class CostRoutingCoordinator:
             claim_lease_seconds=(
                 client_timeout
                 if self.job_registry.durable and client_timeout > 0
-                else None
+                else (
+                    _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
+                    if self.job_registry.durable
+                    else None
+                )
             ),
             execution_timeout_seconds=client_timeout if client_timeout > 0 else None,
         )
@@ -449,6 +452,18 @@ class CostRoutingCoordinator:
             return None
         return prompt, completion
 
+    @staticmethod
+    def _race_result_usage(value: Any) -> Any:
+        """Extract usage from ordinary and tool-call endpoint-race results."""
+        if isinstance(value, tuple):
+            if len(value) == 3:
+                return value[2]
+            if len(value) == 5:
+                return value[3]
+        if isinstance(value, dict):
+            return value.get("usage")
+        return None
+
     def record_async_video_usage(self, *, agent: Any, usage: Any, gateway_job_id: str):
         """Idempotently ledger concrete async-video counts reported by a provider."""
         counts = self._provider_usage(usage)
@@ -471,11 +486,7 @@ class CostRoutingCoordinator:
         if not context["workflow_ready"]:
             context["pending_usage"].append((endpoint_id, value))
             return
-        usage = None
-        if isinstance(value, tuple) and len(value) == 3:
-            usage = value[2]
-        elif isinstance(value, dict):
-            usage = value.get("usage")
+        usage = self._race_result_usage(value)
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
@@ -1081,30 +1092,37 @@ class CostRoutingCoordinator:
             billable_steps = (
                 [] if item.cache_status == "hit" else [*item.race_usage, *item.trace]
             )
-            for index, step in enumerate(billable_steps):
-                counts = self._provider_usage(step.get("usage"))
-                attribute_request_prompt = counts is None and not request_prompt_attributed
-                if attribute_request_prompt:
-                    request_prompt_attributed = True
-                records.append(
-                    self._record_completion(
-                        messages=fallback_messages if attribute_request_prompt else [],
-                        answer=step.get("output", "") if counts is None else "",
-                        route_mode=item.mode,
-                        request_channel="batch",
-                        attribution=item.attribution,
-                        model_name=item.model,
-                        provider_model=self._served_provider_model(
-                            {"trace": [step]}, item.model
-                        ),
-                        workflow_run_id=job.job_id,
-                        prompt_tokens=counts[0] if counts else None,
-                        completion_tokens=counts[1] if counts else None,
-                        usage_record_id=self._batch_usage_record_id(
-                            job_id, item.custom_id, "step", index
-                        ),
+            # Step-level usage is more informative only when it actually exists.
+            # Otherwise a valid item total remains the authoritative source.
+            step_usage_available = any(
+                self._provider_usage(step.get("usage")) is not None
+                for step in billable_steps
+            )
+            if step_usage_available:
+                for index, step in enumerate(billable_steps):
+                    counts = self._provider_usage(step.get("usage"))
+                    attribute_request_prompt = counts is None and not request_prompt_attributed
+                    if attribute_request_prompt:
+                        request_prompt_attributed = True
+                    records.append(
+                        self._record_completion(
+                            messages=fallback_messages if attribute_request_prompt else [],
+                            answer=step.get("output", "") if counts is None else "",
+                            route_mode=item.mode,
+                            request_channel="batch",
+                            attribution=item.attribution,
+                            model_name=item.model,
+                            provider_model=self._served_provider_model(
+                                {"trace": [step]}, item.model
+                            ),
+                            workflow_run_id=job.job_id,
+                            prompt_tokens=counts[0] if counts else None,
+                            completion_tokens=counts[1] if counts else None,
+                            usage_record_id=self._batch_usage_record_id(
+                                job_id, item.custom_id, "step", index
+                            ),
+                        )
                     )
-                )
             if not records:
                 usage_valid = self._batch_item_usage_valid(item)
                 if not usage_valid and item.custom_id not in prompt_token_estimates:
@@ -1834,9 +1852,9 @@ class CostRoutingCoordinator:
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
-        Local backends complete immediately. Callers that require a synchronous
-        provider result pass ``wait_timeout``; a timed-out queued job is
-        cancelled so the synchronous surface does not leave orphaned work.
+        Local backends complete immediately. ``wait_timeout=None`` waits without
+        an application deadline; a timed-out queued job is cancelled only when
+        the caller supplied a finite deadline.
         """
         job = self.submit_embeddings_batch(
             inputs,
@@ -1848,9 +1866,13 @@ class CostRoutingCoordinator:
             owner_id=owner_id,
         )
         backend = self._embedding_backend_for(job)
-        if wait_timeout is not None and hasattr(backend, "wait"):
+        if hasattr(backend, "wait"):
             status = backend.wait(job, timeout=wait_timeout)
-            if not status.get("is_complete") and hasattr(backend, "cancel"):
+            if (
+                wait_timeout is not None
+                and not status.get("is_complete")
+                and hasattr(backend, "cancel")
+            ):
                 backend.cancel(job, reason="synchronous request deadline elapsed")
         return self.embeddings_batch_document(job.job_id, owner_id=owner_id)
 
