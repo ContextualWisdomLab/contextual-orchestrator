@@ -17,7 +17,7 @@ from dataclasses import replace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, _LocalProviderAdmissionTimeout
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
@@ -122,6 +122,41 @@ def test_non_idempotent_timeout_fails_closed_for_ambiguous_outcome() -> None:
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
     assert decision.retry_safe is False
     assert decision.circuit_failure is False
+
+
+def test_local_admission_timeout_fails_over_before_any_provider_send() -> None:
+    """A pre-send local queue timeout is safe to fail over without same-agent retry."""
+
+    class AdmissionClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list[dict], **kwargs: object) -> str:  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            if agent.id == "primary_agent":
+                raise _LocalProviderAdmissionTimeout("slot expired before send")
+            return "fallback answer"
+
+    agents = [
+        ModelAgent("primary_agent", "primary", tags=("reasoning",)),
+        ModelAgent("fallback_agent", "fallback", tags=("reasoning",)),
+    ]
+    client = AdmissionClient()
+    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=3)
+
+    answer, served_id, _served_model, _usage = orchestrator._invoke(
+        agents[0],
+        [{"role": "user", "content": "safe request"}],
+        text="safe request",
+        role="worker",
+        allowed_agent_ids={"primary_agent", "fallback_agent"},
+    )
+
+    assert answer == "fallback answer"
+    assert served_id == "fallback_agent"
+    assert client.calls == ["primary_agent", "fallback_agent"]
 
 
 def test_explicit_unknown_outcome_overrides_other_structured_failure_metadata() -> None:
@@ -650,6 +685,7 @@ def test_tool_retry_backoff_requires_finite_nonnegative_number(value: object) ->
 def _post_fallback_json(
     port: int,
     payload: dict[str, object],
+    response_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, object]]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -665,6 +701,8 @@ def _post_fallback_json(
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
+        if response_headers is not None:
+            response_headers.update(error.headers)
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
@@ -706,6 +744,49 @@ class _ProviderStoppedStreamingClient(ModelClient):
     def _open_provider(self, request, destination=None, *, timeout=None):  # type: ignore[override]
         del request, destination, timeout
         raise _provider_tool_stop_http_error()
+
+
+@pytest.mark.parametrize(
+    ("error_code", "status_code", "expected_calls"),
+    [("tool_execution_stopped", 409, 1), ("conflict", 409, 3),
+     ("provider_outcome_unknown", 502, 1)],
+)
+def test_sdk_http_retry_respects_explicit_tool_stop(monkeypatch, error_code, status_code, expected_calls) -> None:
+    """The pinned SDK probe uses real loopback HTTP, never a provider."""
+    import asyncio
+
+    import openai as sdk
+    assert sdk.__version__ == "2.54.0"
+    server = build_server(TaskOrchestrator([ModelAgent("local_worker", "mock-local")]), port=0)
+    received_calls = []
+
+    def respond(handler):
+        handler._read_json()
+        received_calls.append(error_code)
+        handler._send_error(status_code, error_code, "request stopped", {"retryable": False})
+
+    monkeypatch.setattr(server.RequestHandlerClass, "do_POST", respond)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def request_completion():
+        async with sdk.AsyncOpenAI(
+            api_key="local_test_only", base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+        ) as client:
+            with pytest.raises(sdk.APIStatusError) as raised:
+                await client.chat.completions.create(
+                    model="local_test_model", messages=[{"role": "user", "content": "fixture"}],
+                )
+            assert raised.value.body["code"] == error_code
+            assert raised.value.status_code == status_code
+
+    try:
+        asyncio.run(request_completion())
+        assert len(received_calls) == expected_calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
@@ -751,6 +832,7 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
 
 
 def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
+    response_headers: dict[str, str] = {}
     agents = [
         ModelAgent(
             "primary_worker",
@@ -781,6 +863,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
                 "mode": "route",
                 "messages": [{"role": "user", "content": "send this message"}],
             },
+            response_headers,
         )
     finally:
         server.shutdown()
@@ -789,6 +872,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
     assert status == 409
     assert body["error"]["code"] == "tool_execution_stopped"
     assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert response_headers["x-should-retry"] == "false"
     assert client.calls == ["primary_worker"]
     assert "provider.example" not in json.dumps(body)
 
