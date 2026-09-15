@@ -2973,3 +2973,15 @@ Local `0b949aa2` adds bounded numeric status to the existing common failed-
 attempt log without reading provider text or bodies (89 related tests pass,
 15.28 seconds). Full verification and release of this diagnostic addition
 remain pending; provider availability itself is not repaired by better logs.
+
+## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
+
+`OrchestrationPolicy.max_workflow_steps = 6` bounded generated Conductor plans
+(prompt text and parser) without stating where the number came from, while the
+Fugu-Ultra report's "up to 5 steps" (arXiv:2606.21228 S3.2.3) is a training
+setting that must not be copied into other layers. This change records the
+origin as a product decision beside the field and in `docs/architecture.md`,
+keeps the value administrator-owned through `OrchestrationPolicy`, and adds
+`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
+(prompt and parser follow the policy value; default stays 6). Not established:
+an ablation of the bound itself, which belongs to the #568 equal-budget lane.
