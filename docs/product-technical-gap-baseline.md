@@ -5850,3 +5850,30 @@ Local `0b949aa2` adds bounded numeric status to the existing common failed-
 attempt log without reading provider text or bodies (89 related tests pass,
 15.28 seconds). Full verification and release of this diagnostic addition
 remain pending; provider availability itself is not repaired by better logs.
+
+## 2026-09-14 Durable job registry opt-in degraded silently
+
+`build_job_registry` returned the same non-durable `JobRegistryFactory(None)`
+for two different states: no `batch_job_registry_valkey_url` configured, and a
+configured URL whose `redis` client (the `queue` extra) is not installed. The
+module docstring justified the fallback as "nothing changes for deployments
+that have not opted in", but the same branch also fired for deployments that
+*had* opted in, where everything changes — job registries stop surviving a
+restart, which is the failure this module exists to prevent — with no warning,
+log, or readiness signal to distinguish the two.
+
+Fixed by logging a warning naming the credential and the `queue` extra when a
+URL is configured and the client is missing, matching the established pattern
+elsewhere in the repository (`telemetry.py`'s OpenTelemetry warning, the
+`__main__` fast-mlsirm probe's `reason: missing_dependency`, and the judge's
+explicit fail-closed reason). The behaviour is deliberately not changed to a
+hard failure: a serving gateway should not fail startup over an optional extra.
+Verified RED against unfixed product code, then GREEN, in
+`tests/test_batch_job_registry_boundaries.py`
+(`test_configured_url_without_redis_package_warns_about_lost_durability` plus
+`test_unconfigured_registry_stays_silent`, which proves the never-opted-in path
+stays quiet).
+
+Not established: whether any deployment currently runs in this state. The
+readiness surface still does not report registry durability; that would be a
+separate change.
