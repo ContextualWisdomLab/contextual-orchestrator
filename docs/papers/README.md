@@ -309,6 +309,26 @@ use* (Research Memorandum No. RM-19-07). Educational Testing Service.
 https://www.ets.org/Media/Research/pdf/RM-19-07.pdf
 
 The report states all rights reserved. Link and citation only; no PDF vendored.
+## Conditional-independence diagnostics
+
+van der Linden, W. J., & Glas, C. A. W. (2010). Statistical tests of
+conditional independence between responses and/or response times on test
+items. *Psychometrika, 75*(1), 120–139.
+https://doi.org/10.1007/s11336-009-9129-9
+
+Read status: publisher metadata and abstract verified; original PDF text on
+printed pages 120–123 inspected. The model distinguishes latent speed from
+observed response time and develops conditional-independence diagnostics.
+This is not a complete methods review or a reproduced implementation.
+Publisher HTML was visually inspected, but PDF rendering was blank; equations
+and tables remain visually unverified. The publisher identifies CC BY-NC 2.0;
+cite and link only, with no commercial PDF redistribution assumed.
+
+Engineering inference: numerical adoption belongs to fast-mlsirm and requires
+identified person/item roles and dependence diagnostics. CO's routing-decision
+clock cannot be substituted for a person's item response time. This source
+does not demonstrate an LLM accuracy or latency gain.
+
 ## DOI discovery register
 
 The links below are explicit citations found in tracked source and documentation,
