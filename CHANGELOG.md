@@ -278,6 +278,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `queued`/`validating`/`running`) records success and breaks
   (`tests/test_pr971_review_quality_regressions.py::test_terminal_embedding_batch_document_fails_over_before_marking_health`).
 
+- Response-format SSE requests may now ask for usage; the terminal usage chunk
+  is emitted only when the workflow cost ledger marks the counts as measured.
 - Generation-token inputs retain positive-integer validation without an
   arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
   aliases to `max_output_tokens` before provider forwarding, preserving caller
