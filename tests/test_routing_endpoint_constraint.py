@@ -211,7 +211,8 @@ def _post_json(server: object, path: str, body: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
 
 
 @pytest.mark.parametrize(
@@ -251,6 +252,7 @@ def test_http_surfaces_constrain_candidates_and_preserve_envelopes(path: str, pa
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -288,6 +290,7 @@ def test_http_endpoint_scope_accepts_normalized_models_and_group_aliases(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -347,3 +350,4 @@ def test_http_endpoint_scope_rejects_endpoint_without_local_virtual_capacity(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

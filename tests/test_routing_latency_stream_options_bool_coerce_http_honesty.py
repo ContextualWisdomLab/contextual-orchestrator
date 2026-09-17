@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_chat_accepts_routing_latency_tolerant_string_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_routing_latency_tolerant_string_false() -> None:
@@ -87,6 +89,7 @@ def test_http_chat_accepts_routing_latency_tolerant_string_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_routing_latency_tolerant_yes() -> None:
@@ -106,6 +109,7 @@ def test_http_chat_still_rejects_routing_latency_tolerant_yes() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_stream_options_include_usage_false_string() -> None:
@@ -128,6 +132,7 @@ def test_http_chat_accepts_stream_options_include_usage_false_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_stream_options_include_usage_true_string_without_stream() -> None:
@@ -149,6 +154,7 @@ def test_http_chat_still_rejects_stream_options_include_usage_true_string_withou
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_empty_type_as_omit() -> None:
@@ -169,6 +175,7 @@ def test_http_chat_accepts_response_format_empty_type_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_top_logprobs_digit_string_with_logprobs() -> None:
@@ -188,6 +195,7 @@ def test_http_responses_accepts_top_logprobs_digit_string_with_logprobs() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

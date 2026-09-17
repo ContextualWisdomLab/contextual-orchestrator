@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -70,6 +71,7 @@ def test_http_chat_accepts_message_weight_digit_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_message_weight_out_of_range() -> None:
@@ -88,6 +90,7 @@ def test_http_chat_still_rejects_message_weight_out_of_range() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_strict_bool_coerce_forms() -> None:
@@ -116,6 +119,7 @@ def test_http_chat_accepts_tool_strict_bool_coerce_forms() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_message_prefix_false_coerce_forms() -> None:
@@ -136,6 +140,7 @@ def test_http_chat_accepts_message_prefix_false_coerce_forms() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_message_prefix_true() -> None:
@@ -157,6 +162,7 @@ def test_http_chat_still_rejects_message_prefix_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

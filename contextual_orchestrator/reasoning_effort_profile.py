@@ -458,8 +458,8 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
     """Compare route, conduct, and one-factor variants under one token budget.
 
     Records estimated RMSE, θ̂, mode, and budget. Does not persist private
-    chain-of-thought. Buyer next action: read ``measurement_status`` and
-    ``production_default_change_allowed`` before changing live defaults.
+    chain-of-thought. Buyer next action: use this only for unit checks;
+    automatic production-default promotion is unavailable.
     """
     theta = tuple(float(value) for value in true_theta)
     budget_tokens = 1024

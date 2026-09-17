@@ -28,6 +28,7 @@ from .model_discovery import (
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
@@ -54,6 +55,7 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_TRACE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN"
 
 def _log_level(value: str) -> str:
     """Parse a case-insensitive stdlib logging level name for an argparse option."""
@@ -569,8 +571,8 @@ def _discover_models_command(argv: list[str]) -> None:
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="Enable a price-honest, provider-diverse discovered agent pool in --agents-db (auto-optimization bootstrap; "
-        "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
+        help="Enable a price-evidenced discovered agent pool in --agents-db; unmodeled diversity reordering fails closed "
+        "(requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
     parser.add_argument(
         "--free-only",
@@ -626,7 +628,7 @@ def _discover_models_command(argv: list[str]) -> None:
             if not model.evidence_only
         ]
         bootstrap = TaskOrchestrator(
-            discovered_agents,
+            [],
             agents_db=args.agents_db,
             allow_empty_agents=True,
         )
@@ -634,7 +636,21 @@ def _discover_models_command(argv: list[str]) -> None:
             bootstrap.sync_discovered_agents(discovered_agents)
             if args.enable_cheapest:
                 for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                    agent_id = agent_id_for(model)
+                    incoming = agent_from_discovered(model)
+                    matches = [
+                        candidate
+                        for candidate in bootstrap.candidates
+                        if "discovered" in candidate.tags
+                        and candidate.provider_name == incoming.provider_name
+                        and candidate.credential_name == incoming.credential_name
+                        and candidate.model == incoming.model
+                    ]
+                    if not matches:
+                        continue
+                    agent_id = next(
+                        (candidate.id for candidate in matches if candidate.id == incoming.id),
+                        matches[-1].id,
+                    )
                     bootstrap.patch_agent("default", agent_id, {"status": "active"})
                     enabled_agent_ids.append(agent_id)
         finally:
@@ -759,14 +775,32 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             or "embedding" in model.capabilities
             or (
                 agent_id_for(model) in failed_configured_gateway_probe_ids
-                and agent_id_for(model) in existing_by_id
+                # A failed probe is only ever recorded under the new
+                # fingerprinted id, but a persisted agent from before
+                # model-group fingerprinting may still be keyed by its
+                # legacy id (see ``existing`` below); accept either so a
+                # failed legacy-id endpoint reaches the disable path
+                # instead of being silently dropped and left enabled.
+                and (
+                    agent_id_for(model) in existing_by_id
+                    or legacy_agent_id_for(model) in existing_by_id
+                )
             )
         )
     ]
-    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models}
+    # Include the legacy id form too: an already-persisted agent matched via
+    # the legacy_agent_id_for fallback below keeps its existing (pre-model-
+    # group) id rather than adopting the new hash-suffixed one, so a candidate
+    # that is genuinely one of the freshly-discovered chat models can still
+    # be persisted under either id.
+    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models} | {
+        legacy_agent_id_for(model) for model in chat_models
+    }
     agents = []
     for model in runtime_models:
-        existing = existing_by_id.get(agent_id_for(model))
+        existing = existing_by_id.get(agent_id_for(model)) or existing_by_id.get(
+            legacy_agent_id_for(model)
+        )
         embedding_routable = "embedding" in model.capabilities and model.spend_admitted
         spend_routable = is_routable_discovered_model(model) or embedding_routable
         structured_routable = agent_id_for(model) not in failed_configured_gateway_probe_ids
@@ -822,6 +856,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     existing,
                     disabled=not routable or preserve_disabled,
                     tags=tuple(dict.fromkeys(tags)),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
                 )
             )
         elif existing is not None and any(tag in existing.tags for tag in ("spend:blocked", "structured:blocked")):
@@ -846,6 +881,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                             "structured:blocked:preserve-disabled",
                         }
                     ),
+                    group_name=existing.group_name or agent_from_discovered(model).group_name,
+                )
+            )
+        elif existing is not None and not existing.group_name:
+            agents.append(
+                replace(
+                    existing,
+                    group_name=agent_from_discovered(model).group_name,
                 )
             )
         elif existing is not None and limits_changed:
@@ -948,6 +991,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
+        "--decision-receipts", action="store_true",
+        help="Record initial routing measurements when serving; requires --state-db and the native receipt module.",
+    )
+    parser.add_argument(
         "--release-authority-json",
         default=None,
         help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
@@ -957,12 +1004,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
     parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
     parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
+    parser.add_argument("--trace-token", default="",
+                        help="Explicit local-development trace token; prefer a KV token name. "
+                             "Required in split admin/inference mode to authorize the trace "
+                             "purpose (ADR 0026); without it, trace responses fail closed.")
     parser.add_argument("--auth-token-key", default=None,
                         help="KV credential name for the single server bearer token.")
     parser.add_argument("--admin-token-key", default=None,
                         help="KV credential name for the admin bearer token.")
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
+    parser.add_argument("--trace-token-key", default=None,
+                        help="KV credential name for the trace bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--production",
@@ -1030,6 +1083,30 @@ def main(argv: list[str] | None = None) -> None:
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
+    parser.add_argument(
+        "--rate-limit-wait-seconds",
+        type=float,
+        default=30.0,
+        help=(
+            "Caller-contract bound (not a product limit) on how long a "
+            "passthrough request may wait out a provider rate-limit storm "
+            "when the primary candidate has no administrator-owned "
+            "model_timeout_seconds deadline (default: 30)."
+        ),
+    )
+    parser.add_argument(
+        "--rate-limit-unknown-cooldown-seconds",
+        type=float,
+        default=5.0,
+        help=(
+            "Assumed cooldown applied when a 429/503 provider response "
+            "states no Retry-After/x-ratelimit-reset* at all (RFC 9110 "
+            "permits omitting it, and some providers routinely do). This is "
+            "a caller-contract bound, not a discovered provider fact -- kept "
+            "short by default so an unknown cooldown is re-probed soon "
+            "rather than parked (default: 5)."
+        ),
+    )
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     parser.add_argument(
@@ -1048,8 +1125,8 @@ def main(argv: list[str] | None = None) -> None:
             "proves support) native reasoning_effort, and attaching a replayable "
             "reasoning_effort_snapshot to complete/run/stream_route/batch_route "
             "results. Omit to keep today's payload unchanged -- this does not "
-            "change route/conduct selection defaults, which stay locked until "
-            "production_default_change_allowed is true. Every role in 'default' "
+            "change route/conduct selection defaults; automatic default promotion "
+            "is unavailable. Every role in 'default' "
             "fails closed for a provider that has not proven support, so at "
             "least one --agents entry needs \"reasoning_effort_supported\": "
             "true (or a mock:// base_url) -- startup refuses the flag "
@@ -1075,6 +1152,8 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        rate_limit_wait_seconds=args.rate_limit_wait_seconds,
+        rate_limit_unknown_cooldown_seconds=args.rate_limit_unknown_cooldown_seconds,
         allow_empty_agents=args.auto_discover_model_agents,
         role_effort_catalog=(
             default_role_effort_catalog() if args.role_effort_catalog == "default" else None
@@ -1150,6 +1229,12 @@ def main(argv: list[str] | None = None) -> None:
                 if split_requested
                 else ""
             )
+            trace_requested = bool(args.trace_token or args.trace_token_key)
+            trace_token = (
+                _resolve_auth_token(args.trace_token, args.trace_token_key or DEFAULT_TRACE_CREDENTIAL_NAME)
+                if trace_requested
+                else ""
+            )
         except ValueError as exc:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
@@ -1171,6 +1256,7 @@ def main(argv: list[str] | None = None) -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                trace_token=trace_token,
                 max_body_bytes=args.max_body_bytes,
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
@@ -1193,6 +1279,7 @@ def main(argv: list[str] | None = None) -> None:
                 config_store=_bootstrap_telemetry_config(),
             ),
             release_authority=release_authority,
+            decision_receipts=args.decision_receipts,
         )
         return
 

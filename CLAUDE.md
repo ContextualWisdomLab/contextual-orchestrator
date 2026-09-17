@@ -1,8 +1,64 @@
 # CLAUDE.md
 
+Optimizer means must not replace ordered `score_observations`. Reuse the shared
+scoring boundary and preserve existing selection semantics until the separate
+applicable-evaluator contract is resolved; see the optimizer recovery runbook.
+
+For optimizer batch validation and installed-test setup, read
+`docs/doctoring/optimizer_score_recovery.md`. Match task/result counts before
+scoring and preserve usage on failure; batch fixtures must select route mode.
+Passing this boundary does not establish psychometric calibration eligibility.
+
+Artifact pin changes must retain paths, retention, failure handling and trigger
+locks. Run actionlint and the NIM workflow contracts; local success is not
+artifact publication proof. See `docs/doctoring/artifact_runtime_migration.md`.
+
+Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
+One admission may contain cached and uncached items: finalize cache-only status
+at request close, retain failures and isolate request context. The runbook owns
+reproduction, native prerequisites and separate installed-package evidence.
+
+Batch request lineage evidence and unresolved registry failure semantics live
+in `docs/doctoring/batch_request_lineage.md`; HTTP 201 alone does not establish
+durable lineage. Preserve job-scoped item IDs and original submission identity.
+
+See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
+tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
+For trace HTTP regressions, distinguish the test client's HTTPError from the
+server's serialized authorization failure. The test owns response/listener
+cleanup. Exact-head RED/GREEN and remaining strict failures are recorded in
+`docs/doctoring/http_test_resource_lifecycle.md` under the trace successor.
+
+For HTTP test cleanup, reuse response context managers and explicit server
+closure. Test-resource fixes do not prove production transport closure; follow
+`docs/doctoring/http_test_resource_lifecycle.md` and preserve its unresolved
+expanded-suite evidence boundary.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
+
+LaRT count-encoding work is owned by the [upstream patch and handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Reuse its commands and distinguish scalar contract checks, real dataframe
+loading and unverified estimator integration; do not reapply a pseudocount.
+
+Decision receipt startup remains explicit opt-in; reuse builder validation and
+do not infer complete KPI coverage from the bounded export. See the
+[entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
+for the exact-head ownership audit and warning-sensitive test results.
+
+For title-only research citations, verify and register the persistent identifier
+in the source document and paper inventory. Passing DOI discovery does not prove
+full bibliography coverage; see the KPI runbook's citation reconciliation.
+
+For autonomous experiments, also read and maintain
+[the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
+It records commands, environment limits, failed interpretations, and evidence
+boundaries. Do not restart a live numerical test because polling is silent or
+claim customer improvement from synthetic recovery. Use the independently
+verifiable owner/consumer sequence recorded there instead of waiting for all
+foundation releases before developing a port.
 
 Equivalent model-group endpoints may race only through the normalized, explicit
 endpoint-equivalence contract. Preserve modality validation, bounded concurrency,
@@ -14,6 +70,7 @@ deadline, cancellation/drain provenance, and honest duplicate-cost evidence.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
 - **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. As of 2026-08-18, OpenCode/Noema/Strix (the org's CI review pipeline in `ContextualWisdomLab/.github`) are being migrated onto this gateway as their shared backend — see AGENTS.md's "This repo: the org LLM gateway" section for the full policy and scope.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
+- **Loop-goal execution control**: for all repo PRs and issues, follow AGENTS.md's "Loop-goal execution control" section (structure → Gap → baseline → KPI → experiment order, ledger + Todo discipline, scoped waits, separate branch/worktree for independent work).
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
 
@@ -113,10 +170,24 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Key conventions
 
+- **Failure attribution**: one Noema caller attempt is not one internal provider
+  attempt. Verify deployed revision and request identity; do not mix preflight
+  failures with the review request or automatically replay ambiguous timeout/502.
+  See [the incident runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+- **Stacked quality checks**: zero check runs can result from the former
+  `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
+  trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
+  and verify hosted execution after each new head. Earlier-head results are
+  historical, not current approval. Reproduction and limits:
+  [owner runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
+- **Request attribution**: preserve one effective policy and effort snapshot through execution, final synthesis, cache identity, and saved records. Direct single-role adapters remain compatible. See `docs/doctoring/reasoning-effort-profile.md`; its implementation evidence is Proposed, not a protected release.
 - **Honest metrics**: spend/analytics surfaces label estimates (`usage_source`, `measurement_status`) and never fabricate prices — preserve this when touching analytics.
+- **Quality boundary**: provider uptime is transport evidence, not answer correctness. Keep it out of quality priors; unchanged counters do not guarantee an unchanged posterior or member order. See the Proposed availability-boundary record in `docs/doctoring/measured-routing-evidence.md`.
 - **Fuzz seams**: untrusted-input parsers (request body, agent config, redaction, orchestration) share invariant checks in `fuzz/targets.py`, driven by both Hypothesis (`tests/fuzz/`) and Atheris (`fuzz/`). New parsing seams should get a target there (see `docs/fuzzing.md`).
 - **ADR location**: new product-planning decisions live in
   `docs/planning/adrs/NNNN-slug.md`; `docs/adr/` retains the earlier research
@@ -124,10 +195,37 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+- **Cross-session know-how**: see AGENTS.md's "Recurring bug class: hardcoded review-cadence dates" and "Central review sidecar/egress gap (tracked, not yet closed)" sections for lessons learned this cycle before touching `nim_benchmark.py`'s evidence gates or the org's central review sidecar.
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
+
+Optimizer score validation is shared by both public optimizers: reject nonfinite
+or out-of-range per-task values before aggregation, preserve valid predicates
+and completed-call usage. See `docs/doctoring/optimizer_score_recovery.md` for
+RED/GREEN, isolated-package evidence and remaining coverage boundaries.
 
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof
 boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
+
+## HTTP response and test resource ownership
+
+Python 3.14 may report an unclosed resource during a later test or final pytest
+cleanup; test-body passes alone are not process success. Keep explicit response
+handles in regression tests and assert closure before fallback/backoff. Close a
+consumed HTTPError only after diagnostics/classification; preserve caller ownership
+when returning the original error. Cleanup failures must not replace the primary
+provider failure. Test servers need server_close after shutdown; SQLite fixtures
+need transaction exit before close. Never mask production leaks with fake-client
+cleanup, warning filters or forced GC. Use the existing project interpreter from
+isolated worktrees, record exact head and process exit, and distinguish default
+suite success from strict-warning acceptance. Reproduction, discarded experiments,
+commands and bounded results: [HTTP resource runbook](docs/doctoring/http_test_resource_lifecycle.md).

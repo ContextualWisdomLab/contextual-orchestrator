@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_n_whole_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_seed_whole_float_string() -> None:
@@ -87,6 +89,7 @@ def test_http_responses_accepts_seed_whole_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_fractional_float_string_n() -> None:
@@ -106,6 +109,7 @@ def test_http_chat_rejects_fractional_float_string_n() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_top_logprobs_zero_float_strings() -> None:
@@ -125,6 +129,7 @@ def test_http_chat_accepts_top_logprobs_zero_float_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_nonzero_top_logprobs_float_string() -> None:
@@ -145,6 +150,7 @@ def test_http_chat_still_rejects_nonzero_top_logprobs_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_top_logprobs_zero_float_string() -> None:
@@ -163,6 +169,7 @@ def test_http_completions_accepts_top_logprobs_zero_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_best_of_whole_float_string() -> None:
@@ -181,6 +188,7 @@ def test_http_completions_accepts_best_of_whole_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_max_tool_calls_zero_float_string() -> None:
@@ -200,6 +208,7 @@ def test_http_chat_accepts_max_tool_calls_zero_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_top_logprobs_whole_float_string() -> None:
@@ -219,6 +228,7 @@ def test_http_responses_accepts_top_logprobs_whole_float_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

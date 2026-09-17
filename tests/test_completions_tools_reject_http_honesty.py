@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -59,6 +60,7 @@ def test_http_completions_accepts_baseline_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_tools() -> None:
@@ -84,6 +86,7 @@ def test_http_completions_rejects_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_tool_choice_auto_as_omit() -> None:
@@ -101,6 +104,7 @@ def test_http_completions_accepts_tool_choice_auto_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_tool_choice_required() -> None:
@@ -119,6 +123,7 @@ def test_http_completions_rejects_tool_choice_required() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_functions_and_function_call() -> None:
@@ -138,6 +143,7 @@ def test_http_completions_rejects_functions_and_function_call() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_parallel_tool_calls() -> None:
@@ -156,6 +162,7 @@ def test_http_completions_rejects_parallel_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

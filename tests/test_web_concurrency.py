@@ -59,7 +59,8 @@ def _post(port: int) -> tuple[int, dict[str, object]]:
         with urllib.request.urlopen(request, timeout=6) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_slow_provider_calls_do_not_block_liveness_or_overload_rejection() -> None:

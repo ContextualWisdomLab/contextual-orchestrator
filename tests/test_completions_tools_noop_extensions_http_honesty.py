@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -60,6 +61,7 @@ def test_http_completions_accepts_empty_functions_array() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_parallel_tool_calls_false() -> None:
@@ -78,6 +80,7 @@ def test_http_completions_accepts_parallel_tool_calls_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_parallel_tool_calls_true() -> None:
@@ -98,6 +101,7 @@ def test_http_completions_rejects_parallel_tool_calls_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_nonempty_functions() -> None:
@@ -116,6 +120,7 @@ def test_http_completions_rejects_nonempty_functions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_parallel_tool_calls_non_boolean() -> None:
@@ -134,6 +139,7 @@ def test_http_completions_rejects_parallel_tool_calls_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_empty_tools_and_parallel_false() -> None:
@@ -153,3 +159,4 @@ def test_http_completions_accepts_empty_tools_and_parallel_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

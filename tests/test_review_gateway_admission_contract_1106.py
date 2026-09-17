@@ -8,6 +8,8 @@ tests exercise the real contract behavior, not the mere presence of a name.
 
 from __future__ import annotations
 
+from typing import get_type_hints
+
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
@@ -185,3 +187,10 @@ def test_pool_admission_preserves_each_published_ceiling(monkeypatch):
         for admission in review_gateway.review_pool_admissions(orchestrator.agents)
     }
     assert ceilings == {"small-review": 4096, "large-review": 200000}
+
+
+def test_public_review_pool_admissions_type_hints_resolve():
+    """The public admission contract exposes runtime-resolvable annotations."""
+    hints = get_type_hints(review_gateway.review_pool_admissions)
+    assert hints["agents"]
+    assert hints["return"]

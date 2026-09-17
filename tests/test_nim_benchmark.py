@@ -11,28 +11,32 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import copy
+import datetime
+import inspect
 import io
 import json
 import os
 import socket
+import sys
 import tempfile
 import threading
 import urllib.error
 from pathlib import Path
-import sys
+from typing import ClassVar
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import nim_benchmark as nb  # noqa: E402
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator import nim_benchmark as nb
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import (  # noqa: E402
+from contextual_orchestrator.orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
@@ -41,16 +45,51 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPO_ROOT / "examples" / "nim_task_manifest.json")
+
+
+DECLARED_MAX_WORKFLOW_DEPTH = 5
+DECLARED_MAX_OUTPUT_TOKENS = 264
+DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
+    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
+)
+
+
+def _declared_policy_kwargs(**overrides: object) -> dict:
+    """Return explicit equal-budget envelopes for policy evaluation fixtures."""
+    payload: dict = {
+        "total_token_budget": DECLARED_POLICY_TOTAL_TOKEN_BUDGET,
+        "maximum_calls": DECLARED_MAX_WORKFLOW_DEPTH,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _declared_run_kwargs(**overrides: object) -> dict:
+    """Return explicit workflow-budget declarations for benchmark runs."""
+    payload: dict = {
+        "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
+        "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
+    }
+    payload.update(overrides)
+    return payload
+
+
+CLI_WORKFLOW_BUDGET_FLAGS = [
+    "--max-workflow-depth",
+    "5",
+    "--max-output-tokens",
+    "264",
+]
+CLI_RUN_FLAGS = [*CLI_WORKFLOW_BUDGET_FLAGS]
+
 PRICING_SCENARIO_PATH = str(REPO_ROOT / "examples" / "nim_pricing_scenario.json")
 FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
-    """Isolate credentials and keep offline contracts independent of wall time."""
+def _fresh_backend():
+    """Isolated in-memory KV and a clean benchmark env var for every test."""
     set_backend(InMemoryCredentialBackend())
-    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2000-01-01")
-    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2999-12-31")
     saved_env = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
     try:
         yield
@@ -58,6 +97,35 @@ def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
         set_backend(None)
         if saved_env is not None:
             os.environ[nb.NIM_CREDENTIAL_NAME] = saved_env
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture:
+    production ``run_mode="live"`` calls are meant to fail closed once that
+    literal calendar date lapses, until someone actually re-reviews the
+    official source (``_require_current_actual_cost_evidence``). That
+    review-cadence invariant itself is owned by
+    ``test_nim_benchmark_release_acceptance.py``, which injects an explicit
+    ``today`` alongside explicit reviewed/valid dates. A handful of tests in
+    this file exercise unrelated ``live``-path behavior (missing credential,
+    transport wiring, contract failures, ...) and only need to get past the
+    evidence gate to reach their own assertion — they request this fixture by
+    name. Deliberately **not** autouse: every other test in this file,
+    present or future, must keep observing the literal production evidence
+    dict by default so the fail-closed gate stays file-wide except where a
+    test explicitly opts out of it.
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _ok_json(payload: object) -> tuple[int, bytes]:
@@ -159,8 +227,8 @@ class _FakeDirectResponse:
 class _FakeDirectConnection:
     """Scripted pinned connection that records address and authority evidence."""
 
-    plans: list[object] = []
-    instances: list["_FakeDirectConnection"] = []
+    plans: ClassVar[list[object]] = []
+    instances: ClassVar[list[_FakeDirectConnection]] = []
 
     def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
         self.server_hostname = server_hostname
@@ -653,7 +721,7 @@ def test_probe_supported_chat() -> None:
 
 def test_probe_timeout_and_network_failures() -> None:
     def timeout_transport(method, url, headers, body):
-        raise socket.timeout("slow")
+        raise TimeoutError("slow")
 
     def broken_transport(method, url, headers, body):
         raise ConnectionResetError("reset")
@@ -1269,7 +1337,7 @@ def test_cell_usage_rejects_unknown_agent_as_contract_error() -> None:
 def test_run_error_classification() -> None:
     assert nb._classify_run_error(TimeoutError("slow")) == "timeout"
     wrapped = RuntimeError("provider failed")
-    wrapped.__cause__ = socket.timeout("slow")
+    wrapped.__cause__ = TimeoutError("slow")
     assert nb._classify_run_error(wrapped) == "timeout"
     assert nb._classify_run_error(ValueError("bad")) == "failure"
 
@@ -1413,15 +1481,66 @@ def test_cheapest_priced_agent_selection() -> None:
 
 
 def test_planned_evaluation_requests_formula() -> None:
-    assert nb.planned_evaluation_requests(3, 10) == 10 * (
-        3 * 2 + nb.MAX_WORKFLOW_DEPTH + nb.MAX_WORKFLOW_DEPTH + 2
+    assert nb.planned_evaluation_requests(3, 10, maximum_calls=5) == 10 * (
+        3 * 2 + 5 + 5 + 2
     )
+
+
+def test_planned_evaluation_requests_require_declared_maximum_calls() -> None:
+    """Request planning cannot invent a five-step envelope."""
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=None)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=True)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.planned_evaluation_requests(3, 10, maximum_calls=0)
+    assert nb.planned_evaluation_requests(3, 10, maximum_calls=4) == 10 * (
+        3 * 2 + 4 + 4 + 2
+    )
+
+
+def test_evaluate_policies_require_declared_workflow_budget() -> None:
+    """Equal-budget cells cannot inherit hidden token or call envelopes."""
+    parameters = inspect.signature(nb.evaluate_policies).parameters
+    assert parameters["total_token_budget"].default is None
+    assert parameters["maximum_calls"].default is None
+    client = ModelClient()
+    agents = _mock_agents("vendor/model-a")
+    with pytest.raises(nb.BenchmarkContractError, match="total_token_budget"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=None,
+            maximum_calls=5,
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            total_token_budget=1320,
+            maximum_calls=None,
+        )
 
 
 def test_evaluate_policies_contract_failures() -> None:
     client = ModelClient()
     with pytest.raises(nb.BenchmarkContractError):
-        nb.evaluate_policies([], _mini_manifest(), None, client, nb.RequestBudget(100))
+        nb.evaluate_policies(
+            [],
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(100),
+            **_declared_policy_kwargs(),
+        )
     agents = _mock_agents("vendor/model-a")
     exploratory_only = {
         "manifest_version": "1",
@@ -1429,11 +1548,21 @@ def test_evaluate_policies_contract_failures() -> None:
     }
     with pytest.raises(nb.BenchmarkContractError):
         nb.evaluate_policies(
-            agents, exploratory_only, None, client, nb.RequestBudget(100)
+            agents,
+            exploratory_only,
+            None,
+            client,
+            nb.RequestBudget(100),
+            **_declared_policy_kwargs(),
         )
     with pytest.raises(nb.BenchmarkBudgetError):
         nb.evaluate_policies(
-            agents, _mini_manifest(), None, client, nb.RequestBudget(2)
+            agents,
+            _mini_manifest(),
+            None,
+            client,
+            nb.RequestBudget(2),
+            **_declared_policy_kwargs(),
         )
 
     class RememberedContractClient(ModelClient):
@@ -1449,7 +1578,8 @@ def test_evaluate_policies_contract_failures() -> None:
             None,
             RememberedContractClient(),
             nb.RequestBudget(100),
-        )
+        **_declared_policy_kwargs()
+    )
 
 
 def test_evaluate_policies_all_arms_with_pricing() -> None:
@@ -1463,6 +1593,7 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
         nb._BudgetedModelClient(budget),
         budget,
         nb._deterministic_timer(),
+        **_declared_policy_kwargs()
     )
     cells = evaluation["evaluation_cells"]
     policies = {cell["policy_name"] for cell in cells}
@@ -1476,18 +1607,19 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert evaluation["cheapest_worker_skip_reason"] is None
     conduct_cells = [cell for cell in cells if cell["policy_name"] == "conduct_bounded"]
     assert all(
-        cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+        cell["workflow_depth"] <= DECLARED_MAX_WORKFLOW_DEPTH for cell in conduct_cells
     )
     assert all(
-        cell["configured_total_token_budget"] == nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        cell["configured_total_token_budget"] == DECLARED_POLICY_TOTAL_TOKEN_BUDGET
         for cell in conduct_cells
     )
     assert all(
-        cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH
+        cell["configured_maximum_calls"] == DECLARED_MAX_WORKFLOW_DEPTH
         for cell in conduct_cells
     )
     assert all(
-        cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+        cell["observed_budget_calls"] <= DECLARED_MAX_WORKFLOW_DEPTH
+        for cell in conduct_cells
     )
     assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
     assert cells == sorted(
@@ -1510,6 +1642,7 @@ def test_evaluate_policies_preserves_reported_usage_source() -> None:
         None,
         ReportedUsageClient(),
         nb.RequestBudget(100),
+        **_declared_policy_kwargs()
     )
     assert any(
         cell["token_usage_source"] == "reported"
@@ -1556,6 +1689,7 @@ def test_evaluate_policies_records_observed_budget_overflow() -> None:
         OversizedAnswerClient(),
         nb.RequestBudget(100),
         total_token_budget=512,
+        maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH,
     )
 
     assert evaluation["evaluation_cells"]
@@ -1569,7 +1703,8 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
     agents = _mock_agents("vendor/model-a")
     budget = nb.RequestBudget(200)
     evaluation = nb.evaluate_policies(
-        agents, _mini_manifest(), None, ModelClient(), budget
+        agents, _mini_manifest(), None, ModelClient(), budget,
+        **_declared_policy_kwargs()
     )
     assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
     unpriced_scenario = {
@@ -1583,6 +1718,7 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
         unpriced_scenario,
         ModelClient(),
         nb.RequestBudget(200),
+        **_declared_policy_kwargs()
     )
     assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
 
@@ -1676,6 +1812,27 @@ def test_summaries_count_failures_as_zero_quality() -> None:
     assert nb.build_pareto_frontiers(summaries)["quality_vs_hypothetical_cost"] == []
 
 
+@pytest.mark.parametrize("declared_task_count", [30, 30_000])
+def test_observed_counts_do_not_authorize_production_review(
+    declared_task_count: int,
+) -> None:
+    """Counts alone cannot validate a population, scorer, or decision design."""
+    cells = [
+        _synthetic_cell(policy_name, f"task_{task_index}", 1.0)
+        for task_index in range(30)
+        for policy_name in ("route_once", "conduct_bounded")
+    ]
+    summary = nb._evaluation_evidence_summary(cells, declared_task_count)
+    assert summary["observed_locked_task_count"] == declared_task_count
+    assert summary["observed_paired_task_count"] == 30
+    assert summary["observed_completion_fraction"] == 1.0
+    assert summary["evidence_status"] == "measurement_evidence_only"
+    assert summary["decision_use"] == "measurement_evidence_only"
+    assert summary["minimum_paired_task_count"] is None
+    assert summary["required_completion_fraction"] is None
+    assert summary["routing_recommendation"] is None
+
+
 def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
     cells = [
         _synthetic_cell("route_once", "task_one", 1.0),
@@ -1688,7 +1845,45 @@ def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
     assert summary["observed_completion_fraction"] == 1.0
 
 
-def test_best_single_worker_hindsight_selection() -> None:
+@pytest.mark.parametrize("locked_success", [True, False])
+def test_exploratory_outcomes_cannot_change_locked_policy_evidence(
+    locked_success: bool,
+) -> None:
+    """Exploratory successes or failures cannot promote or dilute locked evidence."""
+    locked_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"locked_{task_index}",
+            1.0 if locked_success else None,
+            "success" if locked_success else "failure",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    exploratory_cells = [
+        _synthetic_cell(
+            policy_name,
+            f"exploratory_{task_index}",
+            None if locked_success else 1.0,
+            "failure" if locked_success else "success",
+        )
+        for policy_name in ("route_once", "conduct_bounded")
+        for task_index in range(100 * nb.MINIMUM_PAIRED_TASK_COUNT)
+    ]
+    for cell in exploratory_cells:
+        cell["task_split"] = "exploratory"
+    mixed_cells = locked_cells + exploratory_cells
+    expected_evidence = nb._evaluation_evidence_summary(
+        locked_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    )
+    assert nb._evaluation_evidence_summary(
+        mixed_cells, nb.MINIMUM_PAIRED_TASK_COUNT
+    ) == expected_evidence
+    assert nb.summarize_policies(mixed_cells) == nb.summarize_policies(locked_cells)
+    assert all(cell["task_split"] == "exploratory" for cell in exploratory_cells)
+
+
+def test_best_single_worker_hindsight_selection_fails_closed_on_ties() -> None:
     assert (
         nb.best_single_worker_hindsight(
             [{"policy_name": "route_once", "mean_task_score": 1.0}]
@@ -1705,6 +1900,27 @@ def test_best_single_worker_hindsight_selection() -> None:
     assert best["model_id"] == "vendor/model-b"
     assert best["selection_basis"] == "hindsight_argmax_mean_locked_score"
 
+    tied = nb.summarize_policies(
+        [
+            _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
+            _synthetic_cell("direct_single_worker:vendor/model-b", "task_one", 1.0),
+        ]
+    )
+    assert nb.best_single_worker_hindsight(tied) is None
+    cells = [
+        _synthetic_cell(policy, "task_one", 1.0)
+        for policy in (
+            "direct_single_worker:vendor/model-a",
+            "direct_single_worker:vendor/model-b",
+            "route_once",
+            "conduct_bounded",
+        )
+    ]
+    comparisons = nb.paired_policy_comparisons(cells, seed=3)
+    assert len(comparisons) == 1
+    assert comparisons[0]["policy_a"] == "conduct_bounded"
+    assert comparisons[0]["policy_b"] == "route_once"
+
 
 def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
     disjoint = [
@@ -1716,13 +1932,112 @@ def test_paired_policy_comparisons_skip_missing_and_disjoint() -> None:
         _synthetic_cell("conduct_bounded", "task_one", 1.0),
         _synthetic_cell("route_once", "task_one", 0.0),
         _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 1.0),
-        # Failed cells carry no score and must stay out of the pairing.
+        # A task observed for only one policy cannot form a pair.
         _synthetic_cell("route_once", "task_three", None, outcome="failure"),
     ]
     comparisons = nb.paired_policy_comparisons(cells, seed=3)
     pairs = {(row["policy_a"], row["policy_b"]) for row in comparisons}
     assert ("conduct_bounded", "route_once") in pairs
     assert ("route_once", "direct_single_worker:vendor/model-a") in pairs
+
+
+@pytest.mark.parametrize("failure_outcome", ["failure", "timeout"])
+def test_paired_comparisons_retain_failed_delivery_and_elapsed_time(
+    failure_outcome: str,
+) -> None:
+    """Dropping a failed task must not turn worse delivery into an apparent tie."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+        _synthetic_cell("conduct_bounded", "task_two", None, failure_outcome),
+        _synthetic_cell("route_once", "task_two", 1.0),
+        _synthetic_cell("route_once", "unpaired_task", 1.0),
+    ]
+    for cell, latency in zip(cells, [100.0, 150.0, 2000.0, 50.0, 5.0]):
+        cell["end_to_end_latency_ms"] = latency
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 2
+    assert comparison["mean_difference"] == -0.5
+    assert (comparison["ci_low"], comparison["ci_high"]) == (-1.0, 0.0)
+    assert comparison["policy_a_success_count"] == 1
+    assert comparison["policy_b_success_count"] == 2
+    assert comparison["policy_a_unpaired_task_count"] == 0
+    assert comparison["policy_b_unpaired_task_count"] == 1
+    latency = comparison["end_to_end_latency_ms"]
+    assert latency["pair_count"] == 2
+    assert latency["mean_difference"] == 950.0
+    assert (latency["ci_low"], latency["ci_high"]) == (-50.0, 1950.0)
+    assert cells[2]["task_score"] is None
+
+
+def test_paired_comparisons_keep_all_failed_pairs_without_inventing_scores() -> None:
+    """Absent scored answers stay absent even when delivery reward is zero."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", None, "timeout"),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    assert (comparison["ci_low"], comparison["ci_high"]) == (0.0, 0.0)
+    assert comparison["policy_a_success_count"] == 0
+    assert comparison["policy_b_success_count"] == 0
+    assert comparison["end_to_end_latency_ms"]["mean_difference"] == 200.0
+    assert all(cell["task_score"] is None for cell in cells)
+    evidence = nb._evaluation_evidence_summary(cells, 1)
+    assert evidence["evidence_status"] == "measurement_evidence_only"
+    assert evidence["decision_use"] == "measurement_evidence_only"
+    assert evidence["observed_paired_task_count"] == 0
+    assert evidence["observed_completion_fraction"] == 0.0
+    assert evidence["minimum_paired_task_count"] is None
+    assert evidence["required_completion_fraction"] is None
+    assert evidence["routing_recommendation"] is None
+
+
+def test_paired_comparisons_exclude_exploratory_tasks_and_reject_duplicate_cells() -> None:
+    """Neither exploratory outcomes nor silent overwrites may change pairing."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "locked_task", 1.0),
+        _synthetic_cell("route_once", "locked_task", 1.0),
+        _synthetic_cell("conduct_bounded", "exploratory_task", 0.0),
+        _synthetic_cell("route_once", "exploratory_task", 1.0),
+    ]
+    cells[2]["task_split"] = cells[3]["task_split"] = "exploratory"
+    comparison = nb.paired_policy_comparisons(cells, seed=3)[0]
+    assert comparison["pair_count"] == 1
+    assert comparison["mean_difference"] == 0.0
+    with pytest.raises(nb.BenchmarkContractError, match="duplicate policy/task"):
+        nb.paired_policy_comparisons([*cells, cells[0]], seed=3)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("end_to_end_latency_ms", float("nan")),
+        ("end_to_end_latency_ms", float("inf")),
+        ("end_to_end_latency_ms", -1.0),
+        ("end_to_end_latency_ms", True),
+        ("task_score", None),
+        ("task_score", float("nan")),
+        ("task_score", -0.1),
+        ("task_score", 1.1),
+        ("task_score", True),
+        ("run_outcome", "unobserved"),
+    ],
+)
+def test_paired_comparisons_reject_invalid_observations(
+    field_name: str, invalid_value: object
+) -> None:
+    """Invalid measurements cannot produce numeric-looking comparison evidence."""
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0][field_name] = invalid_value
+    with pytest.raises(nb.BenchmarkContractError, match=field_name):
+        nb.paired_policy_comparisons(cells, seed=3)
 
 
 def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
@@ -1779,6 +2094,55 @@ def test_report_schema_validation_reports_missing_paths() -> None:
     assert "provenance.run_mode" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("mutate_report", "message"),
+    [
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "planned_evaluation_cells", []
+            ),
+            "evaluation identities must be a non-empty list",
+        ),
+        (
+            lambda report: report["evaluation"]["evaluation_cells"][0].__setitem__(
+                "policy_name", ""
+            ),
+            "evaluation identity is invalid",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__("locked_task_count", 0),
+            "evaluation counts must be positive integers",
+        ),
+        (
+            lambda report: report["provenance"]["benchmark_parameters"].__setitem__(
+                "max_eval_models", 0
+            ),
+            "evaluation model limit must be a positive integer",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "worker_count", report["evaluation"]["worker_count"] + 1
+            ),
+            "planned workers do not match the selected catalog",
+        ),
+        (
+            lambda report: report["evaluation"].__setitem__(
+                "cheapest_worker_skip_reason", "unknown_skip_reason"
+            ),
+            "unknown cheapest worker skip reason",
+        ),
+    ],
+)
+def test_report_schema_rejects_invalid_evaluation_contract(
+    tmp_path: Path, mutate_report, message: str
+) -> None:
+    """Schema validation must fail closed on incomplete evaluation identities."""
+    report = copy.deepcopy(_dry_report(str(tmp_path / "valid_report")))
+    mutate_report(report)
+    with pytest.raises(nb.BenchmarkContractError, match=message):
+        nb.validate_report_schema(report)
+
+
 def _dry_report(output_dir: str) -> dict:
     return nb.run_benchmark(
         "dry_run",
@@ -1786,12 +2150,64 @@ def _dry_report(output_dir: str) -> dict:
         PRICING_SCENARIO_PATH,
         output_dir,
         max_total_requests=900,
+        **_declared_run_kwargs()
     )
+
+
+@pytest.mark.parametrize("mutation", ["omit_task", "duplicate", "unexpected", "split", "omit_both_task", "omit_both_policy"])
+def test_report_rejects_task_omitted_from_every_policy(tmp_path: Path, mutation: str) -> None:
+    """Shared missing observations must not pass as a complete evidence set."""
+    report = _dry_report(str(tmp_path / "complete_report"))
+    cells = report["evaluation"]["evaluation_cells"]
+    if mutation in {"omit_both_task", "omit_both_policy"}:
+        field = "task_id" if mutation == "omit_both_task" else "policy_name"
+        omitted = cells[0][field]
+        for key in ("evaluation_cells", "planned_evaluation_cells"):
+            report["evaluation"][key] = [
+                cell for cell in report["evaluation"][key] if cell[field] != omitted
+            ]
+    elif mutation == "omit_task":
+        omitted_task = cells[0]["task_id"]
+        report["evaluation"]["evaluation_cells"] = [
+            cell for cell in cells if cell["task_id"] != omitted_task
+        ]
+    elif mutation == "duplicate":
+        cells.append(dict(cells[0]))
+    elif mutation == "unexpected":
+        cells[0]["task_id"] = "unexpected_task"
+    else:
+        cells[0]["task_split"] = "exploratory"
+    incomplete_output = tmp_path / "incomplete_report"
+    with pytest.raises(nb.BenchmarkContractError):
+        nb.write_benchmark_artifacts(report, str(incomplete_output))
+    assert not incomplete_output.exists()
+
+
+def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Path) -> None:
+    """Published uncertainty must show the new denominator, time, and schema."""
+    report = _dry_report(str(tmp_path / "current_report"))
+    cells = [
+        _synthetic_cell("conduct_bounded", "task_one", None, "failure"),
+        _synthetic_cell("route_once", "task_one", 1.0),
+    ]
+    cells[0]["end_to_end_latency_ms"] = 900.0
+    cells[1]["end_to_end_latency_ms"] = 700.0
+    report["evaluation"]["paired_comparisons"] = nb.paired_policy_comparisons(cells, 3)
+    summary = nb.render_markdown_summary(report)
+    assert "-1.0 [-1.0, -1.0]" in summary
+    assert "200.0 [200.0, 200.0] ms" in summary
+    assert "successful outcomes A/B 0/1 and 1/1" in summary
+    assert report["benchmark_schema_version"] == "3.0.0"
+    report["benchmark_schema_version"] = "1.0.0"
+    with pytest.raises(nb.BenchmarkContractError, match="unsupported benchmark schema"):
+        nb.validate_report_schema(report)
 
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
     tmp_path: Path,
+    current_actual_cost_evidence: None,
 ) -> None:
+    """Publish nothing when evaluation becomes malformed after valid discovery."""
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     dry_transport = nb.build_dry_run_transport()
     _, catalog_body = dry_transport(
@@ -1820,9 +2236,60 @@ def test_evaluation_contract_failure_publishes_no_artifacts(
             git_sha="e" * 40,
             workflow_run_id="run-contract-failure",
             transport=malformed_during_evaluation,
+            **_declared_run_kwargs(),
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_budgeted_client_delegates_validation_without_injected_transport() -> None:
+    """The ordinary ModelClient validation path remains intact without a seam."""
+    client = nb._BudgetedModelClient(nb.RequestBudget(1))
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+    destination = (socket.AF_INET, ("93.184.216.34", 443))
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(ModelClient, "_validate_provider", lambda *_: destination)
+        assert client._validate_provider(agent) == destination
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "http://nim.example.test/v1",
+        "https://user@nim.example.test/v1",
+        "https://nim.example.test/v1?credential=secret",
+    ),
+)
+def test_injected_benchmark_transport_rejects_unsafe_provider_url(base_url: str) -> None:
+    """An injected transport bypasses DNS only after strict URL validation."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent("live_worker", "provider/model", base_url=base_url)
+
+    with pytest.raises(RuntimeError, match="base_url"):
+        client._validate_provider(agent)
+
+
+def test_injected_benchmark_transport_requires_kv_credential() -> None:
+    """The offline transport seam cannot bypass the runtime credential contract."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+
+    with pytest.raises(NotConfigured, match=nb.NIM_CREDENTIAL_NAME):
+        client._validate_provider(agent)
 
 
 def test_artifact_writer_refuses_secret_leak() -> None:
@@ -1949,7 +2416,13 @@ def test_deterministic_timer_advances_monotonically() -> None:
 
 def test_run_benchmark_rejects_unknown_mode() -> None:
     with pytest.raises(nb.BenchmarkContractError):
-        nb.run_benchmark("test", TASK_MANIFEST_PATH, None, "unused")
+        nb.run_benchmark(
+            "test",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            **_declared_run_kwargs(),
+        )
 
 
 def test_run_benchmark_rejects_output_cap_before_egress() -> None:
@@ -1967,6 +2440,7 @@ def test_run_benchmark_rejects_output_cap_before_egress() -> None:
             None,
             "unused",
             max_output_tokens=0,
+            max_workflow_depth=DECLARED_MAX_WORKFLOW_DEPTH,
             transport=transport,
         )
     assert calls == 0
@@ -2017,8 +2491,14 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
             first["catalog_snapshot"]["invalid_entries"][0]["invalid_reason"]
             == "missing_model_id"
         )
-        # The evaluation compares every required system.
-        assert first["evaluation"]["best_single_worker_hindsight"] is not None
+        # Tied dry-run workers do not invent a unique hindsight selection.
+        direct_scores = [
+            row["mean_task_score"]
+            for row in first["evaluation"]["policy_summaries"]
+            if row["policy_name"].startswith("direct_single_worker:")
+        ]
+        assert direct_scores.count(max(direct_scores)) > 1
+        assert first["evaluation"]["best_single_worker_hindsight"] is None
         assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
         assert first["evaluation"]["paired_comparisons"]
         # Deterministic artifacts: identical reports across runs.
@@ -2048,6 +2528,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
             tmp,
             max_total_requests=900,
             transport=nb.build_dry_run_transport(),
+            **_declared_run_kwargs(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
         assert (
@@ -2056,7 +2537,42 @@ def test_dry_run_accepts_explicit_transport() -> None:
         )
 
 
-def test_live_run_fails_closed_without_credential() -> None:
+def test_live_run_without_evidence_fixture_still_fails_closed_on_expired_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A test that does not request ``current_actual_cost_evidence`` must still
+    observe the literal ``nb.ACTUAL_COST_EVIDENCE`` dict rather than some
+    other test's artificially-extended window -- proving the fixture above is
+    opt-in per test, not file-wide, even though this module also collects
+    tests that do request it. Deliberately expires the dict itself here
+    (rather than relying on real wall-clock time happening to be past
+    whatever the production ``valid_until_date`` currently is) so this
+    assertion stays stable across routine evidence refreshes such as #1073 --
+    a prior version of this test depended on that real-world timing and broke
+    the moment the production evidence was refreshed. A registered credential
+    is present so the run reaches the evidence gate (the first live-mode
+    check) rather than failing earlier for an unrelated reason.
+    """
+    register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2020-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2020-02-01")
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(nb.BenchmarkContractError, match="expired"):
+            nb.run_benchmark(
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                git_sha="f" * 40,
+                workflow_run_id="run-evidence-gate-regression",
+                **_declared_run_kwargs(),
+            )
+
+
+def test_live_run_fails_closed_without_credential(
+    current_actual_cost_evidence: None,
+) -> None:
+    """Require a credential after isolating the reviewed-cost validity window."""
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(NotConfigured):
             nb.run_benchmark(
@@ -2066,10 +2582,12 @@ def test_live_run_fails_closed_without_credential() -> None:
                 tmp,
                 git_sha="a" * 40,
                 workflow_run_id="run-1",
+                **_declared_run_kwargs(),
             )
 
 
-def test_live_run_end_to_end_offline() -> None:
+def test_live_run_end_to_end_offline(current_actual_cost_evidence: None) -> None:
+    """Exercise live-mode report wiring with offline doubles, not provider evidence."""
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
@@ -2086,6 +2604,7 @@ def test_live_run_end_to_end_offline() -> None:
                 git_sha="b" * 40,
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
+                **_declared_run_kwargs(),
             )
     finally:
         ModelClient._validate_provider = original_validate
@@ -2099,7 +2618,10 @@ def test_live_run_end_to_end_offline() -> None:
     assert "nvapi-test-credential" not in json.dumps(report)
 
 
-def test_live_run_uses_default_transport_builder_when_none_given() -> None:
+def test_live_run_uses_default_transport_builder_when_none_given(
+    current_actual_cost_evidence: None,
+) -> None:
+    """Exercise the default transport seam using an offline replacement builder."""
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_builder = nb.build_default_transport
     nb.build_default_transport = lambda timeout_seconds: nb.build_dry_run_transport()
@@ -2117,6 +2639,7 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
                 max_total_requests=900,
                 git_sha="c" * 40,
                 workflow_run_id="run-43",
+                **_declared_run_kwargs(),
             )
     finally:
         nb.build_default_transport = original_builder
@@ -2160,8 +2683,7 @@ def test_cli_dry_run_succeeds() -> None:
                     "--output-dir",
                     tmp,
                     "--max-total-requests",
-                    "900",
-                ]
+                    "900", *CLI_RUN_FLAGS]
             )
         assert exit_code == 0
         printed = json.loads(stdout.getvalue())
@@ -2173,13 +2695,15 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(
-            ["--dry-run", "--task-manifest", "does/not/exist.json"]
+            ["--dry-run", "--task-manifest", "does/not/exist.json", *CLI_RUN_FLAGS]
         )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
 
 
-def test_cli_live_fails_closed_without_secret() -> None:
+def test_cli_live_fails_closed_without_secret(
+    current_actual_cost_evidence: None,
+) -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(
@@ -2189,8 +2713,7 @@ def test_cli_live_fails_closed_without_secret() -> None:
                 "--git-sha",
                 "d" * 40,
                 "--workflow-run-id",
-                "run-1",
-            ]
+                "run-1", *CLI_RUN_FLAGS]
         )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["error_class"] == "NotConfigured"
@@ -2206,11 +2729,49 @@ def test_cli_failure_redacts_resolved_bearer(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(nb, "run_benchmark", fail)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exit_code = nb.run_benchmark_cli(["--dry-run"])
+        exit_code = nb.run_benchmark_cli(["--dry-run", *CLI_RUN_FLAGS])
     assert exit_code == 1
     assert secret not in stdout.getvalue()
     assert "[REDACTED]" in stdout.getvalue()
 
+
+
+def test_run_benchmark_requires_declared_workflow_budget() -> None:
+    """Output-token and workflow-depth budgets are run declarations."""
+    parameters = inspect.signature(nb.run_benchmark).parameters
+    assert parameters["max_output_tokens"].default is None
+    assert parameters["max_workflow_depth"].default is None
+    with pytest.raises(nb.BenchmarkContractError, match="max_output_tokens"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+        )
+    with pytest.raises(nb.BenchmarkContractError, match="max_workflow_depth"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            max_output_tokens=264,
+        )
+
+
+def test_cli_fails_closed_without_workflow_budget_declaration() -> None:
+    """CLI cannot invent a five-step envelope or 264-token output cap."""
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = nb.run_benchmark_cli(
+            ["--dry-run", "--task-manifest", TASK_MANIFEST_PATH]
+        )
+    assert exit_code == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["benchmark_failed_closed"] is True
+    assert payload["error_class"] == "BenchmarkContractError"
+    assert "max_output_tokens" in payload["error_message"] or (
+        "max_workflow_depth" in payload["error_message"]
+    )
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
