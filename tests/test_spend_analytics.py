@@ -7,6 +7,7 @@ import threading
 import urllib.request
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import orchestrator as orchestrator_module
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.token_counting import TokenCountUnavailable
 
@@ -28,7 +29,11 @@ def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
     )
 
 
-def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
+def test_exact_output_without_prompt_usage_is_explicitly_unavailable(monkeypatch) -> None:
+    # Isolate the optional fast-mlsirm judge so it cannot contribute a second
+    # usage source. With prompt tokens unmeasured, honest classification is
+    # "mixed" even when output tokens are fully exact-tokenizer counted.
+    monkeypatch.setattr(orchestrator_module, "_resolve_fast_mlsirm_components", lambda: None)
     orchestrator = _orchestrator()
     orchestrator.run([{"role": "user", "content": "account for this"}])
     report = orchestrator.spend_analytics()
@@ -109,6 +114,7 @@ def test_http_spend_endpoint_preserves_unavailable_status() -> None:
             status, body = response.status, json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["measurement_status"] == "unavailable"
     assert body["totals"]["prompt_tokens"] is None

@@ -326,14 +326,17 @@ def test_working_background_store_marks_records_stored() -> None:
 def test_sql_dimension_seeding_is_idempotent_on_existing_rows() -> None:
     """Re-opening the schema skips inserts when catalog rows already exist."""
     connection = sqlite3.connect(":memory:")
-    SqlLedgerStore(connection, paramstyle="qmark")
-    SqlLedgerStore(connection, paramstyle="qmark")  # second pass hits exists-branch
+    try:
+        SqlLedgerStore(connection, paramstyle="qmark")
+        SqlLedgerStore(connection, paramstyle="qmark")  # second pass hits exists-branch
 
-    cur = connection.cursor()
-    cur.execute("SELECT dimension_name FROM cost_attribution_dimensions")
-    names = [row[0] for row in cur.fetchall()]
-    assert sorted(names) == sorted(ATTRIBUTION_DIMENSIONS)
-    assert len(names) == len(set(names))
+        cur = connection.cursor()
+        cur.execute("SELECT dimension_name FROM cost_attribution_dimensions")
+        names = [row[0] for row in cur.fetchall()]
+        assert sorted(names) == sorted(ATTRIBUTION_DIMENSIONS)
+        assert len(names) == len(set(names))
+    finally:
+        connection.close()
 
 
 def test_non_blocking_wrapper_persists_through_background_worker() -> None:

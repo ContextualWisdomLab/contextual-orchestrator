@@ -150,11 +150,11 @@ actual and hypothetical cost fields, and a response SHA-256.
 Actual endpoint access and hypothetical paid cost remain separate evidence
 classes.
 
-As reviewed on 2026-08-05, NVIDIA's current General FAQ states that NVIDIA
+As reviewed on 2026-09-05, NVIDIA's Run NIM Anywhere page states that NVIDIA
 Developer Program members have free access to hosted NIM API endpoints for
 prototyping. The report records that exact source, review date, validity horizon,
 program context, production distinction, and uncertainty. A live run fails
-closed after 2026-09-04 until the official source is reviewed again. Production
+closed after 2026-10-04 until the official source is reviewed again. Production
 support and licensing are not inferred from prototype access and require
 NVIDIA AI Enterprise under the reviewed documentation.
 
@@ -168,16 +168,16 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
-tasks kept outside the decision set. It proves integration behavior but does not
-authorize production routing. A report reaches
-`evidence_review_required` only when it contains at least 30 paired locked tasks
-and at least 90% successful comparison cells. Otherwise it reports
-`insufficient_evidence` and explains the shortfall.
-
-These thresholds are explicit conservative governance floors, not universal
-statistical guarantees. Every report keeps `routing_recommendation` null even
-when the floor is met; a human review remains required.
+The bundled thirty-task manifest is an integration fixture with two exploratory
+tasks kept outside the measurement set. Observed task counts and completion
+fractions cannot establish statistical sufficiency or authorize production
+routing. Reports use `measurement_evidence_only`, retain null threshold fields
+for schema compatibility, and keep `routing_recommendation` null. Consumers must
+not reinterpret the absence of a cutoff as unrestricted production permission.
+A production decision requires an independently justified, pre-registered and
+validated evaluation design appropriate to the estimand and deployment scope.
+The completion fraction describes emitted cells, not a validated response rate
+for a target population or proof of an expected task-by-policy matrix.
 
 - Seeded paired bootstrap intervals preserve task pairing.
 - Pareto frontiers cover quality versus latency and quality versus reviewed
@@ -186,6 +186,45 @@ when the floor is met; a human review remains required.
 - The manifest rejects expected-answer leakage according to each task's scorer.
 - Only locked tasks enter reported comparisons; exploratory tasks remain outside
   the decision evidence.
+
+### Comparison report version 3
+
+Version 3 preserves a task/policy/split plan made before evaluation, including
+each direct worker and the optional cheapest policy only when eligible.
+Assembly and artifact publication reject missing, duplicate, or unexpected
+observations. Missing observations are not treated as failed deliveries.
+The plan must also match the locked task count and the complete policy matrix
+for the selected catalog workers, model limit, and cheapest-policy skip reason.
+This is an internal completeness check, not independently verified
+preregistration; coordinated changes to the plan, observations, and supporting
+metadata are outside its proof.
+Regenerate older reports because they lack this required plan.
+
+The version 2 comparison semantics are retained: every locked task attempted by both policies, including
+failures and timeouts. The delivered-task score is the scorer's value after a
+successful run and zero when no answer was delivered successfully. The original
+failure record retains `task_score: null`; zero delivery reward is not an
+estimate of an unobserved answer's correctness or a psychometric response.
+
+Each comparison reports A-minus-B mean delivered-score and elapsed-time
+differences with paired 95% bootstrap intervals, successful outcome counts on
+the shared tasks, and unmatched task counts. Elapsed time ends at the recorded
+terminal outcome, including a failure or timeout. A fast failure is therefore
+visible alongside its zero delivery reward; lower elapsed time alone is not an
+improvement in service. The intervals condition on the common task set and the
+selected policies, including the explicitly labelled hindsight worker.
+When direct workers tie for the highest quality, no unique hindsight worker
+is selected and its comparisons are omitted. The observations and other policy
+comparisons remain available; model names never break a quality tie.
+
+Reports using version 1 compared only jointly successful tasks. Their values
+must not be pooled with version 2 or 3, and the validator rejects old schemas.
+Version 2 observations require their independently preserved evaluation plan
+before migration; do not infer a complete plan from surviving observations.
+No task-count or completion-fraction threshold authorizes production promotion.
+The report remains measurement evidence only, with no routing recommendation.
+These mean intervals do not establish p95 performance, population
+representativeness, or uncertainty from choosing the hindsight winner.
 
 ## Fail-closed contract
 

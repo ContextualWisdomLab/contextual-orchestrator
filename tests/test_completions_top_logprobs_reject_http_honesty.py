@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -59,6 +60,7 @@ def test_http_completions_accepts_baseline_without_top_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_top_logprobs() -> None:
@@ -79,6 +81,7 @@ def test_http_completions_rejects_top_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_top_logprobs_zero_as_omit() -> None:
@@ -98,3 +101,4 @@ def test_http_completions_accepts_top_logprobs_zero_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

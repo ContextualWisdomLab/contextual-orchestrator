@@ -59,8 +59,9 @@ import time
 import urllib.error
 import urllib.parse
 import wave
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any
 
 from .conventions import is_two_word_snake_case
 from .credentials import NotConfigured, get_credential, register_credential
@@ -84,7 +85,7 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-BENCHMARK_SCHEMA_VERSION = "1.0.0"
+BENCHMARK_SCHEMA_VERSION = "3.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
@@ -106,16 +107,16 @@ DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKE
 # benchmark media outputs while preventing a provider from returning an
 # unbounded body to the evidence collector.
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
-# Smoke manifests can exercise plumbing but cannot justify production routing.
+# Historical fixture values; neither authorizes statistical or routing decisions.
 MINIMUM_PAIRED_TASK_COUNT = 30
 REQUIRED_COMPLETION_FRACTION = 0.9
 
 ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "evidence_schema_version": "1.0.0",
-    "source_title": "NVIDIA NIM General FAQ",
-    "source_url": "https://docs.api.nvidia.com/nim/docs/product",
-    "reviewed_at_date": "2026-08-05",
-    "valid_until_date": "2026-09-04",
+    "source_title": "Run NIM Anywhere",
+    "source_url": "https://docs.api.nvidia.com/nim/docs/run-anywhere",
+    "reviewed_at_date": "2026-09-05",
+    "valid_until_date": "2026-10-04",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (
@@ -360,6 +361,32 @@ class _BudgetedModelClient(ModelClient):
         """Return the first benchmark transport-contract failure, if any."""
         return self._benchmark_contract_error
 
+    def _validate_provider(self, agent: ModelAgent) -> tuple[int, tuple[Any, ...]]:
+        """Validate injected-transport metadata without performing duplicate DNS.
+
+        Benchmark transports own endpoint resolution and address pinning.  Repeating
+        the generic client DNS preflight here makes an injected offline transport
+        unreachable and creates a time-of-check/time-of-use split for the production
+        pinned transport.  Keep the URL and credential checks at this adapter boundary;
+        the returned loopback tuple is an unused compatibility value because every
+        benchmark send is handled by ``_benchmark_transport``.
+        """
+        if self._benchmark_transport is None:
+            return super()._validate_provider(agent)
+        parsed = urllib.parse.urlparse(agent.base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must use https")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError(
+                f"{agent.id} base_url must not contain credentials, query data, or fragments"
+            )
+        credential_name = agent.credential_name
+        if credential_name and get_credential(credential_name) is None:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        return socket.AF_INET, ("127.0.0.1", parsed.port or 443)
+
     def _send(
         self,
         agent: ModelAgent,
@@ -537,12 +564,13 @@ class EqualBudgetModelClient:
         return getattr(self._delegate, name)
 
     @property
-    def max_output_tokens(self) -> int:
+    def max_output_tokens(self) -> int | None:
         """Expose the delegate cap for compatibility with orchestration clients."""
-        return int(self._delegate.max_output_tokens)
+        value = self._delegate.max_output_tokens
+        return int(value) if value is not None else None
 
     @max_output_tokens.setter
-    def max_output_tokens(self, value: int) -> None:
+    def max_output_tokens(self, value: int | None) -> None:
         """Forward explicit cap changes to the delegated model client."""
         self._delegate.max_output_tokens = value
 
@@ -596,7 +624,10 @@ class EqualBudgetModelClient:
                 "policy cell total-token allowance exhausted"
             )
 
-        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
+        delegate_cap = self._delegate.max_output_tokens
+        output_cap = output_allowance
+        if type(delegate_cap) is int and delegate_cap > 0:
+            output_cap = min(delegate_cap, output_allowance)
         self.observed_calls += 1
         self.observed_prompt_tokens += prompt_tokens
         self.observed_tokens += prompt_tokens
@@ -785,7 +816,6 @@ def discover_model_catalog(
         urllib.error.URLError,
         TimeoutError,
         ConnectionError,
-        socket.timeout,
         socket.gaierror,
     ) as exc:
         raise CatalogDiscoveryError(
@@ -1238,7 +1268,7 @@ def execute_capability_probe(
     started = timer()
     try:
         status, body = transport("POST", url, headers, spec["body"](model_id))
-    except (TimeoutError, socket.timeout) as exc:
+    except TimeoutError as exc:
         return _probe_row(
             capability_name,
             "timeout",
@@ -1700,7 +1730,7 @@ def validate_live_pricing_scenario(
 
     Omitting a scenario is valid and leaves every hypothetical cost ``unknown``.
     Supplying one requires an explicit reviewed status, complete provenance, and
-    a validity horizon that includes the run date.
+    a validity horizon that includes the run date in the system local timezone.
     """
     if scenario is None:
         return
@@ -1709,7 +1739,9 @@ def validate_live_pricing_scenario(
             "live benchmark pricing scenario must be independently reviewed"
         )
     _validate_reviewed_pricing_metadata(scenario)
-    observed_date = today or datetime_module.date.today()
+    observed_date = today or (
+        datetime_module.datetime.now(datetime_module.timezone.utc).astimezone().date()
+    )
     reviewed_at = _parse_evidence_date(scenario["reviewed_at_date"], "reviewed_at_date")
     valid_until = _parse_evidence_date(scenario["valid_until_date"], "valid_until_date")
     if reviewed_at > observed_date:
@@ -2275,6 +2307,19 @@ def evaluate_policies(
             cell["task_score"] = None
         return cell
 
+    cheapest = cheapest_priced_agent(agents, pricing_scenario)
+    planned_policies = [
+        *(f"direct_single_worker:{agent.model}" for agent in agents),
+        "route_once",
+        "conduct_bounded",
+    ]
+    if cheapest is not None:
+        planned_policies.append("cheapest_eligible_worker")
+    planned_cells = [
+        {"policy_name": policy, "task_id": task["task_id"], "task_split": "locked"}
+        for policy in planned_policies
+        for task in tasks
+    ]
     cells: list[dict[str, Any]] = []
     for agent in agents:
         for task in tasks:
@@ -2291,7 +2336,6 @@ def evaluate_policies(
         cells.append(run_cell("conduct_bounded", task, agents, "conduct"))
 
     cheapest_skip_reason = None
-    cheapest = cheapest_priced_agent(agents, pricing_scenario)
     if cheapest is None:
         cheapest_skip_reason = (
             "no_pricing_scenario_supplied"
@@ -2311,6 +2355,7 @@ def evaluate_policies(
     cells.sort(key=lambda cell: (cell["policy_name"], cell["task_id"]))
     return {
         "evaluation_cells": cells,
+        "planned_evaluation_cells": planned_cells,
         "cheapest_worker_skip_reason": cheapest_skip_reason,
         "locked_task_count": len(tasks),
         "worker_count": len(agents),
@@ -2370,9 +2415,11 @@ def pareto_frontier(
 
 
 def summarize_policies(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Aggregate evaluation cells per policy with honest unknown-cost labeling."""
+    """Aggregate locked cells per policy with honest unknown-cost labeling."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for cell in cells:
+        if cell["task_split"] != "locked":
+            continue
         grouped.setdefault(cell["policy_name"], []).append(cell)
     summaries = []
     for policy_name in sorted(grouped):
@@ -2422,7 +2469,7 @@ def summarize_policies(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def best_single_worker_hindsight(
     summaries: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """The best direct single worker selected in hindsight on the locked split."""
+    """Return the unique hindsight leader, or no selection when absent or tied."""
     direct = [
         row
         for row in summaries
@@ -2430,7 +2477,11 @@ def best_single_worker_hindsight(
     ]
     if not direct:
         return None
-    best = max(direct, key=lambda row: (row["mean_task_score"], row["policy_name"]))
+    maximum_score = max(row["mean_task_score"] for row in direct)
+    leaders = [row for row in direct if row["mean_task_score"] == maximum_score]
+    if len(leaders) != 1:
+        return None
+    best = leaders[0]
     return {
         "policy_name": best["policy_name"],
         "model_id": best["policy_name"].split(":", 1)[1],
@@ -2442,14 +2493,28 @@ def best_single_worker_hindsight(
 def paired_policy_comparisons(
     cells: list[dict[str, Any]], seed: int
 ) -> list[dict[str, Any]]:
-    """Paired task-level bootstrap comparisons between the headline policies."""
-    scores: dict[str, dict[str, float]] = {}
-    for cell in cells:
+    """Compare delivered score and terminal-outcome time on all shared tasks."""
+    policy_cells: dict[str, dict[str, dict[str, Any]]] = {}
+    locked_cells = [cell for cell in cells if cell["task_split"] == "locked"]
+    for cell in locked_cells:
+        task_cells = policy_cells.setdefault(cell["policy_name"], {})
+        if cell["task_id"] in task_cells:
+            raise BenchmarkContractError("duplicate policy/task observation")
+        if cell["run_outcome"] not in ("success", "failure", "timeout"):
+            raise BenchmarkContractError("invalid run_outcome for paired comparison")
+        latency_ms = cell["end_to_end_latency_ms"]
+        if (
+            type(latency_ms) not in (int, float)
+            or not math.isfinite(latency_ms)
+            or latency_ms < 0
+        ):
+            raise BenchmarkContractError("invalid end_to_end_latency_ms observation")
         if cell["run_outcome"] == "success":
-            scores.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell[
-                "task_score"
-            ]
-    summaries = summarize_policies(cells)
+            task_score = cell["task_score"]
+            if type(task_score) not in (int, float) or not 0 <= task_score <= 1:
+                raise BenchmarkContractError("invalid successful task_score observation")
+        task_cells[cell["task_id"]] = cell
+    summaries = summarize_policies(locked_cells)
     hindsight = best_single_worker_hindsight(summaries)
     comparison_pairs = [
         ("conduct_bounded", "route_once"),
@@ -2460,18 +2525,42 @@ def paired_policy_comparisons(
         comparison_pairs.append(("conduct_bounded", hindsight["policy_name"]))
     comparisons = []
     for policy_a, policy_b in comparison_pairs:
-        tasks_a, tasks_b = scores.get(policy_a), scores.get(policy_b)
+        tasks_a, tasks_b = policy_cells.get(policy_a), policy_cells.get(policy_b)
         if not tasks_a or not tasks_b:
             continue
         shared_tasks = sorted(set(tasks_a) & set(tasks_b))
         if not shared_tasks:
             continue
-        pairs = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        paired_cells = [(tasks_a[task_id], tasks_b[task_id]) for task_id in shared_tasks]
+        score_pairs = [
+            (
+                cell_a["task_score"] if cell_a["run_outcome"] == "success" else 0.0,
+                cell_b["task_score"] if cell_b["run_outcome"] == "success" else 0.0,
+            )
+            for cell_a, cell_b in paired_cells
+        ]
+        latency_pairs = [
+            (cell_a["end_to_end_latency_ms"], cell_b["end_to_end_latency_ms"])
+            for cell_a, cell_b in paired_cells
+        ]
         comparisons.append(
             {
                 "policy_a": policy_a,
                 "policy_b": policy_b,
-                **paired_bootstrap_mean_difference(pairs, seed=seed),
+                "score_basis": "successful_task_score_else_zero",
+                "pairing_basis": "all_shared_locked_tasks",
+                "policy_a_success_count": sum(
+                    cell_a["run_outcome"] == "success" for cell_a, _ in paired_cells
+                ),
+                "policy_b_success_count": sum(
+                    cell_b["run_outcome"] == "success" for _, cell_b in paired_cells
+                ),
+                "policy_a_unpaired_task_count": len(tasks_a) - len(shared_tasks),
+                "policy_b_unpaired_task_count": len(tasks_b) - len(shared_tasks),
+                **paired_bootstrap_mean_difference(score_pairs, seed=seed),
+                "end_to_end_latency_ms": paired_bootstrap_mean_difference(
+                    latency_pairs, seed=seed
+                ),
             }
         )
     return comparisons
@@ -2535,9 +2624,9 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             "actual cost evidence must preserve the reviewed zero-cost value"
         )
-    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/product":
+    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/run-anywhere":
         raise BenchmarkContractError(
-            "actual cost evidence must cite the reviewed NVIDIA NIM General FAQ"
+            "actual cost evidence must cite the reviewed NVIDIA NIM access terms"
         )
     reviewed_at = _parse_evidence_date(evidence["reviewed_at_date"], "reviewed_at_date")
     valid_until = _parse_evidence_date(evidence["valid_until_date"], "valid_until_date")
@@ -2550,8 +2639,10 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
 def _require_current_actual_cost_evidence(
     today: datetime_module.date | None = None,
 ) -> None:
-    """Fail closed after the reviewed hosted-access validity horizon."""
-    observed_date = today or datetime_module.date.today()
+    """Fail closed after the validity horizon using the system local date."""
+    observed_date = today or (
+        datetime_module.datetime.now(datetime_module.timezone.utc).astimezone().date()
+    )
     reviewed_at = _parse_evidence_date(
         ACTUAL_COST_EVIDENCE["reviewed_at_date"],
         "reviewed_at_date",
@@ -2575,9 +2666,12 @@ def _evaluation_evidence_summary(
     cells: list[dict[str, Any]],
     locked_task_count: int,
 ) -> dict[str, Any]:
-    """Classify whether benchmark evidence can inform production review."""
+    """Report observed quantities without claiming decision-design validity."""
     headline_cells = [
-        cell for cell in cells if cell["policy_name"] != "cheapest_eligible_worker"
+        cell
+        for cell in cells
+        if cell["task_split"] == "locked"
+        and cell["policy_name"] != "cheapest_eligible_worker"
     ]
     successful_cells = [
         cell for cell in headline_cells if cell["run_outcome"] == "success"
@@ -2593,20 +2687,11 @@ def _evaluation_evidence_summary(
     paired_task_ids = successful_tasks_by_policy.get("route_once", set()) & (
         successful_tasks_by_policy.get("conduct_bounded", set())
     )
-    sufficient = (
-        locked_task_count >= MINIMUM_PAIRED_TASK_COUNT
-        and len(paired_task_ids) >= MINIMUM_PAIRED_TASK_COUNT
-        and completion_fraction >= REQUIRED_COMPLETION_FRACTION
-    )
     return {
-        "evidence_status": (
-            "evidence_review_required" if sufficient else "insufficient_evidence"
-        ),
-        "decision_use": (
-            "production_candidate_review" if sufficient else "benchmark_smoke_only"
-        ),
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "evidence_status": "measurement_evidence_only",
+        "decision_use": "measurement_evidence_only",
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "observed_locked_task_count": locked_task_count,
         "observed_paired_task_count": len(paired_task_ids),
         "observed_completion_fraction": completion_fraction,
@@ -2683,6 +2768,11 @@ _REPORT_REQUIRED_PATHS = (
     "catalog_snapshot.probed_models",
     "capability_summary",
     "evaluation.evaluation_cells",
+    "evaluation.planned_evaluation_cells",
+    "evaluation.locked_task_count",
+    "evaluation.worker_count",
+    "evaluation.cheapest_worker_skip_reason",
+    "provenance.benchmark_parameters.max_eval_models",
     "evaluation.policy_summaries",
     "evaluation.paired_comparisons",
     "evaluation.pareto_frontiers",
@@ -2708,7 +2798,7 @@ _REPORT_REQUIRED_PATHS = (
 
 
 def validate_report_schema(report: dict[str, Any]) -> None:
-    """Fail closed when any required report path is absent."""
+    """Require the current comparison semantics and every required report path."""
     missing = []
     for path in _REPORT_REQUIRED_PATHS:
         node: Any = report
@@ -2721,6 +2811,53 @@ def validate_report_schema(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             f"benchmark report is missing required paths: {missing}"
         )
+    if report["benchmark_schema_version"] != BENCHMARK_SCHEMA_VERSION:
+        raise BenchmarkContractError("unsupported benchmark schema; regenerate the report")
+    evaluation = report["evaluation"]
+    identities = []
+    for field in ("planned_evaluation_cells", "evaluation_cells"):
+        rows = evaluation[field]
+        if not isinstance(rows, list) or not rows:
+            raise BenchmarkContractError("evaluation identities must be a non-empty list")
+        keys = []
+        for row in rows:
+            if not isinstance(row, dict) or any(
+                not isinstance(row.get(key), str) or not row[key]
+                for key in ("policy_name", "task_id", "task_split")
+            ):
+                raise BenchmarkContractError("evaluation identity is invalid")
+            keys.append((row["policy_name"], row["task_id"], row["task_split"]))
+        if len(keys) != len(set(keys)):
+            raise BenchmarkContractError("duplicate evaluation identity")
+        identities.append(set(keys))
+    if identities[0] != identities[1]:
+        raise BenchmarkContractError("observations do not match the planned evaluation identities")
+    task_ids = {task for _, task, _ in identities[0]}
+    for field in ("locked_task_count", "worker_count"):
+        value = evaluation[field]
+        if type(value) is not int or value < 1:
+            raise BenchmarkContractError("evaluation counts must be positive integers")
+    if len(task_ids) != evaluation["locked_task_count"]:
+        raise BenchmarkContractError("planned tasks do not match the locked task count")
+    model_limit = report["provenance"]["benchmark_parameters"]["max_eval_models"]
+    if type(model_limit) is not int or model_limit < 1:
+        raise BenchmarkContractError("evaluation model limit must be a positive integer")
+    workers = build_worker_agents(
+        report["catalog_snapshot"]["probed_models"], "mock://plan-validation", model_limit
+    )
+    if len(workers) != evaluation["worker_count"]:
+        raise BenchmarkContractError("planned workers do not match the selected catalog")
+    policies = {"route_once", "conduct_bounded"} | {
+        f"direct_single_worker:{worker.model}" for worker in workers
+    }
+    skip_reason = evaluation["cheapest_worker_skip_reason"]
+    if skip_reason is None:
+        policies.add("cheapest_eligible_worker")
+    elif skip_reason not in {"no_pricing_scenario_supplied", "no_worker_priced_by_scenario"}:
+        raise BenchmarkContractError("unknown cheapest worker skip reason")
+    expected = {(policy, task, "locked") for policy in policies for task in task_ids}
+    if identities[0] != expected:
+        raise BenchmarkContractError("planned evaluation is not the complete selected policy matrix")
 
 
 _CSV_CELL_COLUMNS = (
@@ -2779,10 +2916,14 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- workflow run id: `{report['provenance']['workflow_run_id']}`",
         f"- catalog snapshot sha256: `{report['provenance']['catalog_snapshot_sha256']}`",
         f"- discovered models: {report['catalog_snapshot']['discovered_model_count']}",
-        f"- requests spent: {report['request_budget']['requests_spent']}"
-        f" / {report['request_budget']['max_total_requests']}",
-        f"- complete request plan: {report['request_budget']['planned_total_requests']} "
-        "(catalog + all capability probes + evaluation reserve)",
+        (
+            f"- requests spent: {report['request_budget']['requests_spent']}"
+            f" / {report['request_budget']['max_total_requests']}"
+        ),
+        (
+            f"- complete request plan: {report['request_budget']['planned_total_requests']} "
+            "(catalog + all capability probes + evaluation reserve)"
+        ),
         f"- evidence status: `{report['evaluation']['evidence_status']}`",
         f"- decision use: `{report['evaluation']['decision_use']}`",
         "",
@@ -2806,22 +2947,40 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             f"{row['mean_latency_ms']} | {row['mean_hypothetical_cost_usd']} "
             f"| {row['actual_cost_usd']} |"
         )
-    lines += ["", "## Paired comparisons (95% bootstrap CI)", ""]
+    lines += [
+        "",
+        "## Paired comparisons (95% bootstrap CI)",
+        "",
+        (
+            "Differences are A minus B on all shared locked tasks. Failed delivery "
+            "earns zero task reward; the original unscored answer remains unknown. "
+            "Elapsed time includes failures and timeouts, so faster termination "
+            "alone does not establish better service."
+        ),
+        "",
+    ]
     for comparison in report["evaluation"]["paired_comparisons"]:
+        latency = comparison["end_to_end_latency_ms"]
+        pair_count = comparison["pair_count"]
         lines.append(
             f"- `{comparison['policy_a']}` vs `{comparison['policy_b']}`: "
-            f"mean diff {comparison['mean_difference']} "
-            f"[{comparison['ci_low']}, {comparison['ci_high']}]"
+            f"mean delivered score difference {comparison['mean_difference']} "
+            f"[{comparison['ci_low']}, {comparison['ci_high']}]; "
+            f"mean elapsed-time difference {latency['mean_difference']} "
+            f"[{latency['ci_low']}, {latency['ci_high']}] ms; "
+            f"successful outcomes A/B {comparison['policy_a_success_count']}/{pair_count} "
+            f"and {comparison['policy_b_success_count']}/{pair_count}; "
+            f"unpaired tasks A/B {comparison['policy_a_unpaired_task_count']} "
+            f"and {comparison['policy_b_unpaired_task_count']}"
         )
     evidence = report["actual_cost_evidence"]
     lines += [
         "",
         "## Evidence sufficiency",
         "",
-        f"- paired tasks: {report['evaluation']['observed_paired_task_count']} "
-        f"/ {report['evaluation']['minimum_paired_task_count']} required",
-        f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
-        f"/ {report['evaluation']['required_completion_fraction']} required",
+        f"- jointly successful paired tasks: {report['evaluation']['observed_paired_task_count']}",
+        f"- observed completion fraction: {report['evaluation']['observed_completion_fraction']}",
+        "- statistical sufficiency threshold: none; a pre-registered validated evaluation design is required",
         "- production routing recommendation: none"
         if report["evaluation"]["routing_recommendation"] is None
         else f"- production routing recommendation: {report['evaluation']['routing_recommendation']}",
@@ -2936,6 +3095,9 @@ def assemble_benchmark_report(
         cells,
         evaluation["locked_task_count"],
     )
+    if run_mode == "dry_run":
+        evidence_summary["evidence_status"] = "synthetic_diagnostic_only"
+        evidence_summary["decision_use"] = "benchmark_smoke_only"
     report = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "provenance": build_provenance(
@@ -2951,6 +3113,7 @@ def assemble_benchmark_report(
         "capability_summary": capability_summary,
         "evaluation": {
             "evaluation_cells": cells,
+            "planned_evaluation_cells": evaluation["planned_evaluation_cells"],
             "policy_summaries": summaries,
             "best_single_worker_hindsight": best_single_worker_hindsight(summaries),
             "paired_comparisons": paired_policy_comparisons(cells, seed=seed),
@@ -3232,8 +3395,8 @@ def run_benchmark(
         "max_workflow_depth": MAX_WORKFLOW_DEPTH,
         "policy_total_token_budget": max_output_tokens * MAX_WORKFLOW_DEPTH,
         "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
-        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
-        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "minimum_paired_task_count": None,
+        "required_completion_fraction": None,
         "seed": seed,
         "task_manifest_version": manifest["manifest_version"],
         "pricing_scenario_version": (

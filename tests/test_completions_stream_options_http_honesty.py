@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_completions_stream_options_all_false_without_stream_as_omit() -> N
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_stream_options_true_without_stream_fail_closed() -> None:
@@ -82,6 +84,7 @@ def test_http_completions_stream_options_true_without_stream_fail_closed() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_stream_true_with_stream_options_fail_closed() -> None:
@@ -104,6 +107,7 @@ def test_http_completions_stream_true_with_stream_options_fail_closed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_stream_options_non_object_fail_closed() -> None:
@@ -123,6 +127,7 @@ def test_http_completions_stream_options_non_object_fail_closed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_omits_stream_options_ok() -> None:
@@ -137,6 +142,7 @@ def test_http_completions_omits_stream_options_ok() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

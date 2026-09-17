@@ -52,7 +52,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_http_tool_loop_request_inherits_the_worker_role_effort_profile() -> None:
@@ -107,6 +108,7 @@ def test_http_tool_loop_request_inherits_the_worker_role_effort_profile() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 200, body
     assert captured, "apply_effort_profile was never invoked for the tool-loop request"
@@ -165,6 +167,7 @@ def test_http_tool_loop_request_without_catalog_is_unchanged() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 200, body
     # apply_effort_profile may still run with profile=None (a no-op besides

@@ -2,8 +2,8 @@
 
 Issue #568: each TRINITY/Conductor workflow role gets an explicit
 ``reasoning_effort_profile``. Sampling temperature, top-p, and seed stay
-independent fields. Production routing defaults stay locked until an
-equal-budget ablation beats a predeclared true-θ RMSE threshold.
+independent fields. This module cannot authorize production-default changes;
+its synthetic ablation is a unit-check fixture, not measured buyer evidence.
 
 Buyer next action: parse a versioned profile, bind it to thinker / worker /
 verifier / synthesizer / planner / judge, and compare route-versus-conduct
@@ -20,7 +20,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 PROFILE_VERSION = "reasoning_effort_profile.v1"
-PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD = 0.55
 WORKFLOW_ROLES = (
     "thinker",
     "worker",
@@ -63,7 +62,7 @@ def apply_request_profile(
     profile: ReasoningEffortProfile | None,
     *,
     supports_reasoning_effort: bool,
-    default_max_output_tokens: int,
+    default_max_output_tokens: int | None,
 ) -> dict[str, Any]:
     """Apply one validated profile to an upstream request body.
 
@@ -72,9 +71,16 @@ def apply_request_profile(
     ``omit`` sends only the independently valid sampling and output-token
     controls. The helper never writes prompts, credentials, or private
     reasoning traces.
+
+    ``default_max_output_tokens`` is the caller-resolved output ceiling for the
+    selected model (the request-scoped/client cap, else the agent's published
+    maximum). ``None`` means no ceiling is known anywhere, so the caller's own
+    payload and the provider default are preserved instead of imposing a fixed
+    cap.
     """
     if profile is None:
-        payload.setdefault("max_tokens", default_max_output_tokens)
+        if default_max_output_tokens is not None:
+            payload.setdefault("max_tokens", default_max_output_tokens)
         return payload
     if not isinstance(profile, ReasoningEffortProfile):
         raise EffortProfileError("effort profile must be a ReasoningEffortProfile")
@@ -142,8 +148,8 @@ class ThetaEstimate:
     """Deterministic θ̂ and its RMSE against known true parameters.
 
     Buyer next action: compare ``estimated_theta`` to the true vector you
-    supplied. A lower RMSE from higher effort is evidence; a temperature-only
-    change is not.
+    supplied. Error changes are imposed by a deterministic fixture; they are
+    not evidence of an effect of real model effort.
     """
 
     estimated_theta: tuple[float, ...]
@@ -238,7 +244,7 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
 
 
 def default_role_effort_catalog() -> dict[str, ReasoningEffortProfile]:
-    """Return the issue #568 role catalog. This is evidence, not a production default.
+    """Return the issue #568 evaluation catalog, not a production default.
 
     Thinker, planner, verifier, and judge use high effort. Worker and synthesizer
     use medium effort under the same call/depth/token budget. Buyer next action:
@@ -384,8 +390,8 @@ def estimate_theta_rmse(
     Error shrinks with provider-neutral effort rank, extra Conductor steps,
     recursion depth, and access-list scope. Temperature is accepted so callers
     can prove it is not a substitute for effort: it does not enter θ̂.
-    Buyer next action: treat a lower RMSE from ``high`` effort as evidence,
-    and a temperature-only change as non-evidence.
+    Buyer next action: use this only for unit checks. Lower RMSE is imposed by
+    the fixture and does not establish an effect of real reasoning effort.
     """
     return estimate_theta(
         true_theta,
@@ -408,7 +414,7 @@ def _ablation_arm(
     temperature: float,
     budget_tokens: int,
 ) -> dict[str, Any]:
-    """Build one equal-budget arm with θ̂, RMSE, and measured token use."""
+    """Build one synthetic arm with θ̂, RMSE, and estimated token use."""
     estimate = estimate_theta(
         theta,
         reasoning_effort=reasoning_effort,
@@ -437,8 +443,8 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
     """Compare route, conduct, and one-factor variants under one token budget.
 
     Records estimated RMSE, θ̂, mode, and budget. Does not persist private
-    chain-of-thought. Buyer next action: read ``measurement_status`` and
-    ``production_default_change_allowed`` before changing live defaults.
+    chain-of-thought. Buyer next action: use this only for unit checks;
+    automatic production-default promotion is unavailable.
     """
     theta = tuple(float(value) for value in true_theta)
     budget_tokens = 1024
@@ -534,22 +540,12 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
 
 
 def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
-    """Return whether a live default change is allowed from this ablation.
+    """Keep default promotion unavailable for every supplied report.
 
-    Buyer next action: keep current route/conduct defaults when this is false.
-    A later slice may unlock only after RMSE improvement, a non-estimated
-    measurement, and robustness all clear the predeclared gate.
+    The report argument is retained for existing callers. Declared measurement
+    labels, RMSE improvements and robustness flags cannot grant authority.
+    A released decision contract bound to a prospective design, real held-out
+    outcomes and independent operational acceptance is still required by #86.
+    No such contract is implemented here; keep current route/conduct defaults.
     """
-    try:
-        baseline = float(report["single_model_baseline"]["rmse"])
-        candidate = float(report["role_differentiated"]["rmse"])
-    except (KeyError, TypeError, ValueError):
-        return False
-    if not math.isfinite(baseline) or not math.isfinite(candidate) or baseline <= 0:
-        return False
-    if report.get("measurement_status") == "estimated":
-        return False
-    if report.get("robustness_passed") is not True:
-        return False
-    improvement = (baseline - candidate) / baseline
-    return improvement >= PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD
+    return False
