@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -80,6 +81,7 @@ def test_http_chat_accepts_valid_function_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 def test_http_chat_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
@@ -98,6 +100,7 @@ def test_http_chat_accepts_empty_tools_array_as_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_type_not_function() -> None:
@@ -116,6 +119,7 @@ def test_http_chat_rejects_tool_type_not_function() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_missing_function_name() -> None:
@@ -135,6 +139,7 @@ def test_http_chat_rejects_tool_missing_function_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_function_name_bad_charset() -> None:
@@ -160,6 +165,7 @@ def test_http_chat_rejects_tool_function_name_bad_charset() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_sibling_unknown_fields() -> None:
@@ -187,6 +193,7 @@ def test_http_chat_rejects_tool_sibling_unknown_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_parameters_non_object() -> None:
@@ -214,6 +221,7 @@ def test_http_chat_rejects_parameters_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tools_omitted() -> None:
@@ -230,6 +238,7 @@ def test_http_chat_accepts_tools_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

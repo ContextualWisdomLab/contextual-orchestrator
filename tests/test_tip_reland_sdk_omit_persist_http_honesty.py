@@ -61,7 +61,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -162,6 +163,7 @@ def test_http_chat_tools_persist_null_arguments_as_empty_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_omits_blank_instructions_from_echo() -> None:
@@ -183,6 +185,7 @@ def test_http_responses_omits_blank_instructions_from_echo() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_echoes_nonempty_instructions() -> None:
@@ -202,6 +205,7 @@ def test_http_responses_echoes_nonempty_instructions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tools_omits_null_metadata_value_from_echo() -> None:
@@ -231,6 +235,7 @@ def test_http_chat_tools_omits_null_metadata_value_from_echo() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_omits_null_metadata_value_from_echo() -> None:
@@ -251,6 +256,7 @@ def test_http_responses_omits_null_metadata_value_from_echo() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tools_rejects_nonzero_top_logprobs() -> None:
@@ -279,6 +285,7 @@ def test_http_chat_tools_rejects_nonzero_top_logprobs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tools_omits_whitespace_top_logprobs_from_echo() -> None:
@@ -308,6 +315,7 @@ def test_http_chat_tools_omits_whitespace_top_logprobs_from_echo() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

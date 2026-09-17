@@ -1,0 +1,11 @@
+[package]
+name = "contextual-decision-receipt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py310", "auto-initialize"] }
+
+[lib]
+name = "_decision_receipt"
+crate-type = ["cdylib"]

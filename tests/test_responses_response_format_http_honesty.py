@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_responses_accepts_text_and_json_object_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_json_schema_format() -> None:
@@ -87,6 +89,7 @@ def test_http_responses_accepts_json_schema_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unknown_response_format_type() -> None:
@@ -105,6 +108,7 @@ def test_http_responses_rejects_unknown_response_format_type() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_json_object_with_extra_fields() -> None:
@@ -123,6 +127,7 @@ def test_http_responses_rejects_json_object_with_extra_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_json_schema_without_schema_body() -> None:
@@ -144,6 +149,7 @@ def test_http_responses_rejects_json_schema_without_schema_body() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

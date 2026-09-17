@@ -1,14 +1,14 @@
-"""Background availability telemetry for the OpenRouter transport ledger.
+"""Background telemetry collector for OpenRouter upstream endpoints.
 
 Each poll converts the provider's own ``uptime_last_30m`` measurement into
 exactly one window's worth of equivalent Bernoulli evidence:
 
     successes += uptime / 100 ; failures += (100 - uptime) / 100
 
-This retains the existing transport prior's window-equivalent accounting.
-Overlapping rolling windows are not independent request trials, and the
-provider's best endpoint is not a measured delivered-route success rate.
-These summaries never update the answer-quality ledger or its prior.
+so the accumulated ``(alpha, beta)`` mass converges to true availability
+without any invented weighting constant — every count traces to a poll
+outcome and the failure denominator is the number of polls performed.
+Auditable counters are exposed for verification.
 """
 
 from __future__ import annotations
@@ -21,11 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING
 
-from .model_group import (
-    BETA_PRIOR_FAILURE_COUNT,
-    BETA_PRIOR_SUCCESS_COUNT,
-    ModelGroupRouter,
-)
+from .benchmark_priors import resolve_quality_prior
+from .model_group import ModelGroupRouter
 
 if TYPE_CHECKING:
     from .orchestrator import ModelAgent
@@ -36,14 +33,26 @@ logger = logging.getLogger(__name__)
 # they are percent-encoded below before request assembly.
 _OPENROUTER_UPTIME_ORIGIN = "https://openrouter.ai/api/v1"
 
+# #971 removes the *inference* client's fixed wall-clock deadline (a user is
+# actively waiting on a model completion, which can legitimately run long).
+# This collector's HTTP GET is unrelated background telemetry on a single
+# dedicated sweep thread: it polls every openrouter member sequentially in
+# one loop, and ``stop()`` cannot interrupt a call already blocked inside
+# ``urlopen`` (Python threads are not forcibly cancellable). Leaving this
+# fetch unbounded means one unresponsive endpoint hangs the sweep thread
+# forever -- leaking it and indefinitely starving every later member of an
+# uptime update -- so it keeps its own fixed, independent bound instead.
+_UPTIME_FETCH_TIMEOUT_SECONDS = 10.0
+
 
 class OpenRouterUptimeCollector:
-    """Periodically fold upstream availability into the transport prior."""
+    """Periodically fold measured upstream availability into prior ledgers."""
 
     def __init__(
         self,
-        agents: list[ModelAgent],
+        agents: list["ModelAgent"],
         group_router: ModelGroupRouter,
+        quality_router: ModelGroupRouter,
         interval_seconds: float = 300.0,
         startup_delay_seconds: float = 5.0,
     ) -> None:
@@ -52,6 +61,7 @@ class OpenRouterUptimeCollector:
         Args:
             agents: Orchestrator candidates scanned for openrouter members.
             group_router: Transport ledger receiving uptime evidence.
+            quality_router: Quality ledger receiving uptime evidence.
             interval_seconds: Wall-clock pause between full sweeps.
             startup_delay_seconds: Pause before the first sweep so orchestrator
                 construction stays non-blocking; tests inject smaller values.
@@ -61,6 +71,7 @@ class OpenRouterUptimeCollector:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._group_router = group_router
+        self._quality_router = quality_router
         self._openrouter_agents = [a for a in agents if a.provider_name == "openrouter"]
         # agent.id -> empirical window-equivalent (successes, failures).
         self._window_evidence: dict[str, tuple[float, float]] = {}
@@ -101,60 +112,65 @@ class OpenRouterUptimeCollector:
                 break
 
     def _poll_agent(self, agent: ModelAgent) -> None:
-        """Fold one endpoint measurement into transport window evidence."""
+        """Fold one endpoint measurement into ledgers as window evidence."""
         if agent.provider_name != "openrouter":
             return
         uptime = self._fetch_uptime(agent.model)
         if uptime is None:
             return
-        successes = uptime / 100.0
+        successes = max(0.0, min(1.0, uptime / 100.0))
         failures = 1.0 - successes
+        base_alpha, base_beta = resolve_quality_prior(agent.id)
         prev_alpha, prev_beta = self._window_evidence.get(agent.id, (0.0, 0.0))
         next_alpha = prev_alpha + successes
         next_beta = prev_beta + failures
         self._window_evidence[agent.id] = (next_alpha, next_beta)
-        self._group_router.update_prior(
+        self._apply_to_routers(
             agent.id,
-            BETA_PRIOR_SUCCESS_COUNT + next_alpha,
-            BETA_PRIOR_FAILURE_COUNT + next_beta,
+            base_alpha + next_alpha,
+            base_beta + next_beta,
         )
+
+    def _apply_to_routers(
+        self,
+        member_id: str,
+        alpha: float,
+        beta: float,
+    ) -> None:
+        """Publish one member's blended prior into both ledgers."""
+        self._group_router.update_prior(member_id, alpha, beta)
+        self._quality_router.update_prior(member_id, alpha, beta)
 
     def _fetch_uptime(self, model_id: str) -> float | None:
         """Fetch best-endpoint 30-minute availability for one logical model.
 
         Args:
-            model_id: Discovery-sourced ``author/slug`` model identifier.
+            model_id: Discovery-sourced logical model identifier.
 
         Returns:
-            The highest finite numeric endpoint uptime in ``[0, 100]``, or
-            ``None`` when any supplied percentage is invalid or none exists.
-            Null/missing measurements are absent, not observed failures.
+            The highest reported endpoint uptime in ``[0, 100]``, or
+            ``None`` when the provider response cannot yield one.
         """
-        model_parts = model_id.split("/")
-        if len(model_parts) != 2 or any(part in {"", ".", ".."} for part in model_parts):
-            return None
-        model_path = "/".join(urllib.parse.quote(part, safe="") for part in model_parts)
-        url = f"{_OPENROUTER_UPTIME_ORIGIN}/models/{model_path}/endpoints"
+        segment = urllib.parse.quote(model_id, safe="")
+        url = f"{_OPENROUTER_UPTIME_ORIGIN}/models/{segment}/endpoints"
         request = urllib.request.Request(url, method="GET")
         try:
-            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; author and slug are separately percent-encoded and cannot reach the scheme/authority.
-            with urllib.request.urlopen(request, timeout=10.0) as response:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - scheme/host is the fixed constant origin; model_id is percent-encoded before interpolation and never reaches the scheme/authority.
+            with urllib.request.urlopen(
+                request, timeout=_UPTIME_FETCH_TIMEOUT_SECONDS
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
                 uptimes = [
-                    endpoint["uptime_last_30m"]
+                    float(endpoint["uptime_last_30m"])
                     for endpoint in endpoints
                     if isinstance(endpoint, dict)
                     and endpoint.get("uptime_last_30m") is not None
                 ]
-                # Validate before aggregation: coercion or clamping can turn
-                # booleans, NaN, or out-of-range values into availability mass.
-                if any(type(value) not in (int, float) or not 0 <= value <= 100 for value in uptimes):
-                    raise ValueError("endpoint uptime must be a numeric percentage in [0, 100]")
                 if uptimes:
-                    # Best reported endpoint availability, not the actual
-                    # caller's route mix or an answer-correctness measurement.
-                    return float(max(uptimes))
+                    # Provider routes to its strongest upstream, so the
+                    # observed maximum reflects delivered reliability.
+                    return max(uptimes)
         except (
             AttributeError,
             KeyError,

@@ -108,13 +108,126 @@ Primary owners:
 | Compatible API adoption | Count of successful `/v1/chat/completions` requests by application or token scope over a completed review window. | Shows whether the single API wedge is being used without client rewrites. | HTTP request logs with endpoint, status, auth scope, and timestamp. |
 | Trace-complete workflow rate | Share of conducted workflow runs that include role, worker, subtask, access list, verifier result, and final synthesis fields. | Verifies that enterprise evidence is present when deep orchestration is used. | `workflow_runs` records plus trace schema validation. |
 | Policy-safe routing rate | Share of runs where selected mode, provider exclusions, and verifier requirement match the active orchestration policy. | Detects routing or policy regressions before rollout. | Policy snapshot joined to each run decision. |
+| Psychometric parameter RMSE | Root mean square error between estimated and known true parameters in unit-test fixtures, reported per parameter family on an identified, aligned scale. | Checks parameter recovery; observed buyer accuracy requires separate outcome evidence. | Versioned true-parameter fixtures, estimates, identification constraints, alignment method, and model version. |
+| Routing decision latency p95 | 95th percentile elapsed time from an accepted request to the persisted route decision, excluding upstream generation time. | Detects orchestration overhead and provides the latency guardrail for accuracy-improving policy changes. | Monotonic decision timestamps in the request/decision trace, segmented by policy version and route mode. |
 
 The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
 `trace_complete_workflow_rate`, and `policy_safe_routing_rate`.
 
+`psychometric_parameter_rmse` and `routing_decision_latency_p95` are proposed
+measurement contracts, not fields currently emitted by the runtime snapshot.
+Their implementation, reproducible measurements, and consumer acceptance remain
+open. Synthetic true-parameter recovery belongs to unit tests only; held-out
+observed responses do not by themselves provide known latent parameters.
+Report parameter recovery separately for each parameter family on an identified,
+aligned scale. Accuracy claims require observed task outcomes plus declared
+sampling and failure denominators and uncertainty estimates; fixture RMSE is
+not buyer accuracy evidence. Latency claims require observed request and
+decision timestamps plus declared sampling and failure denominators and
+uncertainty estimates; outcome labels are not a latency measurement.
+
+For decision latency, record acceptance after authentication and request
+validation, selection completion, and durable decision-write acknowledgement.
+Measure elapsed time within one monotonic clock domain; timestamps from separate
+hosts cannot be subtracted without a validated clock contract. Include queueing,
+selection, and decision persistence in the declared interval. Existing worker
+invocation durations include response generation and cannot supply this metric.
+
+Report accepted-request count, persisted-decision count, selection failures,
+write failures, cancellations, and unfinished observations alongside the p95.
+Label a p95 calculated only from persisted decisions as conditional on success;
+never present it as an all-request guarantee or encode missing durations as zero.
+Declare the observation window, quantile method, uncertainty method, and workload
+before comparing policies. A faster failed decision is not a quality improvement.
+
+Implementation tracking: [CO #1110](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1110).
+For this metric, accepted means authenticated and fully validated, before run-slot
+acquisition. A subsequent capacity rejection stays in that denominator, with no
+persisted-decision duration. The current nonblocking slot acquisition does not
+create a queue-wait observation. Instrument both ordinary callbacks and direct
+streaming admission paths; recording only the shared callback wrapper is incomplete.
+Separate initial decisions from failover attempts and never substitute a completed
+workflow record written after generation for the initial decision acknowledgement.
+This specifies the required boundary; it does not claim instrumentation exists.
+
+Use one admission identity per validated HTTP request, not per execution-slot
+acquisition, provider retry, or file replica. Declare separate units for batch
+items and non-generation operations. Start the clock before extracting the
+policy snapshot or preparing measurement records. A handled streaming error
+before selection remains a selection failure even when no exception reaches
+the finalizer; a later delivery failure must not rewrite an already acknowledged
+initial decision as if its persistence failed. Outcome and initial-decision
+statuses are separate observations. These requirements follow the concrete
+pre-release review of candidate `01ce9035715fab4ed60e7352caa85512f855e0bb` in
+#1110; verification of the repaired implementation remains open.
+
+### Auxiliary dispatch and task-route decision
+
+The first upstream call is not necessarily the task-route decision. Automatic
+routing can obtain embedding evidence and a model-backed complexity verdict
+before choosing task execution. Record these as separate phases. An
+`initial_provider_dispatch` receipt is diagnostic evidence, not automatically
+`routing_decision_latency_p95`.
+
+For the headline routing interval, stop after durable acknowledgement of the
+initial task-execution route, before its generation starts. Include any earlier
+evidence acquisition and triage required to choose that route; report those
+component durations separately rather than subtracting them from elapsed time.
+Thus “excluding upstream generation” excludes generation after that decision,
+not earlier model work required to make it. Cache hits need explicit evidence
+and the same endpoint definition; changing endpoint or cache mix cannot establish
+a speedup. Later failover decisions remain separate attempts.
+
+The same embedding helper can also run after task selection to update quality
+evidence. Classify each invocation at its own start, using whether selection
+has occurred; do not infer its phase from the helper name or from successful
+persistence alone. A decision-write failure still follows a selection, but
+provides no successful acknowledgement duration. Preserve post-selection
+component records separately, without extending or replacing the initial
+decision interval. A provider-ready timestamp taken before a diagnostic write
+is not a network-send timestamp. Test observers must collect passively and
+assert after the request: an assertion raised inside a best-effort provider
+hook can change fallback and cache behavior and invalidate the experiment.
+
+This clarification follows the direct auxiliary calls found at candidate
+`07957ee643bf74c5beb13c03827f59331307cc5d` in #1110. Tests must distinguish
+cached and uncached triage, embedding evidence, and task execution. Existing
+first-dispatch tests do not prove this headline interval; its implementation
+and observed-workload baseline remain open.
+
+### Autonomous experiment targets
+
+These are engineering acceptance targets selected on 2026-09-09, not measured
+results or literature-derived constants. Do not ask the user to choose their
+scope. Baseline and candidate must use the same declared population, endpoint
+mix, task rubric, model versions, resource budget, and failure accounting.
+
+| Outcome | Target | Guardrail |
+| --- | --- | --- |
+| Delivered-correct fraction over all accepted requests | At least +1 percentage point versus baseline, with a 95% confidence interval for the difference wholly above zero. | Independently adjudicated observed outcomes; paired or randomized design declared before evaluation; no silent exclusion of failed delivery. |
+| Routing-decision p95 | At most 20 ms and at least 10% lower than baseline, with the 95% interval for the candidate/baseline ratio wholly below 1. | Include selection and durable acknowledgement; preserve workload and failure accounting. This is not the full-page latency SLO. |
+| Numerical parameter recovery | No regression in family-wise aligned RMSE under the declared numerical tolerance. | Known-truth unit tests only; never substitute for observed customer outcomes. |
+
+The end target requires both customer accuracy and decision-latency criteria.
+Intermediate changes may advance one while preserving the other's established
+baseline; they must not be labelled completion of both. If non-regression cannot
+be established, keep the candidate experimental and leave production unchanged.
+Use a fresh holdout for confirmation after adaptive experiment selection, or a
+predeclared sequential inference procedure; repeated inspection of an ordinary
+95% interval is not a stopping rule. Determine sample size from pilot variance,
+the +1-point effect target, and declared power before confirmation, retaining
+task/model/time clustering. Do not reduce sample size after seeing results.
+
+Execution and evidence handoff: [autonomous KPI runbook](doctoring/autonomous_kpi_runbook.md).
+
 ## Commercial Due-Diligence KPIs
 
-These metrics support the KRW 2,000,000,000 commercial-readiness review. The
+The active goal uses a USD 20,000,000,000 sale-quality ambition. This is an
+aspirational quality target, not a measured valuation or a signed transaction.
+The KRW 2,000,000,000 references in the legacy metrics below describe the
+earlier commercial-readiness review; they must not substitute for the active
+goal or be treated as its currency conversion. Accuracy and decision-latency
+acceptance still require the observed evidence specified above. The
 `evidence_type` column is mandatory so measured local evidence is never mixed
 with proposed production targets.
 

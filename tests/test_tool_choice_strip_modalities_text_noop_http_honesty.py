@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,65 @@ def test_http_chat_accepts_padded_tool_choice_none_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
+
+
+def test_http_chat_forwards_normalized_tool_choice_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "normalized choice"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_item",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "tool_choice": "\tAUTO\n",
+            },
+        )
+
+        assert status == 200, body
+        assert body["echo"]["tool_choice"] == "auto"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_http_responses_forwards_normalized_tool_choice_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "normalized response choice",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup_item",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+                "tool_choice": "\tAUTO\n",
+            },
+        )
+
+        assert status == 200, body
+        assert body["echo"]["tool_choice"] == "auto"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_padded_function_call_none_auto() -> None:
@@ -88,6 +148,7 @@ def test_http_chat_accepts_padded_function_call_none_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_padded_tool_choice_function_call() -> None:
@@ -108,6 +169,7 @@ def test_http_completions_accepts_padded_tool_choice_function_call() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_modalities_text_as_noop() -> None:
@@ -123,6 +185,7 @@ def test_http_completions_accepts_modalities_text_as_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_non_text_modalities() -> None:
@@ -138,6 +201,7 @@ def test_http_completions_still_rejects_non_text_modalities() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_padded_required_without_tools() -> None:
@@ -157,6 +221,7 @@ def test_http_chat_still_rejects_padded_required_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

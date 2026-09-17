@@ -2,58 +2,120 @@
 
 These papers ground the design of the LLM **cost review** ledger and the
 **sync-vs-batch / upstream** routing added in `feat/cost-review-and-batch-routing`.
-Vendored PDFs are limited to papers whose redistribution terms were checked;
-the remaining sources are cited and linked without copying their files.
+References below include arXiv preprints and other publications. Redistribution
+must be verified for the exact version of each PDF: arXiv's perpetual,
+non-exclusive license grants distribution rights to arXiv, not a blanket
+permission for this repository to redistribute it. See the
+[arXiv license guidance](https://info.arxiv.org/help/license/index.html).
+Version-page licenses are recorded below. Additional redistribution permission,
+where required, and the contents of release archives remain unverified.
+
+## Stored PDF version inventory
+
+First-page text inspection on 2026-09-09 identifies the following versions.
+This establishes document identity, not redistribution permission or a complete
+research review. License verification must use these versions, not whichever
+version the unversioned abstract page currently serves.
+
+| Stored paper | Embedded arXiv version | Embedded date |
+| --- | --- | --- |
+| FrugalGPT | 2305.05176v1 | 2023-05-09 |
+| RouteLLM | 2406.18665v4 | 2025-02-23 |
+| Hybrid LLM | 2404.14618v1 | 2024-04-22 |
+| HELM | 2211.09110v2 | 2023-10-01 |
+| The Art, Science, and Engineering of Fuzzing: A Survey | 1812.00140v4 | 2019-04-08 |
+
+Version-specific arXiv abstract pages were checked on 2026-09-09:
+
+| Version page | Declared license | Release implication |
+| --- | --- | --- |
+| [2305.05176v1](https://arxiv.org/abs/2305.05176v1) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+| [2406.18665v4](https://arxiv.org/abs/2406.18665v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+| [2404.14618v1](https://arxiv.org/abs/2404.14618v1) | CC BY-NC-ND 4.0 | Do not assume commercial redistribution rights. |
+| [2211.09110v2](https://arxiv.org/abs/2211.09110v2) | CC BY 4.0 | Preserve attribution and license requirements. |
+| [1812.00140v4](https://arxiv.org/abs/1812.00140v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+
+This checks the declared version-page licenses. The local bytes were hashed on
+2026-09-09 in [stored_pdf_sha256.txt](stored_pdf_sha256.txt); from the repository
+root run `shasum -a 256 -c docs/papers/stored_pdf_sha256.txt` to verify all five.
+These hashes identify the stored copies only: comparison with publisher bytes,
+redistribution permission, and release-package inclusion remain separate checks.
+Existing files are retained during the audit.
+
+At source commit `15b8f52b`, `uv build` produced both package formats and
+archive-member inspection found no `.pdf` members in either:
+
+- `contextual_orchestrator-0.2.0-py3-none-any.whl`, SHA-256
+  `9091060d05ee07fa52e48918195c9e14388d6d9e85182b7919fcdf3f5db6e152`.
+- `contextual_orchestrator-0.2.0.tar.gz`, SHA-256
+  `75747f6a0a841046bdad44f5edc408f81839fa8c53b09efa2c2e5710c4c6d180`.
+
+These are local build artifacts, not published-package evidence. Git source
+archives include tracked PDFs and require a separate redistribution decision.
+
+## Response-process validity
+
+Xu, Z., Liu, J., Wang, Y., & Gu, Y. (2026). *Latency-response theory model:
+Evaluating large language models via response accuracy and chain-of-thought
+length* (Version 4) [Preprint]. arXiv. https://arxiv.org/abs/2512.07019v4
+
+Citation only; no PDF vendored. The version page declares the arXiv perpetual
+non-exclusive license, not repository redistribution permission. See the
+[measurement review and read scope](../doctoring/lart_measurement_review.md).
+Experimental intake only: no production estimator or measured KPI improvement.
+
+Bolsinova, M., Tijmstra, J., Molenaar, D., & De Boeck, P. (2017).
+Conditional dependence between response time and accuracy: An overview of its
+possible sources and directions for distinguishing between them. *Frontiers in
+Psychology, 8*, Article 202. https://doi.org/10.3389/fpsyg.2017.00202
+
+[Unmodified publisher PDF](bolsinova_2017_conditional_dependence.pdf), downloaded
+2026-09-09 from the [publisher](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2017.00202/pdf).
+Copyright © 2017 Bolsinova, Tijmstra, Molenaar and De Boeck;
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), verified in the
+publisher copyright statement. No endorsement is implied. SHA-256:
+`3391e166d9c136cec8cdfdcc235e0e06b418a00525aac3005de97940ae9452a5`.
+See the [read scope and proposed experiment](../doctoring/irt_router_measurement_review.md#response-process-identification-follow-up).
 
 ## Cost optimisation
 
 - **FrugalGPT: How to Use Large Language Models While Reducing Cost and
   Improving Performance** — Lingjiao Chen, Matei Zaharia, James Zou. arXiv:2305.05176, 2023.
+  `frugalgpt-cost-2305.05176.pdf`
   Motivates the **configurable price table + per-request cost accounting** and
   cost-optimising model selection: cost varies by orders of magnitude across
   providers/models, so a gateway should price each request and route to the
-  cheapest capable upstream. The earlier bundled arXiv v1 copy is replaced by
-  citation and link because repository redistribution permission was not
-  established: https://arxiv.org/abs/2305.05176v1.
-  TMLR record: https://openreview.net/forum?id=cSimKw5p6R
+  cheapest capable upstream. Version-page license: arXiv non-exclusive;
+  additional redistribution basis unverified.
+  source: https://arxiv.org/abs/2305.05176.
 
 ## Query routing (which upstream / which tier)
+
+- Song et al. (2025), *IRT-Router: Effective and interpretable multi-LLM routing
+  via item response theory*, https://doi.org/10.18653/v1/2025.acl-long.761.
+  See the [measurement review](../doctoring/irt_router_measurement_review.md)
+  for page-level visual inspection and the distinction between prediction fit
+  and identified psychometric interpretation. Citation only; no PDF vendored.
 
 - **RouteLLM: Learning to Route LLMs with Preference Data** — Isaac Ong, Amjad
   Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M.
   Waleed Kadous, Ion Stoica. arXiv:2406.18665, 2024.
+  `routellm-routing-2406.18665.pdf`
   Grounds the **routing decision** layer (`RoutingPolicy` + cost-aware upstream
   selection): route strong/weak model choices to hit a cost/quality target.
-  The earlier bundled arXiv v4 copy is replaced by citation and link because
-  repository redistribution permission was not established:
-  https://arxiv.org/abs/2406.18665v4.
-  ICLR 2025 publication record:
-  https://proceedings.iclr.cc/paper_files/paper/2025/hash/5503a7c69d48a2f86fc00b3dc09de686-Abstract-Conference.html.
-  The landing-page title uses "from Preference Data"; the linked paper uses
-  "with Preference Data". Publication access is not a redistribution license.
+  Version-page license: arXiv non-exclusive; additional redistribution basis
+  unverified. Source: https://arxiv.org/abs/2406.18665.
 
 - **Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing** — Dujian Ding,
   Ankur Mallick, Chi Wang, Robert Sim, Subhabrata Mukherjee, Victor Rühle,
   Laks V. S. Lakshmanan, Ahmed Hassan Awadallah. arXiv:2404.14618 (ICLR 2024).
-  Motivates **quality-aware small/large-model selection** using predicted query
-  difficulty and a chosen quality target. It does not establish this gateway's
-  sync/batch split or a latency guarantee. The earlier bundled arXiv v1 copy is replaced by citation
-  and link: https://arxiv.org/abs/2404.14618v1. That record specifies
-  [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), not
-  unrestricted commercial redistribution.
-  ICLR 2024 publication record:
-  https://proceedings.iclr.cc/paper_files/paper/2024/hash/b47d93c99fa22ac0b377578af0a1f63a-Abstract-Conference.html.
-
-## Prospective sample design
-
-- Lakens, D. (2022). Sample size justification. *Collabra: Psychology, 8*(1),
-  Article 33267. https://doi.org/10.1525/collabra.33267
-  Grounds choosing sample design against an explicit inferential goal and
-  useful precision/effect targets, not a universal count threshold. The
-  [CO design record](../doctoring/prospective-routing-measurement-design.md)
-  separates delivered quality, decision speed, end-to-end latency and
-  psychometric validity. It also records the actual Figure 5 visual inspection
-  and why the combined university PDF is linked rather than vendored.
+  `hybrid-llm-query-routing-2404.14618.pdf`
+  Supports selecting between small and large models using predicted response
+  quality differences and a configurable quality target. It does not establish
+  this repository's sync/batch transport policy or equate bulk requests with
+  easy items. Those are separate product decisions requiring their own evidence.
+  Version-page license: CC BY-NC-ND 4.0;
+  source: https://arxiv.org/abs/2404.14618.
 
 ## Role reasoning-effort profiles
 
@@ -63,9 +125,10 @@ one replayable compute snapshot. PDFs are cited rather than vendored when
 redistribution is unclear.
 
 - Sakana AI. (2026). *Sakana Fugu Technical Report*.
-  https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-  Grounds the latency-quality frontier: route is the low-compute path,
-  conduct is the high-quality path. Do not proxy that split with temperature.
+  https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
+  See the [bounded method review](../doctoring/reasoning-effort-profile.md#fugu-read-scope-and-implementation-boundary-2026-09-09).
+  CO's route/conduct analogy is an engineering interpretation, not an
+  implementation or reproduction of the trained Fugu variants.
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
   *Trinity: An evolved LLM coordinator* (arXiv:2512.04695).
   https://arxiv.org/abs/2512.04695
@@ -79,477 +142,41 @@ redistribution is unclear.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
-  Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
-  and compare it to known true parameters; a rank constant is not an estimate.
+  Background for IRT parameter estimation and information, not a verified
+  source for this project's choice of RMSE as its recovery criterion. The
+  ablation must emit θ̂ and compare it to known true parameters; a rank
+  constant is not an estimate. That engineering criterion measures synthetic
+  parameter recovery, not observed task correctness.
+  Read scope on 2026-09-09: ERIC bibliographic record and the directly viewed
+  copyright page and publisher's note (PDF pages 4 and 6 of 187), not the
+  full estimation chapters. Page 4 states copyright 2001, ERIC Clearinghouse
+  on Assessment and Evaluation, with all rights reserved.
+  [ERIC-hosted original](https://files.eric.ed.gov/fulltext/ED458219.pdf)
+  is linked only; redistribution permission has not been established.
+  Subsequent bounded inspection of printed pages 90 and 111 is recorded in
+  [the estimation-boundary runbook](../doctoring/autonomous_kpi_runbook.md#baker-estimation-boundary-2026-09-09).
 
-The deterministic ablation is for unit checks only. Automatic default promotion
-is unavailable pending the [prospective evidence contract](../doctoring/prospective-routing-measurement-design.md);
-neither a lower fixture RMSE nor a measurement label authorizes live changes.
-
-## Psychometric routing accuracy-time frontier
-
-- Cox, D. R. (1958). Two further applications of a model for binary regression.
-  *Biometrika, 45*(3–4), 562–565.
-  https://doi.org/10.1093/biomet/45.3-4.562
-- Arrieta-Ibarra, I., Gujral, P., Tannen, J., Tygert, M., & Xu, C. (2022).
-  Metrics of calibration for probabilistic predictions. *Journal of Machine
-  Learning Research, 23*(351), 1–54.
-  https://www.jmlr.org/papers/v23/22-0658.html
-  Ground checking whether routing probabilities retain their stated meaning,
-  separately from ranking and aggregate proper scores. Source `92b9309b`
-  reduces paired held-out logit calibration RMSE from `0.231235` to `0.025803`;
-  the 95% candidate-minus-baseline interval is `[-0.208030, -0.202924]`.
-- Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu,
-  R. (2025). IRT-Router: Effective and interpretable multi-LLM routing via
-  item response theory. In *Proceedings of the 63rd Annual Meeting of the
-  Association for Computational Linguistics (Volume 1: Long Papers)*
-  (pp. 15629–15644). Association for Computational Linguistics.
-  https://doi.org/10.18653/v1/2025.acl-long.761
-  [Publisher PDF](https://aclanthology.org/2025.acl-long.761.pdf), 16 pages.
-  Citation and link only: the previously copied file had SHA-256
-  `0fb8cecd934693b83966c857a0e0757551c738989247b0156ab30688d3868d4e`.
-  The [ACL policy](https://aclanthology.org/faq/copyright/) licenses post-2016
-  ACL material under CC BY 4.0 but excludes third-party material. Embedded
-  font/color-profile redistribution conditions have not been independently
-  cleared here. The copy was removed rather than asserting a blanket license;
-  this is not a finding that the publisher's distribution is unauthorized.
-  Restore a copy only with a component-specific rights record covering embedded
-  resources and any third-party figures, tables, or appendix material.
-  Motivates held-out response prediction from candidate-query interactions;
-  exact-query and semantic warm-start evidence must be evaluated separately.
-  CO classifies this as an IRT-shaped predictive model, not a validated
-  psychometric measurement model: monotonicity alone does not identify a scale
-  or establish construct validity, and the paper's selected model-pair and
-  two-query examples do not supply uncertainty or invariant measurement proof.
-  Distinguish the printed linear discrimination transform in Eq. (4) from
-  public code revision `e8f258ced4ec3c40d795403603acd8c1cdfb994d`:
-  [`MIRT.py`, lines 51–59](https://github.com/Mercidaiha/IRT-Router/blob/e8f258ced4ec3c40d795403603acd8c1cdfb994d/router/MIRT.py#L51-L59)
-  uses softplus by default, or a sigmoid multiplied by the configured range.
-  A positive range preserves positive discrimination; the constructor does
-  not itself validate that range. NIRT likewise uses a positive discrimination
-  transform and nonnegative prediction-layer weights. It is therefore
-  incorrect to claim that the public implementation has no orientation
-  constraint. These constraints still do not validate named constructs or the
-  meaning of the Figure 4 cross-coordinate average. The
-  [doctoring audit](../doctoring/measured-routing-evidence.md#irt-router-interpretation-audit-2026-09-05)
-  separates a scale-reparameterization counterexample for the printed equation
-  from unperformed checkpoint and buyer-validation experiments.
-  The gateway does not adopt the paper's stronger interpretation of fitted
-  coordinates as stable LLM abilities or query properties. The paper and its
-  public implementation report predictive metrics, but do not establish scale
-  linking, parameter invariance, local independence, DIF, parameter uncertainty,
-  rater effects, or adaptive-routing selection-bias control. Until those checks
-  exist, fitted values remain deployment- and sample-conditional routing
-  evidence rather than psychometric measurements that can be compared across
-  model versions, provider policies, domains, or time.
-  Source commit `0f875e3f` exercises the released item-side covariate contract
-  against a known coefficient. It converges after 941 iterations and estimates
-  `-0.789650` for true `-0.8` (absolute error `0.010350`). This synthetic
-  recovery still does not establish buyer or invariant-scale validity.
-- Oakes, D. (1999). Direct calculation of the information matrix via the EM.
-  *Journal of the Royal Statistical Society: Series B, 61*(2), 479–482.
-  https://doi.org/10.1111/1467-9868.00188
-  Grounds the observed-information calculation reused by the released
-  `fast-mlsirm` standard-error API.
-- Pritikin, J. N. (2017). A comparison of parameter covariance estimation
-  methods for item response models in an expectation-maximization framework.
-  *Cogent Psychology, 4*(1), 1279435.
-  https://doi.org/10.1080/23311908.2017.1279435
-  Supports checking Oakes covariance estimates for accuracy and elapsed time in
-  item-factor models. Source commit `b0f3703f` recovers six known item
-  intercepts with RMSE `0.039160`; all six 95% Wald intervals cover their true
-  values and have mean width `0.295945`. The released API conditions on
-  population parameters and rejects anchors, zero inflation, and item
-  covariates, so buyer uncertainty remains unexecuted.
-- Millsap, R. E. (2010). Testing measurement invariance using item response
-  theory in longitudinal data: An introduction. *Child Development
-  Perspectives, 4*(1), 5–9.
-  https://doi.org/10.1111/j.1750-8606.2009.00109.x
-  Grounds the requirement that relations between observed outcomes and the
-  latent routing construct remain invariant across recalibrations.
-- Babcock, B., & Albano, A. D. (2012). Rasch scale stability in the presence of
-  item parameter and trait drift. *Applied Psychological Measurement, 36*(7),
-  565–580. https://doi.org/10.1177/0146621612455090
-  Grounds the warning that drift in common items can distort linked scores and
-  classifications. Source commit `2e129e2a` links two known parameter sets
-  through seven stable anchors, flags the one injected drift item, and produces
-  no stable-item false positive. Its fixed `0.25` tolerance is a preregistered
-  effect-size screen, not an inferential cutoff or buyer invariance proof.
-- Tinsley, H. E. A., & Dawis, R. V. (1975). An investigation of the Rasch
-  simple logistic model: Sample free item and test calibration. *Educational
-  and Psychological Measurement, 35*(2), 325–336.
-  https://doi.org/10.1177/001316447503500211
-  Grounds checking whether calibration survives a changed respondent sample
-  and ties any invariance claim to adequate sampling, design, and model fit.
-  Source commit `5c6ba17a` separately fits 20- and 16-candidate synthetic
-  rosters, links 200 common items, and reports linked common-score RMSE
-  `0.010866`, correlation `0.999999`, and maximum shift `0.016498`. Buyer
-  roster invariance remains unexecuted.
-- Huebner, A., & Lucht, M. (2019). Generalizability theory in R. *Practical
-  Assessment, Research, and Evaluation, 24*, Article 5.
-  https://openpublishing.library.umass.edu/pare/article/id/1593/
-  Grounds the crossed persons-by-items-by-occasions G-study and D-study used to
-  distinguish candidate signal from query, repeat, and interaction error.
-  Source commit `015c4bf6` raises synthetic dependability from `0.401565` for
-  one query and one occasion to `0.849616` for 12 queries and four occasions;
-  a balanced synthetic tensor does not establish buyer generalizability.
-- Guo, R., Zheng, Y., & Chang, H.-H. (2015). A stepwise test characteristic
-  curve method to detect item parameter drift. *Journal of Educational
-  Measurement, 52*(3), 280–300. https://doi.org/10.1111/jedm.12077
-  Grounds judging drift by its aggregate test-function impact rather than item
-  parameter distance alone. Source commit `c7c4a13f` detects the one injected
-  drift item and reduces synthetic TCC-area difference from `0.123355` to zero.
-  The released backward-only heuristic uses a fixed threshold and is not the
-  paper's complete entry-and-removal procedure.
-- American Educational Research Association, American Psychological
-  Association, & National Council on Measurement in Education. (2014).
-  *Standards for educational and psychological testing*. American Educational
-  Research Association. https://www.testingstandards.net/open-access-files.html
-  Standards 5.16–5.18 require evidence that scores retain comparable meaning
-  across alternate item sets and that linking limitations are documented.
-- Moses, T. P., & Holland, P. W. (2008). Notes on a general framework for
-  observed score equating (Research Report No. RR-08-59). Educational Testing
-  Service. https://doi.org/10.1002/j.2333-8504.2008.tb02145.x
-  Grounds observed-score equating and its uncertainty boundary. Source commit
-  `1dce9688` recovers a known slope `2` and intercept `1`: raw cross-form RMSE
-  `6.782330` falls to zero, and 300-bootstrap 95% intervals cover all 11 known
-  equivalent scores. Comparable buyer populations or anchors remain required.
-- Meijer, R. R. (1996). Person-fit research: An introduction. *Applied
-  Measurement in Education, 9*(1), 3–8.
-  https://doi.org/10.1207/s15324818ame0901_2
-  Grounds examining response patterns that deviate from the fitted model or
-  comparison group instead of trusting every fitted candidate coordinate.
-- Tendeiro, J. N., Meijer, R. R., & Niessen, A. S. M. (2016). PerFit: An R
-  package for person-fit analysis in IRT. *Journal of Statistical Software,
-  74*(5), 1–27. https://doi.org/10.18637/jss.v074.i05
-  Grounds the released nonparametric person-fit statistics. Source commit
-  `a18e25f7` ranks one injected inverted response pattern first among 1,000
-  candidates with ZU3 separation `1.818719` from the next-highest pattern. The
-  diagnostic does not explain the anomaly or supply a universal action cutoff,
-  so buyer response-pattern fit remains unexecuted.
-- Rudner, L. M. (2001). Computing the expected proportions of misclassified
-  examinees. *Practical Assessment, Research & Evaluation, 7*(14), 1–5.
-  https://doi.org/10.7275/an9m-2035
-- Rudner, L. M. (2005). Expected classification accuracy. *Practical
-  Assessment, Research & Evaluation, 10*(13), 1–4.
-  https://doi.org/10.7275/56a5-6b14
-  Ground expected classification accuracy and consistency in the score-error
-  distribution around a declared decision cut. Source commit `0b19116e`
-  raises expected accuracy from `0.814182` to `0.996895` and consistency from
-  `0.710275` to `0.993829` when synthetic standard error falls from `0.8` to
-  `0.2`. The cut and costs are synthetic, so buyer decisions remain unexecuted.
-- Taylor, H. C., & Russell, J. T. (1939). The relationship of validity
-  coefficients to the practical effectiveness of tests in selection:
-  Discussion and tables. *Journal of Applied Psychology, 23*(5), 565–578.
-  https://doi.org/10.1037/h0057079
-  Grounds the joint reporting of predictive validity, selection ratio, base
-  rate, and expected selected success. Source commit `452a3649` pairs that
-  result with the released Brogden-Cronbach-Gleser utility analogue: raising
-  validity from `0.2` to `0.6` raises synthetic selected success from
-  `0.500273` to `0.723515`, but an `8,000`-unit cost increase turns net utility
-  from `5,626.64` to `-2,373.36`. Personnel selection is only an analogue;
-  buyer-valued routing outcomes and costs remain unvalidated.
-- Brogden, H. E. (1949). When testing pays off. *Personnel Psychology, 2*(2),
-  171–183. https://doi.org/10.1111/j.1744-6570.1949.tb01397.x
-  Research antecedent for the personnel-selection utility analogue; publisher
-  metadata was checked on 2026-09-05. This is not evidence that the analogy
-  is valid for buyer routing, and redistribution permission was not established.
-- Stenhaug, B. A., & Domingue, B. W. (2022). Predictive fit metrics for item
-  response models. *Applied Psychological Measurement, 46*(2), 128–143.
-  https://doi.org/10.1177/01466216211066603
-  Separates prediction of missing responses for observed persons from prediction
-  of complete responses for new persons. Source commit `68831dff` maps those
-  tasks to unseen queries for known deployments and unseen candidate deployments.
-  Source commit `54833bd8` executes the latter path across 24 contexts and
-  records zero psychometric prediction coverage. It therefore cannot claim
-  cold-start predictive fit for a newly introduced or changed deployment.
-- Chen, Y., Lee, Y.-H., & Li, X. (2022). Item pool quality control in
-  educational testing: Change point model, compound risk, and sequential
-  detection. *Journal of Educational and Behavioral Statistics, 47*(3),
-  322–352. https://doi.org/10.3102/10769986211059085
-  Grounds monitoring psychometric drift as a sequential decision with explicit
-  false-detection and missed-detection risks. Source commit `7c3e6e98` runs a
-  narrower one-stream Bernoulli CUSUM calculation over 500 seeded repetitions.
-  Source commit `1b3b7244` searches 11 thresholds on 500 calibration runs using
-  a 95% Wilson false-alarm upper bound, then evaluates the selected `6.6`
-  threshold on an independent 500-run seed. Held-out false alarms are `2.4%`
-  with upper bound `4.15%`; delay p50 is 10 and p95 is 20 observations. It is
-  not the paper's multistream Bayesian procedure and supplies no buyer threshold.
-- Horn, J. L. (1965). A rationale and test for the number of factors in factor
-  analysis. *Psychometrika, 30*(2), 179–185.
-  https://doi.org/10.1007/BF02289447
-  Grounds comparison of observed roots with roots attributable to sampling
-  error. Source commit `73e07a8e` recovers both known dimensions in a seeded
-  1,000-response, 12-item simulation.
-- Tran, U. S., & Formann, A. K. (2009). Performance of parallel analysis in
-  retrieving unidimensionality in the presence of binary data. *Educational
-  and Psychological Measurement, 69*(1), 50–61.
-  https://doi.org/10.1177/0013164408318761
-  Grounds the limitation: Pearson-correlation parallel analysis can perform
-  poorly on binary items. CO therefore treats the result as a synthetic screen,
-  not construct identification or buyer-validity evidence.
-- Maydeu-Olivares, A., & Joe, H. (2005). Limited- and full-information
-  estimation and goodness-of-fit testing in 2ⁿ contingency tables: A unified
-  framework. *Journal of the American Statistical Association, 100*(471),
-  1009–1020. https://doi.org/10.1198/016214504000002069
-  Grounds limited-information global model-fit testing for binary response
-  tables. Source commit `7f13dc7d` yields M2 `45.744317` (`p=0.105619`) for a
-  fitted one-factor design and M2 `287.163678` (`p≈2.27e-41`) when the same
-  one-factor model is fitted to known two-factor data.
-- Xu, J., Paek, I., & Xia, Y. (2017). Investigating the behaviors of M2 and
-  RMSEA2 in fitting a unidimensional model to multidimensional data. *Applied
-  Psychological Measurement, 41*(8), 632–644.
-  https://doi.org/10.1177/0146621617710464
-  Grounds the limitation that M2 sensitivity varies with the multidimensional
-  structure. A detected synthetic misspecification therefore does not establish
-  buyer construct validity or universal model-fit thresholds.
-- Bechger, T. M., Maris, G., Verstralen, H. H. F. M., & Béguin, A. A. (2003).
-  Using classical test theory in combination with item response theory.
-  *Applied Psychological Measurement, 27*(5), 319–334.
-  https://doi.org/10.1177/0146621603257518
-  Grounds posterior-variance decomposition as an empirical score-reliability
-  summary. Source commit `5b50e10c` raises reliability from `0.366437` to
-  `0.800436` when true item discrimination increases from `0.45` to `1.5`.
-- Stanley, L. M., & Edwards, M. C. (2016). Reliability and model fit.
-  *Educational and Psychological Measurement, 76*(6), 976–985.
-  https://doi.org/10.1177/0013164416638900
-  Grounds treating reliability and model fit as distinct evidence. High score
-  precision cannot repair a misspecified model or establish validity.
-- Lord, F. M. (1950). *Properties of test scores expressed as functions of the
-  item parameters* (Research Bulletin RB-50-56). Educational Testing Service.
-  https://doi.org/10.1002/j.2333-8504.1950.tb00919.x
-  Grounds reporting measurement error and discriminating power at specified
-  ability levels rather than only as one sample average.
-- Magis, D. (2013). A note on the item information function of the
-  four-parameter logistic model. *Applied Psychological Measurement, 37*(4),
-  304–315. https://doi.org/10.1177/0146621613475471
-  Grounds the released item/test information calculation. Source commit
-  `b4efa489` spreads 12 item difficulties across `[-2, 2]`, improving the
-  worst information over trait points `[-2, 0, 2]` by `15.789%` and reducing
-  worst conditional standard error from `0.890897` to `0.827931`.
-- Bock, R. D., & Mislevy, R. J. (1982). Adaptive EAP estimation of ability in
-  a microcomputer environment. *Applied Psychological Measurement, 6*(4),
-  431–444. https://doi.org/10.1177/014662168200600405
-- Hau, K.-T., & Chang, H.-H. (2001). Item selection in computerized adaptive
-  testing: Should more discriminating items be used first? *Journal of
-  Educational Measurement, 38*(3), 249–266.
-  https://doi.org/10.1111/j.1745-3984.2001.tb01126.x
-  These ground the released EAP scoring and maximum-information item-selection
-  path reused by source `f4513527`. Across 400 known synthetic candidate
-  deployments, adaptive selection reaches target SE 0.5 in 7.1775 queries on
-  average versus 10.47 for a seeded random order, while reducing theta RMSE
-  from 0.607152 to 0.575996 and unobserved-probability MSE from 0.014746 to
-  0.007504. Paired 95% intervals are `[-3.4125, -3.18]` queries,
-  `[-0.080874, 0.006129]` theta squared error, and
-  `[-0.008804, -0.005716]` unobserved-probability squared error. The theta
-  interval includes zero, so that accuracy improvement is not established.
-  This one-dimensional onboarding screen neither identifies an invariant model
-  ability nor measures live per-request decision latency.
-- Luo, X., Kim, D., & Dickison, P. (2018). Projection-based stopping rules for
-  computerized adaptive testing in licensure testing. *Applied Psychological
-  Measurement, 42*(4), 275–290.
-  https://doi.org/10.1177/0146621617726790
-  Grounds distinguishing classification-oriented confidence-interval stopping
-  from a uniform score-precision target. Source `f4cceb59` stops when the 95%
-  normal interval excludes a declared zero cut or at 12 queries. Across 400
-  known synthetic candidates it averages 9.875 queries, stops early for 41%,
-  and exactly matches the fixed-length decisions and 0.9125 accuracy; the
-  paired query-delta interval is `[-2.425, -1.835]` and the accuracy-delta
-  interval is `[0, 0]`. Near-cut behavior, normal-interval calibration, buyer
-  decision costs, and live query latency remain unvalidated.
-  Source `298e1fc8` makes the known near-cut limitation observable: candidates
-  within 0.5 of the cut stop early 3% of the time, average 11.86 queries, and
-  reach 0.70 accuracy; candidates at least 1.0 away stop early 68%, average
-  8.305 queries, and reach 1.0 accuracy. These descriptive synthetic strata
-  are complemented by source `e2cb547f`: 42.5% are confidence-resolved with
-  1.0 conditional synthetic accuracy, but near-cut resolution is only 3%.
-  These are not calibrated subgroup guarantees.
-- Chow, C. K. (1970). On optimum recognition error and reject tradeoff. *IEEE
-  Transactions on Information Theory, 16*(1), 41–46.
-  https://doi.org/10.1109/TIT.1970.1054406
-  Establishes the error–reject tradeoff rather than treating forced coverage as
-  free. Redistribution permission was not established, so this repository
-  records the citation and decision impact instead of copying the PDF.
-- El-Yaniv, R., & Wiener, Y. (2010). On the foundations of noise-free selective
-  classification. *Journal of Machine Learning Research, 11*, 1605–1641.
-  https://www.jmlr.org/papers/v11/el-yaniv10a.html
-  Grounds risk–coverage evaluation for classification with a reject option.
-  Source `e1ff2e61` selects `z=1.645` on a development seed under a 2.5% Wilson
-  error-upper-bound rule. Against `z=1.96` on the same independent responses,
-  coverage rises from 44.25% to 56% and all-candidate mean queries fall from
-  9.88 to 8.395; paired intervals are `[8.75, 14.75]` percentage points and
-  `[-1.715, -1.2625]`. Observed selective risk is zero with a 1.686% Wilson
-  upper bound; buyer costs and live coverage remain unexecuted.
-  Source `609faff8` repeats the comparison across ten independent response
-  seeds. Efficiency gains persist, but the 2.5% Wilson error ceiling passes in
-  only 20% of runs and the worst upper bound is 4.540%; the candidate threshold
-  is therefore rejected rather than promoted from a favorable single holdout.
-- Morris, T. P., White, I. R., & Crowther, M. J. (2019). Using simulation
-  studies to evaluate statistical methods. *Statistics in Medicine, 38*(11),
-  2074–2102. https://doi.org/10.1002/sim.8086
-  Grounds ADEMP planning and reporting Monte Carlo standard errors. Source
-  `1862893a` reports MCSE 0.1265 for the ten-run ceiling-pass rate and 0.00619,
-  0.02257, and 0.00211 for coverage delta, query delta, and selective risk. A
-  worst-case binomial design needs 400 replications for target MCSE 0.025, so
-  the current audit rejects admission but does not claim a precise pass rate.
-- Chen, W.-H., & Thissen, D. (1997). Local dependence indexes for item pairs
-  using item response theory. *Journal of Educational and Behavioral
-  Statistics, 22*(3), 265–289.
-  https://doi.org/10.3102/10769986022003265
-  Grounds pairwise signed X2/G2 diagnostics for dichotomous responses. The
-  Rust implementation already exists in `fast-mlsirm`; owner PR #1748 exposes
-  it to Python without inventing a universal cutoff. CO adoption still requires
-  a preregistered buyer matrix, multiplicity plan, and decision threshold.
-- Debeer, D., & Janssen, R. (2013). Modeling item-position effects within an
-  IRT framework. *Journal of Educational Measurement, 50*(2), 164–185.
-  https://doi.org/10.1111/jedm.12009
-  Grounds a limited explanatory-IRT adaptation: the released `fast-mlsirm`
-  multigroup item-covariate path can estimate one preregistered item-side
-  language/domain difficulty contrast. It does not estimate language-specific
-  discrimination or residual effects, and cannot pass without linked buyer
-  observations and anchors.
-- Doebler, A. (2012). The problem of bias in person parameter estimation in
-  adaptive testing. *Applied Psychological Measurement, 36*(4), 255–270.
-  https://doi.org/10.1177/0146621612443304
-  Shows that item-calibration error and unmodeled testlet/item-generation effects
-  can systematically bias adaptive estimates even when calibration errors are
-  unbiased. Routing therefore cannot treat adaptively observed cells as a dense,
-  ignorable sample.
-- Finkelman, M., Nering, M. L., & Roussos, L. A. (2009). A conditional exposure
-  control method for multidimensional adaptive testing. *Journal of Educational
-  Measurement, 46*(1), 84–103.
-  https://doi.org/10.1111/j.1745-3984.2009.01070.x
-  Grounds explicit randomized exposure control. CO must record the actual
-  selection design/probability before any propensity correction; deterministic
-  winner-only history is not sufficient evidence. Source commit `46e15555`
-  now records the candidate set, attempts, selection, and policy identity while
-  honestly leaving deterministic propensity unidentified. Source commit
-  `36dbf3bb` quantifies the consequence in the preregistered synthetic design:
-  winner-only candidate means have RMSE `0.321979` against known truth, while
-  logged inverse-propensity estimates have RMSE `0.008943`, a `0.313036`
-  reduction. This is an estimator contract, not buyer evidence.
-- Barrada, J. R., Olea, J., & Ponsoda, V. (2007). Methods for restricting
-  maximum exposure rate in computerized adaptive testing. *Methodology, 3*(1),
-  14–23. https://doi.org/10.1027/1614-2241.3.1.14
-  Grounds the released `fast-mlsirm` CAT exposure-control surface. Selection
-  and administration probabilities used to limit item exposure are not logged
-  gateway routing propensities and do not identify outcomes for candidates the
-  gateway did not call.
-- Horvitz, D. G., & Thompson, D. J. (1952). A generalization of sampling
-  without replacement from a finite universe. *Journal of the American
-  Statistical Association, 47*(260), 663–685.
-  https://doi.org/10.1080/01621459.1952.10483446
-  Grounds inverse-probability weighting when inclusion probabilities are known.
-- Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and
-  learning. In *Proceedings of ICML 2011* (pp. 1097–1104).
-  https://arxiv.org/abs/1103.4601
-  Shows why partial-feedback policy evaluation needs the logging policy or a
-  reward model and why inverse propensity alone can have high variance.
-- Swaminathan, A., & Joachims, T. (2015). Batch learning from logged bandit
-  feedback through counterfactual risk minimization. *JMLR, 16*(52), 1731–1755.
-  https://jmlr.org/papers/v16/swaminathan15a.html
-  Grounds propensity-weighted risk with an explicit variance penalty. Source
-  commit `2c783b98` adds only the prerequisite fixed-seed logging-policy test;
-  production learning and buyer evidence remain out of scope until gated.
-- Stocking, M. L., & Lord, F. M. (1983). Developing a common metric in item
-  response theory. *Applied Psychological Measurement, 7*(2), 201–210.
-  https://doi.org/10.1177/014662168300700208
-  Grounds characteristic-curve linking across separately calibrated forms.
-  Source commit `ca6e9a75` recovers a known six-anchor affine transform with
-  true-parameter RMSE `3.24e-16`; buyer anchors remain unexecuted.
-- Swaminathan, H., & Rogers, H. J. (1990). Detecting differential item
-  functioning using logistic regression procedures. *Journal of Educational
-  Measurement, 27*(4), 361–370.
-  https://doi.org/10.1111/j.1745-3984.1990.tb00754.x
-  Grounds the requirement to distinguish uniform and nonuniform DIF after
-  conditioning on the measured trait. The current synthetic routing surface has
-  neither buyer groups nor an anchored matching variable, so it reports
-  `measurement_validity=false` instead of fabricating a DIF result.
-- French, B. F., & Maller, S. J. (2007). Iterative purification and effect size
-  use with logistic regression for differential item functioning detection.
-  *Educational and Psychological Measurement, 67*(3), 373–393.
-  https://doi.org/10.1177/0013164406294781
-  Together these ground logistic DIF and iterative removal of contaminated
-  matching items. Source commit `d0d81e8f` detects the single injected cohort
-  shift with recall 1.0 and zero false positives after purification.
-- Linacre, J. M. (1989). *Many-facet Rasch measurement*. MESA Press.
-- Eckes, T. (2015). *Introduction to many-facet Rasch measurement* (2nd ed.).
-  Peter Lang. https://doi.org/10.3726/978-3-653-04844-5
-- Bock, R. D., & Aitkin, M. (1981). Marginal maximum likelihood estimation of
-  item parameters: Application of an EM algorithm. *Psychometrika, 46*(4),
-  443–459. https://doi.org/10.1007/BF02293801
-  These ground the judge facet and its marginal-ML estimation. Source commit
-  `ac28b6d0` recovers centered judge severity with RMSE 0.018292 in a connected
-  synthetic design; buyer judge identities and ratings remain unexecuted.
-- He, Y., & Qi, Y. (2023). Using response time in multidimensional
-  computerized adaptive testing. *Journal of Educational Measurement, 60*(4),
-  697–738. https://doi.org/10.1111/jedm.12373
-  Grounds a joint accuracy-time KPI: maximize information per unit time rather
-  than treating latency as a tie-breaker after accuracy.
-- Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
-  Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
-  Grounds local similarity-weighted probability interpolation. The gateway
-  uses the smallest bounded form: two positive-cosine neighbors, with no
-  learned bandwidth or claim of reproducing the paper's estimator.
-
-The current gateway does not claim these papers' full estimators. Candidate changes
-must report held-out prediction quality or true-parameter RMSE together with
-route-decision latency; faster Python preparation alone is a latency result,
-not an accuracy improvement. Production evidence must identify the measured
-unit as a versioned endpoint + model + system/decode/tool policy, preserve
-anchor interactions across recalibration, report uncertainty and subgroup/domain
-DIF, and log randomized exposure or propensities when routing controls which
-responses are observed. Without those conditions, the safe result is "no
-psychometric evidence", never a portable ability rank.
-
-- Lior, G., Frostig, T., Stanovsky, G., & Eyal, M. (2026). *Extending item
-  response theory for efficient and meaningful multilingual evaluation*
-  [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.15643
-  Grounds a safer multilingual extension: language is modeled with explicit
-  difficulty deviations, language/content discrimination components, and
-  language-specific residuals rather than being forced into a person-group DIF
-  variable. Its reported predictive gains do not establish invariance for this
-  gateway; buyer-language replication and anchor continuity remain required.
+`run_equal_budget_ablation` emits estimated, synthetic true-parameter evidence
+for unit-test recovery checks. It does not establish buyer accuracy or authorize
+live routing changes. A Boolean returned by `production_default_change_allowed`
+is not sufficient deployment evidence: caller-declared measurement status and
+robustness do not authenticate observed outcomes. The repair tracked in
+[PR #1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+remains proposed until protected integration. Live defaults require independently
+verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
-- Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
-  Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
-  for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
-  https://doi.org/10.48550/arXiv.2608.06867
-  Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
-  `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
-  A second publisher download was byte-identical. Poppler reads 34 pages but
-  reports PDF dictionary syntax warnings; the original bytes are preserved,
-  and the versioned HTML below is an alternative reading surface.
-  The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
-  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
-  citation above. The paper introduces xRouteBench for quality/cost routing.
-  Its paper license does not establish rights to redistribute the dataset.
-  The [public response-time audit](../doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
-  records separate data/code revisions and unresolved failure-time provenance.
-  No reported paper result is a measured gain for this gateway.
-
-- Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
-  Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
-  and unified framework for LLM routing. In *Findings of the Association for
-  Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
-  Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
-  [Publisher record and PDF](https://aclanthology.org/2026.findings-acl.1881/).
-  This is not xRouteBench. Section 4.2.2 and Figure 8 estimate latency from tokens and
-  serving statistics; those estimates cannot establish observed request-level
-  p95 or gateway overhead. Citation and summary only; redistribution permission
-  for this PDF was not established in this audit.
-
-- Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
-  *The Annals of Statistics, 7*(1), 1–26.
-  https://doi.org/10.1214/aos/1176344552
-  Grounds resampling observed units for uncertainty. NIM report version 2
-  reuses the existing paired mean-bootstrap routine for delivered-task score
-  and terminal-outcome time on all shared locked tasks, including failures.
-  The score definition is a declared product reward; it does not impute an
-  unobserved psychometric response. Mean intervals do not establish p95
-  performance. Citation and summary only; redistribution was not established.
+- Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
+  Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
+  *Chatbot Arena: An open platform for evaluating LLMs by human preference*.
+  arXiv. https://doi.org/10.48550/arXiv.2403.04132
+  Cited by `contextual_orchestrator/benchmark_priors.py`. Version 1 metadata
+  and HTML sections 3–4 were inspected on 2026-09-09. Pairwise human preference
+  is distinct from absolute task correctness. The repository's equal-weight
+  composite of normalized Arena and Quality Index scores is not validated by
+  this citation; its historical snapshot values also need archived provenance.
+  Citation only; no PDF copied. This is not a completed full-paper review.
 
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
@@ -559,108 +186,77 @@ psychometric evidence", never a portable ability rank.
   latency, cost) instead of a single leaderboard number; report incompleteness
   honestly (skipped/unsupported/rate-limited cells stay machine-readable rather
   than silently dropped); and standardize conditions across compared systems
-  (same tasks, scorers, caps, and budgets).
-  The unmodified bundled file is arXiv v2 (2023-10-01):
-  https://arxiv.org/abs/2211.09110v2, which explicitly specifies
-  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-  Source: https://arxiv.org/pdf/2211.09110v2.
-  SHA-256 `30970bda8958a1a8adf6a0a82feef9728331840288b7d2b49368bac87fd25f18`;
-  compared byte-for-byte with the source on 2026-09-05. Copyright remains with
-  the authors; the APA entry below supplies attribution, and no changes were
-  made to the PDF. This paper license does not license all HELM datasets.
+  (same tasks, scorers, caps, and budgets). Version-page license: CC BY 4.0;
+  source: https://arxiv.org/abs/2211.09110.
 
-## Fuzzing methodology
+## Psychometrics beyond orchestration
 
-- Manès, V. J. M., Han, H., Han, C., Cha, S. K., Egele, M., Schwartz,
-  E. J., & Woo, M. (2019). *The art, science, and engineering of fuzzing:
-  A survey* [Preprint, version 4]. arXiv.
-  https://arxiv.org/abs/1812.00140v4
-  Supplies the taxonomy and design background for coverage-guided fuzzing in
-  `docs/fuzzing.md`; it does not prove this gateway's test coverage or safety.
-  The earlier bundled copy is replaced by citation and link because its arXiv
-  distribution grant does not establish this repository's redistribution right.
+### Multilevel ability and measurement error
 
-## Repository-wide referenced research
+Fox, J.-P., & Glas, C. A. W. (2001). Bayesian estimation of a multilevel IRT
+model using Gibbs sampling. *Psychometrika, 66*(2), 271–288.
+https://doi.org/10.1007/BF02294839
 
-The following papers ground implementation or architecture elsewhere in this
-repository. This register deliberately excludes RFC, NIST, ISO, OWASP, and
-vendor documentation; those remain standards or product sources rather than
-academic papers. `tests/test_paper_contracts.py` normalizes arXiv URLs and DOI
-forms and fails when a scholarly identifier used by tracked Python or Markdown
-is absent here.
+The publisher abstract describes joint estimation of a two-parameter normal
+ogive measurement model and a two-level regression on latent ability using
+Gibbs sampling. Research lead: evaluate measurement error and clustering
+together rather than treating observed scores as error-free abilities.
+This is an engineering proposal, not an implemented CO estimator.
+Read status: abstract only; full method, identification assumptions,
+implementation and customer accuracy/latency gains remain unverified.
+The original publication year is 2001, not the publisher's 2025 online date.
+No PDF is attached: full-text access and redistribution permission have not
+been established. See the [discovery receipt](../doctoring/autonomous_kpi_runbook.md#local-zotero-discovery-2026-09-09).
 
-- Bradley, R. A., & Terry, M. E. (1952). Rank analysis of incomplete block
-  designs: I. The method of paired comparisons. *Biometrika, 39*(3/4), 324–345.
-  https://doi.org/10.1093/biomet/39.3-4.324
-- Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
-  Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
-  *Chatbot Arena: An open platform for evaluating LLMs by human preference*
-  [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2403.04132
-- Li, H., Zhang, Q., Wu, Y., Xiao, X., Li, Z., Xia, S.-T., & Liu, H. (2025).
-  *Evaluating scoring bias in LLM-as-a-judge* [Preprint]. arXiv.
-  https://arxiv.org/abs/2506.22316
-- Zheng, C., Zhou, H., Meng, F., Zhou, J., & Huang, M. (2024). Large language
-  models are not robust multiple choice selectors. *International Conference
-  on Learning Representations*.
-  https://proceedings.iclr.cc/paper_files/paper/2024/hash/54dd9e0cff6d9214e20d97eb2a3bae49-Abstract-Conference.html
-- Pezeshkpour, P., & Hruschka, E. (2024). Large language models sensitivity to
-  the order of options in multiple-choice questions. In *Findings of the
-  Association for Computational Linguistics: NAACL 2024* (pp. 2006–2017).
-  https://aclanthology.org/2024.findings-naacl.130/
-- Sharma, M., Tong, M., Korbak, T., Duvenaud, D., Askell, A., Bowman, S. R.,
-  Cheng, N., Durmus, E., Hatfield-Dodds, Z., Johnston, S. R., Kravec, S.,
-  Maxwell, T., McCandlish, S., Ndousse, K., Rausch, O., Schiefer, N., Yan, D.,
-  Zhang, M., & Perez, E. (2023). *Towards understanding sycophancy in language
-  models* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2310.13548
-  Research page:
-  https://www.anthropic.com/research/towards-understanding-sycophancy-in-language-models
-- Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark
-  for multimodal LLM routing* [Preprint]. arXiv.
-  https://doi.org/10.48550/arXiv.2601.17814
-- Jeon, M., Jin, I. H., Schweinberger, M., & Baugh, S. (2021). Mapping
-  unobserved item–respondent interactions: A latent space item response model
-  with interaction map. *Psychometrika, 86*(2), 378–403.
-  https://doi.org/10.1007/s11336-021-09762-5
-- Iannario, M., Monti, A. C., & Scalera, P. (2022). The number of response
-  categories in ordered response models. *The International Journal of
-  Biostatistics, 18*(2), 593–611.
-  https://doi.org/10.1515/ijb-2021-0013
-- Jones, W. P., & Loe, S. A. (2013). Optimal number of questionnaire response
-  categories. *SAGE Open, 3*(2).
-  https://doi.org/10.1177/2158244013489691
-- Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin,
-  Z., Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E., & Stoica, I.
-  (2023). *Judging LLM-as-a-judge with MT-Bench and Chatbot Arena* [Preprint].
-  arXiv. https://arxiv.org/abs/2306.05685
-- Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D.,
-  & Yih, W.-t. (2020). Dense passage retrieval for open-domain question
-  answering. In *Proceedings of EMNLP 2020* (pp. 6769–6781).
-  https://doi.org/10.18653/v1/2020.emnlp-main.550
-- Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM Computer
-  Communication Review, 18*(4), 314–329. https://doi.org/10.1145/52325.52356
-- Dean, J., & Barroso, L. A. (2013). The tail at scale. *Communications of the
-  ACM, 56*(2), 74–80. https://doi.org/10.1145/2408776.2408794
-- Gardner, K., Harchol-Balter, M., Scheller-Wolf, A., & Van Houdt, B. (2017).
-  Redundancy-d: The power of d choices for redundancy. *Operations Research,
-  65*(4), 1078–1094. https://doi.org/10.1287/opre.2016.1582
-- Codd, E. F. (1970). A relational model of data for large shared data banks.
-  *Communications of the ACM, 13*(6), 377–387.
-  https://doi.org/10.1145/362384.362685
-- Birrell, A. D., & Nelson, B. J. (1984). Implementing remote procedure calls.
-  *ACM Transactions on Computer Systems, 2*(1), 39–59.
-  https://doi.org/10.1145/2080.357392
-- Garcia-Molina, H., & Salem, K. (1987). Sagas. In *Proceedings of ACM SIGMOD*
-  (pp. 249–259). https://doi.org/10.1145/38713.38742
-- Yang, N., Barringer, H., & Zhang, N. (2007). A purpose-based access control
-  model. In *Proceedings of IAS 2007*. IEEE.
-  https://doi.org/10.1109/IAS.2007.29
-- Popa, R. A., Redfield, C. M. S., Zeldovich, N., & Balakrishnan, H. (2011).
-  CryptDB: Protecting confidentiality with encrypted query processing. In
-  *Proceedings of the 23rd ACM Symposium on Operating Systems Principles*
-  (pp. 85–100). https://doi.org/10.1145/2043556.2043566
-- Wolf, K., Pallas, F., & Tai, S. (2021). *Messaging with purpose limitation:
-  Privacy-compliant publish-subscribe systems* [Preprint]. arXiv.
-  https://arxiv.org/abs/2110.15150
+### Cross-document reference index
+
+At `fcf0047c37706975d9bff1ab4b95c54a2a383f54`, a tracked-text census found
+six explicit arXiv identifiers referenced elsewhere but absent from this index.
+Their existing evidence records remain canonical; these links do not imply
+that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
+
+| Identifier | Existing evidence and implementation discussion |
+| --- | --- |
+| 1810.07876 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2007.08719 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2306.05685 | [Measured routing evidence](../doctoring/measured-routing-evidence.md) |
+| 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
+| 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
+| 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+
+Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
+Rust, Markdown, and TOML files. This is a discovery census, not a complete
+bibliography: DOI-only sources, author/year citations, other formats, and
+references inside PDFs need separate reconciliation. The table includes
+non-psychometric references to avoid hiding cross-cutting dependencies.
+
+### Interpretation constraints
+
+Additional DOI-only lead: Kang and Jeon (2025),
+[Multidimensional latent space item response models](https://doi.org/10.1017/psy.2025.5).
+The [bounded read and reproduction receipt](../doctoring/measured-routing-evidence.md)
+records the abstract/model scope and a directly viewed supplementary-code name
+mismatch. This extends discovery beyond the arXiv census; it does not establish
+a completed reproduction or a released fast-mlsirm implementation.
+
+These sources constrain what a routing score may mean; they are not routing
+algorithms. They add validity, identification, and fair-comparison checks:
+
+- Messick (1995) frames validity as an argument about score interpretation and
+  use. Buyer-facing quality claims therefore need a construct, intended use,
+  observed outcome, and limitation record; a judge label alone is insufficient.
+- Embretson and Reise (2000) describe item information and identifiability in
+  IRT. Select extra items or raters by expected information only after scale
+  alignment and exposure limits are declared; never optimize a raw judge score
+  as if it were theta.
+- Reise, Ainsworth, and Haviland (2005) separate fit, parameter interpretation,
+  and practical measurement. Report family-wise fit and uncertainty separately
+  from route accuracy and latency, and fail closed when identification is absent.
+- Kim and Chung (2019) examine expanded test use using item DIF and subgroup
+  linking invariance. Their methods distinguish item-level behavior from
+  score-level comparability. Read scope: abstract and printed pages 1–8, not a
+  complete review of results. The [implementation proposal](../doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
+  is an engineering inference, not a demonstrated LLM-routing result.
 
 ## Batch execution / load balancing
 
@@ -670,42 +266,9 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
-## Redistribution audit (2026-09-05)
-
-The earlier blanket redistribution statement was incorrect.
-[arXiv's non-exclusive license](https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html)
-grants distribution rights to arXiv, not automatically to this repository.
-Permission must cover the exact file/version and intended distribution;
-source-code licenses do not license a paper. Citation alone is not permission.
-
-The six PDFs bundled at parent #1067's `47ae9d65` were checked. The separately
-audited child LLMRouter paper retains its own license record above. Among those
-six parent files, IRT-Router and HELM remain with
-the version-specific sources, CC BY 4.0 notices, attribution, and hashes above.
-Four other copies are removed from the current tree, with their citations,
-source summaries, and original version links retained. The table identifies
-their pre-removal bytes at `47ae9d65` for audit, not for redistribution:
-
-| Removed bundled copy | Version | SHA-256 |
-| --- | --- | --- |
-| `frugalgpt-cost-2305.05176.pdf` | arXiv v1 | `035ae8b90333dad8b7817fc8f55e7c4cbca435368c5c1a4dbf7bba9e5db87473` |
-| `routellm-routing-2406.18665.pdf` | arXiv v4 | `c9bc9c8171cab95bb3832cde8767c6b5e0925cd62930e51ddbd60d7cb2616741` |
-| `hybrid-llm-query-routing-2404.14618.pdf` | arXiv v1 | `c0ebc21073112b8f8e51c7ea279eeac4d5b62be88c69a5cd2bccc2d58ec28cbb` |
-| `fuzzing-art-science-engineering-manes-2019.pdf` | arXiv v4 | `b683da872e369882f0b8ebcb7423058e1317aa9571f8187ccd1c6148e3ac3992` |
-
-FrugalGPT, RouteLLM, and the fuzzing survey carry arXiv distribution grants;
-Hybrid LLM carries a noncommercial/no-derivatives condition. We did not establish
-an alternative grant covering these copies for the intended product distribution.
-[TMLR's CC BY 4.0 policy](https://jmlr.org/tmlr/author-guide.html) and the linked
-ICLR publication records do not by themselves establish that these exact older
-files are licensed published artifacts. OpenReview access was unavailable during
-the audit; no permission is inferred from that failure.
-
-This is a current-tree distribution correction, not a history purge: existing
-Git commits, other branches, and previously published artifacts are unchanged.
-Any historical redistribution cleanup needs a separately reviewed plan; no force
-push or release deletion is performed here. Reintroducing a file requires its
-own verified source, version/hash, permission, and attribution.
+> Citations provide attribution, not redistribution permission. Apply the
+> version-specific inventory above before including PDFs in a release; the
+> arXiv non-exclusive license alone does not authorize this repository's reuse.
 
 ## APA 7th edition references
 
@@ -728,15 +291,88 @@ Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
 M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
 data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
 
-He, Y., & Qi, Y. (2023). Using response time in multidimensional computerized
-adaptive testing. *Journal of Educational Measurement, 60*(4), 697–738.
-https://doi.org/10.1111/jedm.12373
+Embretson, S. E., & Reise, S. P. (2000). *Item response theory for
+psychologists*. Lawrence Erlbaum Associates.
 
-Song, W., Huang, Z., Cheng, C., Gao, W., Xu, B., Zhao, G., Wang, F., & Wu, R.
-(2025). IRT-Router: Effective and interpretable multi-LLM routing via item
-response theory. In *Proceedings of the 63rd Annual Meeting of the Association
-for Computational Linguistics (Volume 1: Long Papers)* (pp. 15629–15644).
-Association for Computational Linguistics. https://doi.org/10.18653/v1/2025.acl-long.761
+Messick, S. (1995). Validity of psychological assessment: Validation of
+inferences from persons' responses and performances as scientific inquiry into
+score meaning. *American Psychologist, 50*(9), 741–749.
+https://doi.org/10.1037/0003-066X.50.9.741
 
-Nadaraya, E. A. (1964). On estimating regression. *Theory of Probability &
-Its Applications, 9*(1), 141–142. https://doi.org/10.1137/1109020
+Reise, S. P., Ainsworth, A. T., & Haviland, M. G. (2005). Item response theory:
+Fundamentals, applications, and promise in psychological research. *Current
+Opinion in Psychiatry, 18*(5), 611–616.
+https://doi.org/10.1097/01.yco.0000170421.57227.9b
+
+Kim, S., & Chung, S. (2019). *Psychometric evidence to assess expanded test
+use* (Research Memorandum No. RM-19-07). Educational Testing Service.
+https://www.ets.org/Media/Research/pdf/RM-19-07.pdf
+
+The report states all rights reserved. Link and citation only; no PDF vendored.
+## Conditional-independence diagnostics
+
+van der Linden, W. J., & Glas, C. A. W. (2010). Statistical tests of
+conditional independence between responses and/or response times on test
+items. *Psychometrika, 75*(1), 120–139.
+https://doi.org/10.1007/s11336-009-9129-9
+
+Read status: publisher metadata and abstract verified; original PDF text on
+printed pages 120–123 inspected. The model distinguishes latent speed from
+observed response time and develops conditional-independence diagnostics.
+This is not a complete methods review or a reproduced implementation.
+Publisher HTML was visually inspected, but PDF rendering was blank; equations
+and tables remain visually unverified. The publisher identifies CC BY-NC 2.0;
+cite and link only, with no commercial PDF redistribution assumed.
+
+Engineering inference: numerical adoption belongs to fast-mlsirm and requires
+identified person/item roles and dependence diagnostics. CO's routing-decision
+clock cannot be substituted for a person's item response time. This source
+does not demonstrate an LLM accuracy or latency gain.
+
+## DOI discovery register
+
+The links below are explicit citations found in tracked source and documentation,
+not newly reviewed papers or verified implementation evidence. Some identify
+standards rather than papers. Existing citation discussions remain authoritative;
+this register prevents DOI-only sources from escaping the discovery inventory.
+Case and sentence-final punctuation are normalized by the inventory test.
+
+- [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
+- [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
+- [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
+- [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
+- [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
+- [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
+- [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
+- [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
+- [DOI 10.1111/rssc.12569](https://doi.org/10.1111/rssc.12569)
+- [DOI 10.1145/2043556.2043566](https://doi.org/10.1145/2043556.2043566)
+- [DOI 10.1145/2080.357392](https://doi.org/10.1145/2080.357392)
+- [DOI 10.1145/2408776.2408794](https://doi.org/10.1145/2408776.2408794)
+- [DOI 10.1145/362384.362685](https://doi.org/10.1145/362384.362685)
+- [DOI 10.1145/38713.38742](https://doi.org/10.1145/38713.38742)
+- [DOI 10.1145/52325.52356](https://doi.org/10.1145/52325.52356)
+- [DOI 10.1287/opre.2016.1582](https://doi.org/10.1287/opre.2016.1582)
+- [RFC 4193](https://doi.org/10.17487/RFC4193)
+- [RFC 6265](https://doi.org/10.17487/RFC6265)
+- [RFC 6598](https://doi.org/10.17487/RFC6598)
+- [RFC 9110](https://doi.org/10.17487/RFC9110)
+- [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
+- [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
+- [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
+- [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
+- [arXiv 2404.14618 DOI](https://doi.org/10.48550/arXiv.2404.14618)
+- [arXiv 2406.18665 DOI](https://doi.org/10.48550/arXiv.2406.18665)
+- [arXiv 2512.04388 DOI](https://doi.org/10.48550/arXiv.2512.04388)
+- [arXiv 2512.04695 DOI](https://doi.org/10.48550/arXiv.2512.04695)
+- [arXiv 2601.17814 DOI](https://doi.org/10.48550/arXiv.2601.17814)
+- [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
+- [NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1)
+- [NIST SP 800-204](https://doi.org/10.6028/NIST.SP.800-204)
+- [NIST SP 800-207](https://doi.org/10.6028/NIST.SP.800-207)
+- [NIST SP 800-53r5](https://doi.org/10.6028/NIST.SP.800-53r5)
+- [NIST SP 800-57pt1r5](https://doi.org/10.6028/NIST.SP.800-57pt1r5)
+- [NIST SP 800-63b](https://doi.org/10.6028/NIST.SP.800-63b)
+- [NIST SP 800-92](https://doi.org/10.6028/NIST.SP.800-92)

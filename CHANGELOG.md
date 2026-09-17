@@ -10,43 +10,49 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
-- Benchmark report validation now fails closed on empty evaluation identities,
-  invalid identity fields, non-positive task or worker counts, catalog worker
-  mismatches, and unknown cheapest-worker skip reasons, so incomplete paired
-  evidence cannot be published as a complete plan.
-- Model-effort settings stay consistent across each routing decision record;
-  later settings changes remain visible on the next decision.
-- Benchmark documentation now distinguishes simulated accuracy, unresolved
-  cases, and local decision timing from evidence of real-world performance.
-- Cosine scoring now feeds `math.fsum` with the standard-library multiplication
-  iterator, preserving numerical semantics while reducing psychometric routing
-  decision overhead.
-- The replication audit now reports Monte Carlo standard errors and the
-  conservative 400-replication requirement for a 0.025 pass-rate MCSE, so ten
-  seeds cannot be misread as a precise operating-characteristic estimate.
-- A ten-seed replication audit now rejects the development-selected
-  reject-option threshold because it satisfies the declared error-upper-bound
-  criterion in only 20% of independent runs, despite consistent efficiency.
-- The synthetic classification benchmark now chooses a reject-option threshold
-  on a development seed under a 2.5% Wilson error ceiling and evaluates it on
-  an independent seed against a paired 95% baseline, reporting coverage,
-  selective risk, all-candidate query burden, and directional coverage.
-- The classification screen now reports confidence-resolved coverage and
-  conditional accuracy, preserving unresolved candidates instead of hiding
-  forced decisions inside aggregate accuracy.
-- The adaptive onboarding screen now compares a bounded 95% confidence-interval
-  classification stop with fixed 12-query calibration, reporting paired query
-  and decision-accuracy intervals plus near/mid/far-cut strata instead of
-  treating generic score precision or an aggregate mean as the routing
-  decision objective.
-- The held-out psychometric benchmark now compares released maximum-information
-  EAP calibration with random query ordering for unseen-candidate onboarding,
-  reporting calibration-query burden, score error, and unobserved-probability
-  error with paired bootstrap intervals, without treating synthetic efficiency
-  as buyer or production evidence.
-- Research guidance distinguishes IRT-Router's published equations from its
-  positive-discrimination implementation. Predictive performance and named
-  ability dimensions still require separate measurement-validity evidence.
+### Added
+
+- A canonical, immutable release mechanism: `.github/workflows/release.yml`
+  (`workflow_dispatch` only, explicit `version` input, never triggered by
+  push/schedule/merge), split into a read-only, credential-less `verify` job
+  and a write-scoped `publish` job for least privilege. `verify` checks the
+  dispatched commit is protected `main`'s untampered current tip and that
+  every one of this repository's own known push-triggered checks (Tests,
+  Fuzz, Security's jobs — `RELEASE_EXPECTED_PUSH_CHECKS`) has actually
+  registered as a check-run for that exact commit *and* every check GitHub
+  reports for it is complete with an acceptable conclusion (excluding this
+  release run's own checks) — a dispatch fired moments after a merge, before
+  GitHub has finished registering those push-triggered check-runs at all,
+  is correctly "not ready" rather than a vacuous pass on an empty report —
+  checks the requested version against `pyproject.toml`'s `[project]` table
+  (table-boundary aware, so a same-named `version` key in an unrelated table
+  can never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
+  GitHub commits API (rejecting only one that points at a different commit;
+  a tag at this commit is always a safe idempotent resume, whether or not
+  its Release already exists — see below; a failed tag or Release lookup is
+  read as "absent" only on a confirmed 404 / "release not found" — any other
+  lookup failure, e.g. a rate limit or transient network/5xx error, fails
+  the step closed instead of guessing, so a later dispatch retries and
+  resolves cleanly rather than compounding a wrong assumption), re-runs the
+  full test suite fresh, renders release notes from this file's matching
+  `## [X.Y.Z]` section via the tested `scripts/ci/release_notes.py`, and
+  best-effort looks up a CycloneDX SBOM (a missing SBOM or failed lookup
+  warns, never blocks). `publish` re-verifies `main`'s tip has not advanced
+  and every expected check is still registered and green since `verify`
+  started testing — immediately before it creates anything — then creates
+  the annotated `vX.Y.Z` tag (skipped on a tag resume) and the GitHub
+  Release (skipped on a Release resume, e.g. a prior run whose asset upload
+  failed after the Release itself was already created), always attempting
+  the best-effort SBOM asset attach afterward either way. Gives downstream
+  consumers (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the
+  Wardnet consumer-owner handoff, all recorded on
+  `contextual-orchestrator#971`) an immutable pin target
+  (`.../releases/tag/vX.Y.Z` — not the mutable `.../releases/latest` alias)
+  instead of a vendored source SHA. See
+  `docs/planning/adrs/0129-canonical-immutable-release.md` and
+  `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
+  and dispatching the first `v0.2.0` release are deliberately separate
+  actions.
 
 ### Deprecated
 
@@ -58,174 +64,355 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- NIM policy comparisons include failed and timed-out tasks, show successful
-  outcome counts, and report paired mean elapsed-time uncertainty. Report
-  version 2 replaces the previous success-conditioned comparison; original
-  unscored answers remain unknown, and production review gates still apply.
-- Availability refresh now uses the provider's documented model address;
-  malformed model identifiers are rejected before a request is sent.
-- Invalid provider availability values no longer influence routing evidence;
-  missing measurements remain unknown rather than counted as failures.
-- Provider availability updates no longer change answer-quality assessments
-  when no new answers have been evaluated.
-- Changes to answer-evaluation settings no longer reuse answers produced under
-  different settings. Running work and its saved details retain the settings
-  used when it started, including final answer preparation and streaming.
-- In-flight requests retain their starting model-effort settings across
-  workflow steps, retries, and streaming; later requests can use updated settings.
-- Changing model-effort settings no longer reuses an answer cached under the
-  previous settings. Saved run details retain the completed answer's settings.
-- Research materials now retain citations and source links when permission to
-  bundle a paper has not been established. Licensed copies include their
-  specific attribution and redistribution terms.
-- Default-change evidence now rejects missing or unknown measurement status,
-  impossible error values, and booleans or text used as numbers. A valid zero
-  error and the existing improvement threshold are preserved.
-- Diagnostic coverage uses each generated subgroup's actual size, including
-  odd-sized samples. Unresolved summaries stop with an explicit explanation,
-  and observation p95 follows the recorded sample count. Existing experiment
-  sizes and production admission requirements are unchanged.
-- Research notes distinguish source findings from gateway-specific assumptions
-  and separate experimental warm starts from the production default.
+- Local SSE provider test fixtures now close their listening sockets after shutdown, preventing `ResourceWarning` / `PytestUnraisableExceptionWarning` failures under warnings-as-errors execution.
 
-- The held-out psychometric benchmark now measures sequential probability-drift
-  detection delay and pre-change false alarms over 500 repetitions. A bounded
-  calibration search uses a 95% Wilson false-alarm bound, then evaluates the
-  selected threshold on an independent 500-repetition seed.
-- The held-out psychometric benchmark now distinguishes prediction for unseen
-  queries from prediction for unseen candidate deployments. The latter remains
-  separate and reports zero psychometric prediction coverage instead of
-  inheriting accuracy evidence from known candidates.
-- The held-out psychometric benchmark now reports selection success and net
-  utility together, showing that higher predictive validity does not justify a
-  route when its measurement cost exceeds buyer-valued outcome gains.
-- The held-out psychometric benchmark now decomposes candidate, query,
-  occasion, and interaction variance with a two-facet G-study and reports
-  D-study generalizability and dependability across proposed evidence designs.
-- The held-out psychometric benchmark now separately calibrates full and
-  reduced candidate rosters, links them through common items, and reports
-  common-candidate score stability without treating synthetic recovery as
-  buyer invariance.
-- The held-out psychometric benchmark now makes probability calibration a
-  paired accuracy KPI, reporting calibration slope, intercept, and logit RMSE
-  instead of relying on aggregate Brier and log loss alone.
-- The held-out psychometric benchmark now recovers a known alternate-form score
-  transformation and reports bootstrap equating uncertainty, while keeping
-  buyer score comparability unexecuted.
-- The held-out psychometric benchmark now distinguishes linked parameter drift
-  from its aggregate test-characteristic-curve impact and detects the one
-  injected function-changing item without claiming a universal cutoff.
-- The held-out psychometric benchmark now reports the bias from treating
-  adaptively selected winner observations as an ignorable sample, alongside
-  the error reduction from its logged inverse-propensity estimator.
-- The held-out psychometric benchmark now measures expected classification
-  accuracy and consistency at a declared decision cut. Lower score error improves
-  both measures, while buyer cuts, decision costs, and validity remain gated.
-- The held-out psychometric benchmark now reports conditional test information
-  and standard error at the center and tails. A range-matched item bank improves
-  worst-case information without treating average reliability as uniform precision.
-- The held-out psychometric benchmark now verifies that posterior empirical
-  reliability rises when known item information increases. Reliability remains
-  separate from model fit and cannot open the buyer-validity gate by itself.
-- The held-out psychometric benchmark now distinguishes a fitted one-factor
-  design from known two-factor misspecification with the released M2 global-fit
-  diagnostics, while keeping buyer model fit and construct validity closed.
-- The held-out psychometric benchmark now recovers two known latent dimensions
-  with the released Horn parallel-analysis screen. It keeps buyer construct
-  validity closed because Pearson-PCA screening on binary responses is not a
-  confirmatory measurement model.
-- Streaming automatic routing now fails when every worker candidate is excluded
-  from that role, matching non-streaming selection while preserving explicit
-  requested-model behavior. Benchmark propensity weights and workload receipts
-  now remain aligned with the candidate and item structure actually used.
-- The held-out psychometric benchmark now exercises released nonparametric
-  person-fit diagnostics and ranks one injected inverted candidate response
-  pattern first. It reports separation without inventing a universal cutoff or
-  treating an unusual pattern as proof that a candidate is invalid.
-- The held-out psychometric benchmark now links two synthetic recalibrations
-  through seven stable anchors and detects the one injected item-parameter drift
-  with no stable-item false positive. The tolerance is explicitly an effect-size
-  screen, not a significance test or buyer-validity result.
-- The held-out psychometric benchmark now uses the released Oakes-information
-  API to report item-intercept RMSE, 95% Wald-interval coverage, and mean interval
-  width while keeping synthetic uncertainty evidence outside the buyer gate.
-- The held-out psychometric benchmark now estimates one known item-side context
-  contrast through the released multigroup covariate API. It reports coefficient
-  error and convergence separately while keeping synthetic recovery outside the
-  buyer-validity gate.
-- The held-out psychometric benchmark now fits a many-facet Rasch model to a
-  connected synthetic respondent-item-judge design and reports judge-severity
-  RMSE, convergence, connectedness, and severity-order recovery.
-- The held-out psychometric benchmark now verifies purified logistic DIF on a
-  known candidate-cohort item shift, reporting detection recall, false-positive
-  count, anchor count, and purification convergence. Buyer DIF remains unexecuted.
-- The held-out psychometric benchmark now verifies Stocking–Lord scale linking
-  against a known affine transformation of six common-item anchors and reports
-  convergence plus true-parameter RMSE. Buyer anchors remain unexecuted.
-- The held-out psychometric benchmark now validates a preregistered ε-greedy
-  logging design with positive assignment probability for every candidate,
-  inverse-propensity value RMSE, and true-value confidence-interval coverage.
-  It remains synthetic evidence and does not open the buyer-validity gate.
-- Route, conducted-workflow, and streaming trace rows now retain a secret-free
-  deterministic selection-design receipt: the versioned candidate set, actual
-  attempted deployments, selected deployment, and policy hash. Propensity stays
-  explicitly unidentified; the receipt does not fabricate counterfactual evidence.
-- Adaptive-exposure evidence now distinguishes released CAT exposure control
-  from the missing gateway propensity and counterfactual-observation contract.
-  The unexecuted production gate remains closed.
-- Item-side language/domain validity evidence now reports the released but
-  limited multigroup item-covariate contract instead of claiming no owner
-  implementation exists. Unexecuted buyer evidence remains fail-closed.
-- Psychometric routing now normalizes retained context embeddings once when
-  they are observed. Five before/after local runs reduced median candidate
-  decision p50 from `0.016083` to `0.009791` ms without changing quality metrics.
-- Psychometric benchmark evidence now distinguishes released owner contracts,
-  a pending owner contract, and unimplemented validity checks while keeping all
-  unexecuted checks fail-closed.
-- The psychometric benchmark now enumerates scale linking, local independence,
-  candidate-group DIF, item language/domain effects, judge effects, and adaptive
-  exposure as separate measurement-validity evidence components instead of one
-  opaque unavailable flag.
-- Psychometric benchmark gates now distinguish `not_executed` buyer and
-  measurement-validity evidence from a measured `failed` latency result while
-  preserving the existing fail-closed Boolean compatibility fields.
-- Semantic psychometric lookup now validates and normalizes the query embedding
-  once per decision instead of once per retained context. Five paired local
-  runs reduced candidate decision p50 median from `0.023167` to `0.015042` ms
-  without changing Brier score, log loss, or regret.
-- Experimental two-neighbor psychometric interpolation now reads each
-  neighbor's score map once per candidate instead of repeating generator and
-  membership passes; alternating-process measurements reduced candidate
-  decision p50 by 7.39% without changing Brier score, log loss, or regret.
-- Production single-neighbor psychometric selection again uses one-pass
-  `max()` instead of sorting every retained context for an experimental top-2
-  need; the isolated 512-row selection benchmark fell from 27 to 5.5 µs.
-- The held-out psychometric benchmark now compares the production baseline and
-  interpolation candidate on the same contexts and reports deterministic paired
-  bootstrap 95% intervals for Brier, log-loss, and top-choice-regret deltas.
-  Decision timing repeats 200 times per context, alternates baseline/candidate
-  execution order, and reports each point delta beside its paired interval, so
-  an accuracy interval cannot silently authorize a slower production route.
-  The report also fails closed across accuracy, decision latency, buyer-heldout,
-  and measurement-validity gates; synthetic evidence alone always leaves the
-  production-default decision false.
-- The seeded held-out benchmark can now opt into interpolation of the two
-  nearest positive-cosine psychometric score rows and reports Brier score, log
-  loss, top-choice regret, and decision p50/p95. Live routing retains the
-  validated single-neighbor default until buyer-held-out gates pass.
-- Psychometric observations are keyed by the declared deployment configuration
-  and active role effort/sampling catalog, so reused agent IDs cannot carry
-  scores across model, endpoint, or decode-policy changes. Overflow-safe cosine
-  normalization rejects non-finite evidence; the production single-neighbor
-  path retains its pre-experiment behavior while the positive-cosine cutoff
-  remains confined to the opt-in interpolation experiment.
-- Psychometric router mutation and durable persistence now share one lock, so a
-  concurrent agent-pool change cannot prune a freshly saved valid observation.
-  The paper inventory contract now scans only Git-tracked Python and Markdown
-  sources, excluding ignored build artifacts from research coverage decisions.
-- Psychometric observation replacement now removes only the existing row's
-  contiguous trailing items instead of scanning the complete response ledger;
-  the checked-in benchmark reports fit/rank and observation p50/p95 separately.
+- Refresh the time-bounded NVIDIA hosted NIM access evidence against the
+  official Run NIM Anywhere terms, restoring fail-closed live benchmark
+  execution through 2026-10-04 without treating prototype access as production
+  pricing or licensing evidence.
+
+- `endpoint_race.race_first_valid` now drives each equivalent-endpoint
+  attempt from a raw `threading.Thread(daemon=True)` worker built on a bare
+  `concurrent.futures.Future`, instead of a `concurrent.futures.ThreadPoolExecutor`.
+  `ThreadPoolExecutor` registers every worker it starts with
+  `concurrent.futures.thread`'s own interpreter-exit hook, which
+  unconditionally joins each still-running worker at shutdown regardless of
+  that worker thread's own daemon flag; combined with this org's default
+  no-deadline `ModelClient.timeout=None`, a losing race participant blocked
+  in a provider call that never returns could hang process shutdown forever
+  even though the winner already answered the caller (Devin Review finding
+  on #971, "Endpoint races block process shutdown"). `set_running_or_notify_cancel()`
+  on the bare `Future` preserves the existing "cancelled before it started
+  never calls the provider" duplicate-cost guarantee, and every other
+  coordination primitive (`wait()`, `future.cancel()`, `future.result()`,
+  `future.exception()`) behaves identically to the prior executor-backed
+  futures — "first valid response wins" semantics, unbounded wait for the
+  active call, and cancellation/drain provenance are unchanged.
+
+- OpenRouter free-model endpoint discovery (`_openrouter_free_model_endpoints`)
+  now fans its per-model fetch out across a fixed pool of at most 8 daemon
+  worker threads pulling model IDs from a queue, instead of allocating one
+  `threading.Thread` object per free model and gating only the *work* (not
+  thread creation itself) behind an 8-slot semaphore. A catalog of hundreds
+  or thousands of free models previously still allocated and started that
+  many native OS threads up front — real kernel/stack overhead each — before
+  the semaphore ever limited anything, risking memory exhaustion or stalling
+  discovery before a single fetch could begin. Live thread count now stays
+  bounded regardless of catalog size; daemon-only workers and the abandon-
+  on-deadline behavior for the enclosing bounded discovery call are
+  unchanged.
+
+- Virtual structured workflows now exclude a same-endpoint candidate only
+  after both its synthesis and bounded repair violate the caller's schema,
+  then continue with the next eligible model on that endpoint. Explicit model
+  pins remain single-model and exhausted virtual pools return a typed error.
+
+- (Devin review on #953) `_pin_openrouter_zdr` no longer raises a bare
+  `TypeError` from `dict()` when a caller-supplied `provider` field is
+  present but not an object (an int, bool, list, or string) under an active
+  `zdr_only` scope. It now validates the field and raises a named `ValueError`
+  ("provider must be an object with optional OpenRouter routing keys")
+  instead, matching this codebase's existing convention for malformed
+  caller-input fields. Every call site sharing this one choke point (chat,
+  streaming, tools/binary-media passthrough, and the batch JSONL path)
+  benefits; a valid `provider` object or an absent/`None` one keep their
+  existing behavior unchanged.
+
+- OpenRouter embedding Batch JSONL now carries the same request-scoped
+  `provider.zdr=true` enforcement when `zdr_only` selects an attested
+  OpenRouter embedding agent.
+
+- (2026-09-02, PR #971) `ModelClient`'s constructor no longer defaults
+  `max_retries` to a hand-picked `2`: no cited standard, paper, or the org's
+  own research (Fugu, Conductor, TRINITY) establishes that number, and a
+  fresh audit found it was never justified. RFC 9110 §9.2.2 constrains *when*
+  replay can be safe for idempotent semantics, and NIST SP 800-204 discusses
+  retry/circuit-breaker resilience as a pattern, but neither identifies a
+  specific numeric retry allocation for this library. The default is now
+  `0`: a default `ModelClient` allocates zero automatic provider transport
+  retries, independent of provider, model, or reasoning identity
+  (`tests/test_no_heuristic_default_transport_retry.py`). Explicit nonzero
+  retry budgets remain caller-owned configuration, never a library-authored
+  default (ADR 0001 amendment, 2026-09-02).
+
+- (2026-09-02, PR #971) A default (no configured deadline) synchronous
+  `/v1/embeddings` request against a provider-backed member returned 503:
+  `embedding_deadline` collapsed to `+inf`, and `ProviderEmbeddingBatchBackend.wait`
+  passed that straight into `threading.Event.wait(timeout=...)`, which raises
+  `OverflowError` for a non-finite timeout on CPython -- directly contradicting
+  #971's own no-implicit-deadline policy. `wait()` now translates a non-finite
+  timeout to `None` (block indefinitely) instead
+  (`tests/test_provider_embedding_batch_backend.py::test_provider_batch_wait_survives_infinite_deadline`).
+
+- (2026-09-02, PR #971) A failed configured-gateway structured-chat probe
+  recorded the failing model only under its new fingerprinted id
+  (`agent_id_for`); a persisted agent kept under its pre-fingerprint legacy
+  id (`legacy_agent_id_for`) was silently dropped from `runtime_models` and
+  never reached the disable path, leaving a failed legacy endpoint enabled
+  indefinitely. `_auto_discover_runtime_agents` now accepts either id form
+  when checking for an existing persisted agent
+  (`tests/test_auto_discovery_server.py::test_failed_gateway_probe_disables_legacy_id_persisted_agent`).
+
+- (2026-09-02, PR #971) A privacy-scoped (`zdr_only=True`) embedding batch's
+  pinned `agent_id` was replayed verbatim by `ProviderEmbeddingBatchBackend`
+  after a process restart recovers a durably queued job, with no
+  re-validation that the agent still carried the `privacy:zdr` tag -- an
+  operator could remove ZDR support or repoint the agent between submission
+  and a resumed execution and the batch would still run. `_run_provider_embeddings`
+  now re-checks the request's own recorded `zdr_only` against the resolved
+  agent's current tags at execution time and fails closed if they no longer
+  match
+  (`tests/test_provider_embedding_batch_backend.py::test_recovered_privacy_scoped_embedding_batch_revalidates_current_agent_tags`).
+
+- (2026-09-02, PR #971) A synchronous `/v1/embeddings` member result that
+  came back without raising but was not `completed` (or had no embeddings)
+  bypassed `orchestrator._record_embedding_failure`, so the circuit breaker
+  never opened and no `embedding_endpoint_failed` analytics event was
+  recorded for that failure mode -- a repeatedly incomplete member was
+  retried forever instead of being quarantined like a raised exception. It
+  now routes through the same failure recorder
+  (`tests/test_embeddings_model_pool_http_honesty.py::test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_evidence`).
+
+- (2026-09-02, PR #971) `CostRoutingCoordinator` derived the durable
+  provider-embedding claim lease from `ModelClient.timeout`, so a durable
+  (Valkey-backed) job registry raised `ValueError: durable provider backend
+  claim lease must be positive` at startup whenever the client had no
+  configured deadline (the default since #971) -- a crash directly caused by
+  conflating an internal locking heartbeat with the caller's request
+  deadline. The claim lease now falls back to a fixed, positive default
+  independent of `ModelClient.timeout`. Separately, `execution_timeout_seconds=None`
+  previously fell back to the job registry's storage retention window (7
+  days), silently expiring an intentionally unbounded embedding job; it now
+  stays genuinely unbounded (`+inf` deadline)
+  (`tests/test_provider_embedding_batch_backend.py::test_durable_provider_embedding_backend_survives_unbounded_client_timeout`,
+  `::test_unbounded_execution_timeout_never_substitutes_registry_retention`).
+
+- (2026-09-02, PR #971) `OpenRouterUptimeCollector._fetch_uptime` adopted
+  #971's inference no-fixed-deadline policy (`timeout=None`) even though it
+  is unrelated background telemetry polled sequentially on one dedicated
+  sweep thread that `stop()` cannot interrupt mid-request: one unresponsive
+  OpenRouter endpoint would hang that thread forever, leaking it and
+  indefinitely starving every later member of an uptime update. The fetch
+  now keeps its own fixed, independent bound
+  (`tests/test_openrouter_uptime.py::test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint`).
+
+- (2026-09-02, PR #971) `discover_all_models`'s per-provider loop
+  (`model_discovery.py`) called `discover_provider_models` directly and
+  in-line, with no separate bound or cancellation mechanism -- a stalled
+  provider catalog request (a connection accepted but never answered, or
+  in tests a mock that never returns) blocked discovery of every later,
+  healthy provider forever, regardless of `DISCOVERY_TIMEOUT_SECONDS`
+  (which only bounds one socket read at a time and stays `None` by
+  default). Each provider's discovery attempt now runs on its own daemon
+  thread bounded by a new, separately configured
+  `PROVIDER_DISCOVERY_DEADLINE_SECONDS` (default 30.0s, independent of
+  both `DISCOVERY_TIMEOUT_SECONDS` and `ModelClient.timeout` -- neither is
+  reused or repurposed): once the deadline elapses the caller stops
+  waiting, records a `ProviderDiscoveryError(error_code="discovery_timeout")`
+  for that provider, and moves on; the abandoned thread is daemonized so
+  it cannot block interpreter shutdown
+  (`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_complete`).
+
+- (2026-09-02, PR #971) `select_bootstrap_discovered_agents`'s first pass
+  admitted at most one endpoint per model group (the provider-declared
+  exact model identity) but never checked provider identity, so several
+  cheap, distinctly-named models from one provider could fill most or all
+  of a bootstrap pool before a genuinely independent alternative provider
+  was ever tried -- an apparently diverse pool (distinct model names) that
+  was actually one provider's outage away from total failure, contrary to
+  this repo's own documented "provider-diverse selection" claim for this
+  function. The first pass now admits at most one endpoint per provider
+  *and* per model group; once every viable provider has contributed once
+  (or capacity runs out), a second pass fills remaining slots from
+  still-untried model groups regardless of provider, and a final pass
+  falls back to duplicate model-group endpoints only once real diversity
+  is exhausted. `contextual_orchestrator/provider_bootstrap.py`'s separate,
+  honestly-named `select_model_group_diverse_models` (which never claimed
+  provider diversity, and whose own tests deliberately rank a known
+  same-provider price ahead of diversity) was left unchanged
+  (`tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_spans_multiple_providers_before_repeating_one`,
+  `::test_bootstrap_selector_prefers_model_group_diversity`,
+  `::test_bootstrap_selector_falls_back_to_duplicate_model_group_when_capacity_remains`,
+  `tests/test_review_gateway.py::test_build_review_orchestrator_uses_model_group_diversity`).
+
+- (2026-09-02, PR #971) The privacy re-validation added for a recovered
+  `zdr_only` embedding batch (above) only checked the resolved agent's
+  current tags; it never restored the ambient `request_policy` scope before
+  executing the batch, and the batch's homogeneity check compared only
+  `model`/`agent_id`, not `zdr_only`. Concretely: (1) `_pin_openrouter_zdr`
+  (the code that adds OpenRouter's enforcing `provider.zdr: true` request
+  field) branches on the `request_policy` contextvar, not on `first.zdr_only`
+  directly, and that contextvar is never in effect on the background worker
+  thread that replays a recovered job -- so a recovered ZDR batch's actual
+  HTTP request to OpenRouter silently omitted the ZDR pin even though the tag
+  check above believed it had already re-validated privacy safety; and (2) a
+  batch that somehow mixed `zdr_only=True` and `zdr_only=False` requests
+  under the same `agent_id` executed entirely under `first`'s policy instead
+  of being rejected. `_run_provider_embeddings` now wraps its embedding-shard
+  execution in `self.orchestrator.request_policy(first.zdr_only)` (the same
+  pattern used at every other client call site in `cost_router.py`) and
+  extends the existing route-homogeneity check to also require every request
+  in the batch share `first.zdr_only`, failing closed with the same
+  `RuntimeError` style otherwise (Devin Review on #971)
+  (`tests/test_pr971_review_quality_regressions.py::test_recovered_zdr_batch_reenters_request_privacy_scope`,
+  `::test_provider_embedding_batch_rejects_mixed_privacy_identity`).
+
+- (2026-09-02, PR #971) The per-provider `discovery_deadline` bound added
+  above covered only `discover_provider_models` inside `discover_all_models`'s
+  per-provider loop. Three *shared* metadata fetches the same function makes
+  outside that loop stayed unbounded: `_fetch_models_dev_metadata` (runs once,
+  before the loop, whenever any registered source declares
+  `models_dev_provider_id`), and `_openrouter_zdr_model_ids` /
+  `openrouter_paid_inference_available` (run after the loop; the latter only
+  once an OpenRouter credential is registered) -- each received only
+  `timeout` (the per-socket-read timeout, `None`/unbounded by default), so a
+  stalled Models.dev, OpenRouter ZDR, or OpenRouter credits endpoint could
+  block `discover_all_models` -- and therefore first-boot pool bootstrapping
+  -- indefinitely (Devin Review, bug id
+  `BUG_pr-review-job-93783e6ce7a2440ab487ebce4076fe6f_0002`). The
+  per-provider bound is now a shared primitive, `_run_bounded_by_deadline`
+  (same mechanism as before: a daemon thread plus
+  `worker.join(timeout=discovery_deadline)`; `_discover_provider_models_bounded`
+  is a thin instantiation of it), and all three shared fetches run through
+  it under the same `discovery_deadline`. On timeout each returns the exact
+  fallback value it already returns for an ordinary fetch failure, so the
+  fail-closed posture is unchanged, never weakened: `_fetch_models_dev_metadata`
+  returns `None` (`_merge_models_dev_metadata` already treats `None` as "no
+  evidence" and passes provider rows through unenriched, so the affected
+  provider's own catalog listing still succeeds); `_openrouter_zdr_model_ids`
+  returns an empty `set()` (`_apply_discovered_model_evidence` already
+  short-circuits on an empty set and never marks a model ZDR-capable without
+  positive evidence); and `openrouter_paid_inference_available` returns
+  `None` (`apply_openrouter_spend_admission`'s existing fail-closed rule
+  already denies `spend_admitted` for a paid, non-free OpenRouter row unless
+  `paid_available is True`). `discovery_deadline=None` continues to opt
+  every one of these calls back into the pre-#971 unbounded wait
+  (`tests/test_model_discovery.py::test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch`,
+  `::test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch`,
+  `::test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch`).
+
+- (2026-09-02, PR #971) `_openrouter_free_model_endpoints` fanned its
+  per-model endpoint fetch out across a
+  `concurrent.futures.ThreadPoolExecutor`. That executor's worker threads
+  register with an interpreter-exit hook (`concurrent.futures.thread`'s own
+  `atexit` handler) that unconditionally joins every still-running worker at
+  shutdown, regardless of whether the thread that *created* the executor is
+  itself `daemon=True` -- verified with a local repro: a hung fetch blocked
+  process shutdown even from inside this module's already-daemonized,
+  already-bounded per-provider discovery thread (CodeRabbit, re-confirming
+  the shared-metadata-deadline finding above from a different angle). The
+  fetch fan-out now uses plain `threading.Thread(daemon=True)` workers
+  (concurrency-capped at 8 in flight via a semaphore, matching the prior
+  `max_workers`), which carry no such registration, so a hung fetch is
+  abandoned like every other stalled discovery-time network call in this
+  module and the process can still exit
+  (`tests/test_model_discovery.py::test_openrouter_free_model_endpoints_hang_does_not_block_process_exit`).
+
+- (2026-09-02, PR #971) The `/v1/batch/embeddings` handler's member-failover
+  loop called `observe_success`/`_record_success` for the just-tried agent
+  unconditionally, before ever inspecting the returned document's `status`
+  -- unlike the sibling `/v1/embeddings` fix above (same root cause), this
+  loop's own terminal-status check (`is_complete = document.get("status")
+  == "completed"`) only ran afterward, purely to pick the response's HTTP
+  status code, not to gate success recording or failover. So a
+  `complete_embeddings_batch` call that returned normally with a terminal
+  failure document (`status` of `failed`, `cancelled`, or `rejected` --
+  `CostRoutingCoordinator.embeddings_batch_document`'s own terminal
+  vocabulary) still marked that endpoint healthy and cleared its circuit,
+  `break`ing out of the loop before any other candidate was tried; a
+  genuinely broken endpoint kept being selected by every later request
+  instead of failing over (Devin Review on #971). The loop now checks the
+  document's status before recording success: a terminal-failure document is
+  routed through the same shared `_record_embedding_failure` recorder an
+  exception would use and the loop `continue`s to the next candidate; only a
+  non-terminal-failure document (`completed`, or an in-flight status such as
+  `queued`/`validating`/`running`) records success and breaks
+  (`tests/test_pr971_review_quality_regressions.py::test_terminal_embedding_batch_document_fails_over_before_marking_health`).
+
+- Binary provider responses now downgrade active or unknown media types at the
+  shared HTTP response boundary, while preserving approved media and download
+  formats (issue #1161).
+- Response-format SSE requests may now ask for usage; the terminal usage chunk
+  is emitted only when the workflow cost ledger marks the counts as measured.
+- Generation-token inputs retain positive-integer validation without an
+  arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
+  aliases to `max_output_tokens` before provider forwarding, preserving caller
+  budgets and native-field precedence (issue #1151; ADR 0132). Model-specific limits remain.
+- Finite administrator model timeouts now use one end-to-end deadline across
+  local admission, connection, retry, and streamed chunks; synchronous
+  embeddings use the selected model's policy. Timeout values are capped at the
+  socket-safe 2,147,483,647-second boundary. Pre-send local admission expiry
+  may fail over, while post-send timeout/reset outcomes never replay and remain
+  distinct from clean provider completion or caller cancellation.
+- Ambiguous transport outcomes on both concrete-model and virtual passthrough
+  paths now fail closed as `provider_outcome_unknown`, never replay onto another
+  provider, update circuit/group reliability evidence, omit provider-controlled
+  diagnostics, and tell retrying SDKs not to repeat the request.
+- Live NIM benchmark evaluation now reaches its already pinned provider transport
+  instead of failing every policy cell during a duplicate generic DNS preflight;
+  injected transports retain URL and credential validation for deterministic
+  contract tests.
+- Pytest now declares function-scoped asynchronous fixture loops explicitly,
+  removing the ambient `pytest-asyncio` deprecation ambiguity.
+- Model, Agent, gateway, and structured-output repair requests now default to
+  no application timeout. An administrator-owned per-model wait is applied only
+  to that model; there is no shared 90s/900s/3-hour ceiling. Explicit probe,
+  discovery, benchmark, and operator limits remain bounded.
+- Virtual `orchestrator/free` structured completions (`response_format`, no
+  tools/stream) fail over a retryable synthesizer 502/429 onto the next
+  eligible free worker and attach request-scoped eligible/attempted
+  receipts. Concrete model pins stay sticky. Default model timeout remains
+  null (issue #1045; Inkspan Noema job 101628090366 on base `414f2297`).
+- Review-sidecar `orchestrator/free` admission now treats a CI-seeded
+  `OPENCODE_ZEN_API_KEY` as an authorized free-pool source. Honest-free
+  OpenCode Zen and OpenCode Go rows can enter `G ∩ P ∩ R`; `OPENAI_API_KEY`
+  remains registered for global discovery and is still excluded from the
+  review free pool (Noema 429 on `google/gemma-4-31b-it:free` in PR #1094
+  while Zen/Go evidence was dropped before routing).
+- `OPENCODE_ZEN_API_KEY` is documented as the shared KV credential for both
+  OpenCode Zen and OpenCode Go catalogs; registering it once discovers both
+  accounts.
+- Virtual selectors (`orchestrator/free`, `orchestrator/auto`,
+  `contextual-orchestrator`) keep tools and streaming on Fugu route /
+  TRINITY-Conductor conduct. A tools array no longer ejects those calls into
+  single-agent passthrough, so a failed worker is re-selected on the control
+  plane (incident: ContextualWisdomLab/.github run 34079284863, Strix step 23).
+  A worker `tool_calls` payload is returned as Chat Completions `tool_calls`
+  instead of being treated as missing assistant text. Concrete model ids
+  remain a debug pin. Psychometric θ̂/RMSE stays an equal-budget score of
+  those paper paths, not a separate router.
+- Streamed `/v1/responses` now emits OpenAI `response.reasoning_text.*`
+  events for TRINITY thinker/worker/verifier and Conductor step outputs,
+  while `response.reasoning_summary_*` stays the paper-role stage summary.
+  The synthesizer answer remains `output_text`. Chat Completions, audio,
+  image, video, embeddings, and rerank use the same worker re-selection
+  but cannot emit those reasoning events, so only the modality result is
+  returned.
+- Virtual structured requests can recover on another eligible endpoint after
+  all models at the first endpoint are unavailable. Explicit caller selections
+  and spending limits remain enforced, including malformed later responses.
+- Structured requests that exhaust eligible candidates after both temporary
+  provider failures and missing-model responses retain the temporary failure
+  classification, so clients can recognize that a later retry may succeed.
+- Structured fallback now counts each failed model once in routing health
+  evidence, including failures before successful recovery or a spending stop.
+  Request-size limits remain separate from provider failures.
+- Recovery from a rejected provider response no longer crashes or attributes
+  an earlier model's token usage to the rejected attempt. Missing usage remains
+  unavailable instead of being reported as zero.
+- Malformed response exhaustion no longer reports a fictitious request-size
+  limit. Failed repairs preserve earlier usage even when no repair response
+  was received.
+- Structured-output review follow-up now charges already-incurred synthesis
+  and repair usage before propagating a budget stop, keeps failed workflow
+  evidence queryable without counting it as a normal recent/completed KPI,
+  and binds a repair to the candidate whose synthesis failed. A repair-only
+  413 retires that candidate and starts a fresh synthesis on the next
+  already-eligible candidate instead of forwarding the repair prompt across
+  providers. If no eligible candidate remains, the original request-too-large
+  classification is preserved instead of being rewritten as structured-output
+  exhaustion. Existing endpoint/ZDR/cost/privacy eligibility remains unchanged
+  (Devin Review, PR #1004).
 - Workflow workers now preserve the caller message array exactly once, while
   the added envelope carries only the subtask and Conductor-style prior-step
   access list instead of duplicating the task or source attachments.
@@ -238,10 +425,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retention and the selected backend's polling cadence, so clients can poll
   within the actual job lifecycle instead of guessing or failing closed on
   missing lifecycle metadata.
-- Virtual structured workflows now exclude a same-endpoint candidate only
-  after both its synthesis and bounded repair violate the caller's schema,
-  then continue with the next eligible model on that endpoint. Explicit model
-  pins remain single-model and exhausted virtual pools return a typed error.
+- Virtual structured workflows now exclude a candidate only after both its
+  synthesis and bounded repair violate the caller's schema, then continue with
+  the next distinct eligible model, including another provider endpoint.
+  Explicit models and caller-selected endpoints remain sticky; failed attempts
+  retain validation and usage evidence, and exhausted pools return a typed,
+  secret-free error without recursive retry multiplication.
 - Configured-gateway runtime discovery now retains chat rows only after a
   bounded structured-output probe, and virtual structured workflows share one
   request-scoped missing-model exclusion set across evidence and synthesis.

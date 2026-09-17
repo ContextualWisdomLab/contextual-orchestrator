@@ -19,22 +19,53 @@ References
 
 from __future__ import annotations
 
+import datetime as _dt
 import json as _json
+import math as _math
 import re as _re
+import http.client
 import socket
 import ssl
+import time as _time
 import urllib.error
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 __all__ = [
+    "PROVIDER_OUTCOME_UNKNOWN_CODE",
+    "PROVIDER_RATE_LIMITED_CODE",
     "MAX_PROVIDER_ERROR_BODY_BYTES",
     "MAX_SAFE_MESSAGE_CHARS",
     "PROVIDER_STATUS_SURFACES",
     "ProviderUpstreamError",
     "classify_provider_failure",
+    "parse_retry_after",
     "provider_error_body",
+    "rate_limited_storm_error",
+    "resolve_retry_after_seconds",
     "safe_provider_message",
 ]
+
+PROVIDER_OUTCOME_UNKNOWN_CODE = "provider_outcome_unknown"
+
+#: Honest-429 error code for the rate-limit-storm case: every eligible
+#: candidate is quota-limited and the caller's wait budget cannot cover the
+#: earliest known cooldown. Distinct from the ordinary ``rate_limit_exceeded``
+#: single-candidate surface (429 -> retryable) so callers can tell "one
+#: provider throttled you, failover already tried the rest" apart from
+#: "the whole pool is out of quota right now."
+PROVIDER_RATE_LIMITED_CODE = "provider_rate_limited"
+
+#: Provider ``x-ratelimit-reset*`` headers this gateway will read as a
+#: fallback when ``Retry-After`` is absent. Only a plain numeric
+#: seconds-until-reset value is accepted (the common OpenAI-compatible
+#: convention); a non-numeric provider-specific duration format (e.g. "6m0s")
+#: is left as "unknown" rather than guessed at.
+_RATE_LIMIT_RESET_HEADERS = (
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+    "x-ratelimit-reset",
+)
 
 #: Upper bound for any provider-supplied message that reaches a caller.
 MAX_SAFE_MESSAGE_CHARS = 300
@@ -116,6 +147,114 @@ def provider_error_body(exc: urllib.error.HTTPError) -> bytes:
     return body
 
 
+def parse_retry_after(value: str | None, *, now: float | None = None) -> float | None:
+    """Parse a ``Retry-After`` header value into non-negative seconds from now.
+
+    Accepts either RFC 9110 10.2.3 form: delta-seconds (a plain non-negative
+    integer) or an HTTP-date. Returns ``None`` -- "unknown" -- for a missing,
+    empty, or unparseable value; callers must never guess a cooldown for an
+    unknown value.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        try:
+            return float(int(stripped))
+        except (ValueError, OverflowError):
+            return None
+    try:
+        target = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if target is None:
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=_dt.timezone.utc)
+    reference = _dt.datetime.fromtimestamp(
+        now if now is not None else _time.time(), tz=_dt.timezone.utc
+    )
+    return max((target - reference).total_seconds(), 0.0)
+
+
+def resolve_retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
+    """Resolve a provider-declared cooldown, in seconds, from a 429/503 response.
+
+    Prefers the standard ``Retry-After`` header. When absent, falls back to a
+    plain-numeric ``x-ratelimit-reset*`` header if the provider sent one.
+    Returns ``None`` ("unknown") when neither is present or parseable -- an
+    unknown cooldown must never be treated as zero or guessed at.
+    """
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    parsed = parse_retry_after(headers.get("Retry-After"))
+    if parsed is not None:
+        return parsed
+    for name in _RATE_LIMIT_RESET_HEADERS:
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            value = float(raw.strip())
+        except (ValueError, AttributeError):
+            continue
+        if _math.isfinite(value) and value >= 0:
+            return value
+    return None
+
+
+def rate_limited_storm_error(
+    *,
+    agent_id: str,
+    model: str,
+    retry_after_seconds: float,
+    transport: str = "passthrough",
+    cooldown_source: str = "provider",
+) -> ProviderUpstreamError:
+    """Build the honest 429 for a rate-limit storm the caller's budget can't wait out.
+
+    Raised only when every eligible candidate is currently quota-limited and
+    the earliest known cooldown exceeds the request's remaining wait budget
+    (the administrator-owned model deadline, or the documented
+    ``rate_limit_wait_seconds`` fallback). This is quota exhaustion, not a
+    connection failure, so it is deliberately kept out of the
+    ``provider_connection_error`` / 502 surface and marked retryable: the
+    caller can retry after ``retry_after_seconds``.
+
+    ``cooldown_source`` is ``"provider"`` when ``retry_after_seconds`` came
+    from the provider's own ``Retry-After``/``x-ratelimit-reset*`` header, or
+    ``"assumed"`` when the provider stated no cooldown at all and
+    ``retry_after_seconds`` is instead the administrator-owned
+    ``rate_limit_unknown_cooldown_seconds`` default -- surfaced so the caller
+    can tell a measured wait apart from a guessed one.
+    """
+    assumed_note = (
+        " (the provider stated no cooldown; this is an assumed wait)"
+        if cooldown_source == "assumed"
+        else ""
+    )
+    return ProviderUpstreamError(
+        agent_id=agent_id,
+        model=model,
+        error_code=PROVIDER_RATE_LIMITED_CODE,
+        message=(
+            "every eligible provider is rate-limited past this request's "
+            f"wait budget{assumed_note}"
+        ),
+        client_status=429,
+        provider_status=429,
+        retryable=True,
+        transport=transport,
+        extra_detail={
+            "retry_after_seconds": retry_after_seconds,
+            "cooldown_source": cooldown_source,
+        },
+    )
+
+
 def safe_provider_message(exc: BaseException) -> str | None:
     """Extract one bounded, control-free diagnostic sentence from a failure.
 
@@ -182,6 +321,7 @@ class ProviderUpstreamError(RuntimeError):
         provider_status: int | None = None,
         retryable: bool = False,
         transport: str = "chat",
+        extra_detail: dict[str, Any] | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.model = model
@@ -190,18 +330,21 @@ class ProviderUpstreamError(RuntimeError):
         self.provider_status = provider_status
         self.retryable = retryable
         self.transport = transport
+        self.extra_detail = dict(extra_detail or {})
         super().__init__(message)
 
     @property
     def detail(self) -> dict[str, Any]:
         """Return the structured evidence attached to API error payloads."""
-        return {
+        payload = {
             "agent_id": self.agent_id,
             "model": self.model,
             "provider_status": self.provider_status,
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        payload.update(self.extra_detail)
+        return payload
 
 
 def classify_provider_failure(
@@ -230,12 +373,22 @@ def classify_provider_failure(
             provider_status=exc.provider_status,
             retryable=exc.retryable,
             transport=transport,
+            extra_detail=exc.extra_detail,
         )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code
         client_status, error_code, retryable = PROVIDER_STATUS_SURFACES.get(
             status, _UNMAPPED_UPSTREAM_SURFACE
         )
+        # Quota-cooldown evidence, kept on every 429/503 classification (not
+        # just the passthrough transport's own header walk) so any caller
+        # holding just the classified ProviderUpstreamError -- e.g. _invoke's
+        # chat transport -- can still record and wait out the same cooldown.
+        extra_detail: dict[str, Any] = {}
+        if status in (429, 503):
+            retry_after = resolve_retry_after_seconds(exc)
+            if retry_after is not None:
+                extra_detail["retry_after_seconds"] = retry_after
         return ProviderUpstreamError(
             agent_id=agent_id,
             model=model,
@@ -248,6 +401,7 @@ def classify_provider_failure(
             provider_status=status,
             retryable=retryable,
             transport=transport,
+            extra_detail=extra_detail,
         )
     if isinstance(exc, ssl.SSLCertVerificationError):
         return ProviderUpstreamError(
@@ -283,7 +437,20 @@ def classify_provider_failure(
             retryable=dns_error.errno == socket.EAI_AGAIN,
             transport=transport,
         )
-    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
+    # http.client.HTTPException (IncompleteRead, BadStatusLine) is not an
+    # OSError but is the same event -- a stalled or dropped connection
+    # mid-read, as provider_error_body already notes -- so it shares the
+    # retryable connection classification instead of the opaque default.
+    if isinstance(
+        exc,
+        (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            socket.timeout,
+            http.client.HTTPException,
+        ),
+    ):
         return ProviderUpstreamError(
             agent_id=agent_id,
             model=model,

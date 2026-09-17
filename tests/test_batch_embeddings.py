@@ -206,6 +206,7 @@ def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -266,6 +267,7 @@ def test_http_embeddings_demote_a_failed_cheapest_member(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -344,6 +346,7 @@ def test_http_embeddings_omitted_model_reports_the_actually_served_model(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
@@ -439,6 +442,7 @@ def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
             assert expected in values, f"dimension {dimension} not attributed to {expected}"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_batch_embeddings_accepts_openai_style_input_field() -> None:
@@ -457,6 +461,7 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_agent() -> None:
@@ -493,6 +498,111 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
         assert body["model"] == "zdr-embedding"
     finally:
         server.shutdown()
+        server.server_close()
+
+
+def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
+    agent = ModelAgent(
+        "zdr_embedding",
+        "text-embedding-3-small",
+        provider_name="openrouter",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].to_jsonl_line()["body"]["provider"] == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
+    agent = ModelAgent(
+        "legacy_zdr_embedding",
+        "text-embedding-3-small",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> None:
+    """The batch ZDR pin is applied even for a nonempty but wrong ``provider_name``.
+
+    Mirrors ``orchestrator._resolved_openrouter_provider``'s fix for the same
+    pattern: an agent whose ``base_url`` is OpenRouter's own endpoint but
+    whose ``provider_name`` is a typo/mislabel ("openai") must still resolve
+    to "openrouter" for the ZDR-pin decision, since ``base_url`` — not the
+    free-text ``provider_name`` — determines the actual outbound destination
+    (CodeRabbit review on #953, discussion_r3898659143).
+    """
+    agent = ModelAgent(
+        "mistyped_zdr_embedding",
+        "text-embedding-3-small",
+        provider_name="openai",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch) -> None:
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("removed_agent", "text-embedding-3-small")]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_resolve_embedding_target",
+        lambda *_args: ("text-embedding-3-small", "removed_agent", "openrouter"),
+    )
+
+    coordinator.submit_embeddings_batch(["private"], zdr_only=True)
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
 
 
 def test_pending_batch_preserves_resolved_model_identity() -> None:
@@ -545,6 +655,7 @@ def test_http_queued_embedding_admission_declares_owned_poll_and_retention() -> 
         assert document["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_empty_batch_preserves_resolved_model_identity() -> None:

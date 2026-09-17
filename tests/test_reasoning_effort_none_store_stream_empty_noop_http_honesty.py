@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_reasoning_effort_none() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_reasoning_effort_none() -> None:
@@ -83,6 +85,7 @@ def test_http_completions_accepts_reasoning_effort_none() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_store_stream_background_strings() -> None:
@@ -103,6 +106,7 @@ def test_http_chat_accepts_empty_store_stream_background_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_reasoning_effort_low_noop() -> None:
@@ -121,6 +125,7 @@ def test_http_chat_accepts_reasoning_effort_low_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

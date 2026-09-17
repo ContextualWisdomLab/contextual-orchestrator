@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -70,6 +71,7 @@ def test_http_chat_accepts_message_audio_null_and_empty() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_nonempty_message_audio() -> None:
@@ -94,6 +96,7 @@ def test_http_chat_rejects_nonempty_message_audio() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_nonempty_message_audio_on_user() -> None:
@@ -113,6 +116,7 @@ def test_http_chat_rejects_nonempty_message_audio_on_user() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_message_function_call_null_and_empty() -> None:
@@ -137,6 +141,7 @@ def test_http_chat_accepts_message_function_call_null_and_empty() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_nonempty_message_function_call() -> None:
@@ -163,6 +168,7 @@ def test_http_chat_rejects_nonempty_message_function_call() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_nonempty_message_function_call_on_user() -> None:
@@ -186,6 +192,7 @@ def test_http_chat_rejects_nonempty_message_function_call_on_user() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_message_audio_on_tools_passthrough_path() -> None:
@@ -220,6 +227,7 @@ def test_http_chat_rejects_message_audio_on_tools_passthrough_path() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_null_message_audio_on_tools_passthrough_path() -> None:
@@ -250,3 +258,4 @@ def test_http_chat_accepts_null_message_audio_on_tools_passthrough_path() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

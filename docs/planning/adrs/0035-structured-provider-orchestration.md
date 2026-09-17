@@ -23,8 +23,8 @@ success_criteria:
     target: "every workflow call is recorded under one workflow_run_id, using provider counts when valid and the existing token counter otherwise"
     source: "tests/test_cost_router.py"
   - metric: "strict schema enforcement"
-    target: "JSON Schema output validates locally; one governed repair is traced and a second violation fails closed"
-    source: "tests/test_model_judge.py"
+    target: "JSON Schema output validates locally; one governed repair per candidate is traced and virtual selectors advance through distinct eligible candidates before typed exhaustion"
+    source: "tests/test_structured_output_distinct_fallback.py"
   - metric: "provider health continuity"
     target: "synthesis transport and repeated schema failures update the existing circuit ledger before a later independent request is routed"
     source: "tests/test_model_judge.py"
@@ -65,14 +65,19 @@ an existing provider contract into a false claim of incompatibility.
 For `json_schema`, provider acceptance of `response_format` is not proof that
 the returned content conforms. The gateway selects the schema's declared JSON
 Schema dialect, parses the final content, and validates the instance locally.
-One invalid synthesis receives one same-provider repair call with the original
-schema; both synthesis and repair remain distinct workflow trace and cost-ledger
-steps. A second violation fails closed as `invalid_structured_output`. There is
-no cross-provider replay, schema weakening, item dropping, or untraced repair.
-Provider transport and repeated schema failures update the existing circuit
-ledger; success clears it. This does not replay the same request across
-providers, but prevents later independent requests from repeatedly selecting a
-known failing synthesizer once the governed circuit threshold opens.
+One invalid synthesis receives one same-candidate repair call with the original
+schema. Both synthesis and repair remain distinct workflow trace and cost-ledger
+steps even when they fail validation. An explicitly requested concrete model
+then fails closed without changing identity. A virtual selector excludes that
+candidate and may regenerate through the next distinct eligible candidate,
+including another provider endpoint, while retaining the request's endpoint
+scope, free/ZDR rules, capability gates, file replicas, candidate controls,
+shared spend budget, and trace. Every candidate receives at most one synthesis
+and one repair. Exhaustion is typed as `structured_output_exhausted` beneath the
+stable public `invalid_structured_output` response code. There is no schema
+weakening, item dropping, raw-output diagnostic, untraced repair, or recursive
+retry multiplication. Provider transport and repeated schema failures update
+the existing circuit ledger; success clears it.
 
 ## Consequences
 
@@ -81,9 +86,31 @@ known failing synthesizer once the governed circuit threshold opens.
 - Responses remain native at the final provider boundary, with explicit local
   transport translation where already supported.
 - Structured requests consume additional test-time compute.
-- A schema-violating synthesis may consume one additional, auditable repair call.
+- A schema-violating virtual request may consume one synthesis and one
+  auditable repair call per distinct eligible candidate before exhaustion.
 - Tool execution cannot gain multi-agent verification until an OpenAI-compatible
   stateful tool-loop contract is implemented.
+
+## Research artifact reuse and redistribution
+
+This correctness repair does not introduce a new routing objective; it
+restores ADR 0035's already-accepted bounded candidate-recovery semantics.
+A repair-only request-size rejection retires that virtual candidate and
+starts a fresh synthesis only on another already-eligible candidate; when
+none remains, the request-size error remains the terminal classification
+rather than being rewritten as structured-output exhaustion. Previously
+excluded candidates are never retried.
+
+The relevant routing literature is already committed in this repository as
+redistributable artifacts: [`RouteLLM`](../../papers/routellm-routing-2406.18665.pdf)
+and [`Hybrid LLM`](../../papers/hybrid-llm-query-routing-2404.14618.pdf).
+Their cost/quality-aware routing evidence supports selecting among eligible
+model candidates; it does not authorize bypassing caller endpoint, privacy,
+or budget constraints. Conductor and TRINITY remain cite-link-summary
+references in `docs/papers/README.md` because this repository has not
+independently established a redistribution grant for those newer preprints;
+duplicating their PDFs in this PR would therefore weaken, not strengthen,
+the repository's copyright rule.
 
 ## References
 
