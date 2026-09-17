@@ -51,6 +51,30 @@ live-provider evidence. Do not bypass model routing in the review workflow.
 Protected owner merge, immutable release, consumer adoption, and a real review
 replay remain necessary before claiming the review-agent outage is repaired.
 
+## Tool-loop-emitting-agent routing (2026-09-13)
+
+A handoff (above) tells the caller which agent to execute the tool for, but
+until this change the *follow-up* carrying that tool's `role: "tool"` result
+was not guaranteed to return to the same agent: a virtual selector
+(`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) ranks
+every request fresh, so a differently-ranked or failed-over provider could
+receive tool results for a call it never emitted — an id-format and behavior
+mismatch across providers (NIM/OpenRouter/OpenCode), and a real failure mode
+for the `noema` and `opencode` reviewers that depend on multi-turn tool use
+through this gateway. This closes the Fugu report's (arXiv:2606.21228 §3)
+Conductor tool-loop-return contract: `TaskOrchestrator` remembers, in a
+bounded `tool_loop_memory` map, which agent served each `tool_call_id`, and
+`_apply_tool_loop_route` moves that agent to the front of the
+already-fully-filtered candidate order for a follow-up that carries its
+result — never overriding an explicit concrete model, and never placing an
+otherwise-ineligible agent (circuit open, wrong free/ZDR scope) ahead of the
+normal order. Served responses annotate `orchestration.tool_loop_route`
+(`"emitting_agent"` or `"fallback"`) and `orchestration.tool_loop_agent_id`
+so callers can observe which happened. See
+`tests/test_passthrough_provider_failover.py` for the routing, fallback,
+explicit-model-precedence, free-model-precedence, and LRU-eviction
+contracts.
+
 ## References — APA 7th
 
 Autio, C., Schwartz, R., Dunietz, J., Jain, S., Stanley, M., Tabassi, E., Hall, P., & Roberts, K. (2024). *Artificial intelligence risk management framework: Generative artificial intelligence profile* (NIST AI 600-1). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.AI.600-1

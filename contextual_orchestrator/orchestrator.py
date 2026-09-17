@@ -5380,6 +5380,19 @@ class TaskOrchestrator:
     #: Operational memory bound mirroring ``cache_max_entries``; not a routing weight.
     EVIDENCE_CACHE_MAX_ENTRIES = 512
 
+    #: Bound on remembered ``tool_call_id -> emitting-agent-id`` entries (the
+    #: ``tool_loop_memory`` map -- Fugu report arXiv:2606.21228 S3 / Fugu-Ultra
+    #: Conductor's tool-loop-return contract). This is an operational memory
+    #: bound, like ``EVIDENCE_CACHE_MAX_ENTRIES``, not a product limit on how
+    #: many in-flight tool loops a deployment may run; an LRU eviction is
+    #: sufficient because a tool loop that idles past the bound has, in
+    #: practice, already completed or been abandoned by the caller, so no TTL
+    #: is layered on top. The default is sized for concurrent callers (the
+    #: org CI review lanes run many tool loops in parallel, each with several
+    #: call ids): 4096 two-string entries cost well under 1 MiB, while an
+    #: in-flight loop evicted early would silently degrade to ``fallback``.
+    TOOL_LOOP_MEMORY_MAX_ENTRIES = 4096
+
     def __init__(
         self,
         agents: list[ModelAgent],
@@ -5393,6 +5406,7 @@ class TaskOrchestrator:
         cache_max_entries: int = 256,
         tool_retry_attempts: int = 1,
         tool_retry_backoff_seconds: float = 0.25,
+        tool_loop_memory_max_entries: int = TOOL_LOOP_MEMORY_MAX_ENTRIES,
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
@@ -5475,6 +5489,19 @@ class TaskOrchestrator:
                 "tool_retry_backoff_seconds must be a finite nonnegative number"
             )
         self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)
+        if (
+            isinstance(tool_loop_memory_max_entries, bool)
+            or not isinstance(tool_loop_memory_max_entries, int)
+            or tool_loop_memory_max_entries < 1
+        ):
+            raise ValueError(
+                "tool_loop_memory_max_entries must be a positive integer"
+            )
+        self.tool_loop_memory_max_entries = tool_loop_memory_max_entries
+        # tool_call_id -> emitting-agent-id, bounded LRU (see
+        # TOOL_LOOP_MEMORY_MAX_ENTRIES); guarded by _evidence_lock alongside the
+        # other bounded evidence caches below.
+        self._tool_loop_memory: OrderedDict[str, str] = OrderedDict()
         # Injectable seams keep retry timing deterministic in tests while
         # production uses full jitter to avoid synchronized retry bursts.
         self._tool_retry_sleep = time.sleep
@@ -5966,6 +5993,13 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
+            # Explicit concrete models are never re-ranked for a tool-loop
+            # follow-up (see _apply_tool_loop_route's precedence contract),
+            # but this served response's own tool_calls are still remembered
+            # so a *later* virtual-selector follow-up can return to it.
+            self._record_tool_loop_agents(
+                self._served_tool_calls(result, api_surface), agent.id
+            )
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
@@ -6030,6 +6064,13 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
+        # Route a tool-result follow-up back to the agent that emitted the
+        # call, when it is still one of the already-fully-filtered candidates
+        # above (Fugu report arXiv:2606.21228 S3 / Fugu-Ultra Conductor).
+        # required_agent_id already collapsed `candidates` to a single pinned
+        # agent, so this is a no-op there -- an explicit concrete model is
+        # never re-ranked.
+        candidates, tool_loop_evidence = self._apply_tool_loop_route(candidates, messages)
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         # Rate-limit-storm admission (evidence: noema run 34758641142, strix
@@ -6152,6 +6193,15 @@ class TaskOrchestrator:
                     self._group_router.observe_success(
                         candidate.id, time.perf_counter() - started_at
                     )
+                self._record_tool_loop_agents(
+                    self._served_tool_calls(result, api_surface), candidate.id
+                )
+                if tool_loop_evidence is not None and isinstance(result, dict):
+                    orchestration_extension = result.get("orchestration")
+                    if not isinstance(orchestration_extension, dict):
+                        orchestration_extension = {}
+                        result["orchestration"] = orchestration_extension
+                    orchestration_extension.update(tool_loop_evidence)
                 if rate_limited_skipped and isinstance(result, dict):
                     orchestration = result.setdefault("orchestration", {})
                     if isinstance(orchestration, dict):
@@ -6517,6 +6567,24 @@ class TaskOrchestrator:
                     transport="structured_synthesis",
                 )
             final_agent = synthesis_candidates[0]
+        # Route a Responses/structured-synthesis tool-loop follow-up back to
+        # the agent that emitted the call, mirroring proxy_completion's and
+        # conduct's worker step (Fugu report arXiv:2606.21228 S3 / Fugu-Ultra
+        # Conductor). ``messages`` is already the chat-shaped conversation
+        # (``_responses_to_chat_payload`` translated ``function_call_output``
+        # items into ``role: "tool"`` / ``tool_call_id`` for the Responses
+        # surface), so no separate lookup is needed for that surface.
+        # ``synthesis_candidates`` is already fully filtered (required tags,
+        # free/ZDR, request exclusions), so this only reorders within that
+        # eligible set; an explicit concrete model keeps a single-candidate
+        # list and is therefore never reordered.
+        tool_loop_evidence: dict[str, str] | None = None
+        if virtual_model:
+            synthesis_candidates, tool_loop_evidence = self._apply_tool_loop_route(
+                synthesis_candidates, messages
+            )
+            if synthesis_candidates and synthesis_candidates[0].id != final_agent.id:
+                final_agent = synthesis_candidates[0]
 
         def provider_output(agent: ModelAgent, response: Mapping[str, Any]) -> str:
             """Extract non-empty structured output from the attempted provider."""
@@ -7089,6 +7157,12 @@ class TaskOrchestrator:
             self._group_router.observe_success(
                 final_agent.id, time.perf_counter() - synthesis_started
             )
+        # Remember which agent emitted this served response's tool calls, so a
+        # later tool-loop follow-up on either surface returns to it (see the
+        # reorder above and _record_tool_loop_agents).
+        self._record_tool_loop_agents(
+            self._served_tool_calls(raw, api_surface), final_agent.id
+        )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
         echo = raw.get("echo")
@@ -7128,6 +7202,8 @@ class TaskOrchestrator:
         }
         if isinstance(route, dict):
             raw["orchestration"]["route"] = route
+        if tool_loop_evidence is not None:
+            raw["orchestration"].update(tool_loop_evidence)
         return raw
 
     @contextmanager
@@ -8790,6 +8866,16 @@ class TaskOrchestrator:
             if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         allowed_agent_ids = free_ids if free_only else None
+        # A tool-result follow-up returns to its emitting agent when that
+        # agent is still one of the already role/free/ZDR-filtered
+        # ``ranked_pool`` candidates above (Fugu report arXiv:2606.21228 S3 /
+        # Fugu-Ultra Conductor). An explicit concrete model (``requested``)
+        # is never re-ranked and must not carry tool-loop evidence either:
+        # the caller pinned the agent, so neither ``emitting_agent`` nor
+        # ``fallback`` describes a gateway decision there.
+        tool_loop_evidence: dict[str, str] | None = None
+        if requested is None:
+            ranked_pool, tool_loop_evidence = self._apply_tool_loop_route(ranked_pool, messages)
 
         max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         trace_rows: list[dict[str, Any]] = []
@@ -8897,8 +8983,11 @@ class TaskOrchestrator:
         if isinstance(extras, dict):
             if extras.get("tool_calls"):
                 result["tool_calls"] = extras["tool_calls"]
+                self._record_tool_loop_agents(extras["tool_calls"], served_id or None)
             if extras.get("finish_reason"):
                 result["finish_reason"] = extras["finish_reason"]
+        if tool_loop_evidence is not None:
+            result.update(tool_loop_evidence)
         if prompt_bound is not None and prompt_bound_source is not None:
             result = self._with_context_window_evidence(
                 result, prompt_bound, prompt_bound_source, context_window_excluded
@@ -9042,6 +9131,7 @@ class TaskOrchestrator:
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
         tool_result: dict[str, Any] | None = None
+        tool_loop_evidence: dict[str, str] | None = None
         free_ids = {
             candidate.id
             for candidate in self.agents
@@ -9092,6 +9182,28 @@ class TaskOrchestrator:
                     capable = []
                 if capable:
                     agent = capable[0]
+            if step.role == "worker" and requested_agent is None:
+                # A tool-result follow-up returns to the agent that emitted
+                # the call it is answering, when that agent is still eligible
+                # under this step's own constraints (Fugu report
+                # arXiv:2606.21228 S3 / Fugu-Ultra Conductor). requested_agent
+                # is None only for a virtual selector -- an explicit concrete
+                # model pins ``agent`` above and is never re-ranked here.
+                worker_candidates, step_tool_loop_evidence = self._apply_tool_loop_route(
+                    self._failover_candidates(
+                        agent,
+                        step.subtask,
+                        "worker",
+                        allowed_agent_ids=(
+                            free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
+                        ),
+                    ),
+                    messages,
+                )
+                if worker_candidates:
+                    agent = worker_candidates[0]
+                if step_tool_loop_evidence is not None:
+                    tool_loop_evidence = step_tool_loop_evidence
             if progress is not None:
                 _notify_progress(progress, step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
@@ -9160,7 +9272,9 @@ class TaskOrchestrator:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
             if step.role == "worker" and isinstance(extras, dict) and extras.get("tool_calls"):
                 tool_result = extras
+                self._record_tool_loop_agents(extras["tool_calls"], served_id or agent.id)
                 break
+            tool_loop_evidence = None
 
         if tool_result is not None:
             answer = output
@@ -9218,6 +9332,8 @@ class TaskOrchestrator:
         if tool_result is not None:
             result["tool_calls"] = tool_result["tool_calls"]
             result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
+            if tool_loop_evidence is not None:
+                result.update(tool_loop_evidence)
         if prompt_bound is not None and prompt_bound_source is not None:
             result = self._with_context_window_evidence(
                 result, prompt_bound, prompt_bound_source, context_window_excluded
@@ -10891,6 +11007,156 @@ class TaskOrchestrator:
             )
             self._last_context_window_excluded = excluded
         return healthy
+
+    def _record_tool_loop_agents(self, tool_calls: Any, agent_id: str | None) -> None:
+        """Remember which agent emitted each tool call, keyed by ``tool_call_id``.
+
+        Feeds :meth:`_apply_tool_loop_route`, which routes a follow-up request
+        carrying that call's ``role: tool`` result back to the same agent
+        (Fugu report arXiv:2606.21228 S3 / Fugu-Ultra Conductor's
+        tool-loop-return contract) instead of a freshly ranked one. The map is
+        bounded LRU (:data:`TOOL_LOOP_MEMORY_MAX_ENTRIES` /
+        ``tool_loop_memory_max_entries``); a call id that is never followed up
+        simply ages out.
+        """
+        if not agent_id or not isinstance(tool_calls, list):
+            return
+        call_ids = [
+            call["id"]
+            for call in tool_calls
+            if isinstance(call, dict) and isinstance(call.get("id"), str) and call["id"]
+        ]
+        if not call_ids:
+            return
+        with self._evidence_lock:
+            for call_id in call_ids:
+                self._tool_loop_memory[call_id] = agent_id
+                self._tool_loop_memory.move_to_end(call_id)
+            while len(self._tool_loop_memory) > self.tool_loop_memory_max_entries:
+                self._tool_loop_memory.popitem(last=False)
+
+    @staticmethod
+    def _tool_loop_call_ids(messages: Any) -> list[str]:
+        """Return every ``tool_call_id`` a request's ``role: tool`` messages carry."""
+        if not isinstance(messages, list):
+            return []
+        return [
+            message["tool_call_id"]
+            for message in messages
+            if isinstance(message, dict)
+            and message.get("role") == "tool"
+            and isinstance(message.get("tool_call_id"), str)
+            and message["tool_call_id"]
+        ]
+
+    def _remembered_tool_loop_agent(self, messages: Any) -> str | None:
+        """Return the remembered emitting-agent id for a tool-result follow-up, if any."""
+        call_ids = self._tool_loop_call_ids(messages)
+        if not call_ids:
+            return None
+        with self._evidence_lock:
+            for call_id in call_ids:
+                agent_id = self._tool_loop_memory.get(call_id)
+                if agent_id is not None:
+                    return agent_id
+        return None
+
+    def _apply_tool_loop_route(
+        self,
+        candidates: list[ModelAgent],
+        messages: Any,
+    ) -> tuple[list[ModelAgent], dict[str, str] | None]:
+        """Move a tool-result follow-up's emitting agent to the front, when eligible.
+
+        ``candidates`` must already be fully filtered/ordered by every request
+        constraint that applies (virtual selector, free/ZDR eligibility,
+        circuit state, provider exclusions) -- this only reorders within that
+        eligible set, so an explicit concrete model (whose call sites never
+        reach this helper) and every other precedence rule are preserved
+        unconditionally: the remembered agent is used only when it is already
+        one of ``candidates``.
+
+        Returns ``(candidates, None)`` when the request carries no tool-loop
+        follow-up evidence (no remembered ``tool_call_id``); otherwise the
+        (possibly reordered) candidates plus a routing-evidence mapping with
+        ``tool_loop_route`` (``"emitting_agent"`` when the remembered agent is
+        still eligible and was moved to the front, ``"fallback"`` when it is
+        no longer eligible and the original order is kept) and
+        ``tool_loop_agent_id`` (the remembered agent id either way).
+        """
+        remembered_agent_id = self._remembered_tool_loop_agent(messages)
+        if remembered_agent_id is None:
+            return candidates, None
+        for index, candidate in enumerate(candidates):
+            if candidate.id != remembered_agent_id:
+                continue
+            reordered = (
+                candidates
+                if index == 0
+                else [candidate, *candidates[:index], *candidates[index + 1 :]]
+            )
+            return reordered, {
+                "tool_loop_route": "emitting_agent",
+                "tool_loop_agent_id": remembered_agent_id,
+            }
+        return candidates, {
+            "tool_loop_route": "fallback",
+            "tool_loop_agent_id": remembered_agent_id,
+        }
+
+    @staticmethod
+    def _chat_response_tool_calls(response: Any) -> list[Any] | None:
+        """Return a chat-completions-shaped provider response's ``tool_calls``, if any."""
+        if not isinstance(response, Mapping):
+            return None
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        first = choices[0]
+        message = first.get("message") if isinstance(first, Mapping) else None
+        tool_calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+        return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+
+    @staticmethod
+    def _responses_output_tool_calls(response: Any) -> list[dict[str, Any]] | None:
+        """Return a Responses-shaped provider response's ``function_call`` items.
+
+        Adapts each item's ``call_id`` into the ``{"id": ...}`` shape
+        :meth:`_record_tool_loop_agents` already expects from chat's
+        ``tool_calls``, so a Responses-surface tool call feeds the same
+        ``tool_loop_memory`` map as a chat one.
+        """
+        if not isinstance(response, Mapping):
+            return None
+        output = response.get("output")
+        if not isinstance(output, list):
+            return None
+        call_ids = [
+            item["call_id"]
+            for item in output
+            if isinstance(item, Mapping)
+            and item.get("type") == "function_call"
+            and isinstance(item.get("call_id"), str)
+            and item["call_id"]
+        ]
+        return [{"id": call_id} for call_id in call_ids] if call_ids else None
+
+    @staticmethod
+    def _served_tool_calls(response: Any, api_surface: str) -> list[Any] | None:
+        """Extract a served response's tool calls for whichever wire surface served it.
+
+        A single dispatch point for :meth:`_record_tool_loop_agents` callers
+        that can serve either surface (``proxy_completion``'s explicit-model
+        and virtual passthrough branches, and
+        ``_orchestrated_provider_completion``'s structured synthesis), so the
+        Responses-vs-chat extractor choice is made once instead of repeating
+        the same ``api_surface == "responses"`` branch at each call site.
+        """
+        return (
+            TaskOrchestrator._responses_output_tool_calls(response)
+            if api_surface == "responses"
+            else TaskOrchestrator._chat_response_tool_calls(response)
+        )
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
@@ -19069,6 +19335,8 @@ def chat_completion_response(
         "routing_reason": result.get("routing_reason"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
+        "tool_loop_route": result.get("tool_loop_route"),
+        "tool_loop_agent_id": result.get("tool_loop_agent_id"),
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
         "output_budget_clamped": result.get("output_budget_clamped"),
@@ -19200,6 +19468,8 @@ def chat_completion_chunks(
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result.get("mode"),
         "verification": result.get("verification"),
+        "tool_loop_route": result.get("tool_loop_route"),
+        "tool_loop_agent_id": result.get("tool_loop_agent_id"),
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
         "output_budget_clamped": result.get("output_budget_clamped"),

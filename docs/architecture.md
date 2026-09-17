@@ -53,6 +53,33 @@ The Fugu report combines these ideas into production constraints:
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
 
+Fidelity note (2026-09-13, Fugu report arXiv:2606.21228 S3 / Fugu-Ultra
+Conductor): the paper's Conductor routes a tool loop back to the agent that
+emitted the tool call — when the client executes the tool and sends the
+results back, the continuation goes to the same worker, not a freshly
+selected one. This gateway previously did not do that: a follow-up carrying
+`role: "tool"` results was ranked like any new request, so a virtual selector
+(`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) could
+hand a different provider/model the results for calls it never emitted. This
+is now closed by `TaskOrchestrator`'s bounded `tool_loop_memory` map
+(`tool_call_id -> emitting agent id`, see `_apply_tool_loop_route` in
+`contextual_orchestrator/orchestrator.py`): a follow-up's remembered emitting
+agent is moved to the front of the already-filtered candidate order on
+`proxy_completion`'s single-agent passthrough, `route_once`, `conduct`'s
+worker step, and `_orchestrated_provider_completion`'s structured synthesis
+-- covering both of that path's callers (the Responses API and
+`response_format`-only chat passthrough) -- but only when it is still
+eligible under the request's own constraints (explicit concrete model,
+free/ZDR, circuit state); otherwise routing falls back to the normal order.
+On the Responses surface a served `function_call` item's `call_id` is
+recorded the same way a chat `tool_calls[].id` is, and a follow-up's
+`function_call_output` item needs no separate lookup: the existing
+input-to-chat conversion already turns it into a `role: "tool"` /
+`tool_call_id` message before candidate selection runs. The served
+response's `orchestration` extension records `tool_loop_route`
+(`"emitting_agent"`/`"fallback"`) and `tool_loop_agent_id` as evidence on
+every one of these paths.
+
 ## Implementation Mapping
 
 This repository implements the interface and control plane, not the trained

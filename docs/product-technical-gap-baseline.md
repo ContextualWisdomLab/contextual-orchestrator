@@ -6045,6 +6045,57 @@ attempt log without reading provider text or bodies (89 related tests pass,
 15.28 seconds). Full verification and release of this diagnostic addition
 remain pending; provider availability itself is not repaired by better logs.
 
+### Tool-loop-emitting-agent routing — 2026-09-13
+
+Paper fidelity gap (Fugu report arXiv:2606.21228 §3; Fugu-Ultra Conductor):
+the paper routes a tool loop back to the agent that emitted the tool call,
+but this gateway previously ranked a follow-up carrying `role: "tool"`
+results like any new request under a virtual selector (`orchestrator/free`,
+`orchestrator/auto`, `contextual-orchestrator`), so a different
+provider/model could receive tool results for calls it never emitted — an
+id-format and behavior mismatch across NIM/OpenRouter/OpenCode models, and a
+real failure mode for the `noema` and `opencode` reviewers (org CI) that use
+tools through this gateway.
+
+Local repair: `TaskOrchestrator` now keeps a bounded, thread-safe
+`tool_loop_memory` map (`tool_call_id -> emitting agent id`, LRU-bounded by
+`tool_loop_memory_max_entries`, default 4096 — a memory bound, not a product
+limit) recorded whenever a served response carries `tool_calls` on
+`proxy_completion`'s single-agent passthrough, `route_once`, `conduct`'s
+worker step, and `_orchestrated_provider_completion`'s structured synthesis.
+The last of these generalizes to both of its callers and both provider
+surfaces: the Responses API's `function_call` items (keyed by `call_id`,
+adapted into the same `{"id": ...}` shape `_record_tool_loop_agents` already
+consumes from chat's `tool_calls`) and `response_format`-only chat
+passthrough's `tool_calls`. `_apply_tool_loop_route` moves a follow-up's
+remembered emitting agent to the front of the already-fully-filtered
+candidate order only when it is still eligible under the request's own
+constraints (an explicit concrete model is never overridden; free/ZDR scope
+and circuit-breaker state are re-checked), falling back to the normal order
+otherwise. On the Responses surface, no separate follow-up lookup was
+needed: `_orchestrated_provider_completion` already converts `input` to
+chat-shaped messages before candidate selection, and that conversion already
+turns a `function_call_output` item into a `role: "tool"` /
+`tool_call_id: call_id` message, so `_apply_tool_loop_route`'s existing chat
+lookup covers it unchanged. Served responses carry
+`orchestration.tool_loop_route` (`"emitting_agent"`/`"fallback"`) and
+`orchestration.tool_loop_agent_id` as evidence on every one of these paths.
+Nine targeted tests in `tests/test_passthrough_provider_failover.py` cover:
+routing to the emitting agent over a higher-ranked one, falling back when
+the emitting agent's circuit is open, explicit-concrete-model precedence
+(on both `proxy_completion` and the Responses structured-synthesis path),
+free-model precedence (never returns to a non-free emitting agent), LRU
+eviction, a Responses `function_call` recording the serving agent, a
+Responses `function_call_output` follow-up returning to it, and a
+`response_format`-only chat passthrough follow-up returning to it; the
+touched suite plus `tests/test_api_contract.py`, `tests/test_self_check.py`,
+and `tests/test_tool_execution_fallback.py` pass locally (192 passed, 4
+known pre-existing local-only failures from the openai SDK version pin
+mismatch — 2.44.0 installed vs. the locked 2.54.0 — unrelated to this
+change); `python -m interrogate` reports 100% docstring coverage unchanged.
+A live-traffic/consumer-adoption result from `noema` or `opencode` remains
+open and is not established by this local test evidence.
+
 ### Message-count provenance registry — 2026-09-14
 
 Issue #1157 (shared-context accounting) required provider/model-specific
