@@ -1213,6 +1213,55 @@ def _is_single_tool_call_limit_error(error: urllib.error.HTTPError) -> bool:
     return isinstance(message, str) and _SINGLE_TOOL_CALL_LIMIT_MESSAGE in message.casefold()
 
 
+def _is_context_length_exceeded_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize a prompt that overflows the model's context window.
+
+    A 400 rejection for exceeding the context window is a request-size
+    rejection like the 413 and tool-description-limit cases above, not a
+    generic caller error: the same prompt commonly fits the next
+    capability-matched agent's larger context window, so it must fail over
+    rather than count against the rejecting agent's health.
+
+    Three provider shapes are recognized, in order:
+
+    1. OpenAI's structured shape: ``error.code == "context_length_exceeded"``,
+       regardless of message text.
+    2. A message-text signal observed on OpenAI, vLLM, OpenRouter, and NVIDIA
+       NIM passthrough responses, e.g. "This model's maximum context length
+       is 8192 tokens. However, you requested 9001 tokens ...": the message
+       (dict ``message`` or bare string body), casefolded, contains
+       ``"maximum context length"``, or contains both ``"context length"``
+       and ``"tokens"``.
+    3. A message-text signal observed on Anthropic-compatible proxies:
+       ``error.type == "invalid_request_error"`` with a message containing
+       ``"prompt is too long"``.
+    """
+    if error.code != 400:
+        return False
+    payload = _http_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(details, dict) and details.get("code") == "context_length_exceeded":
+        return True
+    message = (
+        details.get("message")
+        if isinstance(details, dict)
+        else details
+        if isinstance(details, str)
+        else None
+    )
+    if not isinstance(message, str):
+        return False
+    folded = message.casefold()
+    if "maximum context length" in folded:
+        return True
+    if "context length" in folded and "tokens" in folded:
+        return True
+    if isinstance(details, dict) and details.get("type") == "invalid_request_error":
+        if "prompt is too long" in folded:
+            return True
+    return False
+
+
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
     """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
@@ -1910,6 +1959,7 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
             and (
                 current.code == 413
                 or _is_oversized_tool_description_error(current)
+                or _is_context_length_exceeded_error(current)
             )
         ):
             return True

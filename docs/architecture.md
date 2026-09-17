@@ -68,7 +68,9 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - Virtual selectors (`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) keep every inference surface on that control plane: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/videos`, `/v1/audio/*`, and `/v1/rerank`. Tools, `stream=true`, or a non-text modality do not eject a virtual request into a sticky single-agent pin; a concrete model id remains a debug pin. Chat Completions and media endpoints cannot emit Responses `reasoning_text` events, so paper-role process output stays internal and only the modality result is returned.
 - `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
   request-time failure of the primary provider call — 5xx, 429, network, a
-  413 request-size rejection, or a non-retryable 4xx such as 401/403/404
+  413 request-size rejection (a 400 context-window overflow —
+  `_is_context_length_exceeded_error` — is classified the same way), or a
+  non-retryable 4xx such as 401/403/404
   (this list is illustrative, not exhaustive: any failure the provider
   taxonomy classifies via `classify_provider_transport_failure` falls into
   either bucket) — advances to the next ranked candidate within the same
