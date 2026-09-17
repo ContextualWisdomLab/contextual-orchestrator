@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_completions_accepts_string_metadata() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_metadata_non_object() -> None:
@@ -82,6 +84,7 @@ def test_http_completions_rejects_metadata_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_metadata_scalar_values() -> None:
@@ -99,6 +102,7 @@ def test_http_completions_accepts_metadata_scalar_values() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_service_tier_auto() -> None:
@@ -117,6 +121,7 @@ def test_http_completions_accepts_service_tier_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_service_tier_default() -> None:
@@ -134,6 +139,7 @@ def test_http_completions_accepts_service_tier_default() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_service_tier_flex() -> None:
@@ -152,6 +158,7 @@ def test_http_completions_accepts_service_tier_flex() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_service_tier_non_string() -> None:
@@ -170,3 +177,4 @@ def test_http_completions_rejects_service_tier_non_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

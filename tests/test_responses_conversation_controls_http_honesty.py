@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -58,6 +59,7 @@ def test_http_responses_accepts_baseline_without_conversation_controls() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_previous_response_id() -> None:
@@ -78,6 +80,7 @@ def test_http_responses_rejects_previous_response_id() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_conversation() -> None:
@@ -96,6 +99,7 @@ def test_http_responses_rejects_conversation() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_truncation_auto_and_disabled_as_noop() -> None:
@@ -115,6 +119,7 @@ def test_http_responses_accepts_truncation_auto_and_disabled_as_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unknown_truncation() -> None:
@@ -133,6 +138,7 @@ def test_http_responses_rejects_unknown_truncation() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_include() -> None:
@@ -151,6 +157,7 @@ def test_http_responses_rejects_include() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_official_text_format_text() -> None:
@@ -169,6 +176,7 @@ def test_http_responses_accepts_official_text_format_text() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unsupported_text_shape() -> None:
@@ -189,6 +197,7 @@ def test_http_responses_rejects_unsupported_text_shape() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

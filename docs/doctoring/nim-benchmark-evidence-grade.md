@@ -127,14 +127,14 @@ issuing five calls.
 Actual access cost and hypothetical production cost are separate fields and
 separate evidence classes.
 
-As reviewed on 2026-09-05, NVIDIA's NIM General FAQ states that NVIDIA Developer
+As reviewed on 2026-09-05, NVIDIA's Run NIM Anywhere page states that NVIDIA Developer
 Program members have free access to hosted NIM API endpoints for prototyping.
 The same source distinguishes development, testing, research, and evaluation
 from production and states that production requires NVIDIA AI Enterprise. The
 report therefore records `actual_cost_usd = 0.0` only for the reviewed hosted
 endpoint access context, includes the exact source, review date, validity
 horizon, program scope, production distinction, and uncertainty, and refuses a
-live run after 2026-10-05 until the source is reviewed again.
+live run after 2026-10-04 until the source is reviewed again.
 
 No NVIDIA model price is embedded or inferred. A live hypothetical pricing
 scenario is optional; absence means `unknown`. If supplied, it must be marked
@@ -214,6 +214,31 @@ succeed:
 No earlier head, local-only result, queued check, or stale approval is accepted as
 release evidence.
 
+## Synthetic classification verification, 2026-09-12
+
+Frozen head `07b95c9ab8e1c7b2f0031c39ea45349314079c34` passed the full source
+suite: **3,688 passed, 2 skipped, 170.85s**, process 12368, exit 0.
+Log: `/tmp/co-kpi-full-07b95c9a.log`. Reproduction from that checkout:
+
+```sh
+/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-export-native-acceptance-20260912/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["tests", "-q"]))'
+```
+
+This reused existing dependencies read-only and is source integration evidence.
+Separately, root process 40384 completed **126 passed, 18.44s** against the exact
+head's installed wheel, with `python -I` from `/tmp` and the benchmark import
+asserted under installed site-packages. Isolated package directory:
+`/tmp/co-diagnostic-wheel-07b95c9a.EWQ86S`; core wheel SHA-256:
+`24a3528f273a42e17700ea26173af4f3e2820bd6de65ac56ab304a00a627a036`.
+Runtime dependencies used hash-locked requirements; test tooling used pytest 9.1.1.
+
+Root process 56391 also generated a dry-run artifact and checked consistent
+classification in JSON evaluation, run provenance and Markdown. The root reviewer
+directly inspected the generated summary's top screenshot in an actual browser,
+English at 1265 × 712. This is a scoped visual check, not full-document or mobile
+inspection. These results validate synthetic evidence labeling, not customer
+accuracy, observed decision latency, production promotion, or a protected release.
+
 ## References
 
 Autio, C., Schwartz, R., Dunietz, J., Jain, S., Stanley, M., Tabassi, E., Hall,
@@ -237,8 +262,9 @@ Cosgrove, C., Manning, C. D., Ré, C., Acosta-Navas, D., Hudson, D. A., … Kore
 Y. (2023). Holistic evaluation of language models. *Transactions on Machine
 Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 
-NVIDIA Corporation. (n.d.). *General FAQ*. NVIDIA NIM Documentation. Retrieved
-August 5, 2026, from https://docs.api.nvidia.com/nim/docs/product
+NVIDIA Corporation. (n.d.). *Run NIM Anywhere*. NVIDIA NIM Documentation.
+Retrieved September 5, 2026, from
+https://docs.api.nvidia.com/nim/docs/run-anywhere
 
 NVIDIA Corporation. (2026, June 4). *NIM offerings*. NVIDIA NIM for Large
 Language Models. https://docs.nvidia.com/nim/large-language-models/2.0.5/about-nim-llm/nim-offerings.html

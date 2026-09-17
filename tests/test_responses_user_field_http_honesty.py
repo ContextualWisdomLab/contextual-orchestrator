@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -63,6 +64,7 @@ def test_http_responses_accepts_valid_user() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_empty_user() -> None:
@@ -77,6 +79,7 @@ def test_http_responses_rejects_empty_user() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_null_user_as_omit() -> None:
@@ -90,6 +93,7 @@ def test_http_responses_accepts_null_user_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_user_int_scalar_coerce() -> None:
@@ -104,6 +108,7 @@ def test_http_responses_accepts_user_int_scalar_coerce() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_user_object() -> None:
@@ -118,6 +123,7 @@ def test_http_responses_rejects_user_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_overlong_user() -> None:
@@ -132,6 +138,7 @@ def test_http_responses_rejects_overlong_user() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

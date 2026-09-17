@@ -74,6 +74,26 @@ def _orchestrator() -> tuple[TaskOrchestrator, _CountingModelClient]:
     return orchestrator, client
 
 
+def _zdr_capable_orchestrator() -> tuple[TaskOrchestrator, _CountingModelClient]:
+    """An orchestrator whose only agent carries ``privacy:zdr``, so ``zdr_only`` admits it."""
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_zdr_worker",
+                "mock-zdr-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing", "privacy:zdr"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    return orchestrator, client
+
+
 def test_cache_partition_prevents_cross_principal_reuse() -> None:
     """Identical prompts under different authenticated partitions must not collide."""
     orchestrator, client = _orchestrator()
@@ -237,6 +257,50 @@ def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
     assert result["answer"] == "warm answer"
     assert triage_calls == 0
     assert client.calls == 0
+
+
+def test_zdr_only_request_never_reads_or_writes_the_response_cache() -> None:
+    """A ZDR-flagged request must not persist its prompt/answer to a shared cache.
+
+    Private-repository callers set ``zdr_only=True`` precisely so a request's
+    content never lands in retained storage. The response cache is exactly such
+    storage (e.g. a shared Redis-compatible backend) -- a ZDR request must
+    neither read a stale entry nor write its own answer there, regardless of
+    whether the caller separately passed ``bypass_cache``.
+    """
+    orchestrator, client = _zdr_capable_orchestrator()
+    messages = [{"role": "user", "content": "private repository research prompt"}]
+
+    with orchestrator.request_policy(zdr_only=True):
+        first = orchestrator.complete(messages, mode="route")
+        second = orchestrator.complete(messages, mode="route")
+
+    assert client.calls == 2
+    assert first["cache_status"] != "hit"
+    assert second["cache_status"] != "hit"
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    assert orchestrator._cache_provider.values == {}
+
+
+def test_zdr_only_request_ignores_a_preexisting_cache_entry() -> None:
+    """Fail closed: even a stale cached hit must not surface under ZDR_only."""
+    orchestrator, client = _zdr_capable_orchestrator()
+    messages = [{"role": "user", "content": "private repository research prompt"}]
+
+    with orchestrator.request_policy(zdr_only=True):
+        key = orchestrator._cache_key(messages, "route", TaskOrchestrator.GATEWAY_DEFAULT_MODEL, None)
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        key,
+        {"mode": "route", "answer": "stale non-zdr-safe answer", "trace": [{"role": "worker"}]},
+    )
+
+    with orchestrator.request_policy(zdr_only=True):
+        result = orchestrator.complete(messages, mode="route")
+
+    assert result["cache_status"] != "hit"
+    assert result["answer"] != "stale non-zdr-safe answer"
+    assert client.calls == 1
 
 
 if __name__ == "__main__":  # pragma: no cover
