@@ -527,3 +527,31 @@ data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
 Weil, J., Kuarsingh, V., Donley, C., Liljenstolpe, C., & Azinger, M. (2012).
 *IANA-reserved IPv4 prefix for shared address space* (RFC 6598; BCP 153). RFC
 Editor. https://doi.org/10.17487/RFC6598
+
+
+### Declared workflow depth and token budgets (2026-09-07, proposed)
+
+The previous equal-budget cell used a hidden five-step workflow and a
+264-token per-call output cap. Those numbers allocated evaluation compute
+and shaped request planning without an operator declaration. Planning,
+evaluation, CLI, and provenance now require positive integer declarations.
+`None` is a fail-closed sentinel. The equal cell token budget is the product
+of the declared output cap and the declared workflow depth. Five and 264 in
+the workflow YAML are run choices, not code defaults.
+
+This slice does not change production route/conduct defaults. The held-out
+psychometric harness still uses a 2,000-sample 95% interval.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Plan as Request plan
+    participant Cell as Equal-budget cell
+    participant Report as Schema 4 report
+    Operator->>Plan: Workflow depth and output-token cap
+    Plan->>Plan: Fail closed on missing or non-positive declarations
+    Plan->>Cell: Equal call envelope and token product
+    Cell->>Report: Configured budget and observed usage
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
