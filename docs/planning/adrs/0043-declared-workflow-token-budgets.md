@@ -8,8 +8,10 @@ deciders:
 affected_components:
   - "contextual_orchestrator/nim_benchmark.py"
 related:
-  - path: "docs/planning/adrs/0042-declared-paired-bootstrap-coverage.md"
-    relation: extends
+  - path: "docs/planning/adrs/0041-generalize-models-dev-cost-classification.md"
+    relation: related
+  - path: "docs/planning/adrs/0044-declared-heldout-bootstrap-coverage.md"
+    relation: followed_by
 success_criteria:
   - metric: "no hidden workflow envelope"
     target: "omitted maximum_calls or max_workflow_depth fails closed"

@@ -37,6 +37,7 @@ def test_healthz_is_unauthenticated_liveness() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 200
     assert body == {"status": "ok", "service": "contextual-orchestrator"}
@@ -83,6 +84,7 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -105,10 +105,10 @@ REQUIRED_COMPLETION_FRACTION = 0.9
 
 ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "evidence_schema_version": "1.0.0",
-    "source_title": "NVIDIA NIM General FAQ",
-    "source_url": "https://docs.api.nvidia.com/nim/docs/product",
+    "source_title": "Run NIM Anywhere",
+    "source_url": "https://docs.api.nvidia.com/nim/docs/run-anywhere",
     "reviewed_at_date": "2026-09-05",
-    "valid_until_date": "2026-10-05",
+    "valid_until_date": "2026-10-04",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (
@@ -353,6 +353,32 @@ class _BudgetedModelClient(ModelClient):
         """Return the first benchmark transport-contract failure, if any."""
         return self._benchmark_contract_error
 
+    def _validate_provider(self, agent: ModelAgent) -> tuple[int, tuple[Any, ...]]:
+        """Validate injected-transport metadata without performing duplicate DNS.
+
+        Benchmark transports own endpoint resolution and address pinning.  Repeating
+        the generic client DNS preflight here makes an injected offline transport
+        unreachable and creates a time-of-check/time-of-use split for the production
+        pinned transport.  Keep the URL and credential checks at this adapter boundary;
+        the returned loopback tuple is an unused compatibility value because every
+        benchmark send is handled by ``_benchmark_transport``.
+        """
+        if self._benchmark_transport is None:
+            return super()._validate_provider(agent)
+        parsed = urllib.parse.urlparse(agent.base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must use https")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError(
+                f"{agent.id} base_url must not contain credentials, query data, or fragments"
+            )
+        credential_name = agent.credential_name
+        if credential_name and get_credential(credential_name) is None:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        return socket.AF_INET, ("127.0.0.1", parsed.port or 443)
+
     def _send(
         self,
         agent: ModelAgent,
@@ -530,12 +556,13 @@ class EqualBudgetModelClient:
         return getattr(self._delegate, name)
 
     @property
-    def max_output_tokens(self) -> int:
+    def max_output_tokens(self) -> int | None:
         """Expose the delegate cap for compatibility with orchestration clients."""
-        return int(self._delegate.max_output_tokens)
+        value = self._delegate.max_output_tokens
+        return int(value) if value is not None else None
 
     @max_output_tokens.setter
-    def max_output_tokens(self, value: int) -> None:
+    def max_output_tokens(self, value: int | None) -> None:
         """Forward explicit cap changes to the delegated model client."""
         self._delegate.max_output_tokens = value
 
@@ -589,7 +616,10 @@ class EqualBudgetModelClient:
                 "policy cell total-token allowance exhausted"
             )
 
-        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
+        delegate_cap = self._delegate.max_output_tokens
+        output_cap = output_allowance
+        if type(delegate_cap) is int and delegate_cap > 0:
+            output_cap = min(delegate_cap, output_allowance)
         self.observed_calls += 1
         self.observed_prompt_tokens += prompt_tokens
         self.observed_tokens += prompt_tokens
@@ -2346,6 +2376,16 @@ def evaluate_policies(
     }
 
 
+
+def _require_declared_positive_int(value: object, field_name: str) -> int:
+    """Reject missing, boolean, or non-positive integer declarations."""
+    if type(value) is not int or value < 1:
+        raise BenchmarkContractError(
+            f"{field_name} must be a declared positive integer"
+        )
+    return value
+
+
 # --------------------------------------------------------------------------
 # Statistics: paired bootstrap + Pareto frontiers
 # --------------------------------------------------------------------------
@@ -2710,9 +2750,9 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             "actual cost evidence must preserve the reviewed zero-cost value"
         )
-    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/product":
+    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/run-anywhere":
         raise BenchmarkContractError(
-            "actual cost evidence must cite the reviewed NVIDIA NIM General FAQ"
+            "actual cost evidence must cite the reviewed NVIDIA NIM access terms"
         )
     reviewed_at = _parse_evidence_date(evidence["reviewed_at_date"], "reviewed_at_date")
     valid_until = _parse_evidence_date(evidence["valid_until_date"], "valid_until_date")
@@ -2847,6 +2887,8 @@ _REPORT_REQUIRED_PATHS = (
     "provenance.catalog_snapshot_sha256",
     "provenance.task_manifest_sha256",
     "provenance.benchmark_parameters",
+    "provenance.benchmark_parameters.max_output_tokens",
+    "provenance.benchmark_parameters.max_workflow_depth",
     "catalog_snapshot.endpoint",
     "catalog_snapshot.discovered_model_count",
     "catalog_snapshot.duplicate_model_ids",
@@ -2959,6 +3001,11 @@ def validate_report_schema(report: dict[str, Any]) -> None:
     expected = {(policy, task, "locked") for policy in policies for task in task_ids}
     if identities[0] != expected:
         raise BenchmarkContractError("planned evaluation is not the complete selected policy matrix")
+    parameters = report["provenance"]["benchmark_parameters"]
+    _require_declared_positive_int(parameters["max_output_tokens"], "max_output_tokens")
+    _require_declared_positive_int(
+        parameters["max_workflow_depth"], "max_workflow_depth"
+    )
 
 
 _CSV_CELL_COLUMNS = (
@@ -3199,6 +3246,9 @@ def assemble_benchmark_report(
         cells,
         evaluation["locked_task_count"],
     )
+    if run_mode == "dry_run":
+        evidence_summary["evidence_status"] = "synthetic_diagnostic_only"
+        evidence_summary["decision_use"] = "benchmark_smoke_only"
     report = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "provenance": build_provenance(

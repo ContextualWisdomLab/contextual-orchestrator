@@ -37,9 +37,10 @@ def _accept_judgment(_task_text, verification, **_request_options):
 def test_request_retains_starting_policy(monkeypatch, entry_point, request_options):
     """Execution and saved evidence retain one policy while later requests see updates."""
     gateway = _policy_gateway()
+    gateway.policy = replace(gateway.policy, workflow_planning="계획 검증")
     starting_policy = gateway.policy
     policy_hash = sha256(json.dumps(
-        starting_policy.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        starting_policy.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode()).hexdigest()
     seen_policies = []
 

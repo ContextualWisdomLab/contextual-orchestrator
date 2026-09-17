@@ -1,6 +1,6 @@
 # Review gateway free-pool admission evidence
 
-Date: 2026-09-01
+Date: 2026-09-08
 
 ## Scope
 
@@ -25,10 +25,12 @@ Let:
   explicit zero-cost evidence and the repository's existing blind-serving
   capability/modality constraints;
 - `P` be models whose credential source is one of
-  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, or
-  `OPENROUTER_API_KEY`;
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, or `OPENCODE_ZEN_API_KEY`;
 - `R` be models whose credential source was actually registered from the
   caller-declared credential array for the current sidecar bootstrap.
+  Default bootstrap uses every accepted provider credential name, so a
+  CI-seeded `OPENCODE_ZEN_API_KEY` is registered when present.
 
 The review candidate set is exactly `G ∩ P ∩ R`.
 
@@ -48,6 +50,20 @@ not manufacture a fallback preference for it.
 `OPENAI_API_KEY` may therefore be present, registered, and globally discoverable,
 while every OpenAI-derived row contributes zero elements to `P` and consequently
 zero elements to the `orchestrator/free` review candidate set.
+
+`OPENCODE_ZEN_API_KEY` is the shared KV credential for OpenCode Zen and
+OpenCode Go. Those catalogs are independent provider accounts. Honest free
+rows from either catalog may enter `P` through that one credential. Missing
+or non-zero price evidence still fails `G`, so an unpriced Go listing does
+not become free by credential name.
+
+Operational evidence for this widening is ContextualWisdomLab/contextual-orchestrator
+PR #1094, Noema job 101747622034: the sidecar returned HTTP 429 on
+`google/gemma-4-31b-it:free` with caller `attempts=1` after 184s, while
+preflight `ready_count=1` was a NIM vision model. `OPENCODE_ZEN_API_KEY` was
+seeded in CI but excluded from `P` and from default `R`, so Zen/Go free
+evidence never entered the review pool. OpenCode handshake job 101759907361
+then failed waiting for a current-head verdict from the same sidecar.
 
 ## Security and routing rationale
 
@@ -74,7 +90,9 @@ No new routing heuristic is introduced by this change.
 
 The PR implementing this contract must prove at least the following cases:
 
-- all five provider credentials may be supplied and registered together;
+- all five required provider credentials may be supplied and registered together;
+- a CI-seeded `OPENCODE_ZEN_API_KEY` is registered by default bootstrap and
+  honest-free Zen and Go rows enter the review free pool;
 - globally discovered OpenAI rows never enter the review free pool;
 - an OpenAI credential that predates the current bootstrap cannot enter it;
 - an otherwise free, permitted provider credential that predates but was not

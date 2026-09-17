@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_reasoning_effort_none_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_reasoning_effort_none_padded_casefold() -> None:
@@ -88,6 +90,7 @@ def test_http_completions_accepts_reasoning_effort_none_padded_casefold() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_known_reasoning_effort_casefold() -> None:
@@ -106,6 +109,7 @@ def test_http_chat_accepts_known_reasoning_effort_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_unknown_reasoning_effort() -> None:
@@ -125,6 +129,7 @@ def test_http_chat_still_rejects_unknown_reasoning_effort() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_type_padded_casefold() -> None:
@@ -144,6 +149,7 @@ def test_http_chat_accepts_response_format_type_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_json_schema_type_casefold() -> None:
@@ -168,6 +174,7 @@ def test_http_chat_accepts_response_format_json_schema_type_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_text_format_type_padded_casefold() -> None:
@@ -187,6 +194,7 @@ def test_http_responses_accepts_text_format_type_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_modalities_text_padded_casefold() -> None:
@@ -206,6 +214,7 @@ def test_http_chat_accepts_modalities_text_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_modalities_text_padded_casefold() -> None:
@@ -224,6 +233,7 @@ def test_http_responses_accepts_modalities_text_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_modalities_text_padded_casefold() -> None:
@@ -242,6 +252,7 @@ def test_http_completions_accepts_modalities_text_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_non_text_modalities() -> None:
@@ -261,6 +272,7 @@ def test_http_chat_still_rejects_non_text_modalities() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
