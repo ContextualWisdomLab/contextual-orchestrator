@@ -77,6 +77,43 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+- Rate-limit-aware admission (2026-09-14): a 429/503 candidate failure records
+  a per-agent quota cooldown from `Retry-After` (or a numeric
+  `x-ratelimit-reset*` fallback) separately from the health circuit breaker --
+  a 429 is quota exhaustion, not a model health failure, and does not trip it.
+  A 429 with neither header (RFC 9110 permits omitting it; NIM/OpenRouter
+  routinely do) records an *assumed* cooldown -- the administrator-owned
+  `rate_limit_unknown_cooldown_seconds` default -- instead of nothing, tagged
+  `cooldown_source: "assumed"` (vs `"provider"`) everywhere a cooldown is
+  surfaced; a 503 with neither header keeps requiring a real provider-stated
+  duration, since it is a possibly-permanent availability signal without a
+  429's inherent quota-recovery semantics. `TaskOrchestrator._failover_candidates`
+  skips a currently cooled-down candidate for every caller by default, falling
+  back to the full list only when every candidate is limited. The
+  wait-then-retry/honest-429 decision is one shared method,
+  `TaskOrchestrator._await_rate_limit_recovery`: the discriminator is not
+  candidate count but whether the caller delegated model selection at all --
+  a virtual/gateway-selected model (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/
+  `FREE_MODEL`, or none) waits out the earliest cooldown even with only one
+  currently eligible candidate (a single-route free pool wiped to one
+  candidate by a 429 is real production evidence, not a hypothetical --
+  noema-review run 34772771262 on contextual-orchestrator#1177,
+  `ContextualWisdomLab/.github#2148`), while an explicit concrete model id
+  keeps its pre-existing immediate classified-error contract unconditionally.
+  Waiting is one bounded wait, never a busy-loop, applied when it fits the
+  request's administrator-owned
+  `model_timeout_seconds` deadline or the `rate_limit_wait_seconds`
+  caller-contract default, or raises an honest `429`/`provider_rate_limited`
+  with a `Retry-After` header (never a `502` connection-failure
+  misclassification) when waiting is impossible. Two callers reach it:
+  `proxy_completion`'s own passthrough failover loop, and
+  `TaskOrchestrator._invoke_with_rate_limit_recovery`, which wraps `_invoke`
+  -- the shared engine `route_once` and every `conduct` step (including the
+  worker step) use to reach a candidate -- so the real `orchestrator/free`
+  HTTP path is covered by the same admission contract, not a separate one.
+  See the 2026-09-14 entries in
+  [the gap baseline](product-technical-gap-baseline.md) for the production
+  evidence and full scope note.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

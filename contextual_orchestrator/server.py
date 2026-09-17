@@ -8,9 +8,11 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import inspect
 import ipaddress
 import json
 import logging
+import math
 import mmap
 import secrets
 import socket
@@ -57,7 +59,12 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import PROVIDER_OUTCOME_UNKNOWN_CODE, ProviderUpstreamError
+from .token_counting import TokenCountUnavailable, describe_message_count
+from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
+    ProviderUpstreamError,
+)
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -742,6 +749,21 @@ def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
         exc.error_code, "Review the request or contact the operator."
     )
     return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+
+
+def _provider_upstream_extra_headers(exc: ProviderUpstreamError) -> dict[str, str] | None:
+    """Emit ``Retry-After`` for the honest rate-limit-storm 429, else nothing.
+
+    Only ``PROVIDER_RATE_LIMITED_CODE`` (every candidate quota-limited past
+    the request's wait budget) carries this header; the ordinary single-
+    candidate ``rate_limit_exceeded`` surface is unaffected.
+    """
+    if exc.error_code != PROVIDER_RATE_LIMITED_CODE:
+        return None
+    retry_after = exc.extra_detail.get("retry_after_seconds")
+    if not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+        return None
+    return {"retry-after": str(max(math.ceil(retry_after), 0))}
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -1608,7 +1630,7 @@ def _validate_chat_model(body: dict[str, Any]) -> str:
     return model
 
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
-    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    """Validate legacy Completions ``max_tokens`` as a positive integer."""
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
@@ -1621,17 +1643,11 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
         return None
     if max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
-    if max_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_tokens",
-            "max_tokens must be at most 1048576",
-        )
     body["max_tokens"] = max_tokens
     return max_tokens
 
 def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
-    """Chat Completions ``max_completion_tokens`` — positive integer capped at 1_048_576.
+    """Validate Chat Completions ``max_completion_tokens`` as a positive integer.
 
     OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
     ``max_completion_tokens`` wins so clients get a single honest budget.
@@ -1652,12 +1668,6 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_completion_tokens",
             "max_completion_tokens must be a positive integer",
         )
-    if max_completion_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_completion_tokens",
-            "max_completion_tokens must be at most 1048576",
-        )
     body["max_completion_tokens"] = max_completion_tokens
     return max_completion_tokens
 
@@ -1668,32 +1678,28 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     Official Responses clients send ``max_output_tokens`` rather than chat-era
     ``max_tokens``. Accept and type-check so the field is not opaque
     ``unknown_fields``; value is left on the body for provider passthrough.
-    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
-    floats (JS JSON) coerce.
+    Normalize aliases with precedence: native, completion, then legacy tokens.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
-    if "max_output_tokens" not in body:
-        return None
-    value = _coerce_optional_int(
+    output_token_limit = _coerce_optional_int(
         body.get("max_output_tokens"),
         error_code="invalid_max_output_tokens",
         message="max_output_tokens must be a positive integer",
     )
-    if value is None:
+    if output_token_limit is None:
+        output_token_limit = _validate_chat_max_completion_tokens(body)
+    if output_token_limit is None:
+        output_token_limit = _validate_completions_max_tokens(body)
+    if output_token_limit is None:
         return None
-    body["max_output_tokens"] = value
-    if value < 1:
+    body["max_output_tokens"] = output_token_limit
+    if output_token_limit < 1:
         raise RequestError(
             400,
             "invalid_max_output_tokens",
             "max_output_tokens must be a positive integer",
         )
-    if value > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_output_tokens",
-            "max_output_tokens must be at most 1048576",
-        )
-    return value
+    return output_token_limit
 
 
 
@@ -5138,6 +5144,41 @@ def _strip_internal_fields(value: Any) -> Any:
     return value
 
 
+def _prompt_count_source(
+    orchestrator: "TaskOrchestrator", messages: list[dict[str, Any]], model_name: str
+) -> str | None:
+    """Return this request's prompt-count provenance, or ``None`` when unavailable.
+
+    Binds an authoritative message-token count to the exact served
+    request/model without touching candidate selection: it only asks the
+    already-resolved gateway ``token_counter`` whether ``messages``/``model_name``
+    fall inside a verified counting-provenance scope (see
+    ``token_counting.COUNTING_PROVENANCE_REGISTRY``). An unsupported field
+    (tools, non-text content, an out-of-scope model, ...) is explicit
+    unavailability, never a fabricated estimate.
+    """
+    try:
+        result = describe_message_count(orchestrator.token_counter, messages, model_name)
+    except TokenCountUnavailable:
+        return None
+    return result.count_source
+
+
+def _take_shared_context_budget(orchestrator: "TaskOrchestrator") -> dict[str, Any] | None:
+    """Return this request's shared-context output-budget evidence, or ``None``.
+
+    Reads and clears the ``ModelClient``-thread-local evidence the most
+    recent ``chat()`` call recorded (see
+    ``token_counting.shared_context_output_budget``): present only when the
+    served agent's context window, its output ceiling, and an exact prompt
+    count were all authoritative for this exact request.
+    """
+    take = getattr(orchestrator.client, "take_shared_context_budget", None)
+    if take is None:
+        return None
+    return take()
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -5269,22 +5310,13 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
-        prompt_tokens = (
-            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        completion_tokens = (
-            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        if (
-            type(prompt_tokens) is int
-            and prompt_tokens >= 0
-            and type(completion_tokens) is int
-            and completion_tokens >= 0
+        cost = payload.get("cost")
+        if isinstance(cost, dict) and (
+            cost.get("measurement_status") != "measured"
+            or not isinstance(reported_usage, dict)
         ):
+            return chunks
+        if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
             measurement_status = "measured"
         else:
@@ -6335,6 +6367,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -6384,6 +6417,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -7045,14 +7079,10 @@ def build_server(
                         # unavailable otherwise; chat framing/tools are not reconstructed.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
-                        # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed when workflow-level usage is unavailable.
-                        if stream and include_usage and not tool_loop:
-                            raise RequestError(
-                                400,
-                                "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
-                            )
+                        # cost ledger, which may be unmeasured. Conduct-mode payloads
+                        # carry cost.measurement_status; SSE usage is emitted only when
+                        # that ledger is measured, so there is nothing to fail closed on
+                        # here — the stream still succeeds with usage omitted.
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body
@@ -7310,7 +7340,12 @@ def build_server(
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
-                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                        result,
+                        model=model_name,
+                        include_trace=include_trace,
+                        usage=result.get("usage"),
+                        prompt_count_source=_prompt_count_source(orchestrator, messages, model_name),
+                        shared_context_budget=_take_shared_context_budget(orchestrator),
                     ))
                     return
                 if path == "/v1/embeddings":
@@ -7630,8 +7665,7 @@ def build_server(
                         _validate_completions_max_tokens(body)
                     if "max_completion_tokens" in body:
                         _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -8104,6 +8138,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -8304,6 +8339,8 @@ def build_server(
             code: str,
             message: str,
             detail: dict[str, Any] | None = None,
+            *,
+            extra_headers: dict[str, str] | None = None,
         ) -> None:
             request_id = current_request_id() or uuid.uuid4().hex
             error_detail = {**(detail or {}), "request_id": request_id}
@@ -8314,6 +8351,8 @@ def build_server(
             if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
                 # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
                 self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            elif extra_headers:
+                self._send(payload, status, extra_headers=extra_headers)
             else:
                 self._send(payload, status)
 
@@ -8775,12 +8814,30 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_shared_context_budget: dict[str, Any] | None = None
+            stream_output_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
 
-            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            def capture_shared_context_budget(
+                budget: dict[str, Any] | None,
+            ) -> None:
+                nonlocal stream_shared_context_budget
+                stream_shared_context_budget = budget
+
+            def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
+                nonlocal stream_output_budget
+                stream_output_budget = output_budget
+
+            def frame(
+                delta: dict[str, Any],
+                finish: str | None = None,
+                *,
+                shared_context_budget: dict[str, Any] | None = None,
+                orchestration: dict[str, Any] | None = None,
+            ) -> str:
                 payload = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -8792,6 +8849,15 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if shared_context_budget is not None:
+                    # Same shape/field name as the non-streaming response's
+                    # top-level `shared_context_budget` (see
+                    # chat_completion_response / _take_shared_context_budget):
+                    # present only when this run's served agent made an
+                    # authoritative shared-context output-budget decision.
+                    payload["shared_context_budget"] = shared_context_budget
+                if orchestration:
+                    payload["orchestration"] = orchestration
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:
@@ -8816,14 +8882,70 @@ def build_server(
                         "workflow_run_id": run_id,
                         "model_name": model_name,
                     }
+                    # ADR 0130 / #1157: only pass callbacks a stream_route that
+                    # actually declares them -- a duck-typed stand-in (e.g. a
+                    # test double that only implements the plain positional/
+                    # keyword shape) must keep working exactly as before.
+                    try:
+                        stream_route_params = inspect.signature(
+                            orchestrator.stream_route
+                        ).parameters
+                    except (TypeError, ValueError):
+                        stream_route_params = {}
+                    supports_shared_context_budget_callback = (
+                        "shared_context_budget_callback" in stream_route_params
+                        or any(
+                            param.kind is inspect.Parameter.VAR_KEYWORD
+                            for param in stream_route_params.values()
+                        )
+                    )
+                    if "output_budget_callback" in stream_route_params:
+                        stream_kwargs["output_budget_callback"] = capture_output_budget
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
+                    if supports_shared_context_budget_callback:
+                        stream_kwargs["shared_context_budget_callback"] = (
+                            capture_shared_context_budget
+                        )
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    # The served request's evidence is captured above, inside
+                    # stream_route, before its post-stream real-time judge
+                    # call re-enters ModelClient and can overwrite the
+                    # thread-local accessor (issue #1157 follow-up ordering
+                    # hazard). Only fall back to the post-hoc thread-local
+                    # read for a minimal test double whose stream_route does
+                    # not support the callback.
+                    terminal_shared_context_budget = (
+                        stream_shared_context_budget
+                        if supports_shared_context_budget_callback
+                        else _take_shared_context_budget(orchestrator)
+                    )
+                    # ADR 0130: the clamp decision is only known once
+                    # orchestrator.stream_route's final take_output_budget()
+                    # runs above, after _begin_sse() has already flushed
+                    # headers -- so it rides the final content SSE chunk's
+                    # orchestration object, exactly like chat_completion_chunks.
+                    final_orchestration = (
+                        {
+                            key: value
+                            for key, value in stream_output_budget.items()
+                            if value is not None
+                        }
+                        if isinstance(stream_output_budget, dict)
+                        else None
+                    )
+                    if not self._write_sse(
+                        frame(
+                            {},
+                            finish="stop",
+                            shared_context_budget=terminal_shared_context_budget,
+                            orchestration=final_orchestration,
+                        )
+                    ):
                         return
                     if (
                         include_usage
