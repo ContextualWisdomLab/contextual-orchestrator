@@ -297,6 +297,16 @@ Not established: a live NIM confirmation that a one-tool request without the
 flag is accepted (left to failover by design), and any change to
 `general_free_serving_candidates`, which stays request-blind on purpose.
 
+## 2026-09-12 Decision measurement startup gap
+
+The supported server entrypoint did not expose the existing measurement option.
+A default-off, explicit opt-in forwarding repair passes six focused contracts;
+the broader warning-sensitive suite still has two parent-reproduced resource
+failures. The [entrypoint record](doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
+tracks 91 open PRs, 16 file overlaps and the actual hunk audit. Complete cohort
+reconciliation, independent outcome adjudication, real KPI improvement, hosted
+acceptance and deployment remain unverified.
+
 ## 2026-09-12 Title-only psychometric citation gap
 
 Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
