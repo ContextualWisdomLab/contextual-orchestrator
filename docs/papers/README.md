@@ -24,6 +24,7 @@ version the unversioned abstract page currently serves.
 | Hybrid LLM | 2404.14618v1 | 2024-04-22 |
 | HELM | 2211.09110v2 | 2023-10-01 |
 | The Art, Science, and Engineering of Fuzzing: A Survey | 1812.00140v4 | 2019-04-08 |
+| LLMRouter / xRouteBench | 2608.06867v1 | 2026-08-09 |
 
 Version-specific arXiv abstract pages were checked on 2026-09-09:
 
@@ -166,6 +167,23 @@ remains proposed until protected integration. Live defaults require independentl
 verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
+
+- Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+  Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+  for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2608.06867
+  Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
+  `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
+  A second publisher download was byte-identical. Poppler reads 34 pages but
+  reports PDF dictionary syntax warnings; the original bytes are preserved,
+  and the versioned HTML below is an alternative reading surface.
+  The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
+  citation above. The paper introduces xRouteBench for quality/cost routing.
+  Its paper license does not establish rights to redistribute the dataset.
+  The [public response-time audit](../doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+  records separate data/code revisions and unresolved failure-time provenance.
+  No reported paper result is a measured gain for this gateway.
 
 - Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
   Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
