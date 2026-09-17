@@ -4,42 +4,41 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import random
 import statistics
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.benchmark_psychometric_routing import _require_runtime  # noqa: E402
+from scripts.benchmark_psychometric_routing import _require_runtime
 
 _require_runtime(benchmark_script="scripts/benchmark_psychometric_heldout.py")
 
-import fast_mlsirm  # noqa: E402
-import numpy as np  # noqa: E402
+import fast_mlsirm
+import numpy as np
 
-from contextual_orchestrator.psychometric_routing import (  # noqa: E402
+from contextual_orchestrator.psychometric_routing import (
     PsychometricRoutingEvidence,
 )
 
-
 MODEL_IDS = tuple(f"model_{index}" for index in range(4))
 UNSEEN_MODEL_ID = "model_unseen"
-TRAIN_CONTEXTS = 24
 # Script-entry run declarations. Functions take these as required arguments;
 # they are not hidden statistical defaults.
+DECLARED_HELDOUT_CONTEXT_COUNT = 24
 DECLARED_BOOTSTRAP_RESAMPLE_COUNT = 2_000
 DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 DECLARED_BOOTSTRAP_SEED = 568
-LATENCY_REPETITIONS = 200
-ASSIGNMENT_TRIALS = 24_000
+DECLARED_LATENCY_REPETITIONS_PER_CONTEXT = 200
+DECLARED_ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
-DIF_SAMPLE_SIZE = 4_000
+DECLARED_DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
-JUDGE_SAMPLE_SIZE = 1_000
+DECLARED_JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
 DECLARED_ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
@@ -54,7 +53,7 @@ DIMENSIONALITY_SEED = 260_911
 DIMENSIONALITY_ITERATIONS = 360
 MODEL_FIT_SAMPLE_SIZE = 1_200
 MODEL_FIT_SEED = 260_912
-RELIABILITY_SAMPLE_SIZE = 1_200
+DECLARED_RELIABILITY_SAMPLE_SIZE = 1_200
 RELIABILITY_SEED = 260_913
 EQUATING_BOOTSTRAPS = 300
 EQUATING_SEED = 260_914
@@ -62,7 +61,11 @@ ROSTER_INVARIANCE_SEED = 260_915
 GENERALIZABILITY_SEED = 260_916
 SEQUENTIAL_DRIFT_SEED = 260_917
 SEQUENTIAL_DRIFT_HOLDOUT_SEED = 270_917
-SEQUENTIAL_DRIFT_REPLICATIONS = 500
+# Script-entry run declarations for the CUSUM screen. Functions take these as
+# required arguments; they are not hidden statistical defaults.
+DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS = 500
+DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS = 250
+DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS = 100
 ADAPTIVE_CALIBRATION_CANDIDATES = 400
 ADAPTIVE_CALIBRATION_ITEMS = 31
 ADAPTIVE_CALIBRATION_MAX_ITEMS = 12
@@ -160,26 +163,36 @@ def _paired_bootstrap_mean_ci(
     return [means[lower_index], means[upper_index]]
 
 
-def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
+def _build_evidence(
+    *, two_neighbor: bool, context_count: int | None = None
+) -> PsychometricRoutingEvidence:
     """Inject known training probabilities to isolate the warm-start calculation.
 
     Observations establish context identities; replacing the fit cache with
     oracle scores bypasses parameter estimation and cannot validate fit quality.
+    ``context_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
     """
-    evidence = PsychometricRoutingEvidence(
-        max_contexts=TRAIN_CONTEXTS, semantic_warm_start_enabled=two_neighbor
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
     )
-    for context_index in range(TRAIN_CONTEXTS):
-        angle = 2.0 * math.pi * context_index / TRAIN_CONTEXTS
+    evidence = PsychometricRoutingEvidence(
+        max_contexts=declared_context_count,
+        semantic_warm_start_enabled=two_neighbor,
+    )
+    for context_index in range(declared_context_count):
+        angle = 2.0 * math.pi * context_index / declared_context_count
         context = f"train_{context_index}"
         evidence.observe(context, MODEL_IDS[0], True, _vector(angle))
 
     evidence._scores = {
         evidence.context_id(f"train_{context_index}"): {
-            model_id: _probability(model_index, 2.0 * math.pi * context_index / TRAIN_CONTEXTS)
+            model_id: _probability(
+                model_index, 2.0 * math.pi * context_index / declared_context_count
+            )
             for model_index, model_id in enumerate(MODEL_IDS)
         }
-        for context_index in range(TRAIN_CONTEXTS)
+        for context_index in range(declared_context_count)
     }
     evidence._fit_revision = evidence._revision
     return evidence
@@ -187,21 +200,28 @@ def _build_evidence(*, two_neighbor: bool) -> PsychometricRoutingEvidence:
 
 def _evaluate_quality(
     evidence: PsychometricRoutingEvidence,
+    *,
+    context_count: int | None = None,
 ) -> tuple[dict[str, float], dict[str, list[float]]]:
     """Compare half-step held-out contexts against the synthetic probability law.
 
     Return aggregate diagnostics and per-context samples for paired comparison.
     Calibration regresses true logits on predicted logits, not observed labels;
     Brier and log loss are expectations under the declared Bernoulli law.
+    ``context_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
     """
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
+    )
     context_brier: list[float] = []
     context_log_loss: list[float] = []
     context_calibration_logit_rmse: list[float] = []
     predicted_logits: list[float] = []
     truth_logits: list[float] = []
     regrets: list[float] = []
-    for context_index in range(TRAIN_CONTEXTS):
-        angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
+    for context_index in range(declared_context_count):
+        angle = 2.0 * math.pi * (context_index + 0.5) / declared_context_count
         context = f"held_out_{context_index}"
         vector = _vector(angle)
         ranked = evidence.ranked_evidence(MODEL_IDS, context, vector)
@@ -256,19 +276,32 @@ def _evaluate_quality(
 def _measure_paired_latency(
     baseline: PsychometricRoutingEvidence,
     candidate: PsychometricRoutingEvidence,
+    *,
+    context_count: int | None = None,
+    repetitions_per_context: int | None = None,
 ) -> tuple[dict[str, float], dict[str, float], list[float], list[float]]:
     """Time ranking calls in milliseconds, alternating policy order per context.
 
     Keep every repetition, including the first. Return pooled timing summaries
     and each policy's context medians; neither measures end-to-end model calls.
+    ``context_count`` and ``repetitions_per_context`` are required
+    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
     """
+    declared_context_count = _require_declared_positive_int(
+        context_count, "context_count"
+    )
+    declared_repetitions = _require_declared_positive_int(
+        repetitions_per_context, "repetitions_per_context"
+    )
     all_samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
     context_medians: dict[str, list[float]] = {"baseline": [], "candidate": []}
-    for context_index in range(TRAIN_CONTEXTS):
+    for context_index in range(declared_context_count):
         context = f"held_out_{context_index}"
-        vector = _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS)
+        vector = _vector(
+            2.0 * math.pi * (context_index + 0.5) / declared_context_count
+        )
         samples: dict[str, list[float]] = {"baseline": [], "candidate": []}
-        for repetition in range(LATENCY_REPETITIONS):
+        for repetition in range(declared_repetitions):
             ordered = (
                 (("baseline", baseline), ("candidate", candidate))
                 if (context_index + repetition) % 2 == 0
@@ -278,9 +311,9 @@ def _measure_paired_latency(
                 started_ns = time.perf_counter_ns()
                 evidence.ranked_evidence(MODEL_IDS, context, vector)
                 samples[name].append((time.perf_counter_ns() - started_ns) / 1_000_000)
-        for name in samples:
-            all_samples[name].extend(samples[name])
-            context_medians[name].append(statistics.median(samples[name]))
+        for name, timing_samples in samples.items():
+            all_samples[name].extend(timing_samples)
+            context_medians[name].append(statistics.median(timing_samples))
 
     def summary(values: list[float]) -> dict[str, float]:
         """Summarize nonempty timings with the median and nearest-rank p95."""
@@ -300,16 +333,25 @@ def _measure_paired_latency(
 
 def _validate_assignment_design(
     evidence: PsychometricRoutingEvidence,
+    *,
+    trial_count: int | None = None,
 ) -> dict[str, object]:
-    """Validate a preregistered positive-propensity logging design on known truth."""
+    """Validate a preregistered positive-propensity logging design on known truth.
+
+    ``trial_count`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_trial_count = _require_declared_positive_int(
+        trial_count, "trial_count"
+    )
     generator = random.Random(ASSIGNMENT_SEED)
     weighted_rewards = {model_id: [] for model_id in MODEL_IDS}
     observed_rewards = {model_id: [] for model_id in MODEL_IDS}
     observations = {model_id: 0 for model_id in MODEL_IDS}
     minimum_probability = EXPLORATION_RATE / len(MODEL_IDS)
-    for trial_index in range(ASSIGNMENT_TRIALS):
-        context_index = trial_index % TRAIN_CONTEXTS
-        angle = 2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS
+    for trial_index in range(declared_trial_count):
+        context_index = trial_index % DECLARED_HELDOUT_CONTEXT_COUNT
+        angle = 2.0 * math.pi * (context_index + 0.5) / DECLARED_HELDOUT_CONTEXT_COUNT
         context = f"held_out_{context_index}"
         ranked = evidence.ranked_evidence(MODEL_IDS, context, _vector(angle))
         probabilities = {model_id: minimum_probability for model_id in MODEL_IDS}
@@ -336,9 +378,9 @@ def _validate_assignment_design(
         model_id: statistics.fmean(
             _probability(
                 model_index,
-                2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS,
+                2.0 * math.pi * (context_index + 0.5) / DECLARED_HELDOUT_CONTEXT_COUNT,
             )
-            for context_index in range(TRAIN_CONTEXTS)
+            for context_index in range(DECLARED_HELDOUT_CONTEXT_COUNT)
         )
         for model_index, model_id in enumerate(MODEL_IDS)
     }
@@ -365,7 +407,7 @@ def _validate_assignment_design(
     confidence_intervals: dict[str, list[float]] = {}
     covered = 0
     for model_id, values in weighted_rewards.items():
-        standard_error = statistics.stdev(values) / math.sqrt(ASSIGNMENT_TRIALS)
+        standard_error = statistics.stdev(values) / math.sqrt(declared_trial_count)
         interval = [
             estimates[model_id] - 1.96 * standard_error,
             estimates[model_id] + 1.96 * standard_error,
@@ -376,7 +418,7 @@ def _validate_assignment_design(
         "assignment_mechanism": "epsilon_greedy",
         "exploration_rate": EXPLORATION_RATE,
         "minimum_assignment_probability": minimum_probability,
-        "trials": ASSIGNMENT_TRIALS,
+        "trials": declared_trial_count,
         "seed": ASSIGNMENT_SEED,
         "observations_by_candidate": observations,
         "inverse_propensity_value": estimates,
@@ -559,86 +601,126 @@ def _validate_functional_drift() -> dict[str, object]:
     }
 
 
-def _validate_sequential_drift() -> dict[str, object]:
-    """Measure the false-alarm and detection-delay tradeoff for a known shift."""
+def _evaluate_sequential_drift_threshold(
+    *,
+    seed: int,
+    threshold: float,
+    replications: int | None = None,
+    horizon_observations: int | None = None,
+    change_after_observations: int | None = None,
+    confidence_level: float | None = None,
+) -> dict[str, object]:
+    """Simulate seeded first alarms for the declared Bernoulli probability shift.
+
+    Delays exclude pre-change alarms. Replications that never alarm inside the
+    declared horizon are counted as missed detections, not detections at the
+    censoring boundary. Quantiles describe observed post-change detections only.
+    Coverage is a required declaration.
+    """
+    replication_count = _require_declared_positive_int(replications, "replications")
+    horizon = _require_declared_positive_int(
+        horizon_observations, "horizon_observations"
+    )
+    change_after = _require_declared_positive_int(
+        change_after_observations, "change_after_observations"
+    )
+    if change_after >= horizon:
+        raise ValueError(
+            "change_after_observations must be below horizon_observations"
+        )
+    coverage = _require_declared_confidence_level(confidence_level)
     before_probability = 0.8
     after_probability = 0.3
-    change_after = 100
-
-    def evaluate(seed: int, threshold: float) -> dict[str, object]:
-        """Simulate seeded first alarms for the declared Bernoulli probability shift.
-
-        Delays are conditional on post-change detection. Non-detections remain
-        in the rate denominator; no censored delay is replaced with zero.
-        """
-        false_alarms = 0
-        non_detections = 0
-        detection_delays: list[int] = []
-        for replication in range(SEQUENTIAL_DRIFT_REPLICATIONS):
-            generator = random.Random(seed + replication)
-            statistic = 0.0
-            alarm_observation: int | None = None
-            for observation_index in range(250):
-                probability = (
-                    before_probability
-                    if observation_index < change_after
-                    else after_probability
-                )
-                accepted = generator.random() < probability
-                log_likelihood_ratio = (
-                    math.log(after_probability / before_probability)
-                    if accepted
-                    else math.log(
-                        (1.0 - after_probability) / (1.0 - before_probability)
-                    )
-                )
-                statistic = max(0.0, statistic + log_likelihood_ratio)
-                if statistic >= threshold:
-                    alarm_observation = observation_index + 1
-                    break
-            if alarm_observation is None:
-                non_detections += 1
-            elif alarm_observation <= change_after:
-                false_alarms += 1
-            else:
-                detection_delays.append(alarm_observation - change_after)
-        ordered_delays = sorted(detection_delays)
-        false_alarm_rate = false_alarms / SEQUENTIAL_DRIFT_REPLICATIONS
-        z_95 = 1.959963984540054
-        denominator = 1.0 + (z_95**2 / SEQUENTIAL_DRIFT_REPLICATIONS)
-        false_alarm_upper_95 = (
-            false_alarm_rate
-            + z_95**2 / (2 * SEQUENTIAL_DRIFT_REPLICATIONS)
-            + z_95
-            * math.sqrt(
-                false_alarm_rate
-                * (1.0 - false_alarm_rate)
-                / SEQUENTIAL_DRIFT_REPLICATIONS
-                + z_95**2 / (4 * SEQUENTIAL_DRIFT_REPLICATIONS**2)
+    false_alarms = 0
+    censored_replications = 0
+    detection_delays: list[int] = []
+    for replication in range(replication_count):
+        generator = random.Random(seed + replication)
+        statistic = 0.0
+        alarm_observation: int | None = None
+        for observation_index in range(horizon):
+            probability = (
+                before_probability
+                if observation_index < change_after
+                else after_probability
             )
-        ) / denominator
-        return {
-            "threshold_log_likelihood_ratio": threshold,
-            "false_alarm_rate": false_alarm_rate,
-            "false_alarm_rate_upper_95": false_alarm_upper_95,
-            "false_alarm_count": false_alarms,
-            "non_detection_count": non_detections,
-            "post_change_detection_count": len(detection_delays),
-            "observation_horizon": 250,
-            "delay_summary_population": "post_change_detections_only",
-            "post_change_detection_rate_among_no_false_alarm": (
-                len(detection_delays)
-                / (SEQUENTIAL_DRIFT_REPLICATIONS - false_alarms)
-                if SEQUENTIAL_DRIFT_REPLICATIONS > false_alarms else None
-            ),
-            "detection_delay_p50_observations": (
-                statistics.median(detection_delays) if detection_delays else None
-            ),
-            "detection_delay_p95_observations": ordered_delays[
-                math.ceil(0.95 * len(ordered_delays)) - 1
-            ] if ordered_delays else None,
-        }
+            accepted = generator.random() < probability
+            log_likelihood_ratio = (
+                math.log(after_probability / before_probability)
+                if accepted
+                else math.log((1.0 - after_probability) / (1.0 - before_probability))
+            )
+            statistic = max(0.0, statistic + log_likelihood_ratio)
+            if statistic >= threshold:
+                alarm_observation = observation_index + 1
+                break
+        if alarm_observation is None:
+            censored_replications += 1
+        elif alarm_observation <= change_after:
+            false_alarms += 1
+        else:
+            detection_delays.append(alarm_observation - change_after)
+    ordered_delays = sorted(detection_delays)
+    false_alarm_rate = false_alarms / replication_count
+    z_score = statistics.NormalDist().inv_cdf((1.0 + coverage) / 2.0)
+    denominator = 1.0 + (z_score**2 / replication_count)
+    false_alarm_upper_bound = (
+        false_alarm_rate
+        + z_score**2 / (2 * replication_count)
+        + z_score
+        * math.sqrt(
+            false_alarm_rate
+            * (1.0 - false_alarm_rate)
+            / replication_count
+            + z_score**2 / (4 * replication_count**2)
+        )
+    ) / denominator
+    detected = replication_count - false_alarms - censored_replications
+    return {
+        "threshold_log_likelihood_ratio": threshold,
+        "false_alarm_rate": false_alarm_rate,
+        "false_alarm_rate_upper_bound": false_alarm_upper_bound,
+        "censored_replications": censored_replications,
+        "censoring_delay_observations": horizon - change_after,
+        "false_alarm_count": false_alarms,
+        "post_change_detection_count": detected,
+        "delay_summary_population": "post_change_detections_only",
+        "post_change_detection_rate_among_no_false_alarm": (
+            detected / (replication_count - false_alarms)
+            if replication_count > false_alarms else None
+        ),
+        "detection_delay_p50_observations": (
+            statistics.median(detection_delays) if detection_delays else None
+        ),
+        "detection_delay_p95_observations": (ordered_delays[
+            math.ceil(0.95 * len(ordered_delays)) - 1
+        ] if ordered_delays else None),
+    }
 
+
+def _validate_sequential_drift(
+    *,
+    replications: int | None = None,
+    horizon_observations: int | None = None,
+    change_after_observations: int | None = None,
+    confidence_level: float | None = None,
+) -> dict[str, object]:
+    """Measure the false-alarm and detection-delay tradeoff for a known shift."""
+    declarations = {
+        "replications": replications,
+        "horizon_observations": horizon_observations,
+        "change_after_observations": change_after_observations,
+        "confidence_level": confidence_level,
+    }
+
+    def evaluate(seed: int, threshold: float) -> dict[str, float | int]:
+        """Evaluate one threshold under the declared CUSUM horizon."""
+        return _evaluate_sequential_drift_threshold(
+            seed=seed, threshold=threshold, **declarations
+        )
+
+    before_probability = 0.8
+    after_probability = 0.3
     calibration_baseline = evaluate(SEQUENTIAL_DRIFT_SEED, math.log(100.0))
     threshold_candidates = [value / 10.0 for value in range(60, 71)]
     evaluated_candidates = [
@@ -647,8 +729,8 @@ def _validate_sequential_drift() -> dict[str, object]:
     eligible_candidates = [
         value
         for value in evaluated_candidates
-        if value["false_alarm_rate_upper_95"] <= 0.05
-        and value["non_detection_count"] == 0
+        if value["false_alarm_rate_upper_bound"] <= 0.05
+        and value["censored_replications"] == 0
         and value["detection_delay_p95_observations"] is not None
         and value["detection_delay_p95_observations"] <= 25
     ]
@@ -670,15 +752,24 @@ def _validate_sequential_drift() -> dict[str, object]:
         "method": "one_stream_bernoulli_cusum_screen",
         "seed": SEQUENTIAL_DRIFT_SEED,
         "holdout_seed": SEQUENTIAL_DRIFT_HOLDOUT_SEED,
-        "replications": SEQUENTIAL_DRIFT_REPLICATIONS,
+        "replications": _require_declared_positive_int(
+            replications, "replications"
+        ),
+        "horizon_observations": _require_declared_positive_int(
+            horizon_observations, "horizon_observations"
+        ),
+        "change_after_observations": _require_declared_positive_int(
+            change_after_observations, "change_after_observations"
+        ),
+        "confidence_level": _require_declared_confidence_level(confidence_level),
         "before_probability": before_probability,
         "after_probability": after_probability,
-        "change_after_observations": change_after,
         "baseline": baseline,
         "candidate": candidate,
         "calibration_baseline": calibration_baseline,
         "calibration_candidate": calibration_candidate,
         "threshold_search": {
+            "calibration_results": evaluated_candidates,
             "minimum": threshold_candidates[0],
             "maximum": threshold_candidates[-1],
             "step": 0.1,
@@ -686,9 +777,9 @@ def _validate_sequential_drift() -> dict[str, object]:
             "calibration_results": evaluated_candidates,
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
-                "calibration candidates whose 95% false-alarm upper bound and "
-                "p95 delay meet both synthetic targets, with no non-detections; "
-                "otherwise no candidate is selected"
+                "calibration candidates whose declared-coverage false-alarm "
+                "upper bound and detected-only p95 delay meet both synthetic "
+                "targets, with no censored non-detections"
             ),
         },
         "synthetic_targets": {
@@ -697,9 +788,9 @@ def _validate_sequential_drift() -> dict[str, object]:
         },
         "candidate_meets_synthetic_targets": (
             candidate is not None
-            and candidate["non_detection_count"] == 0
+            and candidate["censored_replications"] == 0
             and candidate["detection_delay_p95_observations"] is not None
-            and candidate["false_alarm_rate_upper_95"] <= 0.05
+            and candidate["false_alarm_rate_upper_bound"] <= 0.05
             and candidate["detection_delay_p95_observations"] <= 25
         ),
     }
@@ -879,13 +970,23 @@ def _validate_global_model_fit() -> dict[str, object]:
     }
 
 
-def _validate_score_reliability() -> dict[str, object]:
-    """Verify posterior reliability rises with known item information."""
+def _validate_score_reliability(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Verify posterior reliability rises with known item information.
+
+    ``sample_size`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
     generator = np.random.default_rng(RELIABILITY_SEED)
     item_count = 12
-    ability = generator.normal(size=RELIABILITY_SAMPLE_SIZE)
+    ability = generator.normal(size=declared_sample_size)
     item_difficulty = np.linspace(-1.5, 1.5, item_count)
-    random_draws = generator.random((RELIABILITY_SAMPLE_SIZE, item_count))
+    random_draws = generator.random((declared_sample_size, item_count))
     factor_id = np.zeros(item_count, dtype=np.int64)
     config = fast_mlsirm.FitConfig(
         model="MIRT",
@@ -924,7 +1025,7 @@ def _validate_score_reliability() -> dict[str, object]:
     strong_information = fit_case(1.5)
     return {
         "method": "posterior_variance_empirical_reliability",
-        "sample_size_per_case": RELIABILITY_SAMPLE_SIZE,
+        "sample_size_per_case": declared_sample_size,
         "seed": RELIABILITY_SEED,
         "items": item_count,
         "weak_information": weak_information,
@@ -1101,25 +1202,37 @@ def _validate_selection_utility() -> dict[str, object]:
     }
 
 
-def _validate_candidate_group_dif() -> dict[str, object]:
-    """Recover one known candidate-cohort item shift after criterion purification."""
+def _validate_candidate_group_dif(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Recover one known candidate-cohort item shift after criterion purification.
+
+    ``sample_size`` is a required even positive declaration. ``None`` is a
+    fail-closed sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
+    if declared_sample_size % 2:
+        raise ValueError("sample_size must be a declared even positive integer")
     generator = np.random.default_rng(DIF_SEED)
     item_count = 8
-    group = np.repeat((0, 1), DIF_SAMPLE_SIZE // 2)
-    ability = generator.normal(size=DIF_SAMPLE_SIZE)
+    group = np.repeat((0, 1), declared_sample_size // 2)
+    ability = generator.normal(size=declared_sample_size)
     intercept = np.linspace(-1.4, 1.4, item_count)
     logits = ability[:, None] - intercept[None, :]
     logits[:, 0] += 1.4 * group
     probabilities = 1.0 / (1.0 + np.exp(-logits))
-    responses = (generator.random((DIF_SAMPLE_SIZE, item_count)) < probabilities).astype(
-        np.int8
-    )
+    responses = (
+        generator.random((declared_sample_size, item_count)) < probabilities
+    ).astype(np.int8)
     result = fast_mlsirm.logistic_dif_purified(responses, group)
     flagged_items = np.flatnonzero(result["flagged_bh"]).tolist()
     expected_items = [0]
     return {
         "method": "logistic_dif_purified",
-        "sample_size": DIF_SAMPLE_SIZE,
+        "sample_size": declared_sample_size,
         "seed": DIF_SEED,
         "expected_dif_items": expected_items,
         "flagged_items": flagged_items,
@@ -1134,10 +1247,20 @@ def _validate_candidate_group_dif() -> dict[str, object]:
     }
 
 
-def _validate_judge_effects() -> dict[str, object]:
-    """Recover known judge severities from a connected fully crossed design."""
+def _validate_judge_effects(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Recover known judge severities from a connected fully crossed design.
+
+    ``sample_size`` is a required declaration. ``None`` is a fail-closed
+    sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
     generator = np.random.default_rng(JUDGE_SEED)
-    ability = generator.normal(size=JUDGE_SAMPLE_SIZE)
+    ability = generator.normal(size=declared_sample_size)
     item_difficulty = np.linspace(-1.0, 1.0, 6)
     true_severity = np.asarray([-0.7, 0.0, 0.7])
     logits = (
@@ -1152,7 +1275,7 @@ def _validate_judge_effects() -> dict[str, object]:
     result = fast_mlsirm.fit_facets(responses, n_cat=2)
     return {
         "method": "many_facet_rasch",
-        "sample_size": JUDGE_SAMPLE_SIZE,
+        "sample_size": declared_sample_size,
         "seed": JUDGE_SEED,
         "items": len(item_difficulty),
         "judges": len(true_severity),
@@ -1407,7 +1530,7 @@ def _validate_adaptive_candidate_calibration(
         - statistics.fmean(random_samples[metric])
         for metric in adaptive_samples
     }
-    paired_delta_ci95 = {
+    paired_delta_interval = {
         metric: _paired_bootstrap_mean_ci(
             adaptive_samples[metric], random_samples[metric], **bootstrap
         )
@@ -1498,13 +1621,13 @@ def _validate_adaptive_candidate_calibration(
             float(left == right)
             for left, right in zip(sequential_correct, fixed_correct)
         ),
-        "query_delta_ci95": _paired_bootstrap_mean_ci(
+        "query_delta_interval": _paired_bootstrap_mean_ci(
             sequential_queries,
             [float(ADAPTIVE_CALIBRATION_MAX_ITEMS)]
             * ADAPTIVE_CALIBRATION_CANDIDATES,
             **bootstrap,
         ),
-        "accuracy_delta_ci95": _paired_bootstrap_mean_ci(
+        "accuracy_delta_interval": _paired_bootstrap_mean_ci(
             sequential_correct, fixed_correct, **bootstrap
         ),
         "confidence_resolved_rate": statistics.fmean(
@@ -1660,7 +1783,7 @@ def _validate_adaptive_candidate_calibration(
             "all_candidate_queries": statistics.fmean(heldout_samples["queries"])
             - statistics.fmean(heldout_baseline_samples["queries"]),
         },
-        "heldout_paired_delta_ci95": {
+        "heldout_paired_delta_interval": {
             "coverage": _paired_bootstrap_mean_ci(
                 heldout_samples["resolved"],
                 heldout_baseline_samples["resolved"],
@@ -1724,7 +1847,7 @@ def _validate_adaptive_candidate_calibration(
         "adaptive": adaptive,
         "random_baseline": random_baseline,
         "paired_delta": paired_delta,
-        "paired_delta_ci95": paired_delta_ci95,
+        "paired_delta_interval": paired_delta_interval,
         "classification_stopping": classification_stopping,
         "mean_query_reduction": random_baseline["mean_calibration_queries"]
         - adaptive["mean_calibration_queries"],
@@ -1757,10 +1880,19 @@ def run_benchmark(
         confidence_level=confidence_level,
         seed=seed,
     )
-    baseline_evidence = _build_evidence(two_neighbor=False)
-    candidate_evidence = _build_evidence(two_neighbor=True)
-    baseline, baseline_samples = _evaluate_quality(baseline_evidence)
-    candidate, candidate_samples = _evaluate_quality(candidate_evidence)
+    context_count = DECLARED_HELDOUT_CONTEXT_COUNT
+    baseline_evidence = _build_evidence(
+        two_neighbor=False, context_count=context_count
+    )
+    candidate_evidence = _build_evidence(
+        two_neighbor=True, context_count=context_count
+    )
+    baseline, baseline_samples = _evaluate_quality(
+        baseline_evidence, context_count=context_count
+    )
+    candidate, candidate_samples = _evaluate_quality(
+        candidate_evidence, context_count=context_count
+    )
     adaptive_candidate_calibration = _validate_adaptive_candidate_calibration(
         **bootstrap
     )
@@ -1769,10 +1901,10 @@ def run_benchmark(
             candidate_evidence.ranked_evidence(
                 (UNSEEN_MODEL_ID,),
                 f"held_out_{context_index}",
-                _vector(2.0 * math.pi * (context_index + 0.5) / TRAIN_CONTEXTS),
+                _vector(2.0 * math.pi * (context_index + 0.5) / context_count),
             )
         )
-        for context_index in range(TRAIN_CONTEXTS)
+        for context_index in range(context_count)
     )
     predictive_fit = {
         "method": "cross_validated_prediction_tasks",
@@ -1787,8 +1919,8 @@ def run_benchmark(
             "status": "failed_no_prediction",
             "candidates": "held_out",
             "items": "existing",
-            "contexts": TRAIN_CONTEXTS,
-            "prediction_coverage": unseen_predictions / TRAIN_CONTEXTS,
+            "contexts": context_count,
+            "prediction_coverage": unseen_predictions / context_count,
             "known_limit": (
                 "the router emits no psychometric estimate for an unseen "
                 "candidate deployment"
@@ -1796,29 +1928,47 @@ def run_benchmark(
             "calibration_screen": adaptive_candidate_calibration,
         },
     }
-    assignment_design = _validate_assignment_design(candidate_evidence)
+    assignment_design = _validate_assignment_design(
+        candidate_evidence, trial_count=DECLARED_ASSIGNMENT_TRIALS
+    )
     scale_linking = _validate_scale_linking()
     parameter_invariance = _validate_parameter_invariance()
     candidate_roster_invariance = _validate_candidate_roster_invariance()
     functional_drift = _validate_functional_drift()
-    sequential_drift = _validate_sequential_drift()
+    sequential_drift = _validate_sequential_drift(
+        replications=DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS,
+        horizon_observations=DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS,
+        change_after_observations=DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS,
+        confidence_level=bootstrap["confidence_level"],
+    )
     score_equating = _validate_score_equating()
     response_pattern_fit = _validate_response_pattern_fit()
     construct_dimensionality = _validate_construct_dimensionality()
     global_model_fit = _validate_global_model_fit()
-    score_reliability = _validate_score_reliability()
+    score_reliability = _validate_score_reliability(
+        sample_size=DECLARED_RELIABILITY_SAMPLE_SIZE
+    )
     generalizability_design = _validate_generalizability_design()
     conditional_information = _validate_conditional_information()
     classification_decision = _validate_classification_decision()
     selection_utility = _validate_selection_utility()
-    candidate_group_dif = _validate_candidate_group_dif()
-    judge_effects = _validate_judge_effects()
+    candidate_group_dif = _validate_candidate_group_dif(
+        sample_size=DECLARED_DIF_SAMPLE_SIZE
+    )
+    judge_effects = _validate_judge_effects(
+        sample_size=DECLARED_JUDGE_SAMPLE_SIZE
+    )
     item_covariate_effect = _validate_item_covariate_effect(
         sample_size=DECLARED_ITEM_COVARIATE_SAMPLE_SIZE
     )
     parameter_uncertainty = _validate_parameter_uncertainty()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
-        _measure_paired_latency(baseline_evidence, candidate_evidence)
+        _measure_paired_latency(
+            baseline_evidence,
+            candidate_evidence,
+            context_count=context_count,
+            repetitions_per_context=DECLARED_LATENCY_REPETITIONS_PER_CONTEXT,
+        )
     )
     baseline.update(baseline_latency)
     candidate.update(candidate_latency)
@@ -1829,7 +1979,7 @@ def run_benchmark(
         - statistics.fmean(baseline_samples[metric])
         for metric in candidate_samples
     }
-    delta_ci95 = {
+    delta_interval = {
         metric: _paired_bootstrap_mean_ci(
             candidate_samples[metric], baseline_samples[metric], **bootstrap
         )
@@ -1837,7 +1987,7 @@ def run_benchmark(
     }
     gate_status = {
         "accuracy_noninferior": "passed" if all(
-            delta_ci95[metric][1] <= 0.0
+            delta_interval[metric][1] <= 0.0
             for metric in (
                 "brier_score",
                 "log_loss",
@@ -1847,7 +1997,7 @@ def run_benchmark(
         ) else "failed",
         "buyer_heldout": "not_executed",
         "decision_latency_improved": (
-            "passed" if delta_ci95["decision_median_ms"][1] < 0.0 else "failed"
+            "passed" if delta_interval["decision_median_ms"][1] < 0.0 else "failed"
         ),
         "measurement_validity": "not_executed",
     }
@@ -2082,12 +2232,12 @@ def run_benchmark(
         "bootstrap_samples": bootstrap["resample_count"],
         "bootstrap_confidence_level": bootstrap["confidence_level"],
         "bootstrap_seed": bootstrap["seed"],
-        "contexts_held_out": TRAIN_CONTEXTS,
-        "contexts_train": TRAIN_CONTEXTS,
+        "contexts_held_out": context_count,
+        "contexts_train": context_count,
         "delta": delta,
-        "delta_ci95": delta_ci95,
+        "delta_interval": delta_interval,
         "models": len(MODEL_IDS),
-        "latency_repetitions_per_context": LATENCY_REPETITIONS,
+        "latency_repetitions_per_context": DECLARED_LATENCY_REPETITIONS_PER_CONTEXT,
         "production_default_change_allowed": all(gates.values()),
         "production_gate_status": gate_status,
         "production_gates": gates,
@@ -2122,7 +2272,7 @@ def run_benchmark(
     )
     assert all(
         math.isfinite(delta[metric])
-        and delta_ci95[metric][0] <= delta[metric] <= delta_ci95[metric][1]
+        and delta_interval[metric][0] <= delta[metric] <= delta_interval[metric][1]
         for metric in delta
     )
     assert result["production_default_change_allowed"] == all(gates.values())

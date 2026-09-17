@@ -318,8 +318,8 @@ synthetic fixtures stay comparable. The script entry writes 2,000, 0.95, and
 seed 568 as this run's choices. The report records those fields.
 
 Efron (1979) grounds resampling observed units. This slice does not change
-production route/conduct defaults. Other harness sample sizes remain later
-work.
+production route/conduct defaults. Nested interval key names are the
+successor slice recorded below. Other harness sample sizes remain later work.
 
 ```mermaid
 sequenceDiagram
@@ -329,6 +329,183 @@ sequenceDiagram
     Operator->>Interval: Resample count, coverage, seed
     Interval->>Interval: Fail closed on missing or non-representable declarations
     Interval->>Report: Mean difference and declared-coverage interval
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Coverage-neutral held-out interval keys (2026-09-07, proposed)
+
+After declared coverage, nested report fields still named `*_ci95` implied
+95% even when the run declared a different interval. Those fields are now
+`*_interval`. Coverage stays in `bootstrap_confidence_level`. IRT diagnostics
+that measure actual 95% coverage of standard-error intervals keep their names.
+Sequential-drift horizon and censored no-alarm delays are the successor
+slice recorded below.
+
+```mermaid
+flowchart LR
+    declaration[Declared coverage] --> interval[Interval values]
+    interval --> report["JSON *_interval fields"]
+    declaration --> field[bootstrap_confidence_level]
+```
+
+### Declared sequential-drift horizon and censored delays (2026-09-08, proposed)
+
+The held-out CUSUM screen used a hidden 500-replication, 250-observation,
+change-at-100 horizon and aborted when a replication never alarmed. Those
+choices hid Monte Carlo precision and dropped missed detections from the
+delay KPI. Replications, horizon, change-point, and coverage are now
+required declarations. No-alarm replications are right-censored at the
+remaining post-change length, recorded separately from detected-only delay
+quantiles. Empty detection populations yield null quantiles, not horizon-valued
+events. All-false-alarm runs preserve counts with a null conditional detection
+rate; no eligible candidate preserves all calibration results with false
+acceptance. This retains the effective non-detection repair from parent
+`fb12256bb09d101b5f6dbf38d93b18cdfe19a926` without removing the required declarations.
+The Wilson upper bound uses the declared
+coverage and is stored as `false_alarm_rate_upper_bound`.
+
+This slice does not change production route/conduct defaults. Held-out
+decision-latency repetitions are the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Screen as CUSUM screen
+    participant Report as Held-out report
+    Operator->>Screen: Replications, horizon, change-point, coverage
+    Screen->>Screen: Fail closed on missing or invalid declarations
+    Screen->>Screen: Separate detected events from censored non-detections
+    Screen->>Report: Counts, detection rate, detected-only quantiles or null
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared held-out latency repetitions (2026-09-08, proposed)
+
+Paired ranking timings used a hidden 200-repetition loop per context. That
+number chose Monte Carlo precision for decision-latency p50/p95 without an
+operator declaration. `_measure_paired_latency` now requires
+`repetitions_per_context`. The harness run writes 200 as this run's choice
+and records `latency_repetitions_per_context`.
+
+This slice does not change production route/conduct defaults. Held-out
+context population is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Timing as Paired ranking timings
+    participant Report as Held-out report
+    Operator->>Timing: Repetitions per context
+    Timing->>Timing: Fail closed on missing or non-positive declarations
+    Timing->>Report: Decision p50/p95 and declared repetition count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared held-out context population (2026-09-08, proposed)
+
+Accuracy and decision-latency averages used a hidden 24-context population.
+That number chose the held-out sample without an operator declaration.
+`_build_evidence`, `_evaluate_quality`, and `_measure_paired_latency` now
+require `context_count`. The harness run writes 24 as this run's choice and
+records `contexts_held_out` / `contexts_train`.
+
+This slice does not change production route/conduct defaults. Assignment-design
+trial count is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Quality as Held-out quality and latency
+    participant Report as Held-out report
+    Operator->>Quality: Context population
+    Quality->>Quality: Fail closed on missing or non-positive declarations
+    Quality->>Report: Accuracy, decision latency, and declared context count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared assignment-design trial count (2026-09-08, proposed)
+
+The epsilon-greedy logging screen used a hidden 24,000-trial loop. That
+number chose Monte Carlo precision for inverse-propensity RMSE without an
+operator declaration. `_validate_assignment_design` now requires
+`trial_count`. The harness run writes 24,000 as this run's choice and
+records `trials`.
+
+This slice does not change production route/conduct defaults. Candidate-group
+DIF sample size is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Assignment as Logging-design screen
+    participant Report as Held-out report
+    Operator->>Assignment: Trial count
+    Assignment->>Assignment: Fail closed on missing or non-positive declarations
+    Assignment->>Report: Inverse-propensity RMSE and declared trial count
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared candidate-group DIF sample size (2026-09-08, proposed)
+
+The purified logistic DIF screen used a hidden 4,000-row two-group sample.
+That number chose Monte Carlo precision without an operator declaration.
+`_validate_candidate_group_dif` now requires an even `sample_size`. The
+harness run writes 4,000 as this run's choice and records `sample_size`.
+
+This slice does not change production route/conduct defaults. Score-reliability
+sample size is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Dif as Purified logistic DIF
+    participant Report as Held-out report
+    Operator->>Dif: Even sample size
+    Dif->>Dif: Fail closed on missing, non-positive, or odd declarations
+    Dif->>Report: Flagged items and declared sample size
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared score-reliability sample size (2026-09-08, proposed)
+
+The empirical-reliability screen used a hidden 1,200-row person sample for
+weak- versus strong-information cases. That number chose Monte Carlo
+precision without an operator declaration. `_validate_score_reliability` now
+requires `sample_size`. The harness run writes 1,200 as this run's choice
+and records `sample_size_per_case`.
+
+This slice does not change production route/conduct defaults. Judge-effect
+sample size is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Reliability as Empirical reliability
+    participant Report as Held-out report
+    Operator->>Reliability: Sample size
+    Reliability->>Reliability: Fail closed on missing or non-positive declarations
+    Reliability->>Report: Weak/strong reliability and declared sample size
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+
+### Declared judge-effect sample size (2026-09-08, proposed)
+
+The many-facet Rasch screen used a hidden 1,000-row fully crossed person
+sample. That number chose Monte Carlo precision without an operator
+declaration. `_validate_judge_effects` now requires `sample_size`. The
+harness run writes 1,000 as this run's choice and records `sample_size`.
+
+This slice does not change production route/conduct defaults. Item-covariate
+sample size is the successor slice recorded below.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Facets as Many-facet Rasch
+    participant Report as Held-out report
+    Operator->>Facets: Sample size
+    Facets->>Facets: Fail closed on missing or non-positive declarations
+    Facets->>Report: Severity RMSE and declared sample size
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
@@ -352,7 +529,6 @@ sequenceDiagram
     Covariate->>Report: Contrast error and declared sample size
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
-
 
 ### Failure-inclusive comparison repair (2026-09-05, proposed)
 

@@ -104,6 +104,31 @@ def test_paired_bootstrap_interval_requires_declared_coverage() -> None:
     ) == pytest.approx([-0.1, -0.1])
 
 
+def test_heldout_report_keys_do_not_embed_coverage() -> None:
+    """Interval fields must not bake 95 into the JSON name."""
+    source = Path("scripts/benchmark_psychometric_heldout.py").read_text(
+        encoding="utf-8"
+    )
+    for banned in (
+        '"delta_ci95"',
+        '"paired_delta_ci95"',
+        '"query_delta_ci95"',
+        '"accuracy_delta_ci95"',
+        '"heldout_paired_delta_ci95"',
+        '"false_alarm_rate_upper_95"',
+    ):
+        assert banned not in source
+    for required in (
+        '"delta_interval"',
+        '"paired_delta_interval"',
+        '"query_delta_interval"',
+        '"accuracy_delta_interval"',
+        '"heldout_paired_delta_interval"',
+        '"false_alarm_rate_upper_bound"',
+    ):
+        assert required in source
+
+
 def test_heldout_run_benchmark_requires_declared_bootstrap() -> None:
     """The harness entry cannot restore hidden bootstrap constants."""
     parameters = inspect.signature(heldout_benchmark.run_benchmark).parameters
@@ -129,11 +154,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     monkeypatch.setattr(
         heldout_benchmark,
         "_measure_paired_latency",
-        lambda _baseline, _candidate: (
+        lambda _baseline, _candidate, **_kwargs: (
             {"decision_p50_ms": 1.0, "decision_p95_ms": 1.0},
             {"decision_p50_ms": 2.0, "decision_p95_ms": 2.0},
-            [1.0] * heldout_benchmark.TRAIN_CONTEXTS,
-            [2.0] * heldout_benchmark.TRAIN_CONTEXTS,
+            [1.0] * heldout_benchmark.DECLARED_HELDOUT_CONTEXT_COUNT,
+            [2.0] * heldout_benchmark.DECLARED_HELDOUT_CONTEXT_COUNT,
         ),
     )
 
@@ -141,11 +166,11 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
 
     assert (
         report["latency_repetitions_per_context"]
-        == heldout_benchmark.LATENCY_REPETITIONS
+        == heldout_benchmark.DECLARED_LATENCY_REPETITIONS_PER_CONTEXT
     )
-    assert report["delta"].keys() == report["delta_ci95"].keys()
+    assert report["delta"].keys() == report["delta_interval"].keys()
     for metric, point in report["delta"].items():
-        lower, upper = report["delta_ci95"][metric]
+        lower, upper = report["delta_interval"][metric]
         assert lower <= point <= upper
     assert report["production_gates"] == {
         "accuracy_noninferior": True,
@@ -172,7 +197,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert report["delta"]["calibration_logit_rmse"] == pytest.approx(
         -0.20543148641863096
     )
-    assert report["delta_ci95"]["calibration_logit_rmse"] == pytest.approx(
+    assert report["delta_interval"]["calibration_logit_rmse"] == pytest.approx(
         [-0.20803038507771457, -0.20292440265781464]
     )
     assert report["measurement_validity_components"] == {
@@ -292,7 +317,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assignment = report["assignment_design_validation"]
     assert assignment["assignment_mechanism"] == "epsilon_greedy"
     assert assignment["minimum_assignment_probability"] == pytest.approx(0.05)
-    assert assignment["trials"] == heldout_benchmark.ASSIGNMENT_TRIALS
+    assert assignment["trials"] == heldout_benchmark.DECLARED_ASSIGNMENT_TRIALS
     assert assignment["seed"] == heldout_benchmark.ASSIGNMENT_SEED
     assert all(
         count > 0 for count in assignment["observations_by_candidate"].values()
@@ -373,9 +398,20 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert sequential_drift["method"] == "one_stream_bernoulli_cusum_screen"
     assert sequential_drift["seed"] == heldout_benchmark.SEQUENTIAL_DRIFT_SEED
     assert sequential_drift["holdout_seed"] == 270_917
-    assert sequential_drift["replications"] == 500
-    assert sequential_drift["change_after_observations"] == 100
+    assert sequential_drift["replications"] == (
+        heldout_benchmark.DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS
+    )
+    assert sequential_drift["horizon_observations"] == (
+        heldout_benchmark.DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS
+    )
+    assert sequential_drift["change_after_observations"] == (
+        heldout_benchmark.DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS
+    )
+    assert sequential_drift["confidence_level"] == (
+        heldout_benchmark.DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL
+    )
     assert sequential_drift["baseline"]["false_alarm_rate"] == 0.178
+    assert sequential_drift["baseline"]["censored_replications"] == 0
     assert sequential_drift["baseline"]["detection_delay_p50_observations"] == 6
     assert sequential_drift["baseline"]["detection_delay_p95_observations"] == 15
     assert sequential_drift["threshold_search"]["candidates"] == 11
@@ -385,7 +421,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert sequential_drift["calibration_candidate"]["false_alarm_rate"] == 0.026
     assert sequential_drift["candidate"]["threshold_log_likelihood_ratio"] == 6.6
     assert sequential_drift["candidate"]["false_alarm_rate"] == 0.024
-    assert sequential_drift["candidate"]["false_alarm_rate_upper_95"] == pytest.approx(
+    assert sequential_drift["candidate"]["censored_replications"] == 0
+    assert sequential_drift["candidate"]["false_alarm_rate_upper_bound"] == pytest.approx(
         0.041477057463900756
     )
     assert sequential_drift["candidate"]["detection_delay_p50_observations"] == 10
@@ -448,7 +485,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert reliability["method"] == "posterior_variance_empirical_reliability"
     assert (
         reliability["sample_size_per_case"]
-        == heldout_benchmark.RELIABILITY_SAMPLE_SIZE
+        == heldout_benchmark.DECLARED_RELIABILITY_SAMPLE_SIZE
     )
     assert reliability["seed"] == heldout_benchmark.RELIABILITY_SEED
     assert reliability["items"] == 12
@@ -583,19 +620,19 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         0.007242434141391531
     )
     assert adaptive["paired_delta"]["calibration_queries"] == pytest.approx(-3.2925)
-    assert adaptive["paired_delta_ci95"]["calibration_queries"] == pytest.approx(
+    assert adaptive["paired_delta_interval"]["calibration_queries"] == pytest.approx(
         [-3.4125, -3.18]
     )
     assert adaptive["paired_delta"]["theta_squared_error"] == pytest.approx(
         -0.036862187126945056
     )
-    assert adaptive["paired_delta_ci95"]["theta_squared_error"] == pytest.approx(
+    assert adaptive["paired_delta_interval"]["theta_squared_error"] == pytest.approx(
         [-0.0808741028637953, 0.006129009732609613]
     )
-    assert adaptive["paired_delta_ci95"][
+    assert adaptive["paired_delta_interval"][
         "unobserved_probability_squared_error"
     ] == pytest.approx([-0.00880415088135534, -0.005715993179414072])
-    assert adaptive["paired_delta_ci95"]["target_se_reached"] == pytest.approx(
+    assert adaptive["paired_delta_interval"]["target_se_reached"] == pytest.approx(
         [0.1, 0.1625]
     )
     stopping = adaptive["classification_stopping"]
@@ -608,8 +645,8 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert stopping["sequential_accuracy"] == 0.9125
     assert stopping["fixed_accuracy"] == 0.9125
     assert stopping["decision_agreement_rate"] == 1.0
-    assert stopping["query_delta_ci95"] == pytest.approx([-2.425, -1.835])
-    assert stopping["accuracy_delta_ci95"] == [0.0, 0.0]
+    assert stopping["query_delta_interval"] == pytest.approx([-2.425, -1.835])
+    assert stopping["accuracy_delta_interval"] == [0.0, 0.0]
     assert stopping["confidence_resolved_rate"] == 0.425
     assert stopping["resolved_accuracy"] == 1.0
     risk_coverage = stopping["risk_coverage_screen"]
@@ -639,10 +676,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert risk_coverage["heldout_paired_delta"] == pytest.approx(
         {"coverage": 0.1175, "all_candidate_queries": -1.485}
     )
-    assert risk_coverage["heldout_paired_delta_ci95"]["coverage"] == pytest.approx(
+    assert risk_coverage["heldout_paired_delta_interval"]["coverage"] == pytest.approx(
         [0.0875, 0.1475]
     )
-    assert risk_coverage["heldout_paired_delta_ci95"][
+    assert risk_coverage["heldout_paired_delta_interval"][
         "all_candidate_queries"
     ] == pytest.approx(
         [-1.715, -1.2625]
@@ -709,6 +746,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
     assert dif["method"] == "logistic_dif_purified"
+    assert dif["sample_size"] == heldout_benchmark.DECLARED_DIF_SAMPLE_SIZE
     assert dif["expected_dif_items"] == [0]
     assert dif["flagged_items"] == [0]
     assert dif["known_dif_recall"] == 1.0
@@ -717,6 +755,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     assert dif["anchor_items"] == 7
     judge = report["judge_effects_validation"]
     assert judge["method"] == "many_facet_rasch"
+    assert judge["sample_size"] == heldout_benchmark.DECLARED_JUDGE_SAMPLE_SIZE
     assert judge["connected"] is True
     assert judge["converged"] is True
     assert judge["severity_order_recovered"] is True

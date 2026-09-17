@@ -44,8 +44,8 @@ The report records `bootstrap_samples`, `bootstrap_confidence_level`, and
 `bootstrap_seed`.
 
 Production route/conduct defaults stay locked. Nested `*_ci95` JSON key names
-remain a later naming slice. Other harness sample sizes (assignment trials,
-DIF, reliability) are unchanged.
+move to ADR 0045. Other harness sample sizes (assignment trials, DIF,
+reliability) are unchanged.
 
 ## Alternatives considered
 
@@ -65,6 +65,6 @@ pass the declarations.
 
 ## Remaining work
 
-Other repository-authored harness sample sizes stay open. Nested `*_ci95`
-key names still embed 95. This ADR is Proposed until independent review and
-protected delivery.
+Other repository-authored harness sample sizes stay open. Nested interval
+key names move to ADR 0045. This ADR is Proposed until independent review
+and protected delivery.

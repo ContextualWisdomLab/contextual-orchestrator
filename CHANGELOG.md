@@ -12,9 +12,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Held-out judge-effect evidence now requires a declared sample size. The
+  hidden 1,000-row default is removed. The harness run still writes 1,000 as
+  this run's choice.
 - Held-out item-side language/domain evidence now requires a declared sample
   size. The hidden 1,200-row default is removed. The harness run still writes
   1,200 as this run's choice.
+- Held-out score-reliability evidence now requires a declared sample size.
+  The hidden 1,200-row default is removed. The harness run still writes 1,200
+  as this run's choice.
+- Held-out candidate-group DIF evidence now requires a declared even sample
+  size. The hidden 4,000-row default is removed. The harness run still writes
+  4,000 as this run's choice.
+- Held-out assignment-design evidence now requires a declared trial count.
+  The hidden 24,000-trial default is removed. The harness run still writes
+  24,000 as this run's choice.
+- Held-out accuracy and decision-latency now require a declared context
+  population. The hidden 24-context default is removed from evidence
+  construction, quality evaluation, and paired timings. The harness run still
+  writes 24 as this run's choice.
+- Held-out decision-latency timings now require a declared per-context
+  repetition count. The hidden 200-repetition default is removed. The harness
+  run still writes 200 as this run's choice.
+- The held-out CUSUM screen now requires declared replications, horizon,
+  change-point, and coverage. Replications that never alarm are recorded as
+  horizon-censored missed detections instead of aborting. The Wilson upper
+  bound is stored as `false_alarm_rate_upper_bound`.
+- Held-out report interval fields no longer embed 95 in the JSON name.
+  Coverage stays in the declared `bootstrap_confidence_level` field.
 - The psychometric held-out harness now requires a declared resample count,
   percentile coverage, and seed for paired intervals. Hidden 2,000-sample
   95% defaults are removed. The script entry still writes 2,000, 0.95, and
