@@ -1,5 +1,15 @@
 # AGENTS.md
 
+Preserve ordered `score_observations` in optimizer results: equal means can
+hide different task outcomes. This additive field does not approve the existing
+selection policy; keep its psychometric evidence gap explicit in the runbook.
+
+Optimizer batch results must match the complete task count before callbacks;
+retain usage on rejection. Explicitly select route mode in batch regressions.
+Installed tests may need their sibling test-helper directory, never the source
+package root. See `docs/doctoring/optimizer_score_recovery.md` for corrected RED
+receipts and the separate released-calibration boundary.
+
 For artifact runtime warnings, inspect the exact action manifest rather than
 its version comment. Preserve upload options and security gates; see
 `docs/doctoring/artifact_runtime_migration.md` for owner migration and checks.
@@ -257,6 +267,11 @@ owners, native build commands, and unverified acceptance boundaries are recorded
 in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
+
+Optimizer quality callbacks must yield finite per-task values in [0, 1].
+Validate before aggregation so invalid pairs cannot hide behind a valid mean;
+keep Boolean predicates valid and never discard completed-call usage.
+Recovery evidence and reproduction: `docs/doctoring/optimizer_score_recovery.md`.
 
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
