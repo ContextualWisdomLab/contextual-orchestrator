@@ -5794,6 +5794,278 @@ delta before this normal document revert. The [handoff](doctoring/lart_measureme
 keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
 rights, accuracy and latency gates visible. This is not gap closure or release.
 
+The [combined-item and preprocessing follow-up](doctoring/lart_measurement_review.md#predictive-application-preprocessing-follow-up)
+now verifies the benchmark-qualified retained-cell mapping against all eight
+pinned source matrices. Correctness matches in all 12,800 cells; combined
+length values are individually shifted by one in all 12,800 cells. The pinned
+predictive loader adds another one before held-out log transformation.
+Freeze the intended offset and test preprocessing sensitivity before adopting
+its results. This narrows the item-identity gap but does not resolve model
+family lineage, dataset rights, estimator validation or measured customer gain.
+
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed in that historical
+observation). The earlier proposed universal deadline is superseded by the
+explicit model-timeout requirement: model execution defaults to null, and only
+an administrator-configured model limit may bound its complete execution.
+Readiness probes have a separate finite operational contract. The old run does
+not prove current deployment behavior or justify imposing a global inference cap.
+
+### Read-only timeout policy visibility — local, not runtime activation
+
+Source `6774dab4` exposes an admin-only timeout-policy GET that separates fresh
+configured seconds/revision from the local serving snapshot. It reports seconds
+and `enforcement_available=false`; reads do not activate limits or refresh
+routing. The actual HTTP and related pool/policy/security checks pass 88 tests
+in 9.52 seconds. Source `f9505a5c` adds model-scoped audit history with stable
+older-revision cursors and at most 100 records per read; 96 related tests pass
+in 7.70 seconds, including HTTP authorization and invalid-bound checks. HTTP
+set/clear/restore, released Rust runtime integration and actual administrator
+UI acceptance remain open. See
+[policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).
+
+### Unknown request outcome — local error-contract repair
+
+At `76d1caab`, a passthrough timeout or connection failure with unknown
+acceptance no longer escapes as a generic internal error. The existing
+single-attempt/no-fallback decision is retained, with a caller-safe
+`provider_outcome_unknown` response, `retryable=false` and an explicit
+SDK no-retry header. No tool execution is inferred from a model timeout.
+OpenAI SDK 2.54.0 → actual loopback HTTP → orchestrator → mock provider
+verifies one primary call, no fallback, and no raw diagnostic disclosure.
+The SDK-enabled related run passes 212 tests in 14.63 seconds. This is
+local evidence, not a protected release or live-provider result; full-suite
+verification of these new commits remains pending. Higher-level Strix
+retries, SSE errors, default-null full-response lifetime and UI acceptance
+remain open. See [incident and SDK evidence](doctoring/model-timeout-policy-evidence.md).
+
+The separate Naruon Noema 429 incident lacks per-attempt upstream status;
+final gateway status alone cannot establish every candidate's failure cause.
+Local `0b949aa2` adds bounded numeric status to the existing common failed-
+attempt log without reading provider text or bodies (89 related tests pass,
+15.28 seconds). Full verification and release of this diagnostic addition
+remain pending; provider availability itself is not repaired by better logs.
+
+### Message-count provenance registry — 2026-09-14
+
+Issue #1157 (shared-context accounting) required provider/model-specific
+counting provenance instead of a raw-text heuristic standing in for message
+accounting. #927 explicitly left prompt sizing for future work and #1151 is
+the separate common-output-ceiling concern; neither is reopened here. PR
+#1178 (`feat/context-window-candidate-filter`, not merged) added a raw-text
+*lower bound* for selection-time candidate filtering — deliberately a lower
+bound, not message accounting, and left untouched by this change.
+
+`contextual_orchestrator/token_counting.py` gained
+`COUNTING_PROVENANCE_REGISTRY`, keyed by exact model identifier, each entry
+citing an official source (currently the OpenAI Cookbook's "How to count
+tokens with tiktoken", fetched live 2026-09-14) and scoped to exactly the
+model identifiers that source states the framing constants apply to —
+`gpt-3.5-turbo-0125`, `gpt-4-0314`, `gpt-4-32k-0314`, `gpt-4-0613`,
+`gpt-4-32k-0613`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06`. Bare family
+aliases (`gpt-4o`, `gpt-4`, ...) are deliberately excluded: the source itself
+calls its formula for those "an estimate, not a timeless guarantee," and
+registering them would reintroduce exactly the heuristic framing constant
+operating rules 3.1/9.1 prohibit. `NativeExactTokenCounter.describe_messages`
+/`count_messages` return an exact, provenance-bound count only inside that
+scope; a `tools` payload, a non-text content part, or any other field outside
+`role`/`content`/`name` raises `TokenCountUnavailable` naming the field, and a
+model outside the scope raises the same way. Tools, image/audio content,
+`instructions`, and prior Responses-API `response_id`/conversation references
+remain explicitly unavailable — no accounting for them is invented.
+
+The served `/v1/chat/completions` response gained an optional
+`prompt_count_source` field, set only when
+`contextual_orchestrator/server.py::_prompt_count_source` obtains a count for
+the exact served request/model from this registry, and omitted otherwise; it
+sits next to the existing `usage`/`usage_measurement_status` pair without
+touching the candidate-selection surfaces PR #1177/#1178/#1179 are changing.
+
+Remaining gap: tool-schema, multimodal, `instructions`, and prior-response
+token accounting have no verified official source yet, so #1157's shared-
+context budgeting (using the count against a model's valid output ceiling and
+remaining input/output context) is not implemented by this change — it is a
+provenance-registry foundation, not a closing fix. Local evidence only: the
+new and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`), and the full
+`tests/` run is green apart from the pre-existing, unrelated local-only
+`openai` SDK 2.54.0-pin and `mcp.Client` failures already tracked elsewhere in
+this document.
+
+### Shared-context output budgeting — second half of #1157
+
+Building on the counting-provenance registry above, `token_counting.py`
+gained `shared_context_output_budget(agent, messages, requested_output_tokens,
+*, counter, tools=None)`. It returns a `SharedContextBudget` decision (never
+an estimate) only when every input is authoritative: `agent.context_window`
+is a known positive int, `agent.max_output_tokens` is known, and
+`describe_message_count` returns an exact, registry-verified count for
+`messages`/`agent.model` (no tools, no non-text fields, an in-scope model).
+Any other case — unknown context window, unknown output ceiling, or a count
+unavailable because of tools/modality/an out-of-scope model — returns `None`
+so callers leave existing behavior untouched; per operating rule 9.1, no
+fixed ratio or hidden shrinkage is ever substituted. When a decision is
+returned, `remaining = context_window - prompt_tokens` (the exact count
+already folds in the model's reply-priming tokens per the OpenAI Cookbook
+framing, so they are not subtracted twice) and `output_ceiling =
+min(max_output_tokens, remaining)`.
+
+`ModelClient.chat()` applies this decision at the exact site the existing
+catalog output-ceiling clamp already ran (`effective_max_output_tokens`,
+before the provider HTTP call): with no explicit caller/client output budget,
+it now sends `min(max_output_tokens, remaining)` instead of the bare catalog
+ceiling; when the caller's own explicit budget exceeds `remaining`, or
+`remaining < 1` regardless of an explicit budget, it raises the existing
+`ProviderRequestTooLargeError` (413, `request_too_large`) naming
+`context_window`, `prompt_tokens`, and the requested budget — never a silent
+clamp or truncation. `ModelClient` gained an optional `token_counter`
+constructor argument (the default `TaskOrchestrator` wires its own counter
+into its default client only; a caller-supplied client keeps whichever
+counter it already has) and `take_shared_context_budget()`, mirroring the
+existing `take_usage()` thread-local seam. The served
+`/v1/chat/completions` response gained an optional `shared_context_budget`
+evidence object (`context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`) next to `prompt_count_source`, read and cleared by
+`server._take_shared_context_budget()`, and omitted when no decision was
+made.
+
+Scope left out of this step, by design: only the non-streaming
+`ModelClient.chat()` send path is wired. The streaming (`_stream_send`) and
+local-proxy/passthrough send paths still apply only the pre-existing plain
+`_clamp_agent_token_budget` clamp against `agent.max_output_tokens`, with no
+shared-context accounting — a natural follow-up once this path is proven.
+Tool-schema, multimodal, `instructions`, and prior-response token accounting
+remain unavailable inputs (per the registry gap above), so requests carrying
+them still fall back to the pre-existing plain clamp with no `#1157` evidence
+attached; #1157 is not closed by this change. Local evidence only: the new
+and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run is green apart from the same
+pre-existing, unrelated local-only `openai` SDK 2.54.0-pin and `mcp.Client`
+failures tracked elsewhere in this document.
+
+### Streaming and passthrough shared-context output budgeting — closes the above follow-up
+
+The streaming/local-proxy gap left above is now closed. `ModelClient._stream_send`
+applies the identical `shared_context_output_budget` decision at the exact
+site its own plain `_clamp_agent_token_budget` clamp already ran (using the
+same "explicit" seam as `chat()` — the request-scoped or client-level
+`max_output_tokens`, never whatever catalog default `stream_chat()` already
+wrote into `payload["max_tokens"]` before calling `_stream_send`) — before
+any provider bytes are sent for that attempt. `ModelClient._proxy_send`
+(behind `proxy_send`/`proxy_send_once`/`probe_structured_chat`, the transport
+under the server's single-agent tool-loop passthrough) applies the same
+decision for the `chat/completions` endpoint, reading the caller's own
+`max_tokens` from the untouched passthrough body *before* the existing
+local-provider default-cap injection runs in the same method, so a
+gateway-injected local default is never misread as the caller's own explicit
+budget. In both cases: no explicit budget and all inputs authoritative sends
+`min(max_output_tokens, remaining)`; an explicit budget over `remaining`, or
+`remaining < 1` regardless of an explicit budget, raises the existing
+`ProviderRequestTooLargeError` naming `context_window`, `prompt_tokens`, and
+the requested budget — never a silent clamp. `shared_context_output_budget`
+already returns `None` for any shape `describe_message_count` cannot account
+for (a Responses-shaped `input` body, `tools`, non-text content, an
+out-of-scope model), so passthrough callers get no decision — not a forced
+estimate — whenever the caller-shaped body isn't exact chat-message
+accounting; this is the smallest-diff outcome the follow-up required, not an
+extension of the registry's own scope.
+
+The true streaming `/v1/chat/completions` route
+(`server._stream_route_completion`) already flushes SSE response headers and
+writes its first (`role: assistant`) frame before ever driving the provider
+call, so a rejection on this path necessarily surfaces *after* headers are
+committed rather than as a pre-request HTTP error. No new error-frame plumbing
+was needed for this: `ProviderRequestTooLargeError` is already a
+`ProviderUpstreamError`, and `_stream_route_completion`'s existing
+`except ProviderUpstreamError` handler already turns any such upstream
+rejection into a terminal SSE error frame carrying the same
+`context_window=`/`prompt_tokens=`/`requested_output_tokens=` evidence in its
+message. Live evidence: the terminal success ("stop") frame now also carries
+the same `shared_context_budget` object as the non-streaming response (same
+field name, same shape — `context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`), attached only when `ModelClient.take_shared_context_budget()`
+returns one (reusing `server._take_shared_context_budget()` verbatim,
+matching this repo's existing pattern of attaching `prompt_count_source`-style
+evidence next to a terminal chunk rather than inventing a second shape), and
+omitted otherwise.
+
+Left out, and why: the `responses`-endpoint conversion branch inside
+`_proxy_send` (used only for local/`opencode_go` providers) is unchanged —
+its payload is already a Responses-shaped `input` body, which
+`describe_message_count` cannot account for, so wiring it in would only ever
+compute `None` there; the batch-upload send path (`_batch_run`) is a separate
+async transport (job upload/poll, not a live per-request send) and stays on
+the plain catalog clamp; embeddings (`_send_raw` called from
+`embed_with_usage`) never carry chat messages and are untouched. The
+passthrough response body itself is deliberately left with no
+`shared_context_budget` field: this transport's own module contract is that
+"the full provider response shape... survives verbatim" for tool-loop
+callers, so adding an extra top-level key there would violate that contract;
+only the outbound request-shaping decision (send/clamp/reject) applies to
+passthrough, not response evidence. Local evidence only: the new and touched
+tests pass (`tests/test_true_streaming.py`, `tests/test_output_budget_model_max.py`,
+`tests/test_token_counting_boundaries.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run (3723 passed, 2 skipped) is green
+apart from the same five pre-existing, unrelated local-only `openai` SDK
+2.54.0-pin and `mcp.Client` failures tracked elsewhere in this document.
+
+### Streaming terminal-frame shared-context evidence ordering hazard — fixed
+
+Review of the streaming follow-up above found an ordering hazard it did not
+account for: `TaskOrchestrator.stream_route`'s post-stream real-time judge
+(`policy.realtime_judge`, on by default; see its "Real-time judging after the
+stream" comment) issues its own provider call on the same thread — through
+`_model_judge_verification` -> `_FastMLSIJudgeAdapter.complete()` ->
+`ModelClient.chat()` — and `chat()` unconditionally clears, and can
+repopulate with *its own* evidence, the thread-local shared-context-budget
+accessor at entry. `server._stream_route_completion` read that accessor via
+`server._take_shared_context_budget()` only after `stream_route` had already
+returned, i.e. after the judge's own call had run and potentially overwritten
+it — so the terminal SSE frame could carry the judge's `shared_context_budget`
+evidence, or none at all, instead of the served request's. This is the same
+dishonest-evidence failure mode this document's honest-metrics principle
+forbids, just on the streaming success path rather than the accounting
+surfaces this document otherwise tracks.
+
+Fixed by capturing the served request's evidence *inside* `stream_route`,
+immediately next to the pre-existing `take_usage()` call and before the judge
+runs, following the exact pattern already proven for usage: a new optional
+`shared_context_budget_callback` parameter (mirroring `usage_callback`'s
+shape) hands the caller the evidence at that point. `server
+._stream_route_completion` now passes this callback — guarded by an
+`inspect.signature`-based duck-typing check so a minimal test double whose
+`stream_route` does not accept the parameter still works, falling back to the
+old post-hoc `_take_shared_context_budget()` read only in that case — and
+uses the captured value for the terminal frame. The non-streaming response
+path's `_take_shared_context_budget()` call is unchanged: it already reads
+before any judge call runs and was never affected by this hazard.
+
+`prompt_count_source` was audited for the identical hazard and confirmed
+safe, not just assumed so: `server._prompt_count_source(orchestrator,
+messages, model_name)` derives its answer purely from the request's own
+`messages`/`model_name` via the counting-provenance registry, never from any
+`ModelClient` thread-local state, and — unlike `shared_context_budget` — it
+is not even emitted on the streaming path today, so there is nothing on that
+path for a second call to clobber.
+
+New regression coverage:
+`tests/test_true_streaming.py::test_http_route_stream_terminal_frame_survives_realtime_judge_second_call`
+installs a working (not neutralized) fast-mlsirm judge whose `.judge()` makes
+a real second provider call through the adapter, and asserts the terminal
+frame still carries the served request's `shared_context_budget`
+(`prompt_tokens`/`output_ceiling`), not the judge's. Verified to fail against
+the pre-fix code — the terminal frame carried the judge's own
+`prompt_tokens`/`output_ceiling` instead of the served request's — before the
+fix landed. Local evidence: `tests/test_true_streaming.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`,
+`tests/test_token_counting_boundaries.py`, `tests/test_api_contract.py`, and
+`tests/test_self_check.py` all pass, and `python -m interrogate -v
+contextual_orchestrator/` reports 100%.
 ## 2026-09-13 constant-only KPI PR repair findings
 
 Exact-source review found that [PR #1125](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1125)
@@ -5974,3 +6246,33 @@ stays quiet).
 Not established: whether any deployment currently runs in this state. The
 readiness surface still does not report registry durability; that would be a
 separate change.
+
+### Typed streaming fallback attempt evidence and route contract docs — 2026-09-14
+
+Addresses issue #1016 rows 2 and 4 (remaining gaps confirmed on the 2026-09-13
+assessment; row 1 is separately handled by PR #1171 and is untouched here).
+Row 2: the single-worker streaming fallback trace step (`TaskOrchestrator.
+stream_route`, `contextual_orchestrator/orchestrator.py`) previously recorded a
+failed candidate as prose only (`"subtask": "Failed direct route attempt
+(streamed)"`), unlike the structured-synthesis candidate loop's typed
+`route.attempted[]` entries (`_orchestrated_provider_completion`). Each failed
+streaming attempt now also carries `outcome` (`retryable_transport`,
+`request_too_large`, `deadline_exceeded`, `fail_closed`), `error_code`,
+`provider_status`, `retryable`, and `transport`, built by one small shared
+helper (`_typed_attempt_entry`) both paths now call; `deadline_exceeded` reuses
+PR #1053's `model_timeout` error code rather than a second vocabulary. Prose
+(`subtask`, and a new `reason` field) remains for humans but is no longer the
+only signal. Row 4: the previously internal, undocumented `route`/
+`attempted[]` shape is now a versioned contract
+(`OrchestrationRoute`/`OrchestrationRouteAttempt`, `api_contract.py` spec
+`0.3.0`), and `tests/test_api_contract.py` validates both a real
+structured-synthesis failover and a real streaming failover against it (11
+tests: `test_api_contract.py`, `test_true_streaming.py`). Local run:
+`python -m pytest tests/test_api_contract.py tests/test_true_streaming.py
+tests/test_stream_error_identity.py tests/test_provider_error_taxonomy.py
+tests/test_model_timeout_policy.py tests/test_self_check.py -q` — 109 passed.
+`python -m interrogate -v contextual_orchestrator/` — 100%. Not addressed:
+issue #1016 row 1 (separate PR), and the SSE wire frames themselves still omit
+`orchestration.route` per-token (only the persisted/queried workflow-run trace
+carries it) — no caller currently reads it from the streaming wire response,
+so this was left out of scope rather than silently assumed equivalent.

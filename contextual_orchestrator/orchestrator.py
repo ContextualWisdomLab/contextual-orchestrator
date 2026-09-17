@@ -1396,6 +1396,42 @@ def _administrator_timeout_error(
     )
 
 
+def _typed_attempt_entry(
+    agent_id: str,
+    model: str,
+    classified: ProviderUpstreamError,
+    *,
+    request_too_large: bool = False,
+) -> dict[str, Any]:
+    """Build one typed per-attempt evidence entry shared by every fallback path.
+
+    Both the structured-synthesis candidate loop
+    (``_orchestrated_provider_completion``) and the single-worker streaming
+    fallback (``stream_route``) call this so a failed attempt carries the
+    same fixed ``outcome`` vocabulary: ``request_too_large``,
+    ``retryable_transport``, ``deadline_exceeded`` (the administrator model
+    timeout introduced by PR #1053's ``model_timeout`` error code -- reused
+    here rather than inventing a second vocabulary), or ``fail_closed``.
+    """
+    if request_too_large:
+        outcome = "request_too_large"
+    elif classified.error_code == "model_timeout":
+        outcome = "deadline_exceeded"
+    elif classified.retryable:
+        outcome = "retryable_transport"
+    else:
+        outcome = "fail_closed"
+    return {
+        "agent_id": agent_id,
+        "model": model,
+        "outcome": outcome,
+        "error_code": classified.error_code,
+        "provider_status": classified.provider_status,
+        "retryable": classified.retryable,
+        "transport": classified.transport,
+    }
+
+
 @contextmanager
 def _local_provider_slot(
     agent: ModelAgent,
@@ -6657,28 +6693,12 @@ class TaskOrchestrator:
                             )
                         )
                         attempts.append(
-                            {
-                                "agent_id": candidate.id,
-                                "model": candidate.model,
-                                "outcome": (
-                                    "request_too_large"
-                                    if request_too_large
-                                    else "retryable_transport"
-                                    if isinstance(classified, ProviderUpstreamError)
-                                    and classified.retryable
-                                    else "fail_closed"
-                                ),
-                                "error_code": (
-                                    classified.error_code
-                                    if isinstance(classified, ProviderUpstreamError)
-                                    else type(exc).__name__
-                                ),
-                                "provider_status": (
-                                    classified.provider_status
-                                    if isinstance(classified, ProviderUpstreamError)
-                                    else None
-                                ),
-                            }
+                            _typed_attempt_entry(
+                                candidate.id,
+                                candidate.model,
+                                classified,
+                                request_too_large=request_too_large,
+                            )
                         )
                         if request_too_large and not virtual_model:
                             raise ProviderRequestTooLargeError(
@@ -7465,6 +7485,17 @@ class TaskOrchestrator:
                             (time.perf_counter() - started_at) * 1000, 2
                         ),
                         "output": "",
+                        # Typed evidence (row 2, issue #1016): prose above stays
+                        # as a human-readable reason, not the only signal --
+                        # these fields share the structured-synthesis path's
+                        # fixed outcome vocabulary via ``_typed_attempt_entry``.
+                        **_typed_attempt_entry(
+                            agent.id,
+                            agent.model,
+                            upstream,
+                            request_too_large=request_too_large,
+                        ),
+                        "reason": str(upstream),
                     }
                     if isinstance(failed_usage, dict):
                         failed_step["usage"] = failed_usage
