@@ -176,7 +176,7 @@ async def _render_policy_document_with_camoufox(url: str) -> str:
 def crawl_policy_document(
     url: str,
     *,
-    timeout: float = 15.0,
+    timeout: float | None = None,
     camoufox_renderer: Callable[[str], str] | None = None,
 ) -> str:
     """Fetch one policy through Wardnet's DNS-pinned outbound boundary."""
@@ -214,7 +214,7 @@ def crawl_policy_document(
         },
         method="POST",
     )
-    client = ModelClient(timeout=max(1, int(timeout)), allowed_provider_hosts={wardnet.hostname})
+    client = ModelClient(timeout=timeout, allowed_provider_hosts={wardnet.hostname})
     if wardnet.scheme == "http":
         origin = urlunsplit(("local", wardnet.netloc, "", "", ""))
         agent = ModelAgent(
@@ -346,18 +346,17 @@ def _call_analyzer(
             for source_url, text in documents.items()
         ],
     }
-    response = client.proxy_send_once(
-        agent,
-        "chat/completions",
-        {
-            "model": agent.model,
-            "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
-            "temperature": 0,
-            "max_tokens": 1600,
-            "response_format": _POLICY_SCHEMA,
-            "stream": False,
-        },
-    )
+    payload: dict[str, Any] = {
+        "model": agent.model,
+        "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        "temperature": 0,
+        "response_format": _POLICY_SCHEMA,
+        "stream": False,
+    }
+    output_cap = client.effective_max_output_tokens(agent)
+    if output_cap is not None:
+        payload["max_tokens"] = output_cap
+    response = client.proxy_send_once(agent, "chat/completions", payload)
     return json.loads(ModelClient._response_content(agent, response))
 
 

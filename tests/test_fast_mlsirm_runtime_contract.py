@@ -17,5 +17,5 @@ def test_supported_python_floor_matches_fast_mlsirm_runtime() -> None:
         if dependency.startswith("fast-mlsirm ")
     ]
     assert fast_mlsirm_dependencies == [
-        "fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz"
+        "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f ; python_full_version >= '3.12'"
     ]
