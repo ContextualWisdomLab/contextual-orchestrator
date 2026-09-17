@@ -6587,7 +6587,8 @@ sites via `try`/`finally`; `_StateStore` (`orchestrator.py:4168`) already expose
 was leaking. The leaks were entirely test-owned:
 
 - `with sqlite3.connect(path) as connection:` in `tests/test_model_timeout_policy.py`
-  (14 sites) and `tests/test_agent_pool_db.py` (13 sites) — the sqlite3 connection
+  (14 sites); `tests/test_agent_pool_db.py` (13 sites) already closed on this
+  restack base via main's `closing(...)` form — the sqlite3 connection
   context manager only commits/rolls back the open transaction on exit, it does
   not close the connection, so every one of these leaked.
 - Bare `connection = sqlite3.connect(...)` with no `close()` at all in
