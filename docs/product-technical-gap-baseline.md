@@ -1,5 +1,53 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-14 trace-scope token (issue #117 acceptance item 9)
+
+Issue #117's maintainer verification map, acceptance item 9, flagged that
+`SecurityConfig.authorize` let a bare single `auth_token` satisfy the `trace`
+scope unconditionally, with no test covering the raw library path (`server.py`
+had `expected = self.auth_token` for scope `trace` whenever no
+`bearer_verifier` was configured, regardless of split admin/inference mode).
+ADR 0026 already documented the intended contract — inference or admin
+authentication alone must not authorize a trace-bearing response, and split
+static admin/inference mode should fail closed for trace absent a verified
+claim — but `authorize()` did not implement that fail-closed branch.
+
+Added an explicit `trace_token: str = ""` field to `SecurityConfig`. In
+`authorize()`, scope `trace` without a `bearer_verifier` now resolves in three
+modes: (1) a configured `trace_token` is the only credential that authorizes
+`trace`; (2) with no `trace_token` and no split `admin_token`/`inference_token`
+(single-token mode), `auth_token` keeps the documented local escape hatch; (3)
+split admin/inference mode without a distinct `trace_token` fails closed with
+the existing `401 unauthorized` — `admin_token`/`inference_token` never
+satisfy `trace`. Wired `--trace-token`/`--trace-token-key` in `__main__.py`
+exactly like `--inference-token` (KV credential name
+`CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default, resolved via
+`get_credential`, no runtime env reads). The CLI's existing `--production`
+gating (which requires split admin/inference credentials and rejects
+identical admin/inference values) is unchanged: it only checks admin/inference
+separation, not a trace credential, and every trace-bearing HTTP route already
+gates on the caller's base admin/inference scope *and* the separate `trace`
+scope over the same bearer, so split mode without a `trace_token` was already
+structurally fail-closed for trace once `authorize()` was fixed — no new
+startup requirement was added.
+
+Raw-library-path tests in `tests/test_security_hardening.py`
+(`test_single_token_mode_keeps_the_documented_trace_escape_hatch`,
+`test_split_token_mode_without_trace_token_fails_closed_for_trace`,
+`test_split_token_mode_trace_token_authorizes_only_trace`) cover all three
+modes directly against `SecurityConfig.authorize`, including that
+`trace_token` does not authorize `admin` or `inference`. One HTTP-level test
+in `tests/test_chat_include_orchestration_trace_http_honesty.py`
+(`test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_token`)
+shows a real `/v1/chat/completions` trace-bearing request is refused with the
+plain inference token in split mode, and accepted once `trace_token` is
+provisioned for that credential. Focused suite:
+`tests/test_security_hardening.py`, `tests/test_chat_include_orchestration_trace_http_honesty.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`,
+`tests/test_kv_credentials.py` (77 tests) pass; `interrogate` reports 100%
+docstring coverage. Issue #117 acceptance item 6 (tenant/resource binding)
+remains open.
+
 ## 2026-09-13 Free-pool selection ignored single-tool-call evidence (#940)
 
 At `012beaac` the three mechanisms named in #940 stood at: capability

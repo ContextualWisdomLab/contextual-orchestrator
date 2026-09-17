@@ -167,6 +167,7 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_MODEL_TIMEOUT_SECONDS = 2_147_483_647.0
 _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
+MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
@@ -2373,7 +2374,9 @@ class ModelClient:
                         registry_request, destination, timeout=probe_timeout
                     ) as registry_response:
                         registry = json.loads(
-                            registry_response.read().decode("utf-8")
+                            self._read_bounded_response(
+                                registry_response, MAX_PROVIDER_RESPONSE_BYTES
+                            ).decode("utf-8")
                         )
                     model_ids = {
                         item.get("id")
@@ -2533,7 +2536,11 @@ class ModelClient:
         started = time.monotonic()
         opened = self._open_model_provider(request, destination, agent, timeout)
         with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(
+                self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
+                    "utf-8"
+                )
+            )
         _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
@@ -2793,6 +2800,7 @@ class ModelClient:
         stream_usage: dict[str, Any] | None = None
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
+        response_bytes = 0
         try:
             with self._open_model_provider(
                 request,
@@ -2814,6 +2822,9 @@ class ModelClient:
                         raw = next(response_iterator)
                     except StopIteration:
                         break
+                    response_bytes += len(raw)
+                    if response_bytes > MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderResponseError("provider response exceeds the configured limit")
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -2858,6 +2869,8 @@ class ModelClient:
             if _is_tool_execution_stopped(exc):
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            if isinstance(exc, ProviderResponseError):
                 raise
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
@@ -3016,8 +3029,12 @@ class ModelClient:
         )
         try:
             with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
-                return response.read(), response.headers.get_content_type()
+                return self._read_bounded_response(
+                    response, MAX_PROVIDER_RESPONSE_BYTES
+                ), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
+            if isinstance(exc, ProviderResponseError):
+                raise
             raise classify_provider_failure(
                 exc, agent_id=agent.id, model=agent.model, transport="passthrough"
             ) from None
@@ -3155,6 +3172,8 @@ class ModelClient:
             ) from None
         if last_error is None:  # pragma: no cover - the loop always attempts once
             raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
         if not allow_transient_retries:
             raise last_error
         raise classify_provider_failure(
@@ -3183,7 +3202,11 @@ class ModelClient:
         )
         started = time.monotonic()
         with self._open_model_provider(request, destination, agent) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(
+                self._read_bounded_response(
+                    response, MAX_PROVIDER_RESPONSE_BYTES
+                ).decode("utf-8")
+            )
         _record_provider_response_telemetry(data, started)
         return data
 
@@ -3479,7 +3502,11 @@ class ModelClient:
             method="POST",
         )
         with self._open_model_provider(request, destination, agent) as response:
-            return json.loads(response.read().decode("utf-8"))["id"]
+            return json.loads(
+                self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
+                    "utf-8"
+                )
+            )["id"]
 
     def _batch_json(
         self,
@@ -3501,20 +3528,33 @@ class ModelClient:
             method=method,
         )
         with self._open_model_provider(request, destination, agent) as response:
-            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
+            raw = self._read_bounded_response(
+                response,
+                MAX_PROVIDER_RESPONSE_BYTES
+                if max_response_bytes is None
+                else max_response_bytes,
+            )
             return json.loads(raw.decode("utf-8"))
 
     @staticmethod
     def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
         """Read at most ``max_bytes`` and fail closed on oversized provider data."""
-        declared = response.headers.get("content-length")
+        headers = getattr(response, "headers", None)
+        declared = headers.get("content-length") if headers is not None else None
         if declared is not None:
             try:
                 if int(declared) > max_bytes:
                     raise ProviderResponseError("provider response exceeds the configured limit")
             except ValueError as exc:
                 raise ProviderResponseError("provider returned an invalid content length") from exc
-        body = response.read(max_bytes + 1)
+        try:
+            body = response.read(max_bytes + 1)
+        except TypeError as exc:
+            # Keep compatibility with small response doubles and legacy adapters
+            # that expose only read(); real HTTP responses take the bounded path.
+            if "positional" not in str(exc) and "argument" not in str(exc):
+                raise
+            body = response.read()
         if len(body) > max_bytes:
             raise ProviderResponseError("provider response exceeds the configured limit")
         return body
@@ -3527,7 +3567,7 @@ class ModelClient:
             method="GET",
         )
         with self._open_model_provider(request, destination, agent) as response:
-            return response.read()
+            return self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES)
 
 
 def _coerce_input_text(value: Any) -> str:
