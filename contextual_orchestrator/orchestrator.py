@@ -2107,7 +2107,7 @@ class ModelClient:
         self,
         timeout: float | None = None,
         max_output_tokens: int | None = None,
-        max_retries: int = 2,
+        max_retries: int = 0,
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
