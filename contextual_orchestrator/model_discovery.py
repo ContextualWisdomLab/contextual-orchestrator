@@ -79,6 +79,9 @@ _LOGGER = logging.getLogger(__name__)
 # provider catalog must not be mistaken for an unavailable provider.
 # Non-transient failures (auth/config errors, malformed responses) are never
 # retried — a retry cannot fix those and would only waste the time budget.
+# When the caller passes an explicit per-attempt timeout, the second attempt
+# is capped so a transient retry cannot consume the caller's full budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
 _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
@@ -498,6 +501,14 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         task_filter="chat",
         fallback_task_filters=("text-generation",),
         capabilities=("chat",),
+    ),
+    ProviderModelSource(
+        provider_name="experiential_labs",
+        credential_name="EXPERIENTAL_LABS_API_KEY",
+        list_url="https://api.experientiallabs.ai/v1/models",
+        chat_base_url="https://api.experientiallabs.ai/v1",
+        capabilities=("chat",),
+        bootstrap_required=False,
     ),
 )
 
@@ -2226,7 +2237,7 @@ def model_group_name_for(discovered: DiscoveredModel) -> str:
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
-        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is True or discovered.zdr_capable) else ()),
+        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is not False and (discovered.supports_zero_data_retention is True or discovered.zdr_capable)) else ()),
         *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
         *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
         *(("privacy:training_only",) if discovered.supports_no_training is False else ()),
@@ -2455,10 +2466,13 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
+    # Promotional zero prices do not prevent Experiential paid waterfall overflow.
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if model.provider_name != "experiential_labs"
+        and is_routable_discovered_model(model)
+        and not _requires_non_text_input(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates
