@@ -24,6 +24,7 @@ version the unversioned abstract page currently serves.
 | Hybrid LLM | 2404.14618v1 | 2024-04-22 |
 | HELM | 2211.09110v2 | 2023-10-01 |
 | The Art, Science, and Engineering of Fuzzing: A Survey | 1812.00140v4 | 2019-04-08 |
+| LLMRouter / xRouteBench | 2608.06867v1 | 2026-08-09 |
 
 Version-specific arXiv abstract pages were checked on 2026-09-09:
 
@@ -34,6 +35,7 @@ Version-specific arXiv abstract pages were checked on 2026-09-09:
 | [2404.14618v1](https://arxiv.org/abs/2404.14618v1) | CC BY-NC-ND 4.0 | Do not assume commercial redistribution rights. |
 | [2211.09110v2](https://arxiv.org/abs/2211.09110v2) | CC BY 4.0 | Preserve attribution and license requirements. |
 | [1812.00140v4](https://arxiv.org/abs/1812.00140v4) | arXiv nonexclusive-distrib/1.0 | Additional redistribution basis not established. |
+| [2608.06867v1](https://arxiv.org/abs/2608.06867v1) | CC BY 4.0 | Preserve attribution and license requirements. |
 
 This checks the declared version-page licenses. The local bytes were hashed on
 2026-09-09 in [stored_pdf_sha256.txt](stored_pdf_sha256.txt); from the repository
@@ -126,7 +128,11 @@ redistribution is unclear.
 
 - Sakana AI. (2026). *Sakana Fugu Technical Report*.
   https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
-  See the [bounded method review](../doctoring/reasoning-effort-profile.md#fugu-read-scope-and-implementation-boundary-2026-09-09).
+  Also mirrored on arXiv as https://doi.org/10.48550/arXiv.2606.21228
+  (`arXiv:2606.21228`). See the
+  [bounded method review](../doctoring/reasoning-effort-profile.md#fugu-read-scope-and-implementation-boundary-2026-09-09).
+  Architecture and orchestrator comments cite the report's S3 / Fugu-Ultra
+  Conductor bounds as contrast only; they are not copied into policy defaults.
   CO's route/conduct analogy is an engineering interpretation, not an
   implementation or reproduction of the trained Fugu variants.
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
@@ -167,6 +173,23 @@ verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
+  Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
+  for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
+  https://doi.org/10.48550/arXiv.2608.06867
+  Attached unmodified v1: `llmrouter-xroutebench-2608.06867.pdf`, SHA-256
+  `2da60abf0bc4c73ae95365850f92eca90e13c37d56822c1f98873901eb157878`.
+  A second publisher download was byte-identical. Poppler reads 34 pages but
+  reports PDF dictionary syntax warnings; the original bytes are preserved,
+  and the versioned HTML below is an alternative reading surface.
+  The [versioned paper](https://arxiv.org/html/2608.06867v1) declares
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is the
+  citation above. The paper introduces xRouteBench for quality/cost routing.
+  Its paper license does not establish rights to redistribute the dataset.
+  The [public response-time audit](../doctoring/nim-benchmark-evidence-grade.md#public-response-time-evidence-audit-2026-09-05-proposed)
+  records separate data/code revisions and unresolved failure-time provenance.
+  No reported paper result is a measured gain for this gateway.
+
 - Chiang, W.-L., Zheng, L., Sheng, Y., Angelopoulos, A. N., Li, T., Li, D.,
   Zhang, H., Zhu, B., Jordan, M. I., Gonzalez, J. E., & Stoica, I. (2024).
   *Chatbot Arena: An open platform for evaluating LLMs by human preference*.
@@ -178,6 +201,27 @@ verified observed-task evidence and the protected release process.
   this citation; its historical snapshot values also need archived provenance.
   Citation only; no PDF copied. This is not a completed full-paper review.
 
+- Li, H., Zhang, Y., Guo, Z., Wang, C., Tang, S., Zhang, Q., Chen, Y., Qi, B.,
+  Ye, P., Bai, L., Wang, Z., & Hu, S. (2026). LLMRouterBench: A massive benchmark
+  and unified framework for LLM routing. In *Findings of the Association for
+  Computational Linguistics: ACL 2026* (pp. 37733–37754). Association for
+  Computational Linguistics. https://doi.org/10.18653/v1/2026.findings-acl.1881
+  [Publisher record and PDF](https://aclanthology.org/2026.findings-acl.1881/).
+  This is not xRouteBench. Section 4.2.2 and Figure 8 estimate latency from tokens and
+  serving statistics; those estimates cannot establish observed request-level
+  p95 or gateway overhead. Citation and summary only; redistribution permission
+  for this PDF was not established in this audit.
+
+- Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
+  *The Annals of Statistics, 7*(1), 1–26.
+  https://doi.org/10.1214/aos/1176344552
+  Grounds resampling observed units for uncertainty. NIM report version 2
+  reuses the existing paired mean-bootstrap routine for delivered-task score
+  and terminal-outcome time on all shared locked tasks, including failures.
+  The score definition is a declared product reward; it does not impute an
+  unobserved psychometric response. Mean intervals do not establish p95
+  performance. Citation and summary only; redistribution was not established.
+
 - **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
   Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
   `helm-holistic-evaluation-2211.09110.pdf`
@@ -188,6 +232,16 @@ verified observed-task evidence and the protected release process.
   than silently dropped); and standardize conditions across compared systems
   (same tasks, scorers, caps, and budgets). Version-page license: CC BY 4.0;
   source: https://arxiv.org/abs/2211.09110.
+
+## Prospective sample design
+
+- Lakens, D. (2022). Sample size justification. *Collabra: Psychology, 8*(1),
+  Article 33267. https://doi.org/10.1525/collabra.33267
+  Grounds choosing sample design against an explicit inferential goal and
+  useful precision/effect targets, not a universal count threshold. The
+  [CO design record](../doctoring/prospective-routing-measurement-design.md)
+  separates delivered quality, decision speed, end-to-end latency and
+  psychometric validity.
 
 ## Psychometrics beyond orchestration
 
@@ -368,6 +422,11 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2512.04388 DOI](https://doi.org/10.48550/arXiv.2512.04388)
 - [arXiv 2512.04695 DOI](https://doi.org/10.48550/arXiv.2512.04695)
 - [arXiv 2601.17814 DOI](https://doi.org/10.48550/arXiv.2601.17814)
+- [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
+- [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
+- [DOI 10.1214/aos/1176344552](https://doi.org/10.1214/aos/1176344552)
+- [DOI 10.1525/collabra.33267](https://doi.org/10.1525/collabra.33267)
+- [DOI 10.18653/v1/2026.findings-acl.1881](https://doi.org/10.18653/v1/2026.findings-acl.1881)
 - [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
 - [NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1)
 - [NIST SP 800-204](https://doi.org/10.6028/NIST.SP.800-204)
