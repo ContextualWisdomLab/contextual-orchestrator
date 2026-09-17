@@ -275,6 +275,7 @@ def test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_t
     finally:
         denied_server.shutdown()
         denied_thread.join(timeout=5)
+        denied_server.server_close()
     assert denied_status == 401
     assert denied_body["error"]["code"] == "unauthorized"
 
@@ -294,6 +295,7 @@ def test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_t
     finally:
         accepted_server.shutdown()
         accepted_thread.join(timeout=5)
+        accepted_server.server_close()
     assert accepted_status == 200
     assert "orchestration" in accepted_body
 
