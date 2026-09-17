@@ -2,7 +2,7 @@
 
 Buyer next action: load a versioned ``reasoning_effort_profile`` per workflow
 role, compare equal-budget variants against true parameters, and keep the
-production default unchanged while validated promotion remains unavailable.
+production default unchanged; synthetic RMSE never authorizes promotion.
 Sampling temperature is not reasoning effort.
 """
 
@@ -438,6 +438,7 @@ def test_snapshot_rejects_wrong_profile_type_and_release_gate_is_strict() -> Non
     measured["robustness_passed"] = True
     assert production_default_change_allowed(measured) is False
     measured["role_differentiated"] = {"rmse": 0.1}
+    # Self-declared measurement and robustness are not evaluation authority.
     assert production_default_change_allowed(measured) is False
     measured["single_model_baseline"] = {"rmse": float("nan")}
     assert production_default_change_allowed(measured) is False
