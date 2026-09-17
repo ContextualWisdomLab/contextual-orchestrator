@@ -16,6 +16,11 @@ boundary. Do not retry a remotely submitted job after local lineage failure.
 Workflow origin identity and persistence limitations are documented in
 `docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
 
+Trace HTTP test helpers own urllib-created error responses, independently of
+production provider cleanup. Preserve decoding failures when closing them and
+close listeners after shutdown/join. See the trace successor receipt in the
+existing HTTP resource runbook; its full strict suite is still nonclean.
+
 HTTP test owners must close error responses and listening sockets, not merely
 stop serving. Keep warnings-as-errors enabled; see
 `docs/doctoring/http_test_resource_lifecycle.md` for reproductions and the separate
