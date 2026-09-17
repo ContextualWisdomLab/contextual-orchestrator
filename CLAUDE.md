@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+Artifact pin changes must retain paths, retention, failure handling and trigger
+locks. Run actionlint and the NIM workflow contracts; local success is not
+artifact publication proof. See `docs/doctoring/artifact_runtime_migration.md`.
+
 Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
 One admission may contain cached and uncached items: finalize cache-only status
 at request close, retain failures and isolate request context. The runbook owns

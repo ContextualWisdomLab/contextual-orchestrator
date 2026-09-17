@@ -1,5 +1,9 @@
 # AGENTS.md
 
+For artifact runtime warnings, inspect the exact action manifest rather than
+its version comment. Preserve upload options and security gates; see
+`docs/doctoring/artifact_runtime_migration.md` for owner migration and checks.
+
 Cache reuse is an item observation, not a request terminal until close. Preserve
 mixed-batch selection timing, explicit failures and ContextVar cleanup. See
 `docs/doctoring/kpi_stack_integration.md` for the RED cases and separate source
