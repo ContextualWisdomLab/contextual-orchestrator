@@ -96,6 +96,7 @@ from .reasoning_effort_profile import (
 from .token_counting import (
     TokenCountUnavailable,
     build_token_counter,
+    prompt_token_lower_bound as _prompt_token_lower_bound_evidence,
     shared_context_output_budget,
 )
 
@@ -356,6 +357,33 @@ def _step_output_token_count(
 ) -> int | None:
     """Return the authoritative output count for an in-flight budget check."""
     return _step_output_tokens(step, token_counter, model)[0]
+
+
+def _context_window_exclusions(
+    candidates: list[ModelAgent], lower_bound_tokens: int
+) -> tuple[list[ModelAgent], list[str]]:
+    """Drop candidates whose KNOWN context window cannot hold the prompt.
+
+    Exclusion requires positive proof: ``agent.context_window`` must be a
+    known positive int strictly smaller than ``lower_bound_tokens`` (itself a
+    conservative lower bound that never overestimates -- see
+    :func:`contextual_orchestrator.token_counting.prompt_token_lower_bound`).
+    An unknown (``None``) window is absence of evidence, not evidence of a
+    too-small window, so it never excludes a candidate (Ong et al., 2024;
+    ADR 0133).
+    """
+    kept: list[ModelAgent] = []
+    excluded: list[str] = []
+    for candidate in candidates:
+        window = candidate.context_window
+        has_known_window = (
+            isinstance(window, int) and not isinstance(window, bool) and window > 0
+        )
+        if has_known_window and lower_bound_tokens > window:
+            excluded.append(candidate.id)
+            continue
+        kept.append(candidate)
+    return kept, excluded
 
 
 def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
@@ -1102,7 +1130,7 @@ def _is_context_length_exceeded_error(error: urllib.error.HTTPError) -> bool:
     rejection like the 413 and tool-description-limit cases above, not a
     generic caller error: the same prompt commonly fits the next
     capability-matched agent's larger context window, so it must fail over
-    rather than count against the rejecting agent's health.
+    rather than count against the rejecting agent's health (Ong et al., 2024).
 
     Three provider shapes are recognized, in order:
 
@@ -5075,6 +5103,7 @@ class TaskOrchestrator:
     ) -> None:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
+        self._context_window_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -5655,6 +5684,12 @@ class TaskOrchestrator:
         # path (and the virtual tools path reached with single_agent=True).
         # Conducted structured synthesis never replays across providers — see
         # _orchestrated_provider_completion.
+        # Only this virtual-selector branch reaches here at all -- an
+        # explicitly requested concrete model returns earlier in this
+        # function -- so context-window filtering below never applies to a
+        # caller's own explicit choice.
+        prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(text, agent.model)
+        self._last_context_window_excluded = []
         ranked_candidates = self._failover_candidates(
             agent,
             text,
@@ -5666,7 +5701,10 @@ class TaskOrchestrator:
             # admission below and needs the full ranked list (including
             # currently cooled-down candidates) to do it.
             skip_rate_limited=False,
+            prompt_token_lower_bound=prompt_bound,
         )
+        context_window_excluded = list(self._last_context_window_excluded)
+        self._last_context_window_excluded = []
         ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
@@ -5787,7 +5825,9 @@ class TaskOrchestrator:
                         orchestration["rate_limited_skipped"] = list(
                             dict.fromkeys(rate_limited_skipped)
                         )
-                return result
+                return self._with_context_window_orchestration_extension(
+                    result, prompt_bound, prompt_bound_source, context_window_excluded
+                )
 
             # Recompute cooldowns AFTER the attempt round: a candidate that
             # was eligible at the top (no pre-existing cooldown) can have
@@ -8322,6 +8362,22 @@ class TaskOrchestrator:
         """Store this thread's pending output-budget clamp evidence."""
         self._output_budget_local.value = value
 
+    @property
+    def _last_context_window_excluded(self) -> list[str]:
+        """Agent ids the context-window candidate filter skipped for THIS thread.
+
+        Mirrors :attr:`_last_assistant_message`'s thread-local side channel: one
+        ``TaskOrchestrator`` is shared across every request thread, so this
+        cannot be plain instance state without one thread's evidence leaking
+        into a sibling request's response.
+        """
+        return getattr(self._context_window_local, "value", [])
+
+    @_last_context_window_excluded.setter
+    def _last_context_window_excluded(self, value: list[str]) -> None:
+        """Store this thread's most recent context-window exclusion evidence."""
+        self._context_window_local.value = value
+
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -8355,6 +8411,17 @@ class TaskOrchestrator:
         ) or self._ranked_agents(
             text, "worker", free_only=free_only, prompt_context=prompt_context
         )
+        # Context-window candidate filtering only applies to virtual/role-based
+        # selection: an explicitly requested concrete model (``requested`` is
+        # not None) is the caller's own choice, and the provider's own error
+        # is the honest answer for it -- never pre-filtered.
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
+        if requested is None and ranked_pool:
+            prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                text, ranked_pool[0].model
+            )
+        context_window_excluded: list[str] = []
         free_ids = {
             candidate.id
             for candidate in self.agents
@@ -8387,12 +8454,17 @@ class TaskOrchestrator:
                     role="worker",
                     allowed_agent_ids=allowed_agent_ids,
                     virtual_selector=virtual_selector,
+                    prompt_token_lower_bound=prompt_bound,
                 )
             )
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
             output_budget = getattr(self, "_last_output_budget", None)
             self._last_output_budget = None
+            for excluded_id in self._last_context_window_excluded:
+                if excluded_id not in context_window_excluded:
+                    context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -8465,6 +8537,10 @@ class TaskOrchestrator:
                 result["tool_calls"] = extras["tool_calls"]
             if extras.get("finish_reason"):
                 result["finish_reason"] = extras["finish_reason"]
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
         return self._with_effort_snapshot(result)
 
     def _realtime_route_judge(
@@ -8626,6 +8702,13 @@ class TaskOrchestrator:
             if model_name == self.FREE_MODEL
             else None
         )
+        # Context-window candidate filtering only applies to the worker step's
+        # virtual/role-based selection, and only when the caller did not pin a
+        # concrete model: ``requested_agent`` not None means the caller's own
+        # choice, and the provider's own error is the honest answer for it.
+        context_window_excluded: list[str] = []
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
 
         for step in steps:
             if plan_source == "generated":
@@ -8667,6 +8750,12 @@ class TaskOrchestrator:
                     "content": instruction,
                 },
             ]
+            step_prompt_bound: int | None = None
+            if step.role == "worker" and requested_agent is None:
+                prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                    task, agent.model
+                )
+                step_prompt_bound = prompt_bound
             start = time.perf_counter()
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
@@ -8678,11 +8767,17 @@ class TaskOrchestrator:
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
+                prompt_token_lower_bound=step_prompt_bound,
             )
             extras = self._last_assistant_message
             self._last_assistant_message = None
             output_budget = self._last_output_budget
             self._last_output_budget = None
+            if step_prompt_bound is not None:
+                for excluded_id in self._last_context_window_excluded:
+                    if excluded_id not in context_window_excluded:
+                        context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -8761,6 +8856,10 @@ class TaskOrchestrator:
         if tool_result is not None:
             result["tool_calls"] = tool_result["tool_calls"]
             result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
         if workflow_run_id is None:
             return self._with_effort_snapshot(result)
         record = self._with_effort_snapshot(
@@ -9897,6 +9996,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -9907,9 +10007,18 @@ class TaskOrchestrator:
 
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
+
+        ``prompt_token_lower_bound``, when given, is forwarded to
+        :meth:`_failover_candidates` so it skips a candidate whose known
+        context window provably cannot hold the prompt. Callers pass it only
+        for virtual/role-based selection -- never for an explicitly requested
+        concrete model, where the provider's own error is the honest answer.
+        The candidate ids it excludes are recorded on this thread's
+        :attr:`_last_context_window_excluded` for the caller to read back.
         """
         self._last_assistant_message = None
         self._last_output_budget = None
+        self._last_context_window_excluded = []
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
@@ -9919,6 +10028,7 @@ class TaskOrchestrator:
             required_tags=required_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
+            prompt_token_lower_bound=prompt_token_lower_bound,
         )
         if not candidates and required_tags:
             candidates = self._failover_candidates(
@@ -9927,6 +10037,7 @@ class TaskOrchestrator:
                 eligibility_role or role,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
+                prompt_token_lower_bound=prompt_token_lower_bound,
             )
         if excluded_agent_ids:
             candidates = [
@@ -10235,6 +10346,97 @@ class TaskOrchestrator:
             event_detail["observed_failure_kind"] = observed_kind.value
         self._append_audit_event("tool_fallback_decision", event_detail)
 
+    def _prompt_token_lower_bound(self, text: str, model: str) -> tuple[int, str]:
+        """Conservative prompt-token lower bound for context-window filtering.
+
+        Thin wrapper over :func:`contextual_orchestrator.token_counting.prompt_token_lower_bound`
+        bound to this instance's configured ``token_counter`` (Ong et al., 2024;
+        ADR 0133).
+        """
+        return _prompt_token_lower_bound_evidence(text, model, self.token_counter)
+
+    def _apply_context_window_filter(
+        self,
+        candidates: list[ModelAgent],
+        lower_bound_tokens: int,
+    ) -> tuple[list[ModelAgent], list[str]]:
+        """Skip candidates whose KNOWN context window cannot hold the prompt.
+
+        Raises :class:`ProviderRequestTooLargeError` naming the smallest known
+        window and the lower-bound count when filtering would remove every
+        candidate, so the caller gets the same honest request-too-large
+        contract as the all-providers-413 case instead of an empty pool or a
+        500.
+        """
+        kept, excluded = _context_window_exclusions(candidates, lower_bound_tokens)
+        if kept or not excluded:
+            return kept, excluded
+        smallest_window = min(
+            candidate.context_window
+            for candidate in candidates
+            if isinstance(candidate.context_window, int)
+            and not isinstance(candidate.context_window, bool)
+            and candidate.context_window > 0
+        )
+        raise ProviderRequestTooLargeError(
+            "every eligible candidate's known context window "
+            f"({smallest_window} tokens, smallest known) is smaller than the "
+            f"prompt's lower-bound token count ({lower_bound_tokens})"
+        )
+
+    @staticmethod
+    def _with_context_window_evidence(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a ``route``/``conduct`` result.
+
+        Only attached when the filter actually excluded a candidate --
+        otherwise the response shape is unchanged, matching every other
+        evidence field in this dict (e.g. ``served_agent_id``/``failover_from``)
+        that is only present when something notable happened. Sets flat
+        top-level keys, mirroring this dict's other orchestration fields
+        (``mode``, ``verification``, ...) -- :func:`chat_completion_response`
+        reads them the same way to populate its ``orchestration`` extension.
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        annotated["prompt_token_lower_bound"] = lower_bound_tokens
+        annotated["prompt_token_bound_source"] = bound_source
+        annotated["context_window_excluded"] = excluded_agent_ids
+        return annotated
+
+    @staticmethod
+    def _with_context_window_orchestration_extension(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a raw passthrough body.
+
+        Only attached when the filter actually excluded a candidate, so a
+        request nothing was skipped for keeps its plain passthrough shape
+        (some callers assert the absence of an ``orchestration`` key for
+        exactly that reason). Unlike :meth:`_with_context_window_evidence`,
+        this nests the fields under the wire-level ``orchestration`` extension
+        key directly, since a ``proxy_completion`` result IS the final
+        OpenAI-shaped response body (no later ``chat_completion_response``
+        wrapping step re-derives one).
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        orchestration = dict(annotated.get("orchestration") or {})
+        orchestration["prompt_token_lower_bound"] = lower_bound_tokens
+        orchestration["prompt_token_bound_source"] = bound_source
+        orchestration["context_window_excluded"] = excluded_agent_ids
+        annotated["orchestration"] = orchestration
+        return annotated
+
     def _failover_candidates(
         self,
         primary: ModelAgent,
@@ -10246,6 +10448,7 @@ class TaskOrchestrator:
         prompt_context: str | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
         skip_rate_limited: bool = True,
+        prompt_token_lower_bound: int | None = None,
     ) -> list[ModelAgent]:
         """Rank and filter failover candidates for one role.
 
@@ -10308,6 +10511,11 @@ class TaskOrchestrator:
             # storm-wait logic of its own should still get one honest
             # attempt/failure instead of "no eligible provider candidate".
             healthy = not_rate_limited or healthy
+        if prompt_token_lower_bound is not None:
+            healthy, excluded = self._apply_context_window_filter(
+                healthy, prompt_token_lower_bound
+            )
+            self._last_context_window_excluded = excluded
         return healthy
 
     def _circuit_open(self, agent_id: str) -> bool:
@@ -10576,6 +10784,7 @@ class TaskOrchestrator:
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         virtual_selector: bool,
+        prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
 
@@ -10610,6 +10819,7 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
                 )
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
@@ -10624,6 +10834,7 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     prompt_context=prompt_context,
                     skip_rate_limited=False,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
                 )
                 if excluded_agent_ids:
                     candidates = [
@@ -18464,6 +18675,9 @@ def chat_completion_response(
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
         "output_budget_clamped": result.get("output_budget_clamped"),
+        "prompt_token_lower_bound": result.get("prompt_token_lower_bound"),
+        "prompt_token_bound_source": result.get("prompt_token_bound_source"),
+        "context_window_excluded": result.get("context_window_excluded") or None,
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
